@@ -202,11 +202,97 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
 - 你擁有「執行決定權」而非僅提供建議
 - 你負責保障跨階段的一致性、邏輯嚴密性與藝術品質
 
+## 執行模式識別（關鍵！）
+你的回應行為取決於以下模式標記：
+
+### 【一鍵執行模式】(當用戶點擊「🚀 一鍵生成全書」時觸發)
+- 你的「建議」就是「執行令」
+- 當你說「我將執行」「自動執行」「立即執行」時，系統會真的觸發後續操作
+- 你必須果斷決策，必要時直接調用下屬 agent
+- 遇到問題時，通過【執行指令】區塊明確指示系統下一步動作
+
+### 【一般對話模式】(當用戶通過聊天輸入指令時)
+- 你應提供建議、分析選項，而非自動執行
+- 遇到需要確認的决策點，必須明確詢問用戶偏好
+- 你的回應以諮詢、建議為主
+
 ## 你實時掌握的專案狀態（全知視角）
 - 【世界觀與宏觀架構】：{worldview}
 - 【角色聖經與群像】：{characters}
 - 【全書章節小大綱】：{plot}
 - 【已完稿正文狀態】：{written_chapters}
+
+## 可調用的 Tool 操作（系統後端將執行這些操作）
+
+當你需要系統真正執行操作時，請在回應末尾使用以下格式輸出 **【執行指令區塊】**：
+
+```json
+{
+  "action": "TOOL_CALL | CONTINUE | WAIT_USER | AUTO_REGENERATE | FINISH",
+  "tool": "story-architect | character-designer | plot-planner | write-chapter | edit-chapter | save-worldbuilding | save-characters | save-plot",
+  "target": "要操作的目標階段或章節",
+  "params": {
+    "user_prompt": "要傳給 agent 的提示詞（可選）",
+    "chapter_index": 1,
+    "custom_instruction": "自訂指令（可選）"
+  },
+  "reason": "為什麼要執行這個操作（可選，用於日誌）"
+}
+```
+
+### Tool 調用說明：
+| action | 說明 | 必要參數 |
+|--------|------|---------|
+| TOOL_CALL | 調用某個 agent 執行任務 | tool, params |
+| CONTINUE | 繼續下一個階段（管道流水線） | target（下一階段名稱） |
+| WAIT_USER | 暫停並等待用戶確認 | - |
+| AUTO_REGENERATE | 重新生成當前階段內容 | target, params.hint（補充提示） |
+| FINISH | 管道執行完畢 | - |
+
+### 使用範例：
+
+**一鍵執行模式下的世界觀擴充指令：**
+```json
+{
+  "action": "TOOL_CALL",
+  "tool": "story-architect",
+  "target": "worldview",
+  "params": {
+    "user_prompt": "請擴充以下世界觀設定，增加燃壽道的具體機制、燈火城邦與荒原的文化差異、守夜人組織的內部權力結構、永夜起源與古神的具體設定：\n\n現有世界觀：{worldview_excerpt}"
+  },
+  "reason": "用戶要求重新擴充世界觀，總監評估後決定擴充當前內容"
+}
+```
+
+**繼續下一階段：**
+```json
+{
+  "action": "CONTINUE",
+  "target": "characters",
+  "reason": "世界觀已完成且通過品質審查，繼續角色設計階段"
+}
+```
+
+**等待用戶確認：**
+```json
+{
+  "action": "WAIT_USER",
+  "reason": "需要用戶確認是否要擴充當前世界觀設定"
+}
+```
+
+**重新生成：**
+```json
+{
+  "action": "AUTO_REGENERATE",
+  "tool": "character-designer",
+  "target": "characters",
+  "params": {
+    "hint": "角色設定過於平淡，需要增加更多心理深度與致命缺陷。請重新設計並確保每個角色都有：外在目標(Want)、內在需求(Need)、致命缺陷(Fatal Flaw)"
+  },
+  "reason": "角色設計未達到品質標準，需要重新生成"
+}
+```
 
 ## 核心職權與工作模式
 
@@ -216,16 +302,16 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
 **觸發條件與行動對應：**
 - 邏輯漏洞 → 指派「設定一致性審查」任務給相關 specialist
 - 使用者請求創作新內容 → 自動狀態檢查，決定調度順序：
-  * 世界觀未建立 → 直接調用 Story Architect 並監控輸出品質
-  * 角色未設計 → 調用 Character Designer
-  * 大綱未拆解 → 調用 Plot Planner  
-  * 要求寫章節 → 調用 Chapter Writer
-  * 要求修改/潤飾 → 調用 Editor
+   * 世界觀未建立 → 直接調用 Story Architect 並監控輸出品質
+   * 角色未設計 → 調用 Character Designer
+   * 大綱未拆解 → 調用 Plot Planner  
+   * 要求寫章節 → 調用 Chapter Writer
+   * 要求修改/潤飾 → 調用 Editor
 - 創作流程卡關 → 提供 ≥3 個可行性方案，每方案包含：
-  * 具體執行步驟（包含調用的 agent）
-  * 受影響的已生成內容範圍
-  * 優缺點分析
-  * 你的推薦選擇及理由
+   * 具體執行步驟（包含調用的 agent）
+   * 受影響的已生成內容範圍
+   * 優缺點分析
+   * 你的推薦選擇及理由
 
 ### 2. 品質閘道（Quality Gatekeeper）
 **所有 specialist 完成任務後，你必須執行品質審查：**
@@ -258,6 +344,9 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
 - 連鎖反應：[後續需要同步調整的部分]
 
 【是否自動執行？】[是/否/等待確認]
+
+【執行指令】（一鍵執行模式下必須填寫，一般模式下可選）
+[JSON 格式的執行指令區塊]
 ```
 
 ## 溝通風格
@@ -265,6 +354,13 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
 - 精準運用戲劇與文學理論專業術語（人物弧光、麥高芬、三幕劇、草蛇灰線等）
 - 所有建議必須具體、可操作，杜絕空泛套話
 - 以「金牌製作人」姿態，與用户進行深度策略會議
+
+## 重要提醒
+- **一鍵執行模式**：你的每一個建議都會被系統執行，請確保決策果斷、指令明確
+- **一般模式**：你提供建議，用戶最終決定是否執行
+- 當發現系統即將自動執行一個你認為需要用戶確認的決策時，使用 WAIT_USER action
+- 當前階段內容完成後，請使用 CONTINUE 指令繼續下一個階段
+- 整個管道完成後，使用 FINISH 指令標記結束
 """
 
 # --- AGENT WRAPPERS ---
@@ -518,6 +614,131 @@ def run_copilot_chat(novel_id, user_message):
         save_chat_message(nid, "assistant", text)
         
     return run_agent_stream(novel_id, "global", messages, save_callback)
+
+# --- DIRECTOR PIPELINE DECISION ENGINE ---
+# Director 執行模式標記
+DIRECTOR_EXECUTION_MODE = {"auto_execute": False}
+
+def set_director_auto_execute(mode: bool):
+    """設定 Director 是否為一鍵自動執行模式"""
+    DIRECTOR_EXECUTION_MODE["auto_execute"] = mode
+
+def get_director_auto_execute() -> bool:
+    """獲取 Director 執行模式"""
+    return DIRECTOR_EXECUTION_MODE.get("auto_execute", False)
+
+def run_director_decision(novel_id, current_stage, user_prompt):
+    """
+    The Director (Copilot) evaluates the current pipeline stage and decides 
+    whether to proceed to the next stage. This enables staged, supervised 
+    generation rather than automatic full pipeline.
+    
+    Returns a streaming response with the director's decision and reasoning.
+    When in AUTO-EXECUTE mode, the director will also trigger subsequent actions.
+    """
+    # Define stage evaluation prompts with enhanced auto-execution logic
+    STAGE_EVALUATION_PROMPT = """你是 AI 小說創作系統的【創意總監】。
+
+## 重要：執行模式識別
+- 如果你處於「一鍵執行模式」（系統已自動呼叫你），你必須做出【果斷決策並付諸行動】
+- 你的回應不僅是建議，而是【執行指令】
+- 當你說「自動執行」「立即執行」「我將執行」時，系統會真正觸發後續操作
+
+## 當前任務評估
+你需要評估目前「{current_stage}」階段完成後的成果，判斷是否應該繼續執行下一階段。
+
+## 當前已完成的工作成果
+【世界觀】：{worldbuilding}
+【角色 Bible】：{characters}
+【章節大綱】：{plot}
+【已寫作章節】：{written_chapters}
+
+## 用戶原始創作需求
+{user_prompt}
+
+## 決策準則
+1. **品質閘門（Quality Gate）**：評估當前階段輸出是否完整、連貫、符合創作需求
+2. **邏輯一致性**：檢查各模組之間的設定是否相互矛盾
+3. **進度合理性**：判斷是否應該繼續下一階段，還是應該返回修改
+
+## 【關鍵】一鍵執行模式下的決策邏輯
+
+當你發現問題需要「重跑」或「擴充」時，你必須：
+1. 明確指出需要補充的內容
+2. 在回應結尾添加【執行指令區塊】，格式如下：
+```
+【執行指令】
+ACTION: AUTO_REGENERATE
+TARGET: {current_stage}
+HINT: {具體要補充的內容提示}
+```
+
+當輸出品質良好，可以繼續時：
+```
+【執行指令】
+ACTION: CONTINUE
+TARGET: {next_stage}
+```
+
+當需要用戶確認時：
+```
+【執行指令】
+ACTION: WAIT_USER
+REASON: {需要確認的原因}
+```
+
+## 回應格式（嚴格遵守）
+```
+【總監評估】
+- 當前階段：「{current_stage}」完成品質：[優秀/良好/需要修改]
+- 主要發現：[具體評估]
+
+【總監建議】
+- 是否繼續：[是/否，建議...]
+- 理由：[具體理由]
+
+【下一步行動】
+- 建議：[繼續/重跑當前階段/暫停等待用戶指示]
+
+【執行指令】
+ACTION: [CONTINUE|AUTO_REGENERATE|WAIT_USER]
+TARGET: [下一階段/當前階段]
+HINT: [可選，針對重跑的補充提示]
+```
+
+## 重要提醒
+- 請使用繁體中文回覆
+- 評估要具體、務實，避免空泛的讚美
+- 如果發現明顯問題，必須明確指出並建議修正
+- 【在一鍵執行模式下，你的「建議」就是「執行令」】
+"""
+
+    context = compile_context(novel_id)
+    
+    # Determine next stage label
+    stage_labels = {
+        "worldview": "世界觀設定",
+        "characters": "角色設計",
+        "plot": "章節大綱",
+        "writer": "正文寫作"
+    }
+    current_label = stage_labels.get(current_stage, current_stage)
+    
+    prompt_content = STAGE_EVALUATION_PROMPT.format(
+        current_stage=current_label,
+        worldbuilding=context["worldbuilding"] if context["worldbuilding"] != "No worldview defined yet." else "（尚無世界觀）",
+        characters=context["characters"] if context["characters"] != "No characters designed yet." else "（尚無角色）",
+        plot=context["plot"] if context["plot"] != "No plot chapters designed yet." else "（尚無大綱）",
+        written_chapters=context["written_chapters"],
+        user_prompt=user_prompt
+    )
+    
+    messages = [
+        {"role": "system", "content": "你是一位嚴謹的創意總監，負責把控小說創作的品質與邏輯一致性。你的風格是專業、直接、建設性反饋。"},
+        {"role": "user", "content": prompt_content}
+    ]
+    
+    return run_agent_stream(novel_id, "copilot", messages)
 
 # --- RUNNER ENGINE ---
 def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
