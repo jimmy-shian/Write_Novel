@@ -62,141 +62,69 @@
                     </div>
                     
                     <div class="header-actions" id="novel-header-actions" style="display: none; gap: 8px;">
-                        <div class="dropdown-container" style="position: relative; display: inline-block;">
-                            <button id="btn-export-dropdown" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px;">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="7 10 12 15 17 10"></polyline>
-                                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                                </svg>
-                                <span>匯出小說專案</span>
-                            </button>
-                            <div id="export-dropdown-menu" class="glass-dropdown" style="position: absolute; right: 0; top: calc(100% + 8px); background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08); width: 220px; z-index: 100; padding: 6px;">
-                                <button class="dropdown-item" data-format="txt" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; text-align: left; padding: 10px 14px; border-radius: 8px; font-weight: 500; color: var(--text-primary); cursor: pointer; transition: all 0.2s;">
-                                    <span style="font-size: 1.2rem;">📄</span>
-                                    <div>
-                                        <div style="font-size: 0.85rem; font-weight: 600;">匯出 TXT 完整正文</div>
-                                        <div style="font-size: 0.7rem; color: var(--text-muted);">僅包含章節標題與正文內容</div>
-                                    </div>
-                                </button>
-                                <button class="dropdown-item" data-format="markdown" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; text-align: left; padding: 10px 14px; border-radius: 8px; font-weight: 500; color: var(--text-primary); cursor: pointer; transition: all 0.2s; margin-top: 4px;">
-                                    <span style="font-size: 1.2rem;">📝</span>
-                                    <div>
-                                        <div style="font-size: 0.85rem; font-weight: 600;">匯出 Markdown 設定集</div>
-                                        <div style="font-size: 0.7rem; color: var(--text-muted);">含世界觀、角色、大綱與正文</div>
-                                    </div>
-                                </button>
+                        <!-- 執行模式切換開關 -->
+                        <div class="execution-mode-toggle" title="一鍵執行模式：總監建議即為執行令 | 一般模式：總監提供建議由用戶決定">
+                            <span class="mode-label">一般模式</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-auto-execute">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="mode-label mode-auto">一鍵執行</span>
+                        </div>
+                        
+                        <!-- 一鍵啟動按鈕 -->
+                        <button id="btn-pipeline-execute" class="btn btn-primary btn-sm" style="display: flex; align-items: center; gap: 6px;">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            <span>🚀 一鍵生成全書</span>
+                        </button>
+                    </div>
+                    
+                    <!-- 管道執行進度指示器 (隱藏直到執行開始) -->
+                    <div id="pipeline-progress-bar" class="pipeline-progress hidden">
+                        <div class="progress-stages">
+                            <div class="stage-indicator" data-stage="worldview">
+                                <div class="stage-icon">🌍</div>
+                                <div class="stage-label">世界觀</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="characters">
+                                <div class="stage-icon">👥</div>
+                                <div class="stage-label">角色</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="plot">
+                                <div class="stage-icon">📋</div>
+                                <div class="stage-label">大綱</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="writer">
+                                <div class="stage-icon">✍️</div>
+                                <div class="stage-label">正文</div>
+                                <div class="stage-status"></div>
                             </div>
                         </div>
+                        <div class="progress-director-message" id="director-message">🎬 AI 總監評估中...</div>
                     </div>
                 </div>
                 
                 <!-- Nav Tabs -->
                 <nav id="workspace-nav">
-                    <button class="nav-tab active" data-tab="pipeline">🧠 聯動工作流</button>
-                    <button class="nav-tab" data-tab="worldview">世界觀設定</button>
-                    <button class="nav-tab" data-tab="characters">角色 Bible</button>
-                    <button class="nav-tab" data-tab="plot">劇情大綱</button>
-                    <button class="nav-tab" data-tab="writer">分章寫作</button>
+                    <button class="nav-tab active" data-tab="worldview">🌍 世界觀設定</button>
+                    <button class="nav-tab" data-tab="characters">👥 角色 Bible</button>
+                    <button class="nav-tab" data-tab="plot">📋 劇情大綱</button>
+                    <button class="nav-tab" data-tab="writer">✍️ 分章寫作</button>
                 </nav>
             </header>
             
             <!-- Workpanels Container -->
             <div id="workpanels">
                 
-                <!-- 0. ORCHESTRATION PIPELINE TAB -->
-                <section id="panel-pipeline" class="workpanel active">
-                    <div class="panel-actions-header">
-                        <div class="agent-badge">
-                            <span class="pulse-indicator" style="background-color: var(--secondary);"></span>
-                            <span>🧠 Multi-Agent Orchestration Flow (聯動大腦)</span>
-                        </div>
-                        <button id="btn-pipeline-execute" class="btn btn-primary btn-sm">
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                            </svg>
-                            <span>一鍵啟動 Agent 聯動工作流</span>
-                        </button>
-                    </div>
-                    
-                    <!-- Visual Flow Nodes Chart -->
-                    <div class="pipeline-flow-board">
-                        
-                        <!-- Agent Node 1 -->
-                        <div class="pipeline-node" id="node-architect">
-                            <div class="node-header">
-                                <span class="node-icon">1️⃣</span>
-                                <div class="node-info">
-                                    <div class="node-name">Story Architect</div>
-                                    <div class="node-role">世界觀規劃師</div>
-                                </div>
-                                <span class="node-status-pill status-idle" id="status-architect">Idle 閒置</span>
-                            </div>
-                            <div class="node-body">
-                                <p class="node-desc">負責起草核心勢力背景、地理、力量體系與小說核心衝突。</p>
-                                <div class="node-console-container">
-                                    <div class="console-label">Live Output Stream (100% Real-time)</div>
-                                    <textarea class="node-console" id="pipeline-console-architect" placeholder="等待聯動工作流啟動..." readonly></textarea>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Connection Line/Arrow -->
-                        <div class="pipeline-arrow">
-                            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="12" y1="5" x2="12" y2="19"></line>
-                                <polyline points="19 12 12 19 5 12"></polyline>
-                            </svg>
-                        </div>
-                        
-                        <!-- Agent Node 2 -->
-                        <div class="pipeline-node" id="node-character">
-                            <div class="node-header">
-                                <span class="node-icon">2️⃣</span>
-                                <div class="node-info">
-                                    <div class="node-name">Character Designer</div>
-                                    <div class="node-role">角色設計大師</div>
-                                </div>
-                                <span class="node-status-pill status-idle" id="status-character">Idle 閒置</span>
-                            </div>
-                            <div class="node-body">
-                                <p class="node-desc">讀取前序世界觀，精心編排多維度的角色矩陣（包括性格缺憾與動機）。</p>
-                                <div class="node-console-container">
-                                    <div class="console-label">Live Output Stream (100% Real-time)</div>
-                                    <textarea class="node-console" id="pipeline-console-character" placeholder="等待世界觀規劃師完成..." readonly></textarea>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Connection Line/Arrow -->
-                        <div class="pipeline-arrow">
-                            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="12" y1="5" x2="12" y2="19"></line>
-                                <polyline points="19 12 12 19 5 12"></polyline>
-                            </svg>
-                        </div>
-                        
-                        <!-- Agent Node 3 -->
-                        <div class="pipeline-node" id="node-plot">
-                            <div class="node-header">
-                                <span class="node-icon">3️⃣</span>
-                                <div class="node-info">
-                                    <div class="node-name">Plot Planner</div>
-                                    <div class="node-role">劇情規劃大師</div>
-                                </div>
-                                <span class="node-status-pill status-idle" id="status-plot">Idle 閒置</span>
-                            </div>
-                            <div class="node-body">
-                                <p class="node-desc">融合世界衝突與角色性格張力，推演分章劇情、大綱細節與伏筆。</p>
-                                <div class="node-console-container">
-                                    <div class="console-label">Live Output Stream (100% Real-time)</div>
-                                    <textarea class="node-console" id="pipeline-console-plot" placeholder="等待角色設計大師完成..." readonly></textarea>
-                                </div>
-                            </div>
-                        </div>
-                        
-                    </div>
-                </section>
+                <!-- 1. WORLDVIEW TAB -->
                 
                 <!-- 1. WORLDVIEW TAB -->
                 <section id="panel-worldview" class="workpanel">
@@ -213,6 +141,14 @@
                                 <span>AI 自動規劃世界觀</span>
                             </button>
                             <button id="btn-worldview-save" class="btn btn-ghost btn-sm">保存修改</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-worldview" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Story Architect</strong> 正在分析與生成世界觀設定...
                         </div>
                     </div>
                     
@@ -242,6 +178,14 @@
                             </button>
                             <button id="btn-character-add" class="btn btn-ghost btn-sm">新增角色</button>
                             <button id="btn-characters-save" class="btn btn-ghost btn-sm">保存修改</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-characters" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Character Designer</strong> 正在分析與生成角色設定...
                         </div>
                     </div>
                     

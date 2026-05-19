@@ -26,7 +26,10 @@ from db import (
     save_plot_chapters,
     save_chapter,
     get_agent_configs,
-    save_agent_config
+    save_agent_config,
+    append_foreshadowing,
+    insert_plot_chapter,
+    update_character_single_field
 )
 from agents import (
     run_story_architect,
@@ -34,7 +37,17 @@ from agents import (
     run_plot_planner,
     run_chapter_writer,
     run_editor_agent,
-    run_copilot_chat
+    run_copilot_chat,
+    run_director_decision,
+    set_director_auto_execute,
+    set_director_user_prompt,
+    get_director_auto_execute
+)
+# 增量生成 Agent
+from agents_incremental import (
+    run_incremental_architect,
+    run_incremental_character_designer,
+    run_incremental_plot_planner
 )
 from llm import get_config_for_agent, get_default_config
 from db import AGENT_DEFAULTS
@@ -160,6 +173,38 @@ def api_save_chapter(novel_id: str, chapter_index: int, payload: ChapterSave):
 def api_clear_chat(novel_id: str):
     clear_chat_memory(novel_id)
     return {"status": "success"}
+
+class PipelinePromptSave(BaseModel):
+    pipeline_prompt: str
+
+@app.post("/api/novels/{novel_id}/pipeline-prompt")
+def api_save_pipeline_prompt(novel_id: str, payload: PipelinePromptSave):
+    """Save the user's last pipeline orchestration prompt for memory"""
+    from db import update_novel_pipeline_prompt
+    update_novel_pipeline_prompt(novel_id, payload.pipeline_prompt)
+    return {"status": "success"}
+
+@app.get("/api/novels/{novel_id}/pipeline-prompt")
+def api_get_pipeline_prompt(novel_id: str):
+    """Get the user's last pipeline orchestration prompt"""
+    novel = get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return {"pipeline_prompt": novel.get("pipeline_prompt", "")}
+
+# --- DIRECTOR PIPELINE STAGES ENDPOINT ---
+@app.post("/api/novels/{novel_id}/director-decision")
+def api_director_decision(novel_id: str, current_stage: str = Body(...), user_prompt: str = Body(...)):
+    """
+    The Director (Copilot) evaluates whether to proceed to the next stage.
+    Returns a decision with reasoning about whether to continue, skip, or adjust.
+    """
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_director_decision(novel_id, current_stage, user_prompt),
+        media_type="text/event-stream"
+    )
 
 # --- AGENT STREAMING ACTIONS ---
 @app.post("/api/agent/story-architect")
@@ -399,3 +444,100 @@ def serve_index():
 
 # Mount other static files
 app.mount("/", StaticFiles(directory=static_dir), name="static")
+
+# ============================================================
+# INCREMENTAL UPDATE API ENDPOINTS (細粒度編輯)
+# ============================================================
+
+class ForeshadowingAppend(BaseModel):
+    """新增伏筆種子"""
+    seed: str
+
+class PlotChapterInsert(BaseModel):
+    """在指定位置插入新大綱章節"""
+    insert_after_index: int  # 插入到此索引之後（0 表示插入到最前面）
+    chapter_data: dict
+
+class CharacterFieldUpdate(BaseModel):
+    """更新角色單一欄位"""
+    char_index: int
+    field_name: str
+    new_value: Any
+
+# --- 增量操作端點 ---
+@app.post("/api/novels/{novel_id}/worldbuilding/foreshadowing")
+def api_append_foreshadowing(novel_id: str, payload: ForeshadowingAppend):
+    """增量添加伏筆種子到世界觀（不重新生成全部）"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    version = append_foreshadowing(novel_id, payload.seed)
+    if version:
+        return {"status": "success", "version": version}
+    raise HTTPException(status_code=400, detail="Failed to append foreshadowing")
+
+@app.post("/api/novels/{novel_id}/plot/chapters/insert")
+def api_insert_plot_chapter(novel_id: str, payload: PlotChapterInsert):
+    """在指定位置插入新的大綱章節"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    version = insert_plot_chapter(novel_id, payload.insert_after_index, payload.chapter_data)
+    if version:
+        return {"status": "success", "version": version}
+    raise HTTPException(status_code=400, detail="Failed to insert chapter outline")
+
+@app.patch("/api/novels/{novel_id}/characters/field")
+def api_update_character_field(novel_id: str, payload: CharacterFieldUpdate):
+    """增量更新角色單一欄位（細粒度修改）"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    result = update_character_single_field(novel_id, payload.char_index, payload.field_name, payload.new_value)
+    if result.get("status") == "success":
+        return result
+    raise HTTPException(status_code=400, detail=result.get("message", "Failed to update character field"))
+
+# --- 增量生成 Agent 端點 ---
+class IncrementalArchitectRequest(BaseModel):
+    """增量生成世界觀（局部上下文）"""
+    target_section: str  # 要生成的部分，如 "foreshadowing_seeds", "three_act_structure"
+    user_hint: str       # 用戶的提示
+
+class IncrementalCharacterRequest(BaseModel):
+    """增量生成角色（局部上下文）"""
+    target_char_index: Optional[int] = None  # 要修改的角色索引，None 表示新增
+    field_name: Optional[str] = None         # 要修改的欄位，None 表示全部
+    user_hint: str                           # 用戶的提示
+
+class IncrementalPlotRequest(BaseModel):
+    """增量生成大綱（局部上下文）"""
+    insert_after_index: int                  # 插入位置
+    user_hint: str                           # 用戶的提示
+
+@app.post("/api/agent/incremental-architect")
+def api_incremental_architect(novel_id: str = Body(...), payload: IncrementalArchitectRequest = Body(...)):
+    """增量生成世界觀的特定部分（不重新生成全部）"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_incremental_architect(novel_id, payload.target_section, payload.user_hint),
+        media_type="text/event-stream"
+    )
+
+@app.post("/api/agent/incremental-character")
+def api_incremental_character(novel_id: str = Body(...), payload: IncrementalCharacterRequest = Body(...)):
+    """增量生成/修改角色（局部上下文）"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_incremental_character_designer(novel_id, payload.target_char_index, payload.field_name, payload.user_hint),
+        media_type="text/event-stream"
+    )
+
+@app.post("/api/agent/incremental-plot")
+def api_incremental_plot(novel_id: str = Body(...), payload: IncrementalPlotRequest = Body(...)):
+    """增量生成大綱章節（局部上下文，可在指定位置插入）"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_incremental_plot_planner(novel_id, payload.insert_after_index, payload.user_hint),
+        media_type="text/event-stream"
+    )

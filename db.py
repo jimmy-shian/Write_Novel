@@ -18,14 +18,14 @@ AGENT_DEFAULTS = {
         "model": os.getenv("MODEL_GLOBAL", "google/gemma-3n-e4b-it"),
         "temperature": 0.70,
         "top_p": 0.95,
-        "max_tokens": 4096,
+        "max_tokens": 16384,
         "enable_thinking": 1
     },
     "architect": {
         "model": os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
         "temperature": 0.30,  # 架構性輸出需要精準
         "top_p": 0.95,
-        "max_tokens": 8192,
+        "max_tokens": 16384,  # 增加到 16K
         "enable_thinking": 1
     },
     "character": {
@@ -33,7 +33,7 @@ AGENT_DEFAULTS = {
         "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "openai/gpt-oss-120b"),
         "temperature": 0.40,  # 角色設計需要創意但結構化
         "top_p": 0.95,
-        "max_tokens": 8192,
+        "max_tokens": 16384,  # 增加到 16K
         "enable_thinking": 1
     },
     "plot": {
@@ -41,7 +41,7 @@ AGENT_DEFAULTS = {
         "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "qwen/qwen3.5-122b-a10b"),
         "temperature": 0.35,  # 大綱規劃需要邏輯嚴謹
         "top_p": 0.95,
-        "max_tokens": 8192,
+        "max_tokens": 16384,  # 增加到 16K
         "enable_thinking": 1
     },
     "writer": {
@@ -55,14 +55,14 @@ AGENT_DEFAULTS = {
         "model": os.getenv("MODEL_EDITOR", "mistralai/mistral-small-4-119b-2603"),
         "temperature": 0.25,  # 精準的文字微調
         "top_p": 0.90,
-        "max_tokens": 8192,
+        "max_tokens": 16384,  # 增加到 16K
         "enable_thinking": 0
     },
     "copilot": {
         "model": os.getenv("MODEL_COPILOT", "stepfun-ai/step-3.5-flash"),
         "temperature": 0.55,  # 創意建議與互動對話
         "top_p": 0.95,
-        "max_tokens": 4096,
+        "max_tokens": 16384,  # 增加到 16K
         "enable_thinking": 0
     }
 }
@@ -87,6 +87,12 @@ def db_init():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # Ensure pipeline_prompt column exists
+    try:
+        cursor.execute("ALTER TABLE novels ADD COLUMN pipeline_prompt TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     
     # 2. Worldbuilding table (versioned)
     cursor.execute("""
@@ -191,8 +197,18 @@ def create_novel(novel_id, title, genre, style):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO novels (id, title, genre, style) VALUES (?, ?, ?, ?)",
-        (novel_id, title, genre, style)
+        "INSERT INTO novels (id, title, genre, style, pipeline_prompt) VALUES (?, ?, ?, ?, ?)",
+        (novel_id, title, genre, style, "")
+    )
+    conn.commit()
+    conn.close()
+
+def update_novel_pipeline_prompt(novel_id, pipeline_prompt):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE novels SET pipeline_prompt = ? WHERE id = ?",
+        (pipeline_prompt, novel_id)
     )
     conn.commit()
     conn.close()
@@ -444,3 +460,97 @@ def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, 
     """, (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, int(enable_thinking)))
     conn.commit()
     conn.close()
+
+# --- INCREMENTAL UPDATE FUNCTIONS ---
+def append_foreshadowing(novel_id, new_seed):
+    """
+    增量添加伏筆種子到世界觀。
+    不重新生成全部，只在現有內容末尾追加新的伏筆。
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    if not wb:
+        return None
+    
+    current_content = wb["content"]
+    # 找到伏筆種子的位置並追加
+    if "伏筆種子" in current_content:
+        # 在現有伏筆種子後面追加
+        parts = current_content.split("【伏筆種子】")
+        if len(parts) > 1:
+            # 替換最後部分，添加新伏筆
+            new_part = parts[1]
+            if new_part.strip():
+                # 在最後一個條目後面追加
+                lines = new_part.strip().split("\n")
+                last_idx = len(lines) - 1
+                while last_idx >= 0 and not lines[last_idx].strip():
+                    last_idx -= 1
+                if last_idx >= 0:
+                    lines.insert(last_idx + 1, f"  • {new_seed}")
+                    new_part = "\n".join(lines)
+            parts[1] = new_part
+            new_content = "【伏筆種子】".join(parts)
+        else:
+            new_content = current_content + f"\n  • {new_seed}"
+    else:
+        new_content = current_content + f"\n\n【伏筆種子】\n  • {new_seed}"
+    
+    return save_worldbuilding(novel_id, new_content)
+
+def insert_plot_chapter(novel_id, insert_after_index, new_chapter):
+    """
+    在指定位置後面插入新的大綱章節。
+    insert_after_index: 插入到此索引之後（0 表示插入到最前面）
+    返回新的 version
+    """
+    plot = get_latest_plot_chapters(novel_id)
+    if not plot:
+        return None
+    
+    plot_data = plot["parsed_data"]
+    if "chapters" not in plot_data:
+        plot_data["chapters"] = []
+    
+    chapters = plot_data["chapters"]
+    
+    # 確保 chapter_index 正確
+    if insert_after_index < 0 or insert_after_index >= len(chapters):
+        # 插入到最後
+        new_chapter["chapter_index"] = len(chapters) + 1
+        chapters.append(new_chapter)
+    else:
+        # 插入到指定位置之後
+        insert_pos = insert_after_index + 1
+        new_chapter["chapter_index"] = insert_pos + 1
+        chapters.insert(insert_pos, new_chapter)
+        # 重新計算後面所有章節的 chapter_index
+        for i in range(insert_pos + 1, len(chapters)):
+            chapters[i]["chapter_index"] = i + 1
+    
+    return save_plot_chapters(novel_id, plot_data)
+
+def update_character_field(novel_id, char_index, field_name, new_value):
+    """
+    更新單一角色的特定欄位（細粒度修改）。
+    """
+    char_data = get_latest_characters(novel_id)
+    if not char_data or "parsed_data" not in char_data:
+        return None
+    
+    parsed = char_data["parsed_data"]
+    if "characters" not in parsed or char_index >= len(parsed["characters"]):
+        return None
+    
+    # 更新指定欄位
+    parsed["characters"][char_index][field_name] = new_value
+    
+    return save_characters(novel_id, parsed)
+
+def update_character_single_field(novel_id, char_index, field_name, new_value):
+    """
+    增量更新角色單一欄位（不重新生成全部）。
+    """
+    result = update_character_field(novel_id, char_index, field_name, new_value)
+    if result:
+        return {"status": "success", "version": result}
+    return {"status": "error", "message": "Failed to update character field"}
