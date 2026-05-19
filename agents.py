@@ -243,11 +243,36 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
 ### Tool 調用說明：
 | action | 說明 | 必要參數 |
 |--------|------|---------|
-| TOOL_CALL | 調用某個 agent 執行任務 | tool, params |
+| TOOL_CALL | 調用某個 agent 執行任務（全部重新生成） | tool, params |
+| INCREMENTAL_UPDATE | 增量更新/新增部分內容（細粒度編輯） | target, params |
 | CONTINUE | 繼續下一個階段（管道流水線） | target（下一階段名稱） |
 | WAIT_USER | 暫停並等待用戶確認 | - |
 | AUTO_REGENERATE | 重新生成當前階段內容 | target, params.hint（補充提示） |
 | FINISH | 管道執行完畢 | - |
+
+### 【關鍵區分】何時用 TOOL_CALL vs INCREMENTAL_UPDATE
+
+**使用 TOOL_CALL（全部重新生成）當：**
+- 用戶明確要求「重新設計」「全部重寫」
+- 現有內容與創作方向完全不符，需要推翻重來
+- 存在系統性邏輯錯誤，無法通過局部修復
+
+**使用 INCREMENTAL_UPDATE（增量更新）當：**
+- 用戶要求「新增」「插入」「局部修改」
+- 只修改某個角色的特定欄位（如 personality、motivation、arc）
+- 只在世界觀中新增伏筆種子（如「新增一個伏筆」）
+- 在大綱的特定位置插入新章節
+- 保持其餘內容不變的情況下進行補充
+
+### INCREMENTAL_UPDATE 的 target 與 params：
+
+| target | params 說明 | 範例 |
+|--------|-------------|------|
+| foreshadowing_seeds | user_hint（要新增的伏筆內容） | "新增一個關於主角身世的伏筆" |
+| three_act_structure | user_hint（要修改的結構內容） | "將第一幕的setup調整為..." |
+| character | target_char_index, field_name, user_hint | "修改第3個角色的personality" |
+| new_character | user_hint（新角色描述） | "設計一個新反派角色" |
+| plot_chapter | insert_after_index, user_hint | "在第2章之後插入新章節" |
 
 ### 使用範例：
 
@@ -261,6 +286,45 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼
     "user_prompt": "請擴充以下世界觀設定，增加燃壽道的具體機制、燈火城邦與荒原的文化差異、守夜人組織的內部權力結構、永夜起源與古神的具體設定：\n\n現有世界觀：{worldview_excerpt}"
   },
   "reason": "用戶要求重新擴充世界觀，總監評估後決定擴充當前內容"
+}
+```
+
+**增量新增伏筆種子（不重新生成全部世界觀）：**
+```json
+{
+  "action": "INCREMENTAL_UPDATE",
+  "target": "foreshadowing_seeds",
+  "params": {
+    "user_hint": "新增一個伏筆：關於主角身上隱藏的古老血脈，在結局時覺醒"
+  },
+  "reason": "用戶要求新增伏筆，不需要重新生成全部世界觀"
+}
+```
+
+**增量修改角色特定欄位：**
+```json
+{
+  "action": "INCREMENTAL_UPDATE",
+  "target": "character",
+  "params": {
+    "target_char_index": 2,
+    "field_name": "personality",
+    "user_hint": "將第3個角色（索引2）的性格從冷酷改為外冷內熱，增加更多層次感"
+  },
+  "reason": "用戶要求調整特定角色的性格，不需要重新設計全部角色"
+}
+```
+
+**增量插入新大綱章節：**
+```json
+{
+  "action": "INCREMENTAL_UPDATE",
+  "target": "plot_chapter",
+  "params": {
+    "insert_after_index": 2,
+    "user_hint": "在第3章之後插入一個過渡章節，描述主角穿越荒原的經歷"
+  },
+  "reason": "用戶要求在特定位置插入新章節，保持其他章節不變"
 }
 ```
 
@@ -616,8 +680,10 @@ def run_copilot_chat(novel_id, user_message):
     return run_agent_stream(novel_id, "global", messages, save_callback)
 
 # --- DIRECTOR PIPELINE DECISION ENGINE ---
-# Director 執行模式標記
-DIRECTOR_EXECUTION_MODE = {"auto_execute": False}
+# Director 執行模式標記（用於區分一鍵執行模式 vs 一般模式）
+# 一鍵執行模式：總監的建議即為執行令（自動執行）
+# 一般模式：總監提供建議，由用戶決定
+DIRECTOR_EXECUTION_MODE = {"auto_execute": False, "user_prompt": ""}
 
 def set_director_auto_execute(mode: bool):
     """設定 Director 是否為一鍵自動執行模式"""
@@ -626,6 +692,14 @@ def set_director_auto_execute(mode: bool):
 def get_director_auto_execute() -> bool:
     """獲取 Director 執行模式"""
     return DIRECTOR_EXECUTION_MODE.get("auto_execute", False)
+
+def set_director_user_prompt(prompt: str):
+    """設定當前用戶的創作需求 prompt"""
+    DIRECTOR_EXECUTION_MODE["user_prompt"] = prompt
+
+def get_director_user_prompt() -> str:
+    """獲取當前用戶的創作需求 prompt"""
+    return DIRECTOR_EXECUTION_MODE.get("user_prompt", "")
 
 def run_director_decision(novel_id, current_stage, user_prompt):
     """
@@ -670,21 +744,21 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 【執行指令】
 ACTION: AUTO_REGENERATE
 TARGET: {current_stage}
-HINT: {具體要補充的內容提示}
+HINT: {{具體要補充的內容提示}}
 ```
 
 當輸出品質良好，可以繼續時：
 ```
 【執行指令】
 ACTION: CONTINUE
-TARGET: {next_stage}
+TARGET: {{next_stage}}
 ```
 
 當需要用戶確認時：
 ```
 【執行指令】
 ACTION: WAIT_USER
-REASON: {需要確認的原因}
+REASON: {{需要確認的原因}}
 ```
 
 ## 回應格式（嚴格遵守）
@@ -738,7 +812,11 @@ HINT: [可選，針對重跑的補充提示]
         {"role": "user", "content": prompt_content}
     ]
     
-    return run_agent_stream(novel_id, "copilot", messages)
+    # Save director decision to chat memory so it persists across sessions
+    def save_director_decision_callback(nid, text):
+        save_chat_message(nid, "assistant", text)
+        
+    return run_agent_stream(novel_id, "copilot", messages, save_director_decision_callback)
 
 # --- RUNNER ENGINE ---
 def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
