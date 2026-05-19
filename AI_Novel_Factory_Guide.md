@@ -31,8 +31,8 @@
 | | :--- | :--- | :---: | :---: | :---: | :---: |
 | **Global** | google/gemma-3n-e4b-it | 全域預設模型（Router / Fallback） | 0.70 | 0.95 | 4096 | ✅ |
 | **Story Architect** | qwen/qwen3.5-122b-a10b | Planner / Architect，結構設計與任務拆解 | 0.30 | 0.95 | 8192 | ✅ |
-| **Character Designer** | mistralai/mistral-small-4-119b-2603 | 創意但結構化的人物描寫 | 0.45 | 0.95 | 4096 | ✅ |
-| **Plot Planner** | openai/gpt-oss-120b | 邏輯嚴謹的大綱拆解 | 0.35 | 0.95 | 8192 | ✅ |
+| **Character Designer** | openai/gpt-oss-120b | 創意但結構化的人物描寫（使用 MODEL_STORY） | 0.45 | 0.95 | 8192 | ✅ |
+| **Plot Planner** | qwen/qwen3.5-122b-a10b | 邏輯嚴謹的大綱拆解（使用 MODEL_CRITIC） | 0.35 | 0.95 | 8192 | ✅ |
 | **Chapter Writer** | nvidia/nemotron-3-super-120b-a12b | Main Writer，高品質內容生成核心 | 0.65 | 0.95 | 16384 | ✅ |
 | **Editor Agent** | mistralai/mistral-small-4-119b-2603 | 精準的文字微調潤稿 | 0.25 | 0.90 | 8192 | ❌ |
 | **Co-pilot** | stepfun-ai/step-3.5-flash | 快速創意建議與互動對話 | 0.55 | 0.95 | 4096 | ❌ |
