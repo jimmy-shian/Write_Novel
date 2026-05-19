@@ -76,14 +76,17 @@ NVIDIA_API_KEY_WRITER="nvapi-xxx"
 NVIDIA_API_KEY_EDITOR="nvapi-xxx"
 NVIDIA_API_KEY_COPILOT="nvapi-xxx"
 
-# --- Agent Default Models ---
-MODEL_GLOBAL="qwen/qwen3.5-122b-a10b"
-MODEL_ARCHITECT="nvidia/nemotron-3-super-120b-a12b"
-MODEL_CHARACTER="mistralai/mistral-small-4-119b-2603"
-MODEL_PLOT="openai/gpt-oss-120b"
-MODEL_WRITER="minimaxai/minimax-m2.7"
-MODEL_EDITOR="google/gemma-3n-e4b-it"
-MODEL_COPILOT="nvidia/nemotron-3-super-120b-a12b"
+# --- Agent Default Models (與前端 Agent 對應) ---
+# 前端 Agent: global, architect, character, plot, writer, editor, copilot
+# character Agent 會使用 MODEL_CHARACTER，若不存在則用 MODEL_STORY
+# plot Agent 會使用 MODEL_PLOT，若不存在則用 MODEL_CRITIC
+MODEL_GLOBAL="google/gemma-3n-e4b-it"
+MODEL_ARCHITECT="qwen/qwen3.5-122b-a10b"
+MODEL_STORY="openai/gpt-oss-120b"        # Character Designer 備援
+MODEL_WRITER="nvidia/nemotron-3-super-120b-a12b"
+MODEL_EDITOR="mistralai/mistral-small-4-119b-2603"
+MODEL_CRITIC="qwen/qwen3.5-122b-a10b"    # Plot Planner 備援
+MODEL_COPILOT="stepfun-ai/step-3.5-flash"
 
 # --- Global Defaults ---
 DEFAULT_BASE_URL="https://integrate.api.nvidia.com/v1"
