@@ -36,6 +36,18 @@ from agents import (
     run_editor_agent,
     run_copilot_chat
 )
+from llm import get_config_for_agent, get_default_config
+
+# Agent friendly names for frontend display
+AGENT_DISPLAY_NAMES = {
+    "global": "Global 全域 (預設設置)",
+    "architect": "1️⃣ Story Architect (故事結構架構師)",
+    "character": "2️⃣ Character Designer (角色設計大師)",
+    "plot": "3️⃣ Plot Planner (章節劇情規劃師)",
+    "writer": "4️⃣ Chapter Writer (小說正文寫作作家)",
+    "editor": "5️⃣ Editor Agent (精緻文風編輯)",
+    "copilot": "🧠 Co-Pilot Orchestrator (AI 總監)"
+}
 
 # Initialize database
 db_init()
@@ -207,7 +219,38 @@ def api_agent_copilot_chat(novel_id: str = Body(...), user_message: str = Body(.
 # --- SETTINGS PANEL ROUTES ---
 @app.get("/api/settings")
 def api_get_settings():
-    return get_agent_configs()
+    """
+    Returns agent configurations merged with .env defaults.
+    Priority: Database saved values > .env defaults
+    """
+    db_configs = get_agent_configs()
+    defaults = get_default_config()
+    all_agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
+    
+    merged = {}
+    for agent in all_agents:
+        # Get config from llm.py (which handles .env defaults)
+        llm_config = get_config_for_agent(agent)
+        
+        # Start with llm.py defaults (already includes .env)
+        merged[agent] = {
+            "api_key": llm_config.get("api_key", ""),
+            "base_url": llm_config.get("base_url", defaults["base_url"]),
+            "model": llm_config.get("model", ""),
+            "temperature": llm_config.get("temperature", defaults["temperature"]),
+            "top_p": llm_config.get("top_p", defaults["top_p"]),
+            "max_tokens": llm_config.get("max_tokens", defaults["max_tokens"]),
+            "enable_thinking": llm_config.get("enable_thinking", defaults["enable_thinking"]),
+            "display_name": AGENT_DISPLAY_NAMES.get(agent, agent)
+        }
+        
+        # Override with database values if they exist and are not empty
+        db_agent = db_configs.get(agent, {})
+        for key in merged[agent]:
+            if key in db_agent and db_agent[key] not in [None, ""]:
+                merged[agent][key] = db_agent[key]
+    
+    return merged
 
 @app.post("/api/settings")
 def api_save_settings(config: AgentConfigSave):

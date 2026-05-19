@@ -3,45 +3,103 @@ import json
 import os
 import re
 from db import get_agent_configs
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- Nvidia Model Presets ---
+NVIDIA_MODEL_PRESETS = {
+    "google/gemma-3n-e4b-it": {
+        "temperature": 0.20,
+        "top_p": 0.70,
+        "frequency_penalty": 0.00,
+        "presence_penalty": 0.00
+    },
+    "nvidia/nemotron-3-super-120b-a12b": {
+        "chat_template_kwargs": {"enable_thinking": True},
+        "reasoning_budget": 16384
+    },
+    "openai/gpt-oss-120b": {},
+    "minimaxai/minimax-m2.7": {},
+    "mistralai/mistral-small-4-119b-2603": {
+        "reasoning_effort": "high"
+    },
+    "stepfun-ai/step-3.5-flash": {}
+}
+
+# --- Agent API Key Mapping from .env ---
+def get_agent_api_key(agent_name):
+    """Get API key from environment variables."""
+    key_map = {
+        "global": os.getenv("NVIDIA_API_KEY_GLOBAL"),
+        "architect": os.getenv("NVIDIA_API_KEY_ARCHITECT"),
+        "character": os.getenv("NVIDIA_API_KEY_CHARACTER"),
+        "plot": os.getenv("NVIDIA_API_KEY_PLOT"),
+        "writer": os.getenv("NVIDIA_API_KEY_WRITER"),
+        "editor": os.getenv("NVIDIA_API_KEY_EDITOR"),
+        "copilot": os.getenv("NVIDIA_API_KEY_COPILOT")
+    }
+    return key_map.get(agent_name, key_map.get("global"))
+
+# --- Agent Model Mapping from .env ---
+def get_agent_model(agent_name):
+    """Get default model from environment variables."""
+    model_map = {
+        "global": os.getenv("MODEL_GLOBAL", "qwen/qwen3.5-122b-a10b"),
+        "architect": os.getenv("MODEL_ARCHITECT"),
+        "character": os.getenv("MODEL_CHARACTER"),
+        "plot": os.getenv("MODEL_PLOT"),
+        "writer": os.getenv("MODEL_WRITER"),
+        "editor": os.getenv("MODEL_EDITOR"),
+        "copilot": os.getenv("MODEL_COPILOT")
+    }
+    return model_map.get(agent_name, model_map.get("global", "qwen/qwen3.5-122b-a10b"))
+
+def get_default_config():
+    """Get default config values from .env."""
+    return {
+        "base_url": os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        "temperature": float(os.getenv("DEFAULT_TEMPERATURE", 0.7)),
+        "top_p": float(os.getenv("DEFAULT_TOP_P", 0.95)),
+        "max_tokens": int(os.getenv("DEFAULT_MAX_TOKENS", 4096)),
+        "enable_thinking": int(os.getenv("DEFAULT_ENABLE_THINKING", 1))
+    }
 
 def get_config_for_agent(agent_name):
     """
     Fetches the configuration for a specific agent.
-    If the agent's API key is empty, falls back to the 'global' configuration.
-    If 'global' API key is also empty, checks the environment variable.
+    Priority: Database settings > .env defaults
     """
     configs = get_agent_configs()
     
     agent_cfg = configs.get(agent_name)
     global_cfg = configs.get("global")
     
-    # Base fallback logic
+    # Base fallback from .env defaults
+    defaults = get_default_config()
     config = {
-        "api_key": "",
-        "base_url": "https://integrate.api.nvidia.com/v1/chat/completions",
-        "model": "qwen/qwen3.5-122b-a10b",
-        "temperature": 0.7,
-        "top_p": 0.95,
-        "max_tokens": 4096,
-        "enable_thinking": 1
+        "api_key": get_agent_api_key(agent_name) or "",
+        "base_url": defaults["base_url"],
+        "model": get_agent_model(agent_name),
+        "temperature": defaults["temperature"],
+        "top_p": defaults["top_p"],
+        "max_tokens": defaults["max_tokens"],
+        "enable_thinking": defaults["enable_thinking"]
     }
     
-    # Populate with global values first
+    # Override with global database values if present and not empty
     if global_cfg:
         for k in config:
             if k in global_cfg and global_cfg[k] not in [None, ""]:
                 config[k] = global_cfg[k]
                 
-    # Override with specific agent values if present and not empty
+    # Override with specific agent database values if present and not empty
     if agent_cfg and agent_name != "global":
         for k in config:
             if k in agent_cfg and agent_cfg[k] not in [None, ""]:
                 config[k] = agent_cfg[k]
                 
-    # Environment fallback if still empty
-    if not config["api_key"]:
-        config["api_key"] = os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-        
     return config
 
 def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
@@ -80,6 +138,11 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     
     if config["enable_thinking"]:
         payload["chat_template_kwargs"] = {"enable_thinking": True}
+        
+    # Auto-inject preset parameters if model matches
+    model_name = config["model"]
+    if model_name in NVIDIA_MODEL_PRESETS:
+        payload.update(NVIDIA_MODEL_PRESETS[model_name])
         
     if custom_payload_overrides:
         payload.update(custom_payload_overrides)
@@ -130,7 +193,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                         
                     delta = choices[0].get("delta", {})
                     
-                    # 1. Check for thinking model reasoning field
+                    # Check for thinking model reasoning field
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                     content = delta.get("content") or ""
                     
@@ -142,11 +205,11 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                         continue
                         
                     if content:
-                        # Some models put think blocks directly inside content, e.g. <think>...</think>
-                        # Let's detect these inline tags
-                        if "<think>" in content:
+                        # Detect inline think blocks like 
+                        think_start = ""
+                        if think_start in content:
                             in_think_block = True
-                            parts = content.split("<think>")
+                            parts = content.split(think_start)
                             if parts[0]:
                                 yield "data: " + json.dumps({
                                     "type": "content",
@@ -159,9 +222,9 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                                 }, ensure_ascii=False) + "\n\n"
                             continue
                             
-                        if "</think>" in content:
+                        if think_end in content:
                             in_think_block = False
-                            parts = content.split("</think>")
+                            parts = content.split(think_end)
                             if parts[0]:
                                 yield "data: " + json.dumps({
                                     "type": "thinking",
@@ -181,7 +244,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                         }, ensure_ascii=False) + "\n\n"
                         
                 except Exception as e:
-                    # Ignore JSON parsing errors for weird lines
+                    # Ignore JSON parsing errors for partial chunks
                     continue
                     
         yield "data: " + json.dumps({"type": "done"}) + "\n\n"

@@ -112,7 +112,7 @@ def db_init():
             """, (
                 agent,
                 "", # Let the user enter their API key in UI
-                "https://integrate.api.nvidia.com/v1/chat/completions",
+                "https://integrate.api.nvidia.com/v1",
                 "qwen/qwen3.5-122b-a10b",
                 0.60 if agent in ["writer", "editor"] else 0.40,
                 0.95,

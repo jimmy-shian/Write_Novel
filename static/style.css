@@ -928,7 +928,7 @@ body::after {
 }
 
 .chat-input-area {
-    padding: 16px;
+    padding: 16px 16px 50px 16px;
     border-top: 1px solid var(--border-color);
     display: flex;
     gap: 10px;
@@ -944,8 +944,7 @@ body::after {
     font-size: 0.85rem;
     resize: none;
     outline: none;
-    height: 40px;
-    line-height: 1.4;
+    line-height: 2;
     transition: var(--transition-smooth);
 }
 
@@ -1197,7 +1196,7 @@ body::after {
     color: var(--text-secondary);
 }
 
-.form-group input, .form-group textarea {
+.form-group input, .form-group select, .form-group textarea {
     background-color: #ffffff;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
@@ -1208,7 +1207,7 @@ body::after {
     transition: var(--transition-smooth);
 }
 
-.form-group input:focus, .form-group textarea:focus {
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
     border-color: var(--primary);
     box-shadow: 0 0 0 1px var(--primary-glow);
 }

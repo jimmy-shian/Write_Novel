@@ -86,6 +86,7 @@ const el = {
     settingAgentName: document.getElementById('setting-agent-name'),
     settingApiKey: document.getElementById('setting-api-key'),
     settingBaseUrl: document.getElementById('setting-base-url'),
+    settingPresetModel: document.getElementById('setting-preset-model'),
     settingModel: document.getElementById('setting-model'),
     settingMaxTokens: document.getElementById('setting-max-tokens'),
     settingTemperature: document.getElementById('setting-temperature'),
@@ -249,28 +250,29 @@ async function loadSettings() {
 }
 
 function loadAgentConfigFields(agentName) {
-    const config = state.settingsData[agentName];
-    if (!config) return;
+    const config = state.settingsData[agentName] || {};
     
     el.settingAgentName.value = agentName;
     el.settingApiKey.value = config.api_key || '';
-    el.settingBaseUrl.value = config.base_url || '';
+    el.settingBaseUrl.value = config.base_url || 'https://integrate.api.nvidia.com/v1';
     el.settingModel.value = config.model || '';
     el.settingMaxTokens.value = config.max_tokens || '';
-    el.settingTemperature.value = config.temperature || '';
-    el.settingTopP.value = config.top_p || '';
+    el.settingTemperature.value = config.temperature ?? '';
+    el.settingTopP.value = config.top_p ?? '';
     el.settingEnableThinking.checked = config.enable_thinking === 1;
     
-    // Set titles
-    const friendlyNames = {
-        global: "Global 全域 (預設設置)",
-        architect: "1️⃣ Story Architect (故事結構架構師)",
-        character: "2️⃣ Character Designer (角色設計大師)",
-        plot: "3️⃣ Plot Planner (章節劇情規劃師)",
-        writer: "4️⃣ Chapter Writer (小說正文寫作作家)",
-        editor: "5️⃣ Editor Agent (精緻文風編輯)"
-    };
-    el.settingsAgentTitle.textContent = friendlyNames[agentName] || agentName;
+    // Auto-select match preset if it exists
+    if (el.settingPresetModel) {
+        const presetModels = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "mistralai/mistral-small-4-119b-2603", "stepfun-ai/step-3.5-flash", "google/gemma-3n-e4b-it"];
+        if (config.model && presetModels.includes(config.model)) {
+            el.settingPresetModel.value = config.model;
+        } else {
+            el.settingPresetModel.value = "";
+        }
+    }
+    
+    // Use display_name from backend if available
+    el.settingsAgentTitle.textContent = config.display_name || agentName;
 }
 
 async function saveCurrentAgentSettings() {
@@ -1032,6 +1034,68 @@ function setupEventListeners() {
     
     // Save Settings
     el.btnSaveAgentSettings.addEventListener('click', saveCurrentAgentSettings);
+    
+    // Quick apply Nvidia Presets
+    if (el.settingPresetModel) {
+        el.settingPresetModel.addEventListener('change', () => {
+            const presetVal = el.settingPresetModel.value;
+            if (!presetVal) return;
+            
+            const presets = {
+                "nvidia/nemotron-3-super-120b-a12b": {
+                    model: "nvidia/nemotron-3-super-120b-a12b",
+                    temperature: 1.0,
+                    top_p: 0.95,
+                    max_tokens: 16384,
+                    enable_thinking: true
+                },
+                "openai/gpt-oss-120b": {
+                    model: "openai/gpt-oss-120b",
+                    temperature: 1.0,
+                    top_p: 1.0,
+                    max_tokens: 4096,
+                    enable_thinking: false
+                },
+                "minimaxai/minimax-m2.7": {
+                    model: "minimaxai/minimax-m2.7",
+                    temperature: 1.0,
+                    top_p: 0.95,
+                    max_tokens: 8192,
+                    enable_thinking: false
+                },
+                "mistralai/mistral-small-4-119b-2603": {
+                    model: "mistralai/mistral-small-4-119b-2603",
+                    temperature: 0.10,
+                    top_p: 1.00,
+                    max_tokens: 16384,
+                    enable_thinking: false
+                },
+                "stepfun-ai/step-3.5-flash": {
+                    model: "stepfun-ai/step-3.5-flash",
+                    temperature: 1.0,
+                    top_p: 0.9,
+                    max_tokens: 16384,
+                    enable_thinking: false
+                }
+            };
+            
+            const preset = presets[presetVal];
+            if (preset) {
+                el.settingModel.value = preset.model;
+                el.settingMaxTokens.value = preset.max_tokens;
+                el.settingTemperature.value = preset.temperature;
+                el.settingTopP.value = preset.top_p;
+                el.settingEnableThinking.checked = preset.enable_thinking;
+                
+                // If Base URL is empty or matches qwen placeholder/blank, set default Nvidia integration base
+                if (!el.settingBaseUrl.value || el.settingBaseUrl.value.trim() === '' || el.settingBaseUrl.value.includes('qwen')) {
+                    el.settingBaseUrl.value = 'https://integrate.api.nvidia.com/v1';
+                }
+                
+                showToast(`已套用 ${preset.model} 預設值，點擊儲存以套用！`);
+            }
+        });
+    }
     
     // 4. Save Text Editors Handlers
     el.btnWorldviewSave.addEventListener('click', saveWorldviewDirect);
