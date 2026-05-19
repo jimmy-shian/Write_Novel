@@ -263,7 +263,7 @@ function loadAgentConfigFields(agentName) {
     
     // Auto-select match preset if it exists
     if (el.settingPresetModel) {
-        const presetModels = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "mistralai/mistral-small-4-119b-2603", "stepfun-ai/step-3.5-flash", "google/gemma-3n-e4b-it"];
+        const presetModels = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "mistralai/mistral-small-4-119b-2603", "stepfun-ai/step-3.5-flash", "google/gemma-3n-e4b-it", "qwen/qwen3.5-122b-a10b"];
         if (config.model && presetModels.includes(config.model)) {
             el.settingPresetModel.value = config.model;
         } else {
