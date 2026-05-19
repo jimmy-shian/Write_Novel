@@ -11,6 +11,8 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "novel_factor
 
 # --- Agent Default Configurations from .env ---
 # 根據 .env 設定各 Agent 的預設模型與參數
+# 前端 Agent 命名: global, architect, character, plot, writer, editor, copilot
+# .env 命名: MODEL_GLOBAL, MODEL_ARCHITECT, MODEL_STORY(MODEL_CHARACTER備援), MODEL_WRITER, MODEL_EDITOR, MODEL_CRITIC(MODEL_PLOT備援), MODEL_COPILOT
 AGENT_DEFAULTS = {
     "global": {
         "model": os.getenv("MODEL_GLOBAL", "google/gemma-3n-e4b-it"),
@@ -27,15 +29,17 @@ AGENT_DEFAULTS = {
         "enable_thinking": 1
     },
     "character": {
-        "model": os.getenv("MODEL_CHARACTER", "mistralai/mistral-small-4-119b-2603"),
-        "temperature": 0.45,  # 創意但結構化的人物描寫
+        # .env 中是 MODEL_STORY，作為 MODEL_CHARACTER 的備援
+        "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "openai/gpt-oss-120b"),
+        "temperature": 0.40,  # 角色設計需要創意但結構化
         "top_p": 0.95,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "enable_thinking": 1
     },
     "plot": {
-        "model": os.getenv("MODEL_PLOT", "openai/gpt-oss-120b"),
-        "temperature": 0.35,  # 邏輯嚴謹的大綱拆解
+        # .env 中是 MODEL_CRITIC，作為 MODEL_PLOT 的備援
+        "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "qwen/qwen3.5-122b-a10b"),
+        "temperature": 0.35,  # 大綱規劃需要邏輯嚴謹
         "top_p": 0.95,
         "max_tokens": 8192,
         "enable_thinking": 1
