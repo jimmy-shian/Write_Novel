@@ -13,23 +13,40 @@
 | 智能體名稱 | 核心角色定位 (Role) | 工作職責與特色 |
 | | :--- | :--- |
 | **Story Architect**<br>故事結構架構師 | 🗺️ 世界觀構建大師 | 負責規劃小說的**世界觀底層設定**、勢力範圍、力量體系、歷史脈絡與核心衝突。它會將您的零散靈感轉化為架構嚴密的世界觀設定集。 |
+| | | **推薦模型**：nvidia/nemotron-3-super-120b-a12b、openai/gpt-oss-120b<br>**推薦溫度**：0.3 - 0.4（需要精準、架構性輸出） |
 | **Character Designer**<br>角色設計大師 | 👥 靈魂人物雕刻家 | 根據世界觀背景，精細化雕琢小說中所有核心角色。包含設計角色的名稱、身份、**性格標籤 (Personality)**、**致命缺陷 (Flaws)**、**核心動機 (Motivation)** 與**人物成長弧線 (Arc)**，並輸出成嚴格的 JSON 視覺卡片。 |
+| | | **推薦模型**：mistralai/mistral-small-4-119b-2603、qwen/qwen3.5-122b-a10b<br>**推薦溫度**：0.4 - 0.5（需要創意但結構化的人物描寫） |
 | **Plot Planner**<br>章節劇情規劃師 | ⏳ 黃金分割大綱師 | 將世界觀與角色動機完美融合，自動將整本小說拆分為結構合理的**章節劇情大綱**。設計每一章的標題、核心情節事件、**寫作目的 (Purpose)**、**伏筆與鋪墊 (Foreshadowing)** 與**情緒基調 (Tone)**。 |
+| | | **推薦模型**：openai/gpt-oss-120b、nvidia/nemotron-3-super-120b-a12b<br>**推薦溫度**：0.3 - 0.4（邏輯嚴謹的大綱拆解） |
 | **Chapter Writer**<br>小說正文寫作作家 | ✍️ 文字具象魔術師 | 根據當前選中章節的大綱事件、世界觀設定與人物 Bible，進行極具文學張力的**正文 Prose 創作**。支援 **NVIDIA 120B 思考模型 (Nemotron)**，可在正文撰寫前進行深度的推理思考，讓情節銜接與人物對白更符合人性與張力。 |
+| | | **推薦模型**：nvidia/nemotron-3-super-120b-a12b、minimaxai/minimax-m2.7、mistralai/mistral-small-4-119b-2603<br>**推薦溫度**：0.6 - 0.7（創意寫作需要高隨機性） |
 | **Editor Agent**<br>精緻文風編輯 | 🔍 文字拋光雕刻師 | 對已撰寫的章節正文進行**微調、精修與文筆潤色**。您可以給予它特定的精修指令（如：「加強打鬥動作的緊湊感」、「讓環境氣氛顯得更肅殺寂靜」、「使對話更加綿裡藏針」），它會針對文字細節進行二次加工。 |
+| | | **推薦模型**：google/gemma-3n-e4b-it、stepfun-ai/step-3.5-flash<br>**推薦溫度**：0.2 - 0.3（精準的文字微調，需要低隨機性） |
 | **Co-pilot Director**<br>AI 總監 Copilot | 💬 隨身智囊 & 導演 | 常駐於右側側邊欄的 AI 對談小助手。它共享當前小說的 SQLite 記憶庫，能夠隨時與您針對特定情節進行腦力激盪、解答創作瓶頸，或提供角色命運的全新點子。 |
+| | | **推薦模型**：nvidia/nemotron-3-super-120b-a12b、stepfun-ai/step-3.5-flash<br>**推薦溫度**：0.5 - 0.6（創意建議與互動對話） |
 
-### 每個 Agent 的專屬模型配置
+### 每個 Agent 的專屬模型配置（從 .env 讀取）
 
-| Agent | 預設模型 | 說明 |
-| :--- | :--- | :--- |
-| **Global** | qwen/qwen3.5-122b-a10b | 全域預設模型 |
-| **Story Architect** | nvidia/nemotron-3-super-120b-a12b | 120B 推理模型，擅長架構複雜世界觀 |
-| **Character Designer** | mistralai/mistral-small-4-119b-2603 | 高推理模型，精細角色心理描寫 |
-| **Plot Planner** | openai/gpt-oss-120b | 120B 大模型，擅長邏輯縝密的劇情規劃 |
-| **Chapter Writer** | minimaxai/minimax-m2.7 | 精緻情感與文學描寫 |
-| **Editor Agent** | google/gemma-3n-e4b-it | 精校版模型，文字潤色精確 |
-| **Co-pilot** | nvidia/nemotron-3-super-120b-a12b | 120B 推理模型，深度創意決策 |
+| Agent | 預設模型 | 說明 | 預設溫度 | Top P | Max Tokens | 深度思考 |
+| | :--- | :--- | :---: | :---: | :---: | :---: |
+| **Global** | google/gemma-3n-e4b-it | 全域預設模型（Router / Fallback） | 0.70 | 0.95 | 4096 | ✅ |
+| **Story Architect** | qwen/qwen3.5-122b-a10b | Planner / Architect，結構設計與任務拆解 | 0.30 | 0.95 | 8192 | ✅ |
+| **Character Designer** | mistralai/mistral-small-4-119b-2603 | 創意但結構化的人物描寫 | 0.45 | 0.95 | 4096 | ✅ |
+| **Plot Planner** | openai/gpt-oss-120b | 邏輯嚴謹的大綱拆解 | 0.35 | 0.95 | 8192 | ✅ |
+| **Chapter Writer** | nvidia/nemotron-3-super-120b-a12b | Main Writer，高品質內容生成核心 | 0.65 | 0.95 | 16384 | ✅ |
+| **Editor Agent** | mistralai/mistral-small-4-119b-2603 | 精準的文字微調潤稿 | 0.25 | 0.90 | 8192 | ❌ |
+| **Co-pilot** | stepfun-ai/step-3.5-flash | 快速創意建議與互動對話 | 0.55 | 0.95 | 4096 | ❌ |
+
+### 為何各 Agent 需要不同的溫度設定？
+
+| Agent | 溫度原則 | 原因 |
+| | :--- | :--- |
+| **架構師 / 規劃師** | 低 (0.3-0.35) | 需要精準、架構性輸出，避免過度發散 |
+| **角色設計師** | 中低 (0.45) | 需要創意的人物描寫，但要有結構 |
+| **正文寫作** | 中高 (0.6-0.65) | 創意寫作需要高隨機性，產生豐富多樣的文學表達 |
+| **編輯師** | 極低 (0.25) | 精準的文字微調，需要低隨機性避免偏離原文 |
+| **Copilot** | 中 (0.55) | 創意建議與互動對話，需要平衡創意與連貫性 |
+| **全域預設** | 高 (0.70) | 作為 Fallback，預設較高溫度適合探索 |
 
 ---
 

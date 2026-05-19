@@ -2,8 +2,66 @@ import sqlite3
 import json
 from datetime import datetime
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "novel_factory.db")
+
+# --- Agent Default Configurations from .env ---
+# 根據 .env 設定各 Agent 的預設模型與參數
+AGENT_DEFAULTS = {
+    "global": {
+        "model": os.getenv("MODEL_GLOBAL", "google/gemma-3n-e4b-it"),
+        "temperature": 0.70,
+        "top_p": 0.95,
+        "max_tokens": 4096,
+        "enable_thinking": 1
+    },
+    "architect": {
+        "model": os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
+        "temperature": 0.30,  # 架構性輸出需要精準
+        "top_p": 0.95,
+        "max_tokens": 8192,
+        "enable_thinking": 1
+    },
+    "character": {
+        "model": os.getenv("MODEL_CHARACTER", "mistralai/mistral-small-4-119b-2603"),
+        "temperature": 0.45,  # 創意但結構化的人物描寫
+        "top_p": 0.95,
+        "max_tokens": 4096,
+        "enable_thinking": 1
+    },
+    "plot": {
+        "model": os.getenv("MODEL_PLOT", "openai/gpt-oss-120b"),
+        "temperature": 0.35,  # 邏輯嚴謹的大綱拆解
+        "top_p": 0.95,
+        "max_tokens": 8192,
+        "enable_thinking": 1
+    },
+    "writer": {
+        "model": os.getenv("MODEL_WRITER", "nvidia/nemotron-3-super-120b-a12b"),
+        "temperature": 0.65,  # 創意寫作需要高隨機性
+        "top_p": 0.95,
+        "max_tokens": 16384,  # 正文寫作需要更多 tokens
+        "enable_thinking": 1
+    },
+    "editor": {
+        "model": os.getenv("MODEL_EDITOR", "mistralai/mistral-small-4-119b-2603"),
+        "temperature": 0.25,  # 精準的文字微調
+        "top_p": 0.90,
+        "max_tokens": 8192,
+        "enable_thinking": 0
+    },
+    "copilot": {
+        "model": os.getenv("MODEL_COPILOT", "stepfun-ai/step-3.5-flash"),
+        "temperature": 0.55,  # 創意建議與互動對話
+        "top_p": 0.95,
+        "max_tokens": 4096,
+        "enable_thinking": 0
+    }
+}
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -101,11 +159,12 @@ def db_init():
     )
     """)
     
-    # Pre-populate default agent configurations
-    default_agents = ["global", "architect", "character", "plot", "writer", "editor"]
+    # Pre-populate default agent configurations from AGENT_DEFAULTS
+    default_agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
     for agent in default_agents:
         cursor.execute("SELECT 1 FROM agent_configs WHERE agent_name = ?", (agent,))
         if not cursor.fetchone():
+            defaults = AGENT_DEFAULTS.get(agent, AGENT_DEFAULTS["global"])
             cursor.execute("""
             INSERT INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -113,11 +172,11 @@ def db_init():
                 agent,
                 "", # Let the user enter their API key in UI
                 "https://integrate.api.nvidia.com/v1",
-                "qwen/qwen3.5-122b-a10b",
-                0.60 if agent in ["writer", "editor"] else 0.40,
-                0.95,
-                16384 if agent == "writer" else 4096,
-                1
+                defaults["model"],
+                defaults["temperature"],
+                defaults["top_p"],
+                defaults["max_tokens"],
+                defaults["enable_thinking"]
             ))
             
     conn.commit()

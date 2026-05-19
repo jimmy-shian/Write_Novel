@@ -37,6 +37,7 @@ from agents import (
     run_copilot_chat
 )
 from llm import get_config_for_agent, get_default_config
+from db import AGENT_DEFAULTS
 
 # Agent friendly names for frontend display
 AGENT_DISPLAY_NAMES = {

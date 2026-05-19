@@ -2,7 +2,7 @@ import requests
 import json
 import os
 import re
-from db import get_agent_configs
+from db import get_agent_configs, AGENT_DEFAULTS
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -44,17 +44,19 @@ def get_agent_api_key(agent_name):
 
 # --- Agent Model Mapping from .env ---
 def get_agent_model(agent_name):
-    """Get default model from environment variables."""
+    """Get default model from environment variables.
+    If specific agent model is not set, falls back to MODEL_GLOBAL."""
+    global_default = os.getenv("MODEL_GLOBAL", "qwen/qwen3.5-122b-a10b")
     model_map = {
-        "global": os.getenv("MODEL_GLOBAL", "qwen/qwen3.5-122b-a10b"),
-        "architect": os.getenv("MODEL_ARCHITECT"),
-        "character": os.getenv("MODEL_CHARACTER"),
-        "plot": os.getenv("MODEL_PLOT"),
-        "writer": os.getenv("MODEL_WRITER"),
-        "editor": os.getenv("MODEL_EDITOR"),
-        "copilot": os.getenv("MODEL_COPILOT")
+        "global": global_default,
+        "architect": os.getenv("MODEL_ARCHITECT") or global_default,
+        "character": os.getenv("MODEL_CHARACTER") or global_default,
+        "plot": os.getenv("MODEL_PLOT") or global_default,
+        "writer": os.getenv("MODEL_WRITER") or global_default,
+        "editor": os.getenv("MODEL_EDITOR") or global_default,
+        "copilot": os.getenv("MODEL_COPILOT") or global_default
     }
-    return model_map.get(agent_name, model_map.get("global", "qwen/qwen3.5-122b-a10b"))
+    return model_map.get(agent_name, global_default)
 
 def get_default_config():
     """Get default config values from .env."""
@@ -69,23 +71,25 @@ def get_default_config():
 def get_config_for_agent(agent_name):
     """
     Fetches the configuration for a specific agent.
-    Priority: Database settings > .env defaults
+    Priority: Database settings > AGENT_DEFAULTS > .env globals
     """
     configs = get_agent_configs()
     
     agent_cfg = configs.get(agent_name)
     global_cfg = configs.get("global")
     
-    # Base fallback from .env defaults
-    defaults = get_default_config()
+    # Get agent-specific defaults from AGENT_DEFAULTS (reads from .env for models)
+    agent_defaults = AGENT_DEFAULTS.get(agent_name, AGENT_DEFAULTS["global"])
+    
+    # Base fallback from agent-specific AGENT_DEFAULTS
     config = {
         "api_key": get_agent_api_key(agent_name) or "",
-        "base_url": defaults["base_url"],
+        "base_url": agent_defaults.get("base_url", "https://integrate.api.nvidia.com/v1"),
         "model": get_agent_model(agent_name),
-        "temperature": defaults["temperature"],
-        "top_p": defaults["top_p"],
-        "max_tokens": defaults["max_tokens"],
-        "enable_thinking": defaults["enable_thinking"]
+        "temperature": agent_defaults["temperature"],
+        "top_p": agent_defaults["top_p"],
+        "max_tokens": agent_defaults["max_tokens"],
+        "enable_thinking": agent_defaults["enable_thinking"]
     }
     
     # Override with global database values if present and not empty
