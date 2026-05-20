@@ -1492,6 +1492,383 @@ async function saveProseDirect() {
 }
 
 // ==========================================
+// DIRECTOR COMMAND PARSER (總監指令解析器)
+// ==========================================
+
+/**
+ * 解析總監回覆中的執行指令區塊
+ * 支援舊格式（ACTION/TARGET/HINT）和新格式（JSON格式）
+ */
+function parseDirectorCommand(responseText) {
+    const result = {
+        action: null,
+        tool: null,
+        target: null,
+        params: {},
+        reason: "",
+        raw_command: null
+    };
+    
+    // 嘗試解析 JSON 格式的執行指令區塊
+    const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+    if (jsonBlockMatch) {
+        try {
+            const jsonCommand = JSON.parse(jsonBlockMatch[1]);
+            result.action = jsonCommand.action;
+            result.tool = jsonCommand.tool;
+            result.target = jsonCommand.target;
+            result.params = jsonCommand.params || {};
+            result.reason = jsonCommand.reason || "";
+            result.raw_command = jsonCommand;
+            return result;
+        } catch (e) {
+            console.warn("Failed to parse JSON command block:", e);
+        }
+    }
+    
+    // 嘗試解析舊格式的【執行指令】區塊
+    const actionMatch = responseText.match(/\【執行指令\][\s\S]*?ACTION:\s*(\w+)/);
+    const targetMatch = responseText.match(/TARGET:\s*(\w+)/);
+    const hintMatch = responseText.match(/HINT:\s*([\s\S]*?)(?=```|$)/);
+    const reasonMatch = responseText.match(/REASON:\s*([\s\S]*?)(?=```|$)/);
+    const toolMatch = responseText.match(/TOOL:\s*(\w+)/);
+    
+    if (actionMatch) {
+        result.action = actionMatch[1].trim().toUpperCase();
+        result.target = targetMatch ? targetMatch[1].trim() : null;
+        result.reason = reasonMatch ? reasonMatch[1].trim() : "";
+        
+        // 從舊格式提取 hint 到 params
+        if (hintMatch) {
+            result.params.hint = hintMatch[1].trim();
+        }
+        
+        // 嘗試從 responseText 中提取其他參數
+        const userPromptMatch = responseText.match(/user_prompt["\s:]+([^}"]+)/);
+        if (userPromptMatch) {
+            result.params.user_prompt = userPromptMatch[1].trim();
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * 執行總監的增量更新指令
+ */
+async function executeIncrementalCommand(command) {
+    const { action, target, params } = command;
+    
+    switch (action) {
+        case 'INCREMENTAL_UPDATE':
+            return await executeIncrementalUpdate(target, params);
+        case 'TOOL_CALL':
+            return await executeToolCall(target, params);
+        case 'AUTO_REGENERATE':
+            return await executeAutoRegenerate(target, params);
+        default:
+            console.warn("Unknown action:", action);
+            return false;
+    }
+}
+
+/**
+ * 執行增量更新操作
+ */
+async function executeIncrementalUpdate(target, params) {
+    const { user_hint, insert_after_index, target_char_index, field_name } = params;
+    
+    switch (target) {
+        case 'foreshadowing_seeds':
+            // 新增伏筆種子
+            showToast("🌱 增量新增伏筆種子...");
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-architect',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        target_section: 'foreshadowing_seeds',
+                        user_hint: user_hint || params.hint || '新增一個伏筆'
+                    },
+                    null,
+                    (delta) => {
+                        if (el.editorWorldview) {
+                            el.editorWorldview.value += delta;
+                        }
+                    },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        showToast("伏筆種子新增完成");
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'three_act_structure':
+            // 更新三幕式結構
+            showToast("📐 增量更新三幕式結構...");
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-architect',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        target_section: 'three_act_structure',
+                        user_hint: user_hint || params.hint || '更新三幕式結構'
+                    },
+                    null,
+                    (delta) => {
+                        if (el.editorWorldview) {
+                            el.editorWorldview.value += delta;
+                        }
+                    },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        showToast("三幕式結構更新完成");
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'character':
+            // 修改角色的特定欄位
+            showToast("👤 增量更新角色欄位...");
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-character',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        target_char_index: target_char_index,
+                        field_name: field_name,
+                        user_hint: user_hint || params.hint || '修改角色'
+                    },
+                    null,
+                    (delta) => {
+                        if (el.editorCharactersJson) {
+                            el.editorCharactersJson.value += delta;
+                        }
+                    },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        showToast("角色更新完成");
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'new_character':
+            // 新增一個新角色
+            showToast("➕ 新增角色...");
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-character',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        target_char_index: null, // 表示新增
+                        field_name: null,
+                        user_hint: user_hint || params.hint || '新增一個新角色'
+                    },
+                    null,
+                    (delta) => {
+                        if (el.editorCharactersJson) {
+                            el.editorCharactersJson.value += delta;
+                        }
+                    },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        showToast("新角色新增完成");
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'plot_chapter':
+            // 在指定位置插入新章節大綱
+            showToast("📝 增量插入新章節大綱...");
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-plot',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        insert_after_index: insert_after_index ?? 0,
+                        user_hint: user_hint || params.hint || '插入新章節'
+                    },
+                    null,
+                    (delta) => {
+                        if (el.editorPlotJson) {
+                            el.editorPlotJson.value += delta;
+                        }
+                    },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        showToast("新章節插入完成");
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        default:
+            showToast(`⚠️ 不支援的增量操作目標: ${target}`);
+            return false;
+    }
+}
+
+/**
+ * 執行工具調用（全量生成）
+ */
+async function executeToolCall(tool, params) {
+    const { user_prompt, chapter_index } = params;
+    
+    switch (tool) {
+        case 'story-architect':
+            showToast("🏗️ 執行故事架構師（全量生成）...");
+            return new Promise((resolve) => {
+                el.editorWorldview.value = '';
+                streamAPI(
+                    '/api/agent/story-architect',
+                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+                    null,
+                    (delta) => { el.editorWorldview.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'character-designer':
+            showToast("👥 執行角色設計師（全量生成）...");
+            return new Promise((resolve) => {
+                el.editorCharactersJson.value = '';
+                streamAPI(
+                    '/api/agent/character-designer',
+                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+                    null,
+                    (delta) => { el.editorCharactersJson.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'plot-planner':
+            showToast("📋 執行劇情規劃師（全量生成）...");
+            return new Promise((resolve) => {
+                el.editorPlotJson.value = '';
+                streamAPI(
+                    '/api/agent/plot-planner',
+                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+                    null,
+                    (delta) => { el.editorPlotJson.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'write-chapter':
+            showToast(`✍️ 執行章節寫手（第 ${chapter_index} 章）...`);
+            return new Promise((resolve) => {
+                el.editorProse.value = '';
+                streamAPI(
+                    '/api/agent/write-chapter',
+                    { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
+                    null,
+                    (delta) => { el.editorProse.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        default:
+            showToast(`⚠️ 不支援的工具調用: ${tool}`);
+            return false;
+    }
+}
+
+/**
+ * 執行自動重新生成
+ */
+async function executeAutoRegenerate(target, params) {
+    const { hint } = params;
+    
+    switch (target) {
+        case 'worldview':
+        case '世界觀':
+            showToast("🔄 重新生成世界觀...");
+            return new Promise((resolve) => {
+                el.editorWorldview.value = '';
+                const prompt = hint || "請重新設計世界觀";
+                streamAPI(
+                    '/api/agent/story-architect',
+                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    null,
+                    (delta) => { el.editorWorldview.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'characters':
+        case '角色':
+            showToast("🔄 重新生成角色設計...");
+            return new Promise((resolve) => {
+                el.editorCharactersJson.value = '';
+                const prompt = hint || "請重新設計角色";
+                streamAPI(
+                    '/api/agent/character-designer',
+                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    null,
+                    (delta) => { el.editorCharactersJson.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        case 'plot':
+        case '章節大綱':
+            showToast("🔄 重新生成章節大綱...");
+            return new Promise((resolve) => {
+                el.editorPlotJson.value = '';
+                const prompt = hint || "請重新規劃章節大綱";
+                streamAPI(
+                    '/api/agent/plot-planner',
+                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    null,
+                    (delta) => { el.editorPlotJson.value += delta; },
+                    (err) => showToast("Error: " + err),
+                    async () => {
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
+        default:
+            showToast(`⚠️ 不支援的重新生成目標: ${target}`);
+            return false;
+    }
+}
+
+// ==========================================
 // DYNAMIC AGENT AGENT TEAM EXECUTION (STREAMING)
 // ==========================================
 function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, options = {}) {
