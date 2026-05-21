@@ -336,8 +336,14 @@ def get_latest_plot_chapters(novel_id):
     if row:
         data = dict(row)
         try:
-            data["parsed_data"] = json.loads(data["outline_json"])
-        except:
+            parsed = json.loads(data["outline_json"])
+            # 統一格式：如果 parsed 是 list，包裝成 {"chapters": list}
+            if isinstance(parsed, list):
+                data["parsed_data"] = {"chapters": parsed}
+            else:
+                data["parsed_data"] = parsed
+        except Exception as e:
+            print(f"[ERROR] Failed to parse plot_chapters JSON: {e}")
             data["parsed_data"] = {}
         return data
     return None
@@ -462,25 +468,192 @@ def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, 
     conn.close()
 
 # --- INCREMENTAL UPDATE FUNCTIONS ---
+def parse_worldview_to_json(content):
+    """
+    將世界觀內容（可能是 JSON 或舊的標題純文字）統一解析為標準的 JSON 字典結構。
+    """
+    if not content:
+        return {
+            "theme": "",
+            "main_conflict": "",
+            "worldview": "",
+            "macro_outline": "",
+            "three_act_structure": {
+                "act1_setup": "",
+                "act2_confrontation": "",
+                "act3_resolution": ""
+            },
+            "progressive_character_plan": {
+                "wave_1_opening": "",
+                "wave_2_development": "",
+                "wave_3_climax": ""
+            },
+            "foreshadowing_seeds": [],
+            "key_turning_points": []
+        }
+    
+    content_stripped = content.strip()
+    if content_stripped.startswith("{") and content_stripped.endswith("}"):
+        try:
+            parsed = json.loads(content_stripped)
+            # 確保所有必填鍵與子結構存在，提供穩定預設值
+            return {
+                "theme": parsed.get("theme", ""),
+                "main_conflict": parsed.get("main_conflict", ""),
+                "worldview": parsed.get("worldview", ""),
+                "macro_outline": parsed.get("macro_outline", ""),
+                "three_act_structure": {
+                    "act1_setup": parsed.get("three_act_structure", {}).get("act1_setup", parsed.get("three_act_structure", {}).get("act1", "")),
+                    "act2_confrontation": parsed.get("three_act_structure", {}).get("act2_confrontation", parsed.get("three_act_structure", {}).get("act2", "")),
+                    "act3_resolution": parsed.get("three_act_structure", {}).get("act3_resolution", parsed.get("three_act_structure", {}).get("act3", ""))
+                },
+                "progressive_character_plan": {
+                    "wave_1_opening": parsed.get("progressive_character_plan", {}).get("wave_1_opening", ""),
+                    "wave_2_development": parsed.get("progressive_character_plan", {}).get("wave_2_development", ""),
+                    "wave_3_climax": parsed.get("progressive_character_plan", {}).get("wave_3_climax", "")
+                },
+                "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []),
+                "key_turning_points": parsed.get("key_turning_points", [])
+            }
+        except Exception as e:
+            print(f"[WARN] parse_worldview_to_json JSON load failed: {e}. Falling back to text parser.")
+            
+    # --- 舊格式文字解析器 (純文字相容備援) ---
+    result = {
+        "theme": "",
+        "main_conflict": "",
+        "worldview": "",
+        "macro_outline": "",
+        "three_act_structure": {
+            "act1_setup": "",
+            "act2_confrontation": "",
+            "act3_resolution": ""
+        },
+        "progressive_character_plan": {
+            "wave_1_opening": "",
+            "wave_2_development": "",
+            "wave_3_climax": ""
+        },
+        "foreshadowing_seeds": [],
+        "key_turning_points": []
+    }
+    
+    headers = [
+        "【核心主題】",
+        "【核心衝突】",
+        "【世界觀設定】",
+        "【整體故事大綱】",
+        "【三幕式結構】",
+        "【角色漸進規劃策略】",
+        "【伏筆種子】",
+        "【關鍵轉折點】"
+    ]
+    
+    pos = []
+    for h in headers:
+        idx = content.find(h)
+        if idx != -1:
+            pos.append((idx, h))
+    pos.sort()
+    
+    sections = {}
+    for i in range(len(pos)):
+        start_idx = pos[i][0] + len(pos[i][1])
+        end_idx = pos[i+1][0] if i + 1 < len(pos) else len(content)
+        sections[pos[i][1]] = content[start_idx:end_idx].strip()
+        
+    if "【核心主題】" in sections:
+        result["theme"] = sections["【核心主題】"]
+    if "【核心衝突】" in sections:
+        result["main_conflict"] = sections["【核心衝突】"]
+    if "【世界觀設定】" in sections:
+        result["worldview"] = sections["【世界觀設定】"]
+    if "【整體故事大綱】" in sections:
+        result["macro_outline"] = sections["【整體故事大綱】"]
+        
+    if "【三幕式結構】" in sections:
+        three_act_text = sections["【三幕式結構】"]
+        for line in three_act_text.split("\n"):
+            line = line.strip()
+            if "第一幕" in line or "Setup" in line:
+                result["three_act_structure"]["act1_setup"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+            elif "第二幕" in line or "Confrontation" in line:
+                result["three_act_structure"]["act2_confrontation"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+            elif "第三幕" in line or "Resolution" in line:
+                result["three_act_structure"]["act3_resolution"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+
+    if "【角色漸進規劃策略】" in sections:
+        prog_text = sections["【角色漸進規劃策略】"]
+        for line in prog_text.split("\n"):
+            line = line.strip()
+            if line.startswith("-") or line.startswith("•") or line.startswith("*"):
+                line = line[1:].strip()
+            if ":" in line or "：" in line:
+                sep = "：" if "：" in line else ":"
+                parts = line.split(sep, 1)
+                k = parts[0].strip()
+                v = parts[1].strip()
+                if "wave_1" in k or "wave1" in k or "開篇" in k or "第一波" in k:
+                    result["progressive_character_plan"]["wave_1_opening"] = v
+                elif "wave_2" in k or "wave2" in k or "第二波" in k or "發展" in k:
+                    result["progressive_character_plan"]["wave_2_development"] = v
+                elif "wave_3" in k or "wave3" in k or "第三波" in k or "高潮" in k:
+                    result["progressive_character_plan"]["wave_3_climax"] = v
+            else:
+                if line:
+                    if not result["progressive_character_plan"]["wave_1_opening"]:
+                        result["progressive_character_plan"]["wave_1_opening"] = line
+                    elif not result["progressive_character_plan"]["wave_2_development"]:
+                        result["progressive_character_plan"]["wave_2_development"] = line
+                    elif not result["progressive_character_plan"]["wave_3_climax"]:
+                        result["progressive_character_plan"]["wave_3_climax"] = line
+                        
+    if "【伏筆種子】" in sections:
+        seeds_text = sections["【伏筆種子】"]
+        for line in seeds_text.split("\n"):
+            line = line.strip()
+            if line.startswith("•") or line.startswith("-") or line.startswith("*"):
+                line = line[1:].strip()
+            if line:
+                result["foreshadowing_seeds"].append(line)
+                
+    if "【關鍵轉折點】" in sections:
+        pts_text = sections["【關鍵轉折點】"]
+        for line in pts_text.split("\n"):
+            line = line.strip()
+            if line.startswith("•") or line.startswith("-") or line.startswith("*"):
+                line = line[1:].strip()
+            if line:
+                result["key_turning_points"].append(line)
+                
+    return result
+
 def append_foreshadowing(novel_id, new_seed):
     """
     增量添加伏筆種子到世界觀。
-    不重新生成全部，只在現有內容末尾追加新的伏筆。
+    支援舊純文字世界觀與新結構化 JSON 世界觀。
     """
     wb = get_latest_worldbuilding(novel_id)
     if not wb:
         return None
     
     current_content = wb["content"]
-    # 找到伏筆種子的位置並追加
+    if current_content and current_content.strip().startswith("{"):
+        try:
+            parsed = parse_worldview_to_json(current_content)
+            if "foreshadowing_seeds" not in parsed:
+                parsed["foreshadowing_seeds"] = []
+            parsed["foreshadowing_seeds"].append(new_seed)
+            return save_worldbuilding(novel_id, json.dumps(parsed, ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f"[ERROR] JSON append failed: {e}. Falling back to text append.")
+
+    # 傳統純文字格式追加
     if "伏筆種子" in current_content:
-        # 在現有伏筆種子後面追加
         parts = current_content.split("【伏筆種子】")
         if len(parts) > 1:
-            # 替換最後部分，添加新伏筆
             new_part = parts[1]
             if new_part.strip():
-                # 在最後一個條目後面追加
                 lines = new_part.strip().split("\n")
                 last_idx = len(lines) - 1
                 while last_idx >= 0 and not lines[last_idx].strip():

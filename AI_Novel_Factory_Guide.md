@@ -129,15 +129,6 @@ C:\Users\user\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port
 
 ---
 
-### ⚠️ 啟動疑難排解：連接埠衝突 (WinError 10013)
-
-若遇到 `WinError 10013`，代表連接埠被佔用。**更換連接埠**即可：
-```powershell
-C:\Users\user\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8001 --reload
-```
-
----
-
 ### 步驟 5：瀏覽並使用網站
 
 當終端機顯示 `Uvicorn running on http://127.0.0.1:8000` 時，開啟瀏覽器造訪：

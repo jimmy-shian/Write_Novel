@@ -14,7 +14,8 @@ from db import (
     save_plot_chapters,
     append_foreshadowing,
     insert_plot_chapter,
-    update_character_single_field
+    update_character_single_field,
+    parse_worldview_to_json
 )
 from llm import call_llm_stream
 
@@ -71,45 +72,110 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     ]
     
     def save_callback(nid, text):
-        if target_section == "foreshadowing_seeds":
-            # 增量添加伏筆種子
+        import json
+        wb = get_latest_worldbuilding(nid)
+        existing_content = wb["content"] if wb else ""
+        
+        if existing_content and existing_content.strip().startswith("{"):
+            # 新的結構化 JSON 世界觀
+            current_json = parse_worldview_to_json(existing_content)
             parsed = parse_json_safely(text)
-            if isinstance(parsed, list):
-                for seed in parsed:
-                    if isinstance(seed, str):
-                        append_foreshadowing(nid, seed)
-                    elif isinstance(seed, dict):
-                        # 如果是物件格式，轉換為字串
-                        append_foreshadowing(nid, str(seed))
-            elif isinstance(parsed, str):
-                append_foreshadowing(nid, parsed)
-        elif target_section == "three_act_structure":
-            # 更新整個世界觀中的三幕式結構部分
-            parsed = parse_json_safely(text)
-            if "three_act_structure" in parsed or "act1" in parsed or "act2" in parsed:
-                # 直接替換三幕式結構
-                new_content = f"【三幕式結構】\n"
-                if "three_act_structure" in parsed:
-                    ts = parsed["three_act_structure"]
-                    new_content += f"  第一幕（Setup）：{ts.get('act1_setup', ts.get('act1', ''))}\n"
-                    new_content += f"  第二幕（Confrontation）：{ts.get('act2_confrontation', ts.get('act2', ''))}\n"
-                    new_content += f"  第三幕（Resolution）：{ts.get('act3_resolution', ts.get('act3', ''))}\n"
-                else:
-                    new_content += f"  第一幕（Setup）：{parsed.get('act1_setup', parsed.get('act1', ''))}\n"
-                    new_content += f"  第二幕（Confrontation）：{parsed.get('act2_confrontation', parsed.get('act2', ''))}\n"
-                    new_content += f"  第三幕（Resolution）：{parsed.get('act3_resolution', parsed.get('act3', ''))}\n"
+            if parsed is None:
+                parsed = text.strip()
                 
-                # 簡單替換現有內容中的三幕式結構部分
-                if wb and wb["content"]:
-                    content = wb["content"]
-                    import re
-                    # 替換三幕式結構部分
-                    pattern = r'【三幕式結構】.*?(?=\n\n【|\Z)'
-                    if re.search(pattern, content, re.DOTALL):
-                        content = re.sub(pattern, new_content.strip(), content, flags=re.DOTALL)
+            if target_section == "foreshadowing_seeds":
+                new_seeds = []
+                if isinstance(parsed, list):
+                    new_seeds = [s for s in parsed if isinstance(s, str)]
+                elif isinstance(parsed, dict):
+                    seeds_val = parsed.get("foreshadowing_seeds", parsed.get("seeds", []))
+                    if isinstance(seeds_val, list):
+                        new_seeds = [s for s in seeds_val if isinstance(s, str)]
+                elif isinstance(parsed, str):
+                    if "\n" in parsed:
+                        new_seeds = [line.strip().lstrip("-*•").strip() for line in parsed.split("\n") if line.strip()]
                     else:
-                        content = content + "\n\n" + new_content
-                    save_worldbuilding(nid, content)
+                        new_seeds = [parsed]
+                if new_seeds:
+                    current_json["foreshadowing_seeds"].extend(new_seeds)
+                    
+            elif target_section == "key_turning_points":
+                new_points = []
+                if isinstance(parsed, list):
+                    new_points = [p for p in parsed if isinstance(p, str)]
+                elif isinstance(parsed, dict):
+                    pts_val = parsed.get("key_turning_points", parsed.get("points", []))
+                    if isinstance(pts_val, list):
+                        new_points = [p for p in pts_val if isinstance(p, str)]
+                elif isinstance(parsed, str):
+                    if "\n" in parsed:
+                        new_points = [line.strip().lstrip("-*•").strip() for line in parsed.split("\n") if line.strip()]
+                    else:
+                        new_points = [parsed]
+                if new_points:
+                    current_json["key_turning_points"].extend(new_points)
+                    
+            elif target_section == "three_act_structure":
+                act_data = {}
+                if isinstance(parsed, dict):
+                    act_data = parsed.get("three_act_structure", parsed)
+                if isinstance(act_data, dict):
+                    current_json["three_act_structure"]["act1_setup"] = act_data.get("act1_setup", act_data.get("act1", current_json["three_act_structure"]["act1_setup"]))
+                    current_json["three_act_structure"]["act2_confrontation"] = act_data.get("act2_confrontation", act_data.get("act2", current_json["three_act_structure"]["act2_confrontation"]))
+                    current_json["three_act_structure"]["act3_resolution"] = act_data.get("act3_resolution", act_data.get("act3", current_json["three_act_structure"]["act3_resolution"]))
+                    
+            elif target_section == "progressive_character_plan":
+                plan_data = {}
+                if isinstance(parsed, dict):
+                    plan_data = parsed.get("progressive_character_plan", parsed)
+                if isinstance(plan_data, dict):
+                    current_json["progressive_character_plan"]["wave_1_opening"] = plan_data.get("wave_1_opening", plan_data.get("wave1", current_json["progressive_character_plan"]["wave_1_opening"]))
+                    current_json["progressive_character_plan"]["wave_2_development"] = plan_data.get("wave_2_development", plan_data.get("wave2", current_json["progressive_character_plan"]["wave_2_development"]))
+                    current_json["progressive_character_plan"]["wave_3_climax"] = plan_data.get("wave_3_climax", plan_data.get("wave3", current_json["progressive_character_plan"]["wave_3_climax"]))
+            else:
+                if isinstance(parsed, dict):
+                    val = parsed.get(target_section, parsed.get("content", ""))
+                else:
+                    val = str(parsed)
+                if val:
+                    current_json[target_section] = val
+                    
+            save_worldbuilding(nid, json.dumps(current_json, ensure_ascii=False, indent=2))
+        else:
+            # 備援至舊的平鋪文字解析/替換邏輯
+            if target_section == "foreshadowing_seeds":
+                parsed = parse_json_safely(text)
+                if isinstance(parsed, list):
+                    for seed in parsed:
+                        if isinstance(seed, str):
+                            append_foreshadowing(nid, seed)
+                        elif isinstance(seed, dict):
+                            append_foreshadowing(nid, str(seed))
+                elif isinstance(parsed, str):
+                    append_foreshadowing(nid, parsed)
+            elif target_section == "three_act_structure":
+                parsed = parse_json_safely(text)
+                if "three_act_structure" in parsed or "act1" in parsed or "act2" in parsed:
+                    new_content = f"【三幕式結構】\n"
+                    if "three_act_structure" in parsed:
+                        ts = parsed["three_act_structure"]
+                        new_content += f"  第一幕（Setup）：{ts.get('act1_setup', ts.get('act1', ''))}\n"
+                        new_content += f"  第二幕（Confrontation）：{ts.get('act2_confrontation', ts.get('act2', ''))}\n"
+                        new_content += f"  第三幕（Resolution）：{ts.get('act3_resolution', ts.get('act3', ''))}\n"
+                    else:
+                        new_content += f"  第一幕（Setup）：{parsed.get('act1_setup', parsed.get('act1', ''))}\n"
+                        new_content += f"  第二幕（Confrontation）：{parsed.get('act2_confrontation', parsed.get('act2', ''))}\n"
+                        new_content += f"  第三幕（Resolution）：{parsed.get('act3_resolution', parsed.get('act3', ''))}\n"
+                    
+                    if wb and wb["content"]:
+                        content = wb["content"]
+                        import re
+                        pattern = r'【三幕式結構】.*?(?=\n\n【|\Z)'
+                        if re.search(pattern, content, re.DOTALL):
+                            content = re.sub(pattern, new_content.strip(), content, flags=re.DOTALL)
+                        else:
+                            content = content + "\n\n" + new_content
+                        save_worldbuilding(nid, content)
     
     return run_agent_stream(novel_id, "architect", messages, save_callback)
 

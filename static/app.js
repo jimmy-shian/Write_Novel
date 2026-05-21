@@ -135,7 +135,6 @@ function showToast(message) {
  * @param {string} agentName - Agent 名稱（如 "Story Architect"）
  */
 function showAgentProcessingIndicator(tabName, agentName) {
-    // 根據 tab 名稱找到對應的指示器
     let indicator = null;
     let navTab = null;
     
@@ -155,16 +154,49 @@ function showAgentProcessingIndicator(tabName, agentName) {
     
     if (indicator) {
         indicator.classList.remove('hidden');
+        indicator.classList.add('has-terminal');
         const textEl = indicator.querySelector('.processing-text');
         if (textEl && agentName) {
             textEl.innerHTML = `<strong>${agentName}</strong> 正在處理中，請稍候...`;
         }
+        
+        let terminal = indicator.querySelector('.agent-stream-output');
+        if (!terminal) {
+            terminal = document.createElement('div');
+            terminal.className = 'agent-stream-output active';
+            terminal.id = `stream-output-${tabName}`;
+            indicator.appendChild(terminal);
+        }
+        terminal.textContent = ''; 
     }
     
-    // 為對應的 Nav Tab 添加處理中效果
     if (navTab) {
         navTab.classList.add('processing');
     }
+}
+
+/**
+ * 渲染單個世界觀區塊（帶編輯/刪除按鈕）
+ */
+function renderWorldviewSection(sectionId, icon, title, content, badgeClass) {
+    return `
+        <div class="worldview-section-card" data-section="${sectionId}">
+            <div class="worldview-section-header">
+                <div class="worldview-section-title">
+                    <span class="worldview-section-badge ${badgeClass}">${icon}</span>
+                    ${title}
+                </div>
+                <div class="worldview-section-actions">
+                    <button onclick="toggleSectionExpand('${sectionId}')" title="展開/收合">↕</button>
+                    <button onclick="editWorldviewSection('${sectionId}', '${title}', \`${content.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`)" title="編輯">✏️</button>
+                    <button onclick="deleteWorldviewSection('${sectionId}', '${title}')" title="刪除">🗑️</button>
+                </div>
+            </div>
+            <div class="worldview-section-content" id="content-${sectionId}">
+                ${content}
+            </div>
+        </div>
+    `;
 }
 
 /**
@@ -191,6 +223,11 @@ function hideAgentProcessingIndicator(tabName) {
     
     if (indicator) {
         indicator.classList.add('hidden');
+        const terminal = indicator.querySelector('.agent-stream-output');
+        if (terminal) {
+            terminal.remove();
+        }
+        indicator.classList.remove('has-terminal');
     }
     
     if (navTab) {
@@ -320,16 +357,12 @@ function hideGeneratingIndicator(tabName) {
 }
 
 /**
- * 啟動管道流程
+ * 啟動管道流程 — 統一入口
+ * 同時支援一鍵自動模式 (isAutoExecuteMode=true) 和一般模式 (顯示互動按鈕)
  */
 async function runPipeline() {
     if (!state.currentNovelId) {
         showToast('請先選擇或建立一個小說專案');
-        return;
-    }
-    
-    if (!state.isAutoExecuteMode) {
-        showToast('請先切換到「一鍵執行模式」再開始');
         return;
     }
     
@@ -343,45 +376,20 @@ async function runPipeline() {
     updatePipelineStage('plot', 'pending');
     updatePipelineStage('writer', 'pending');
     
-    // 首先呼叫 director-decision 來評估當前狀態
-    updateDirectorMessage('🔍 總監正在掃描創作現狀...');
-    
     try {
-        // 獲取用戶的原始創作需求（如果有的話）
+        // 獲取用戶的原始創作需求
         const userPrompt = state.currentNovelData?.novel?.description || '請根據現有設定繼續創作';
         
-        // 呼叫總監決策 API
-        streamAPI(
-            `/api/novels/${state.currentNovelId}/director-decision`,
-            {
-                current_stage: 'init',
-                user_prompt: userPrompt,
-                auto_execute: state.isAutoExecuteMode
-            },
-            // onThinking
-            (thinking) => {
-                const thinkingBox = el.aiThinkingStream;
-                if (thinkingBox) {
-                    thinkingBox.classList.remove('hidden');
-                    el.aiThinkingText.textContent += thinking;
-                }
-            },
-            // onContent
-            (content) => {
-                // 內容會顯示在聊天區
-                updateDirectorMessage('📝 總監決策分析中...');
-            },
-            // onError
-            (error) => {
-                console.error('Director decision error:', error);
-                showToast('決策評估失敗: ' + error);
-            },
-            // onDone
-            async () => {
-                // 決策完成後，根據結果執行
-                await handleDirectorDecision();
-            }
-        );
+        // 先刷新數據
+        await loadNovelDetails(state.currentNovelId);
+        
+        // 呼叫總監決策並根據結果執行
+        updateDirectorMessage('🔍 總監正在掃描創作現狀...');
+        const decision = await runDirectorDecision('init');
+        
+        // 根據總監決策執行對應動作
+        await executeDirectorAction(decision, userPrompt);
+        
     } catch (err) {
         console.error('Pipeline error:', err);
         showToast('管道執行失敗: ' + err.message);
@@ -390,63 +398,372 @@ async function runPipeline() {
     }
 }
 
+
 /**
- * 處理總監決策結果
+ * 執行總監決策結果 — 核心路由引擎
+ * 根據 runDirectorDecision 返回的解析結果，調度對應的 Agent 操作
+ * @param {object} decision - runDirectorDecision 返回的決策物件
+ * @param {string} userPrompt - 用戶原始創作需求
  */
-async function handleDirectorDecision() {
-    // 這裡需要從聊天區或特殊區域讀取總監的決策
-    // 為了簡化，我們直接根據當前狀態來判斷下一步
+async function executeDirectorAction(decision, userPrompt) {
+    const action = decision.action;
+    const hint = decision.hint || '';
     
-    updateDirectorMessage('🎯 總監正在制定創作策略...');
+    updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
-    // 檢查當前創作狀態
+    switch (action) {
+        case 'CONTINUE': {
+            const target = decision.target || '';
+            if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
+                updatePipelineStage('worldview', 'running');
+                updateDirectorMessage('🌍 開始生成世界觀設定...');
+                await executePipelineStage('worldview', userPrompt);
+            } else if (target === 'characters' || target === '角色設計') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'running');
+                updateDirectorMessage('👥 開始生成角色設定...');
+                await executePipelineStage('characters', userPrompt);
+            } else if (target === 'plot' || target === '章節大綱') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('plot', 'running');
+                updateDirectorMessage('📋 開始生成章節大綱...');
+                await executePipelineStage('plot', userPrompt);
+            } else if (target === 'writer' || target === '正文寫作') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('plot', 'done');
+                updatePipelineStage('writer', 'running');
+                updateDirectorMessage('✍️ 開始撰寫正文...');
+                await executePipelineStage('writer', userPrompt);
+            } else {
+                // 無明確 target，根據當前狀態自動決定
+                await executeNextMissingStage(userPrompt);
+            }
+            break;
+        }
+        
+        case 'AUTO_REGENERATE': {
+            const target = decision.target || decision.regenerateStage || '';
+            showToast(`⚡ 總監指示重新生成：${hint || target}`);
+            const enhancedPrompt = hint || userPrompt;
+            if (target.includes('worldview') || target.includes('世界觀')) {
+                updatePipelineStage('worldview', 'running');
+                await executePipelineStage('worldview', enhancedPrompt);
+            } else if (target.includes('character') || target.includes('角色')) {
+                updatePipelineStage('characters', 'running');
+                await executePipelineStage('characters', enhancedPrompt);
+            } else if (target.includes('plot') || target.includes('大綱')) {
+                updatePipelineStage('plot', 'running');
+                await executePipelineStage('plot', enhancedPrompt);
+            } else {
+                // 預設重跑世界觀
+                updatePipelineStage('worldview', 'running');
+                await executePipelineStage('worldview', enhancedPrompt);
+            }
+            break;
+        }
+        
+        case 'GO_BACK_TO_WORLDVIEW': {
+            showToast('⚡ 總監指示回頭修改世界觀設定...');
+            updatePipelineStage('worldview', 'running');
+            const worldviewPrompt = hint 
+                ? `請根據以下指示修改世界觀：\n\n${hint}\n\n現有世界觀：\n${state.currentNovelData?.worldbuilding || ''}`
+                : userPrompt;
+            await executePipelineStage('worldview', worldviewPrompt);
+            break;
+        }
+        
+        case 'GO_BACK_TO_CHARACTERS': {
+            showToast('⚡ 總監指示回頭修改角色設計...');
+            updatePipelineStage('characters', 'running');
+            const charPrompt = hint 
+                ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
+                : userPrompt;
+            await executePipelineStage('characters', charPrompt);
+            break;
+        }
+        
+        case 'GO_BACK_TO_PLOT': {
+            showToast('⚡ 總監指示回頭修改大綱...');
+            updatePipelineStage('plot', 'running');
+            const plotPrompt = hint 
+                ? `請根據以下指示重新規劃大綱：\n\n${hint}\n\n現有大綱：\n${state.currentNovelData?.plot_raw || ''}`
+                : userPrompt;
+            await executePipelineStage('plot', plotPrompt);
+            break;
+        }
+        
+        case 'WRITE_ALL_CHAPTERS': {
+            updatePipelineStage('worldview', 'done');
+            updatePipelineStage('characters', 'done');
+            updatePipelineStage('plot', 'done');
+            updatePipelineStage('writer', 'running');
+            updateDirectorMessage('✍️ 開始自動撰寫所有章節正文...');
+            showToast('🚀 總監批准！開始自動撰寫全書章節...');
+            await writeAllChaptersSequentially(userPrompt);
+            break;
+        }
+        
+        case 'WAIT_USER': {
+            showToast('⏸️ 總監要求用戶確認，請查看右側聊天區的總監評估');
+            updateDirectorMessage('⏸️ 等待用戶確認...');
+            state.isPipelineRunning = false;
+            break;
+        }
+        
+        case 'FINISH': {
+            showToast('🎉 總監宣布：全部創作任務已完成！');
+            updateDirectorMessage('✅ 全部任務已完成');
+            updatePipelineStage('worldview', 'done');
+            updatePipelineStage('characters', 'done');
+            updatePipelineStage('plot', 'done');
+            updatePipelineStage('writer', 'done');
+            state.isPipelineRunning = false;
+            setTimeout(() => showPipelineProgress(false), 3000);
+            await loadNovelDetails(state.currentNovelId);
+            break;
+        }
+        
+        default: {
+            // 無法解析的 ACTION — 回退到智能狀態檢測
+            console.warn('Unknown director action:', action, '— falling back to state detection');
+            await executeNextMissingStage(userPrompt);
+            break;
+        }
+    }
+}
+
+/**
+ * 智能填補缺失階段（回退邏輯）
+ * 當 Director 未返回明確 ACTION 時，根據當前狀態自動推進
+ */
+async function executeNextMissingStage(userPrompt) {
     const hasWorldview = state.currentNovelData?.worldbuilding && state.currentNovelData.worldbuilding.trim().length > 50;
     const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
     const hasPlot = state.currentNovelData?.plot && state.currentNovelData.plot.chapters?.length > 0;
     
-    // 決定下一步
     if (!hasWorldview) {
-        // 需要生成世界觀
         updatePipelineStage('worldview', 'running');
         updateDirectorMessage('🌍 開始生成世界觀設定...');
-        await executeArchitectAgent();
+        await executePipelineStage('worldview', userPrompt);
     } else if (!hasCharacters) {
-        // 需要生成角色
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'running');
         updateDirectorMessage('👥 開始生成角色設定...');
-        await executeCharacterAgent();
+        await executePipelineStage('characters', userPrompt);
     } else if (!hasPlot) {
-        // 需要生成大綱
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
         updatePipelineStage('plot', 'running');
         updateDirectorMessage('📋 開始生成章節大綱...');
-        await executePlotAgent();
+        await executePipelineStage('plot', userPrompt);
     } else {
-        // 所有前期準備完成
+        // 所有前期準備完成，開始寫作
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
         updatePipelineStage('plot', 'done');
-        updateDirectorMessage('✅ 前期準備完成！可以開始寫作章節正文。');
-        state.isPipelineRunning = false;
-        
-        // 自動切換到寫作模式
-        state.activeTab = 'writer';
-        renderActiveTab();
-        
-        // 延遲關閉進度條，確保用戶能看到完成狀態
-        setTimeout(() => {
-            showPipelineProgress(false);
-        }, 3000);
+        updatePipelineStage('writer', 'running');
+        updateDirectorMessage('✍️ 前期準備完成，開始撰寫正文...');
+        await writeAllChaptersSequentially(userPrompt);
     }
 }
+
+/**
+ * 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
+ * @param {string} stage - 階段名稱: worldview, characters, plot, writer
+ * @param {string} userPrompt - 用戶 prompt
+ */
+async function executePipelineStage(stage, userPrompt) {
+    return new Promise((resolve) => {
+        let endpoint, body, targetTextarea;
+        let agentName = '';
+        
+        switch (stage) {
+            case 'worldview':
+                endpoint = '/api/agent/story-architect';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorWorldview;
+                state.activeTab = 'worldview';
+                agentName = 'Story Architect (故事結構架構師)';
+                break;
+            case 'characters':
+                endpoint = '/api/agent/character-designer';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorCharactersJson;
+                state.activeTab = 'characters';
+                agentName = 'Character Designer (角色設計大師)';
+                break;
+            case 'plot':
+                endpoint = '/api/agent/plot-planner';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Plot Planner (章節劇情規劃師)';
+                break;
+            case 'writer':
+                endpoint = '/api/agent/write-chapter';
+                body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
+                targetTextarea = el.editorProse;
+                state.activeTab = 'writer';
+                agentName = 'Chapter Writer (小說正文寫作作家)';
+                break;
+            default:
+                resolve();
+                return;
+        }
+        
+        renderActiveTab();
+        if (targetTextarea) targetTextarea.value = '';
+        
+        showToast(`🚀 正在啟動 ${stage} Agent...`);
+        showAgentProcessingIndicator(stage, agentName);
+        
+        streamAPI(
+            endpoint,
+            body,
+            (delta) => {
+                updateAgentStreamOutput(stage, delta);
+            },
+            (delta) => {
+                if (targetTextarea) {
+                    targetTextarea.value += delta;
+                    targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                }
+                updateAgentStreamOutput(stage, delta);
+            },
+            (msg) => {
+                showToast(`${stage} Agent 執行失敗: ${msg}`);
+                updatePipelineStage(stage, 'error');
+                hideAgentProcessingIndicator(stage);
+                resolve();
+            },
+            async () => {
+                updatePipelineStage(stage, 'done');
+                hideAgentProcessingIndicator(stage);
+                
+                // 刷新數據
+                await loadNovelDetails(state.currentNovelId);
+                
+                // 如果管道仍在運行，詢問總監下一步
+                if (state.isPipelineRunning) {
+                    showToast(`${stage} 完成，正在請求 AI 總監評估...`);
+                    const nextDecision = await runDirectorDecision(stage);
+                    await executeDirectorAction(nextDecision, userPrompt);
+                }
+                
+                resolve();
+            }
+        );
+    });
+}
+
+/**
+ * 自動撰寫所有章節正文（按大綱順序，每章寫完後詢問總監）
+ */
+async function writeAllChaptersSequentially(userPrompt) {
+    const plotChapters = state.currentNovelData?.plot?.chapters || [];
+    
+    if (plotChapters.length === 0) {
+        showToast('⚠️ 沒有大綱章節可寫，請先生成大綱');
+        state.isPipelineRunning = false;
+        return;
+    }
+    
+    const totalChapters = plotChapters.length;
+    showToast(`📖 共 ${totalChapters} 個大綱節點，開始逐章撰寫...`);
+    
+    // 找出已寫作的章節（跳過已完成的）
+    const existingChapters = state.currentNovelData?.chapters || [];
+    const writtenIndices = new Set(existingChapters.map(c => c.chapter_index));
+    
+    for (let i = 0; i < totalChapters; i++) {
+        const chapterIndex = i + 1; // 1-based
+        
+        // 跳過已寫作的章節
+        if (writtenIndices.has(chapterIndex)) {
+            updateDirectorMessage(`⏭️ 第 ${chapterIndex}/${totalChapters} 章已存在，跳過...`);
+            continue;
+        }
+        
+        if (!state.isPipelineRunning) {
+            showToast('⏸️ 管道已暫停');
+            break;
+        }
+        
+        updateDirectorMessage(`✍️ 正在撰寫第 ${chapterIndex}/${totalChapters} 章...`);
+        showToast(`✍️ 開始撰寫第 ${chapterIndex} 章（共 ${totalChapters} 章）`);
+        
+        state.activeTab = 'writer';
+        state.activeChapterIndex = chapterIndex;
+        renderActiveTab();
+        
+        // 撰寫單一章節
+        await new Promise((resolve) => {
+            if (el.editorProse) el.editorProse.value = '';
+            
+            streamAPI(
+                '/api/agent/write-chapter',
+                { novel_id: state.currentNovelId, chapter_index: chapterIndex },
+                () => {},
+                (delta) => {
+                    if (el.editorProse) {
+                        el.editorProse.value += delta;
+                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    }
+                },
+                (msg) => {
+                    showToast(`第 ${chapterIndex} 章寫作失敗: ${msg}`);
+                },
+                async () => {
+                    await loadNovelDetails(state.currentNovelId);
+                    resolve();
+                }
+            );
+        });
+        
+        // 每 3 章或最後一章時，請求總監評估
+        if ((chapterIndex % 3 === 0) || chapterIndex === totalChapters) {
+            updateDirectorMessage(`🎬 總監正在評估第 ${chapterIndex} 章...`);
+            const chapterDecision = await runDirectorDecision('writer');
+            
+            // 如果總監指示回退修改
+            if (chapterDecision.action === 'GO_BACK_TO_WORLDVIEW' ||
+                chapterDecision.action === 'GO_BACK_TO_CHARACTERS' ||
+                chapterDecision.action === 'GO_BACK_TO_PLOT') {
+                showToast(`⚡ 總監在第 ${chapterIndex} 章後指示回退修改...`);
+                await executeDirectorAction(chapterDecision, userPrompt);
+                return; // 回退後由 executeDirectorAction 接管流程
+            }
+            
+            if (chapterDecision.action === 'WAIT_USER') {
+                showToast('⏸️ 總監要求暫停，請確認後繼續');
+                state.isPipelineRunning = false;
+                return;
+            }
+        }
+    }
+    
+    // 全部章節寫作完成
+    updatePipelineStage('writer', 'done');
+    updateDirectorMessage('🎉 全書撰寫完畢！');
+    showToast('🎉 恭喜！全部章節正文已撰寫完成！');
+    state.isPipelineRunning = false;
+    
+    setTimeout(() => showPipelineProgress(false), 3000);
+    await loadNovelDetails(state.currentNovelId);
+    selectWriterChapter(1);
+}
+
 
 /**
  * 執行 Story Architect Agent
  */
 async function executeArchitectAgent() {
     showGeneratingIndicator('worldview');
+    
+    // 清理 textarea buffer 防止重複內容
+    el.editorWorldview.value = '';
     
     const userPrompt = state.currentNovelData?.novel?.description || 
         `請為以下類型和風格的小說設計完整的世界觀：\n` +
@@ -465,15 +782,12 @@ async function executeArchitectAgent() {
             showToast('世界觀生成失敗: ' + error);
             el.editorWorldview.disabled = false;
             updatePipelineStage('worldview', 'error');
+            // 添加錯誤訊息到聊天
+            appendChatMessage('assistant', `⚠️ 世界觀生成失敗: ${error}`);
         },
         async () => {
             el.editorWorldview.disabled = false;
             updatePipelineStage('worldview', 'done');
-            
-            // 保存世界觀
-            await requestAPI(`/api/novels/${state.currentNovelId}/worldbuilding`, 'POST', {
-                content: el.editorWorldview.value
-            });
             
             // 刷新數據並繼續下一步
             await loadNovelDetails(state.currentNovelId);
@@ -504,17 +818,6 @@ async function executeCharacterAgent() {
             el.editorCharactersJson.disabled = false;
             updatePipelineStage('characters', 'done');
             
-            // 保存角色
-            let charData;
-            try {
-                charData = JSON.parse(el.editorCharactersJson.value);
-            } catch (e) {
-                charData = { characters: [] };
-            }
-            await requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', {
-                json_data: charData
-            });
-            
             await loadNovelDetails(state.currentNovelId);
             await handleDirectorDecision();
         }
@@ -542,17 +845,6 @@ async function executePlotAgent() {
         async () => {
             el.editorPlotJson.disabled = false;
             updatePipelineStage('plot', 'done');
-            
-            // 保存大綱
-            let plotData;
-            try {
-                plotData = JSON.parse(el.editorPlotJson.value);
-            } catch (e) {
-                plotData = { chapters: [] };
-            }
-            await requestAPI(`/api/novels/${state.currentNovelId}/plot`, 'POST', {
-                outline_json: plotData
-            });
             
             await loadNovelDetails(state.currentNovelId);
             await handleDirectorDecision();
@@ -808,7 +1100,7 @@ function renderNovelsList() {
         // Delete novel handler
         li.querySelector('.delete-novel-btn').addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (confirm(`確定要刪除「${n.title}」專案嗎？此操作無法還原！`)) {
+            if (await showCustomConfirm(`確定要刪除「${n.title}」專案嗎？此操作無法還原！`)) {
                 try {
                     await requestAPI(`/api/novels/${n.id}`, 'DELETE');
                     if (state.currentNovelId === n.id) {
@@ -863,6 +1155,1258 @@ function renderActiveTab() {
 
 function renderWorldviewTab() {
     el.editorWorldview.value = state.currentNovelData.worldbuilding || '';
+    // 渲染世界觀各區塊的視覺化列表
+    renderWorldviewSections();
+    
+    // 確保 JSON sidebar 隱藏
+    const jsonSidebar = document.querySelector('#panel-worldview .editor-sidebar-json');
+    if (jsonSidebar) {
+        jsonSidebar.style.display = 'none';
+    }
+}
+
+/**
+ * 渲染世界觀各區塊的視覺化 UI
+ */
+function parseWorldviewJSON(text) {
+    const defaultStructure = {
+        theme: "",
+        main_conflict: "",
+        worldview: "",
+        macro_outline: "",
+        three_act_structure: {
+            act1_setup: "",
+            act2_confrontation: "",
+            act3_resolution: ""
+        },
+        progressive_character_plan: {
+            wave_1_opening: "",
+            wave_2_development: "",
+            wave_3_climax: ""
+        },
+        foreshadowing_seeds: [],
+        key_turning_points: []
+    };
+
+    if (!text || text.trim().length === 0) {
+        return defaultStructure;
+    }
+
+    const textStripped = text.trim();
+    if (textStripped.startsWith("{") && textStripped.endsWith("}")) {
+        try {
+            const parsed = JSON.parse(textStripped);
+            return {
+                theme: parsed.theme || "",
+                main_conflict: parsed.main_conflict || "",
+                worldview: parsed.worldview || "",
+                macro_outline: parsed.macro_outline || "",
+                three_act_structure: {
+                    act1_setup: parsed.three_act_structure?.act1_setup || parsed.three_act_structure?.act1 || "",
+                    act2_confrontation: parsed.three_act_structure?.act2_confrontation || parsed.three_act_structure?.act2 || "",
+                    act3_resolution: parsed.three_act_structure?.act3_resolution || parsed.three_act_structure?.act3 || ""
+                },
+                progressive_character_plan: {
+                    wave_1_opening: parsed.progressive_character_plan?.wave_1_opening || "",
+                    wave_2_development: parsed.progressive_character_plan?.wave_2_development || "",
+                    wave_3_climax: parsed.progressive_character_plan?.wave_3_climax || ""
+                },
+                foreshadowing_seeds: Array.isArray(parsed.foreshadowing_seeds) ? parsed.foreshadowing_seeds : [],
+                key_turning_points: Array.isArray(parsed.key_turning_points) ? parsed.key_turning_points : []
+            };
+        } catch (e) {
+            console.warn("parseWorldviewJSON parse failed, falling back to legacy parser", e);
+        }
+    }
+
+    // --- 舊格式文字解析器 (平鋪相容備援) ---
+    const result = JSON.parse(JSON.stringify(defaultStructure));
+    const headers = [
+        "【核心主題】",
+        "【核心衝突】",
+        "【世界觀設定】",
+        "【整體故事大綱】",
+        "【三幕式結構】",
+        "【角色漸進規劃策略】",
+        "【伏筆種子】",
+        "【關鍵轉折點】"
+    ];
+
+    const pos = [];
+    headers.forEach(h => {
+        const idx = text.indexOf(h);
+        if (idx !== -1) {
+            pos.push({ idx, h });
+        }
+    });
+    pos.sort((a, b) => a.idx - b.idx);
+
+    const sections = {};
+    for (let i = 0; i < pos.length; i++) {
+        const startIdx = pos[i].idx + pos[i].h.length;
+        const endIdx = (i + 1 < pos.length) ? pos[i + 1].idx : text.length;
+        sections[pos[i].h] = text.substring(startIdx, endIdx).trim();
+    }
+
+    if (sections["【核心主題】"]) result.theme = sections["【核心主題】"];
+    if (sections["【核心衝突】"]) result.main_conflict = sections["【核心衝突】"];
+    if (sections["【世界觀設定】"]) result.worldview = sections["【世界觀設定】"];
+    if (sections["【整體故事大綱】"]) result.macro_outline = sections["【整體故事大綱】"];
+
+    if (sections["【三幕式結構】"]) {
+        const lines = sections["【三幕式結構】"].split("\n");
+        lines.forEach(line => {
+            const l = line.trim();
+            if (l.includes("第一幕") || l.includes("Setup")) {
+                result.three_act_structure.act1_setup = l.split(/[：:]/).slice(1).join("：").trim() || l;
+            } else if (l.includes("第二幕") || l.includes("Confrontation")) {
+                result.three_act_structure.act2_confrontation = l.split(/[：:]/).slice(1).join("：").trim() || l;
+            } else if (l.includes("第三幕") || l.includes("Resolution")) {
+                result.three_act_structure.act3_resolution = l.split(/[：:]/).slice(1).join("：").trim() || l;
+            }
+        });
+    }
+
+    if (sections["【角色漸進規劃策略】"]) {
+        const lines = sections["【角色漸進規劃策略】"].split("\n");
+        lines.forEach(line => {
+            let l = line.trim();
+            if (l.startsWith("-") || l.startsWith("•") || l.startsWith("*")) {
+                l = l.substring(1).trim();
+            }
+            if (l.includes(":") || l.includes("：")) {
+                const sep = l.includes("：") ? "：" : ":";
+                const parts = l.split(sep);
+                const k = parts[0].trim();
+                const v = parts.slice(1).join(sep).trim();
+                if (k.includes("wave_1") || k.includes("wave1") || k.includes("開篇") || k.includes("第一波")) {
+                    result.progressive_character_plan.wave_1_opening = v;
+                } else if (k.includes("wave_2") || k.includes("wave2") || k.includes("第二波") || k.includes("發展")) {
+                    result.progressive_character_plan.wave_2_development = v;
+                } else if (k.includes("wave_3") || k.includes("wave3") || k.includes("第三波") || k.includes("高潮")) {
+                    result.progressive_character_plan.wave_3_climax = v;
+                }
+            } else {
+                if (l) {
+                    if (!result.progressive_character_plan.wave_1_opening) {
+                        result.progressive_character_plan.wave_1_opening = l;
+                    } else if (!result.progressive_character_plan.wave_2_development) {
+                        result.progressive_character_plan.wave_2_development = l;
+                    } else if (!result.progressive_character_plan.wave_3_climax) {
+                        result.progressive_character_plan.wave_3_climax = l;
+                    }
+                }
+            }
+        });
+    }
+
+    if (sections["【伏筆種子】"]) {
+        const lines = sections["【伏筆種子】"].split("\n");
+        lines.forEach(line => {
+            let l = line.trim();
+            if (l.startsWith("-") || l.startsWith("•") || l.startsWith("*")) {
+                l = l.substring(1).trim();
+            }
+            if (l) {
+                result.foreshadowing_seeds.push(l);
+            }
+        });
+    }
+
+    if (sections["【關鍵轉折點】"]) {
+        const lines = sections["【關鍵轉折點】"].split("\n");
+        lines.forEach(line => {
+            let l = line.trim();
+            if (l.startsWith("-") || l.startsWith("•") || l.startsWith("*")) {
+                l = l.substring(1).trim();
+            }
+            if (l) {
+                result.key_turning_points.push(l);
+            }
+        });
+    }
+
+    return result;
+}
+
+async function saveWorldviewJSON(jsonObj) {
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    const text = JSON.stringify(jsonObj, null, 2);
+    try {
+        await requestAPI(`/api/novels/${state.currentNovelId}/worldbuilding`, 'POST', {
+            content: text
+        });
+        state.currentNovelData.worldbuilding = text;
+        el.editorWorldview.value = text;
+        renderWorldviewSections();
+        showToast('世界觀設定已儲存');
+    } catch (e) {
+        showToast('更新失敗');
+        console.error(e);
+    }
+}
+
+function openWorldviewTextSectionEditModal(field, title, currentContent) {
+    let modal = document.getElementById('modal-worldview-text-edit');
+    if (!modal) {
+        const html = `
+        <div id="modal-worldview-text-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h2 id="wv-text-edit-title">編輯設定</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label id="wv-text-edit-label">設定內容</label>
+                        <textarea id="wv-text-edit-content" rows="10" placeholder="請輸入設定內容..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+                    </div>
+                    <button id="btn-wv-text-edit-submit" class="btn btn-primary btn-full mt-4">儲存設定</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-worldview-text-edit');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+
+    document.getElementById('wv-text-edit-title').innerText = `✏️ 編輯 ${title}`;
+    document.getElementById('wv-text-edit-label').innerText = `${title} 詳細設定`;
+    document.getElementById('wv-text-edit-content').value = currentContent || '';
+
+    const submitBtn = document.getElementById('btn-wv-text-edit-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+
+    newBtn.addEventListener('click', async () => {
+        const val = document.getElementById('wv-text-edit-content').value.trim();
+        const worldviewText = state.currentNovelData?.worldbuilding || '';
+        const js = parseWorldviewJSON(worldviewText);
+        js[field] = val;
+        await saveWorldviewJSON(js);
+        modal.classList.remove('active');
+    });
+
+    modal.classList.add('active');
+}
+
+function openThreeActEditModal(currentThreeAct) {
+    let modal = document.getElementById('modal-three-act-edit');
+    if (!modal) {
+        const html = `
+        <div id="modal-three-act-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 650px;">
+                <div class="modal-header">
+                    <h2>🎬 編輯三幕式結構</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; max-height: 75vh; overflow-y: auto;">
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #93c5fd;">第一幕（Setup）</label>
+                        <textarea id="ta-act1" rows="4" placeholder="開端與鋪墊..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #a78bfa;">第二幕（Confrontation）</label>
+                        <textarea id="ta-act2" rows="4" placeholder="對抗與衝突..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #fca5a5;">第三幕（Resolution）</label>
+                        <textarea id="ta-act3" rows="4" placeholder="解決與高潮..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <button id="btn-three-act-submit" class="btn btn-primary btn-full mt-2">儲存三幕式結構</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-three-act-edit');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+
+    const ta = currentThreeAct || {};
+    document.getElementById('ta-act1').value = ta.act1_setup || '';
+    document.getElementById('ta-act2').value = ta.act2_confrontation || '';
+    document.getElementById('ta-act3').value = ta.act3_resolution || '';
+
+    const submitBtn = document.getElementById('btn-three-act-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+
+    newBtn.addEventListener('click', async () => {
+        const worldviewText = state.currentNovelData?.worldbuilding || '';
+        const js = parseWorldviewJSON(worldviewText);
+        js.three_act_structure = {
+            act1_setup: document.getElementById('ta-act1').value.trim(),
+            act2_confrontation: document.getElementById('ta-act2').value.trim(),
+            act3_resolution: document.getElementById('ta-act3').value.trim()
+        };
+        await saveWorldviewJSON(js);
+        modal.classList.remove('active');
+    });
+
+    modal.classList.add('active');
+}
+
+function openCharacterPlanEditModal(currentPlan) {
+    let modal = document.getElementById('modal-char-plan-edit');
+    if (!modal) {
+        const html = `
+        <div id="modal-char-plan-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 650px;">
+                <div class="modal-header">
+                    <h2>👥 編輯角色漸進規劃策略</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; max-height: 75vh; overflow-y: auto;">
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #67e8f9;">第一波開篇 (Wave 1)</label>
+                        <textarea id="cp-wave1" rows="4" placeholder="初期主要登場角色、核心人設與初始動機..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #fdba74;">第二波發展 (Wave 2)</label>
+                        <textarea id="cp-wave2" rows="4" placeholder="中期新登場角色、關係網交織與內部陣營演變..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight: 600; color: #f9a8d4;">第三波高潮 (Wave 3)</label>
+                        <textarea id="cp-wave3" rows="4" placeholder="後期關鍵底牌角色、決戰陣營確立與宿命大結局..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
+                    </div>
+                    <button id="btn-char-plan-submit" class="btn btn-primary btn-full mt-2">儲存角色漸進規劃</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-char-plan-edit');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+
+    const cp = currentPlan || {};
+    document.getElementById('cp-wave1').value = cp.wave_1_opening || '';
+    document.getElementById('cp-wave2').value = cp.wave_2_development || '';
+    document.getElementById('cp-wave3').value = cp.wave_3_climax || '';
+
+    const submitBtn = document.getElementById('btn-char-plan-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+
+    newBtn.addEventListener('click', async () => {
+        const worldviewText = state.currentNovelData?.worldbuilding || '';
+        const js = parseWorldviewJSON(worldviewText);
+        js.progressive_character_plan = {
+            wave_1_opening: document.getElementById('cp-wave1').value.trim(),
+            wave_2_development: document.getElementById('cp-wave2').value.trim(),
+            wave_3_climax: document.getElementById('cp-wave3').value.trim()
+        };
+        await saveWorldviewJSON(js);
+        modal.classList.remove('active');
+    });
+
+    modal.classList.add('active');
+}
+
+function openWorldviewListEditModal(field, title, currentList) {
+    let modal = document.getElementById('modal-worldview-list-edit');
+    if (!modal) {
+        const html = `
+        <div id="modal-worldview-list-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 650px; max-height: 85vh; display: flex; flex-direction: column;">
+                <div class="modal-header">
+                    <h2 id="wv-list-edit-title">編輯清單</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; padding-bottom: 20px;">
+                    <div id="wv-list-items-container" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <button id="btn-wv-list-add-item" class="btn btn-secondary btn-xs" style="align-self: flex-start; margin-top: 4px;">➕ 新增項目</button>
+                    <button id="btn-wv-list-submit" class="btn btn-primary btn-full mt-4">儲存變更</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-worldview-list-edit');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+
+    document.getElementById('wv-list-edit-title').innerText = `📋 編輯 ${title}`;
+    const container = document.getElementById('wv-list-items-container');
+    container.innerHTML = '';
+
+    const list = Array.isArray(currentList) ? [...currentList] : [];
+
+    function renderItems() {
+        container.innerHTML = '';
+        if (list.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
+            return;
+        }
+
+        list.forEach((item, index) => {
+            const div = document.createElement('div');
+            div.style = 'display: flex; gap: 8px; align-items: center;';
+            div.innerHTML = `
+                <span style="font-size: 0.8rem; color: var(--text-muted); min-width: 24px;">#${index + 1}</span>
+                <input type="text" class="wv-list-item-input" data-index="${index}" value="${item.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="請輸入項目內容...">
+                <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem;">✕</button>
+            `;
+            container.appendChild(div);
+
+            div.querySelector('.wv-list-item-input').addEventListener('input', (e) => {
+                list[index] = e.target.value;
+            });
+
+            div.querySelector('.delete-item-btn').addEventListener('click', () => {
+                list.splice(index, 1);
+                renderItems();
+            });
+        });
+    }
+
+    renderItems();
+
+    // Rebind Add Button
+    const addBtn = document.getElementById('btn-wv-list-add-item');
+    const newAddBtn = addBtn.cloneNode(true);
+    addBtn.parentNode.replaceChild(newAddBtn, addBtn);
+    newAddBtn.addEventListener('click', () => {
+        list.push('');
+        renderItems();
+        setTimeout(() => {
+            const inputs = container.querySelectorAll('.wv-list-item-input');
+            if (inputs.length > 0) {
+                inputs[inputs.length - 1].focus();
+            }
+        }, 50);
+    });
+
+    // Rebind Submit Button
+    const submitBtn = document.getElementById('btn-wv-list-submit');
+    const newSubmitBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newSubmitBtn, submitBtn);
+
+    newSubmitBtn.addEventListener('click', async () => {
+        const finalList = list.map(item => item.trim()).filter(item => item !== '');
+        const worldviewText = state.currentNovelData?.worldbuilding || '';
+        const js = parseWorldviewJSON(worldviewText);
+        js[field] = finalList;
+        await saveWorldviewJSON(js);
+        modal.classList.remove('active');
+    });
+
+    modal.classList.add('active');
+}
+
+function renderWorldviewSections() {
+    const container = document.getElementById('worldview-sections-container');
+    if (!container) return;
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    
+    let html = '';
+    
+    function makeTextCard(field, icon, title, value, badgeClass) {
+        if (!value || value.trim().length === 0) {
+            return `
+                <div class="worldview-section-card empty-state" data-section="${field}" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewTextSectionEditModal('${field}', '${title}', '')">
+                    <span style="font-size: 1.5rem;">${icon}</span>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">${title}</span>
+                    <div style="display: flex; gap: 8px; margin-top: 4px;">
+                        <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增設定</button>
+                        <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')">✨ AI 規劃</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="worldview-section-card" data-section="${field}">
+                <div class="worldview-section-header">
+                    <div class="worldview-section-title">
+                        <span class="worldview-section-badge ${badgeClass}">${icon}</span>
+                        ${title}
+                    </div>
+                    <div class="worldview-section-actions">
+                        <button onclick="toggleSectionExpand('${field}')" title="展開/收合">↕</button>
+                        <button onclick="enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
+                        <button onclick="openWorldviewTextSectionEditModal('${field}', '${title}', \`${value.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`)" title="編輯">✏️ 編輯</button>
+                        <button onclick="deleteWorldviewSection('${field}', '${title}')" title="清空">🗑️ 刪除</button>
+                    </div>
+                </div>
+                <div class="worldview-section-content" id="content-${field}">
+                    ${value}
+                </div>
+            </div>
+        `;
+    }
+    
+    html += makeTextCard('theme', '🎯', '核心主題', js.theme, 'theme');
+    html += makeTextCard('main_conflict', '⚔️', '核心衝突', js.main_conflict, 'conflict');
+    html += makeTextCard('worldview', '🌍', '世界觀設定', js.worldview, 'setting');
+    html += makeTextCard('macro_outline', '📖', '整體故事大綱', js.macro_outline, 'outline');
+    
+    const hasThreeAct = js.three_act_structure.act1_setup || js.three_act_structure.act2_confrontation || js.three_act_structure.act3_resolution;
+    if (!hasThreeAct) {
+        html += `
+            <div class="worldview-section-card empty-state" data-section="three-act" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openThreeActEditModal(null)">
+                <span style="font-size: 1.5rem;">📐</span>
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">三幕式結構</span>
+                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增三幕</button>
+                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('three_act_structure', '三幕式結構')">✨ AI 規劃</button>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="worldview-section-card" data-section="three-act">
+                <div class="worldview-section-header">
+                    <div class="worldview-section-title">
+                        <span class="worldview-section-badge structure">📐</span>
+                        三幕式結構
+                    </div>
+                    <div class="worldview-section-actions">
+                        <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
+                        <button onclick="enhanceWorldviewSectionWithAI('three_act_structure', '三幕式結構')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
+                        <button onclick="openThreeActEditModal(JSON.parse(\`${JSON.stringify(js.three_act_structure).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
+                        <button onclick="deleteWorldviewSection('three-act', '三幕式結構')" title="清空">🗑️ 刪除</button>
+                    </div>
+                </div>
+                <div class="worldview-section-content" id="content-three-act">
+                    <div style="margin-bottom: 6px;"><strong>第一幕 (Setup)：</strong>${js.three_act_structure.act1_setup || '（未設定）'}</div>
+                    <div style="margin-bottom: 6px;"><strong>第二幕 (Confrontation)：</strong>${js.three_act_structure.act2_confrontation || '（未設定）'}</div>
+                    <div><strong>第三幕 (Resolution)：</strong>${js.three_act_structure.act3_resolution || '（未設定）'}</div>
+                </div>
+            </div>
+        `;
+    }
+    
+    const hasCharPlan = js.progressive_character_plan.wave_1_opening || js.progressive_character_plan.wave_2_development || js.progressive_character_plan.wave_3_climax;
+    if (!hasCharPlan) {
+        html += `
+            <div class="worldview-section-card empty-state" data-section="character-waves" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openCharacterPlanEditModal(null)">
+                <span style="font-size: 1.5rem;">👥</span>
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">角色漸進規劃策略</span>
+                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增規劃</button>
+                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('progressive_character_plan', '角色漸進規劃策略')">✨ AI 規劃</button>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="worldview-section-card" data-section="character-waves">
+                <div class="worldview-section-header">
+                    <div class="worldview-section-title">
+                        <span class="worldview-section-badge waves">👥</span>
+                        角色漸進規劃策略
+                    </div>
+                    <div class="worldview-section-actions">
+                        <button onclick="toggleSectionExpand('character-waves')" title="展開/收合">↕</button>
+                        <button onclick="enhanceWorldviewSectionWithAI('progressive_character_plan', '角色漸進規劃策略')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
+                        <button onclick="openCharacterPlanEditModal(JSON.parse(\`${JSON.stringify(js.progressive_character_plan).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
+                        <button onclick="deleteWorldviewSection('character-waves', '角色漸進規劃策略')" title="清空">🗑️ 刪除</button>
+                    </div>
+                </div>
+                <div class="worldview-section-content" id="content-character-waves">
+                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 6px;">
+                        <div class="wave-name" style="color: #67e8f9; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第一波開篇 (Wave 1)</div>
+                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_1_opening || '（未設定）'}</div>
+                    </div>
+                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 6px;">
+                        <div class="wave-name" style="color: #fdba74; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第二波發展 (Wave 2)</div>
+                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_2_development || '（未設定）'}</div>
+                    </div>
+                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px;">
+                        <div class="wave-name" style="color: #f9a8d4; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第三波高潮 (Wave 3)</div>
+                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_3_climax || '（未設定）'}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    const hasTurningPoints = js.key_turning_points && js.key_turning_points.length > 0;
+    if (!hasTurningPoints) {
+        html += `
+            <div class="worldview-section-card empty-state" data-section="turning-points" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewListEditModal('key_turning_points', '關鍵轉折點', [])">
+                <span style="font-size: 1.5rem;">🔄</span>
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">關鍵轉折點</span>
+                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增轉折</button>
+                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('key_turning_points', '關鍵轉折點')">✨ AI 規劃</button>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="worldview-section-card" data-section="turning-points">
+                <div class="worldview-section-header">
+                    <div class="worldview-section-title">
+                        <span class="worldview-section-badge turning">🔄</span>
+                        關鍵轉折點
+                    </div>
+                    <div class="worldview-section-actions">
+                        <button onclick="toggleSectionExpand('turning-points')" title="展開/收合">↕</button>
+                        <button onclick="enhanceWorldviewSectionWithAI('key_turning_points', '關鍵轉折點')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
+                        <button onclick="openWorldviewListEditModal('key_turning_points', '關鍵轉折點', JSON.parse(\`${JSON.stringify(js.key_turning_points).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
+                        <button onclick="deleteWorldviewSection('turning-points', '關鍵轉折點')" title="清空">🗑️ 刪除</button>
+                    </div>
+                </div>
+                <div class="worldview-section-content" id="content-turning-points" style="display: flex; flex-direction: column; gap: 6px;">
+                    ${js.key_turning_points.map((point, idx) => `
+                        <div class="turning-point-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px;">
+                            <div class="turning-point-header" style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">
+                                <span class="turning-point-index" style="font-weight: 600; color: #fdba74;">轉折點 #${idx + 1}</span>
+                            </div>
+                            <div class="turning-point-content" style="font-size: 0.8rem; color: var(--text-secondary);">${point}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    const hasSeeds = js.foreshadowing_seeds && js.foreshadowing_seeds.length > 0;
+    if (!hasSeeds) {
+        html += `
+            <div class="worldview-section-card empty-state" data-section="seeds" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', [])">
+                <span style="font-size: 1.5rem;">🌱</span>
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">伏筆種子</span>
+                <div style="display: flex; gap: 8px; margin-top: 4px;">
+                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增伏筆</button>
+                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('foreshadowing_seeds', '伏筆種子')">✨ AI 規劃</button>
+                </div>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="worldview-section-card" data-section="seeds">
+                <div class="worldview-section-header">
+                    <div class="worldview-section-title">
+                        <span class="worldview-section-badge seeds">🌱</span>
+                        伏筆種子
+                    </div>
+                    <div class="worldview-section-actions">
+                        <button onclick="toggleSectionExpand('seeds')" title="展開/收合">↕</button>
+                        <button onclick="enhanceWorldviewSectionWithAI('foreshadowing_seeds', '伏筆種子')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
+                        <button onclick="openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', JSON.parse(\`${JSON.stringify(js.foreshadowing_seeds).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
+                        <button onclick="deleteWorldviewSection('seeds', '伏筆種子')" title="清空">🗑️ 刪除</button>
+                    </div>
+                </div>
+                <div class="worldview-section-content" id="content-seeds" style="display: flex; flex-direction: column; gap: 6px;">
+                    ${js.foreshadowing_seeds.map((seed, idx) => `
+                        <div class="seed-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; font-size: 0.8rem; color: var(--text-secondary);">
+                            <span style="font-weight: 600; color: #f9a8d4; margin-right: 6px;">🌱 伏筆 #${idx + 1}:</span> ${seed}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = `<div class="worldview-sections" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">${html}</div>`;
+}
+
+async function deleteWorldviewSection(sectionId, title) {
+    if (!(await showCustomConfirm(`確定要清空/刪除【${title}】的設定內容嗎？`))) {
+        return;
+    }
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    
+    if (sectionId === 'theme') js.theme = '';
+    else if (sectionId === 'main_conflict') js.main_conflict = '';
+    else if (sectionId === 'worldview') js.worldview = '';
+    else if (sectionId === 'macro_outline') js.macro_outline = '';
+    else if (sectionId === 'three-act') {
+        js.three_act_structure = { act1_setup: '', act2_confrontation: '', act3_resolution: '' };
+    }
+    else if (sectionId === 'character-waves') {
+        js.progressive_character_plan = { wave_1_opening: '', wave_2_development: '', wave_3_climax: '' };
+    }
+    else if (sectionId === 'turning-points') js.key_turning_points = [];
+    else if (sectionId === 'seeds') js.foreshadowing_seeds = [];
+    
+    await saveWorldviewJSON(js);
+    showToast(`${title} 的設定已清空`);
+}
+
+function addWorldviewSection(sectionType) {
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    if (sectionType === 'core-theme') openWorldviewTextSectionEditModal('theme', '核心主題', js.theme);
+    else if (sectionType === 'core-conflict') openWorldviewTextSectionEditModal('main_conflict', '核心衝突', js.main_conflict);
+    else if (sectionType === 'world-setting') openWorldviewTextSectionEditModal('worldview', '世界觀設定', js.worldview);
+    else if (sectionType === 'overall-outline') openWorldviewTextSectionEditModal('macro_outline', '整體故事大綱', js.macro_outline);
+    else if (sectionType === 'three-act') openThreeActEditModal(js.three_act_structure);
+    else if (sectionType === 'character-waves') openCharacterPlanEditModal(js.progressive_character_plan);
+    else if (sectionType === 'turning-points') openWorldviewListEditModal('key_turning_points', '關鍵轉折點', js.key_turning_points);
+    else if (sectionType === 'seeds') openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', js.foreshadowing_seeds);
+    else showToast('不支援新增此類型');
+}
+
+/**
+ * 切換區塊展開/收合狀態
+ */
+function toggleSectionExpand(sectionId) {
+    const content = document.getElementById(`content-${sectionId}`);
+    if (content) {
+        content.classList.toggle('expanded');
+    }
+}
+
+/**
+ * 去除文本前綴（-、*、•、數字編號等）
+ * @param {string} text - 原始文本
+ * @returns {string} 去除前綴後的文本
+ */
+function stripBulletPrefix(text) {
+    return text.replace(/^[-*•]\s*/, '').replace(/^\d+[.、]\s*/, '').trim();
+}
+
+/**
+ * 解析世界觀文本中的伏筆種子
+ * @param {string} text - 世界觀文本
+ * @returns {string[]} 伏筆種子陣列
+ */
+function parseWorldviewSeeds(text) {
+    if (!text) return [];
+    
+    // 查找【伏筆種子】或【伏筆與設定種子】區塊
+    const seedsSectionMatch = text.match(/【伏筆[與]?設定?種子】\s*([\s\S]*?)(?=\n【|$)/i);
+    if (seedsSectionMatch) {
+        const seedsText = seedsSectionMatch[1];
+        // 按行分割，過濾空行，並去除前綴
+        return seedsText.split('\n')
+            .map(line => stripBulletPrefix(line.trim()))
+            .filter(line => line.length > 0 && !line.startsWith('#'));
+    }
+    
+    // 如果沒有找到專用區塊，嘗試查找其他可能的格式
+    // 例如：- 伏筆1, - 伏筆2 或數字列表
+    const bulletMatch = text.match(/(?:^|\n)(?:[-*•]|\d+[.、])\s*([^#\n]+)/gm);
+    if (bulletMatch) {
+        return bulletMatch
+            .map(line => stripBulletPrefix(line))
+            .filter(line => line.length > 0);
+    }
+    
+    return [];
+}
+
+/**
+ * 解析世界觀文本中的【核心主題】
+ * @param {string} text - 世界觀文本
+ * @returns {string|null} 核心主題內容
+ */
+function parseCoreTheme(text) {
+    if (!text) return null;
+    const match = text.match(/【核心主題】\s*([\s\S]*?)(?=\n【|$)/i);
+    return match ? match[1].trim() : null;
+}
+
+/**
+ * 解析世界觀文本中的【核心衝突】
+ * @param {string} text - 世界觀文本
+ * @returns {string|null} 核心衝突內容
+ */
+function parseCoreConflict(text) {
+    if (!text) return null;
+    const match = text.match(/【核心衝突】\s*([\s\S]*?)(?=\n【|$)/i);
+    return match ? match[1].trim() : null;
+}
+
+/**
+ * 解析世界觀文本中的【世界觀設定】
+ * @param {string} text - 世界觀文本
+ * @returns {string|null} 世界觀設定內容
+ */
+function parseWorldSetting(text) {
+    if (!text) return null;
+    const match = text.match(/【世界觀設定】\s*([\s\S]*?)(?=\n【|$)/i);
+    return match ? match[1].trim() : null;
+}
+
+/**
+ * 解析世界觀文本中的【三幕式結構】
+ * @param {string} text - 世界觀文本
+ * @returns {string|null} 三幕式結構內容
+ */
+function parseThreeActStructure(text) {
+    if (!text) return null;
+    const match = text.match(/【三幕式結構】\s*([\s\S]*?)(?=\n【|$)/i);
+    return match ? match[1].trim() : null;
+}
+
+/**
+ * 解析世界觀文本中的【整體故事大綱】
+ * @param {string} text - 世界觀文本
+ * @returns {string|null} 整體故事大綱內容
+ */
+function parseOverallOutline(text) {
+    if (!text) return null;
+    const match = text.match(/【整體故事大綱】\s*([\s\S]*?)(?=\n【|$)/i);
+    return match ? match[1].trim() : null;
+}
+
+/**
+ * 解析世界觀文本中的【角色漸進規劃策略】
+ * @param {string} text - 世界觀文本
+ * @returns {Array} 角色漸進規劃陣列
+ */
+function parseCharacterWavePlan(text) {
+    if (!text) return [];
+    const match = text.match(/【角色漸進規劃策略】\s*([\s\S]*?)(?=\n【|$)/i);
+    if (!match) return [];
+    
+    const section = match[1];
+    // 按 wave 分組 - 支援 "- wave_X_name:" 或 "wave_X_name:" 格式
+    const waves = [];
+    // 匹配 "- wave_1_opening: 內容" 或 "wave_1_opening: 內容" 格式
+    const waveMatches = section.matchAll(/(?:^|\n)\s*[-*]?\s*wave_(\d+)[_:](\w+):\s*([\s\S]*?)(?=\n\s*[-*]?\s*wave_|\n【|$$)/gi);
+    for (const wm of waveMatches) {
+        waves.push({
+            name: `wave_${wm[1]}_${wm[2]}`,
+            content: wm[3].trim()
+        });
+    }
+    return waves;
+}
+
+/**
+ * 解析世界觀文本中的【關鍵轉折點】
+ * @param {string} text - 世界觀文本
+ * @returns {Array} 關鍵轉折點陣列
+ */
+function parseKeyTurningPoints(text) {
+    if (!text) return [];
+    const match = text.match(/【關鍵轉折點】\s*([\s\S]*?)(?=\n【|$)/i);
+    if (!match) return [];
+    
+    const section = match[1];
+    const points = [];
+    // 匹配 "轉折點 X（第Y章）：內容" 格式，支援前導的空白、項目符號(-, *, •)和數字編號
+    const pointMatches = section.matchAll(/(?:^|\n)\s*[-*•]?\s*轉折點\s*(\d+)[（(]第(\d+)章[)）][：:]\s*([^\n]+)/g);
+    for (const pm of pointMatches) {
+        points.push({
+            index: parseInt(pm[1]),
+            chapter: parseInt(pm[2]),
+            content: pm[3].trim()
+        });
+    }
+    return points;
+}
+
+/**
+ * 渲染伏筆種子視覺化列表
+ * 當有伏筆時顯示伏筆列表，當沒有伏筆但有世界觀內容時顯示世界觀摘要
+ */
+function renderWorldviewSeedsList() {
+    const container = document.getElementById('seeds-list-container');
+    if (!container) return;
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const seeds = parseWorldviewSeeds(worldviewText);
+    
+    if (seeds.length === 0) {
+        // 沒有伏筆時，顯示世界觀內容預覽（前500字）
+        if (worldviewText && worldviewText.trim().length > 0) {
+            const preview = worldviewText.trim().substring(0, 500);
+            const hasMore = worldviewText.trim().length > 500;
+            container.innerHTML = `
+                <div class="seed-card">
+                    <div class="seed-header">
+                        <span class="seed-badge">📖 世界觀內容預覽</span>
+                    </div>
+                    <div class="seed-content">${preview}${hasMore ? '...' : ''}</div>
+                    <div style="margin-top:8px; font-size:0.75rem; color:var(--text-muted);">
+                        完整內容請在左側編輯器中查看和編輯
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <button class="btn btn-secondary btn-xs" onclick="document.getElementById('btn-seed-add').click()" style="width:100%;">
+                        ➕ 新增伏筆
+                    </button>
+                </div>
+            `;
+        } else {
+            container.innerHTML = '<div class="empty-placeholder">尚無世界觀內容。請在左側編輯器中輸入，或點擊「AI 自動規劃世界觀」生成。</div>';
+        }
+        return;
+    }
+    
+    container.innerHTML = seeds.map((seed, index) => `
+        <div class="seed-card" data-seed-index="${index}">
+            <div class="seed-header">
+                <span class="seed-badge">伏筆 #${index + 1}</span>
+                <div class="seed-actions">
+                    <button class="seed-delete-btn" data-index="${index}" title="刪除此伏筆">✕</button>
+                </div>
+            </div>
+            <div class="seed-content">${seed}</div>
+        </div>
+    `).join('');
+    
+    // 綁定刪除按鈕事件
+    container.querySelectorAll('.seed-delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const seedIndex = parseInt(e.target.dataset.index);
+            deleteWorldviewSeed(seedIndex);
+        });
+    });
+}
+
+/**
+ * 刪除指定的伏筆種子
+ * @param {number} seedIndex - 要刪除的伏筆索引
+ */
+async function deleteWorldviewSeed(seedIndex) {
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const seeds = parseWorldviewSeeds(worldviewText);
+    
+    if (seedIndex < 0 || seedIndex >= seeds.length) {
+        showToast('無效的伏筆索引');
+        return;
+    }
+    
+    const seedToDelete = seeds[seedIndex];
+    
+    if (!(await showCustomConfirm(`確定要刪除伏筆「${seedToDelete.substring(0, 30)}...」嗎？`))) {
+        return;
+    }
+    
+    // 從文本中移除該伏筆
+    const lines = worldviewText.split('\n');
+    const newLines = [];
+    let currentSeedIndex = -1;
+    let inSeedsSection = false;
+    
+    for (const line of lines) {
+        // 檢測是否進入伏筆區塊
+        if (line.match(/【伏筆[與]?設定?種子】/i)) {
+            inSeedsSection = true;
+            newLines.push(line);
+            continue;
+        }
+        
+        // 檢測是否離開伏筆區塊（遇到新的【標題】）
+        if (inSeedsSection && line.match(/^【/) && !line.match(/【伏筆/)) {
+            inSeedsSection = false;
+            newLines.push(line);
+            continue;
+        }
+        
+        if (inSeedsSection) {
+            const trimmedLine = line.trim();
+            // 跳過空行和標題行
+            if (!trimmedLine || trimmedLine.startsWith('#')) {
+                newLines.push(line);
+                continue;
+            }
+            
+            // 檢查這一行是否是我們要刪除的伏筆
+            const isTargetSeed = trimmedLine === seedToDelete || 
+                                  trimmedLine.replace(/^[-*•]\s*/, '') === seedToDelete ||
+                                  trimmedLine.replace(/^\d+[.、]\s*/, '') === seedToDelete;
+            
+            if (!isTargetSeed) {
+                newLines.push(line);
+            }
+            // 如果是目標伏筆，就跳過（刪除）
+        } else {
+            newLines.push(line);
+        }
+    }
+    
+    const newWorldviewText = newLines.join('\n');
+    
+    try {
+        await requestAPI(`/api/novels/${state.currentNovelId}/worldbuilding`, 'POST', {
+            content: newWorldviewText
+        });
+        state.currentNovelData.worldbuilding = newWorldviewText;
+        el.editorWorldview.value = newWorldviewText;
+        renderWorldviewSeedsList();
+        showToast('伏筆已刪除');
+    } catch (e) {
+        showToast('刪除失敗');
+    }
+}
+
+/**
+ * 伏筆 Modal 狀態
+ */
+let seedModalState = {
+    mode: 'add', // 'add' or 'edit'
+    editIndex: -1,
+    originalText: ''
+};
+
+/**
+ * 打開新增伏筆 Modal
+ */
+function openAddSeedModal() {
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    
+    seedModalState = {
+        mode: 'add',
+        editIndex: -1,
+        originalText: ''
+    };
+    
+    document.getElementById('seed-modal-title').textContent = '新增伏筆';
+    document.getElementById('input-seed-content').value = '';
+    document.getElementById('modal-seed').classList.remove('hidden');
+    document.getElementById('input-seed-content').focus();
+}
+
+/**
+ * 打開編輯伏筆 Modal
+ * @param {number} index - 伏筆索引
+ * @param {string} text - 伏筆內容
+ */
+function openEditSeedModal(index, text) {
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    
+    seedModalState = {
+        mode: 'edit',
+        editIndex: index,
+        originalText: text
+    };
+    
+    document.getElementById('seed-modal-title').textContent = '編輯伏筆';
+    document.getElementById('input-seed-content').value = text;
+    document.getElementById('modal-seed').classList.remove('hidden');
+    document.getElementById('input-seed-content').focus();
+}
+
+/**
+ * 關閉伏筆 Modal
+ */
+function closeSeedModal() {
+    document.getElementById('modal-seed').classList.add('hidden');
+    seedModalState = {
+        mode: 'add',
+        editIndex: -1,
+        originalText: ''
+    };
+}
+
+/**
+ * 初始化伏筆 Modal 事件
+ */
+function initSeedModalEvents() {
+    const modal = document.getElementById('modal-seed');
+    const confirmBtn = document.getElementById('btn-seed-modal-confirm');
+    const cancelBtn = document.getElementById('btn-seed-modal-cancel');
+    const inputContent = document.getElementById('input-seed-content');
+    
+    // 確認按鈕
+    confirmBtn.onclick = async () => {
+        const content = inputContent.value.trim();
+        if (!content) {
+            showToast('請輸入伏筆內容');
+            return;
+        }
+        
+        if (seedModalState.mode === 'add') {
+            await addWorldviewSeed(content);
+        } else {
+            await editWorldviewSeed(seedModalState.editIndex, content);
+        }
+        closeSeedModal();
+    };
+    
+    // 取消按鈕
+    cancelBtn.onclick = closeSeedModal;
+    
+    // 點擊 Modal 背景關閉
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            closeSeedModal();
+        }
+    };
+    
+    // ESC 鍵關閉
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+            closeSeedModal();
+        }
+    });
+}
+
+/**
+ * 手動新增伏筆種子
+ */
+async function addWorldviewSeed(seedText) {
+    if (!seedText || !seedText.trim()) {
+        showToast('請輸入伏筆內容');
+        return;
+    }
+    
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    let newWorldviewText = worldviewText;
+    
+    // 檢查是否已有伏筆區塊
+    if (worldviewText.match(/【伏筆[與]?設定?種子】/i)) {
+        // 在現有伏筆區塊中添加
+        newWorldviewText = worldviewText.replace(
+            /【伏筆[與]?設定?種子】\s*/i,
+            `【伏筆與設定種子】\n- ${seedText.trim()}`
+        );
+    } else {
+        // 在文本末尾添加新的伏筆區塊
+        newWorldviewText = worldviewText + '\n\n【伏筆與設定種子】\n- ' + seedText.trim();
+    }
+    
+    try {
+        await requestAPI(`/api/novels/${state.currentNovelId}/worldbuilding`, 'POST', {
+            content: newWorldviewText
+        });
+        state.currentNovelData.worldbuilding = newWorldviewText;
+        el.editorWorldview.value = newWorldviewText;
+        renderWorldviewSections();
+        showToast('伏筆已新增');
+    } catch (e) {
+        showToast('新增失敗');
+    }
+}
+
+/**
+ * 編輯指定的伏筆種子
+ * @param {number} seedIndex - 要編輯的伏筆索引
+ * @param {string} newText - 新的伏筆內容
+ */
+async function editWorldviewSeed(seedIndex, newText) {
+    if (!newText || !newText.trim()) {
+        showToast('請輸入伏筆內容');
+        return;
+    }
+    
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const seeds = parseWorldviewSeeds(worldviewText);
+    
+    if (seedIndex < 0 || seedIndex >= seeds.length) {
+        showToast('無效的伏筆索引');
+        return;
+    }
+    
+    const oldText = seeds[seedIndex];
+    
+    // 從文本中替換該伏筆
+    const lines = worldviewText.split('\n');
+    const newLines = [];
+    let currentSeedIndex = -1;
+    let inSeedsSection = false;
+    
+    for (const line of lines) {
+        // 檢測是否進入伏筆區塊
+        if (line.match(/【伏筆[與]?設定?種子】/i)) {
+            inSeedsSection = true;
+            newLines.push(line);
+            continue;
+        }
+        
+        // 檢測是否離開伏筆區塊（遇到新的【標題】）
+        if (inSeedsSection && line.match(/^【/) && !line.match(/【伏筆/)) {
+            inSeedsSection = false;
+            newLines.push(line);
+            continue;
+        }
+        
+        if (inSeedsSection) {
+            const trimmedLine = line.trim();
+            // 跳過空行和標題行
+            if (!trimmedLine || trimmedLine.startsWith('#')) {
+                newLines.push(line);
+                continue;
+            }
+            
+            // 檢查這一行是否是我們要編輯的伏筆
+            const isTargetSeed = trimmedLine === oldText || 
+                                  trimmedLine.replace(/^[-*•]\s*/, '') === oldText ||
+                                  trimmedLine.replace(/^\d+[.、]\s*/, '') === oldText;
+            
+            if (isTargetSeed) {
+                // 保留原有的前綴格式
+                const prefixMatch = line.match(/^(\s*[-*•]\s*)/);
+                const prefix = prefixMatch ? prefixMatch[1] : '';
+                newLines.push(prefix + newText);
+            } else {
+                newLines.push(line);
+            }
+        } else {
+            newLines.push(line);
+        }
+    }
+    
+    const newWorldviewText = newLines.join('\n');
+    
+    try {
+        await requestAPI(`/api/novels/${state.currentNovelId}/worldbuilding`, 'POST', {
+            content: newWorldviewText
+        });
+        state.currentNovelData.worldbuilding = newWorldviewText;
+        el.editorWorldview.value = newWorldviewText;
+        renderWorldviewSections();
+        showToast('伏筆已更新');
+    } catch (e) {
+        showToast('更新失敗');
+    }
+}
+
+/**
+ * 使用 AI 生成伏筆種子
+ */
+async function generateWorldviewSeedsWithAI() {
+    const hint = await showCustomPrompt('請輸入伏筆生成提示（可留空使用預設）：', '生成3個與主角成長相關的伏筆線索');
+    if (hint === null) return; // 用戶取消
+    
+    showAgentProcessingIndicator('worldview', 'Story Architect');
+    
+    streamAPI(
+        '/api/agent/incremental-architect',
+        {
+            novel_id: state.currentNovelId,
+            target_section: 'foreshadowing_seeds',
+            user_hint: hint || '生成3個與主角成長相關的伏筆線索'
+        },
+        null,
+        (delta) => {
+            // 將生成的內容追加到世界觀編輯器
+            el.editorWorldview.value += delta;
+        },
+        (err) => {
+            showToast('AI 生成失敗: ' + err);
+            hideAgentProcessingIndicator('worldview');
+        },
+        async () => {
+            hideAgentProcessingIndicator('worldview');
+            showToast('伏筆生成完成');
+            await loadNovelDetails(state.currentNovelId);
+        }
+    );
 }
 
 function renderCharactersTab() {
@@ -883,8 +2427,15 @@ function renderCharactersTab() {
         card.className = 'character-card';
         card.dataset.index = index;
         
-        const traitsHtml = (c.personality || []).map(t => `<span class="char-trait-pill">${t}</span>`).join('');
-        const flawsHtml = (c.flaws || []).map(f => `<span class="char-trait-pill" style="border-color:rgba(239, 68, 68, 0.2); color:#fca5a5;">${f}</span>`).join('');
+        // Interactive personality pills with ✕ delete
+        const traitsHtml = (c.personality || []).map((t, tIdx) => 
+            `<span class="char-trait-pill" data-char="${index}" data-field="personality" data-tidx="${tIdx}">${t} <button class="delete-pill-btn" title="刪除此特質">✕</button></span>`
+        ).join('');
+        
+        // Interactive flaw pills with ✕ delete
+        const flawsHtml = (c.flaws || []).map((f, fIdx) => 
+            `<span class="char-trait-pill" style="border-color:rgba(239, 68, 68, 0.2); color:#fca5a5;" data-char="${index}" data-field="flaws" data-tidx="${fIdx}">${f} <button class="delete-pill-btn" title="刪除此缺陷">✕</button></span>`
+        ).join('');
         
         card.innerHTML = `
             <div class="char-header">
@@ -892,12 +2443,14 @@ function renderCharactersTab() {
                 <span class="char-role">${c.role}</span>
             </div>
             <div class="char-bio">
-                <strong>動機：</strong><span class="char-motivation">${c.motivation}</span><br>
-                <strong>成長弧線：</strong><span class="char-arc">${c.arc}</span>
+                <strong>動機：</strong><span class="char-motivation">${c.motivation || '未設定'}</span><br>
+                <strong>成長弧線：</strong><span class="char-arc">${c.arc || '未設定'}</span>
             </div>
             <div class="char-traits">
                 ${traitsHtml}
+                <button class="btn-add-pill add-trait-btn" data-char="${index}" data-field="personality">+ 特質</button>
                 ${flawsHtml}
+                <button class="btn-add-pill add-flaw-btn" data-char="${index}" data-field="flaws">+ 缺陷</button>
             </div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
                 <button class="btn btn-secondary btn-xs edit-char-btn" data-index="${index}">編輯</button>
@@ -909,8 +2462,8 @@ function renderCharactersTab() {
         // Delete character handler - FIXED: properly capture index in closure
         const deleteBtn = card.querySelector('.delete-char-btn');
         deleteBtn.addEventListener('click', (function(idx, charName) {
-            return function() {
-                if (confirm(`刪除角色「${charName}」？`)) {
+            return async function() {
+                if (await showCustomConfirm(`刪除角色「${charName}」？`)) {
                     // Re-fetch fresh data from state to avoid stale reference
                     const freshCharData = state.currentNovelData.characters;
                     if (freshCharData && freshCharData.characters && freshCharData.characters[idx]) {
@@ -942,8 +2495,151 @@ function renderCharactersTab() {
             };
         })(index, {...c})); // spread to avoid reference issues
         
+        // Pill delete handlers: remove trait/flaw by clicking ✕
+        card.querySelectorAll('.delete-pill-btn').forEach(btn => {
+            btn.addEventListener('click', (function(charIdx) {
+                return function(e) {
+                    e.stopPropagation();
+                    const pill = e.target.closest('.char-trait-pill');
+                    if (!pill) return;
+                    const field = pill.dataset.field;
+                    const tidx = parseInt(pill.dataset.tidx);
+                    const freshCharData = state.currentNovelData.characters;
+                    if (freshCharData && freshCharData.characters && freshCharData.characters[charIdx]) {
+                        const arr = freshCharData.characters[charIdx][field];
+                        if (arr && tidx >= 0 && tidx < arr.length) {
+                            arr.splice(tidx, 1);
+                            state.currentNovelData.characters = freshCharData;
+                            state.currentNovelData.characters_raw = JSON.stringify(freshCharData, null, 2);
+                            requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: freshCharData })
+                                .then(() => { showToast('已刪除'); renderCharactersTab(); })
+                                .catch(() => showToast('刪除失敗'));
+                        }
+                    }
+                };
+            })(index));
+        });
+        
+        // Add trait/flaw handlers
+        card.querySelectorAll('.btn-add-pill').forEach(btn => {
+            btn.addEventListener('click', (function(charIdx) {
+                return async function(e) {
+                    const field = e.target.dataset.field;
+                    const label = field === 'personality' ? '新特質' : '新缺陷';
+                    const newVal = await showCustomPrompt(`請輸入${label}：`);
+                    if (!newVal || !newVal.trim()) return;
+                    const freshCharData = state.currentNovelData.characters;
+                    if (freshCharData && freshCharData.characters && freshCharData.characters[charIdx]) {
+                        if (!freshCharData.characters[charIdx][field]) {
+                            freshCharData.characters[charIdx][field] = [];
+                        }
+                        freshCharData.characters[charIdx][field].push(newVal.trim());
+                        state.currentNovelData.characters = freshCharData;
+                        state.currentNovelData.characters_raw = JSON.stringify(freshCharData, null, 2);
+                        requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: freshCharData })
+                            .then(() => { showToast(`${label}已新增`); renderCharactersTab(); })
+                            .catch(() => showToast('新增失敗'));
+                    }
+                };
+            })(index));
+        });
+        
+        // AI enhance handler
+        const aiBtn = card.querySelector('.ai-enhance-char-btn');
+        if (aiBtn) {
+            aiBtn.addEventListener('click', (function(charIdx, charName) {
+                return function() {
+                    openCharacterAIEnhanceModal(charIdx, charName);
+                };
+            })(index, c.name));
+        }
+        
         el.charactersCardsGrid.appendChild(card);
     });
+}
+
+/**
+ * 開啟角色 AI 局部增強 Modal
+ */
+function openCharacterAIEnhanceModal(charIndex, charName) {
+    let modal = document.getElementById('modal-character-ai-enhance');
+    if (!modal) {
+        const html = `
+        <div id="modal-character-ai-enhance" class="modal-overlay">
+            <div class="modal-card" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2>✨ AI 局部增強角色</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p style="margin-bottom:12px; color: var(--text-secondary); font-size:0.85rem;">
+                        選擇要增強的欄位，AI 將根據世界觀和已有設定為角色生成更豐富的內容。
+                    </p>
+                    <div class="form-group">
+                        <label>增強欄位</label>
+                        <select id="ai-enhance-field">
+                            <option value="personality">性格特質 (Personality)</option>
+                            <option value="flaws">致命缺陷 (Flaws)</option>
+                            <option value="motivation">動機 (Motivation)</option>
+                            <option value="arc">成長弧線 (Arc)</option>
+                            <option value="backstory">背景故事 (Backstory)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>提示方向（選填）</label>
+                        <input type="text" id="ai-enhance-hint" placeholder="例如：讓性格更矛盾、添加童年陰影...">
+                    </div>
+                    <button id="btn-ai-enhance-submit" class="btn btn-primary btn-full mt-4">🚀 開始 AI 增強</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-character-ai-enhance');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+    
+    document.getElementById('ai-enhance-hint').value = '';
+    
+    // Rebind submit
+    const submitBtn = document.getElementById('btn-ai-enhance-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+    
+    newBtn.addEventListener('click', () => {
+        const fieldName = document.getElementById('ai-enhance-field').value;
+        const userHint = document.getElementById('ai-enhance-hint').value || `增強角色「${charName}」的${fieldName}設定`;
+        modal.classList.remove('active');
+        
+        showAgentProcessingIndicator('characters', 'Character Designer (局部增強)');
+        showToast(`正在為「${charName}」進行 AI 局部增強...`);
+        
+        streamAPI(
+            '/api/agent/incremental-character',
+            {
+                novel_id: state.currentNovelId,
+                target_char_index: charIndex,
+                field_name: fieldName,
+                user_hint: userHint
+            },
+            null,
+            (delta) => {
+                // Incremental character returns updated data
+                el.editorCharactersJson.value += delta;
+            },
+            (err) => {
+                showToast('AI 增強失敗: ' + err);
+                hideAgentProcessingIndicator('characters');
+            },
+            async () => {
+                hideAgentProcessingIndicator('characters');
+                showToast(`角色「${charName}」增強完成`);
+                await loadNovelDetails(state.currentNovelId);
+            }
+        );
+    });
+    
+    modal.classList.add('active');
 }
 
 // NEW: Open character edit modal
@@ -1114,6 +2810,8 @@ function renderPlotTab() {
             </div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px; border-top:1px solid var(--border-color); padding-top:8px;">
                 <button class="btn btn-secondary btn-xs edit-chapter-outline-btn" data-index="${index}">編輯</button>
+                <button class="btn btn-ghost btn-xs insert-chapter-btn" data-index="${index}" title="在此章後插入新章">➕ 插入新章</button>
+                <button class="btn btn-ai btn-xs ai-insert-chapter-btn" data-index="${index}" title="AI 在此章後生成新大綱">✨ AI 增產</button>
                 <button class="btn btn-ghost btn-xs delete-chapter-outline-btn" data-index="${index}">刪除</button>
             </div>
         `;
@@ -1124,11 +2822,53 @@ function renderPlotTab() {
             openChapterOutlineEditModal(index, ch);
         });
         
+        // ➕ 手動插入新章
+        const insertBtn = item.querySelector('.insert-chapter-btn');
+        insertBtn.addEventListener('click', (function(afterIndex) {
+            return function() {
+                openManualChapterInsertModal(afterIndex);
+            };
+        })(index));
+        
+        // ✨ AI 增產/插大綱
+        const aiInsertBtn = item.querySelector('.ai-insert-chapter-btn');
+        aiInsertBtn.addEventListener('click', (function(afterIndex) {
+            return async function() {
+                const hint = await showCustomPrompt('請輸入 AI 章節大綱生成提示（可留空）：', `在第 ${afterIndex + 1} 章後插入新的章節`);
+                if (hint === null) return;
+                
+                showAgentProcessingIndicator('plot', 'Plot Planner (增量插入)');
+                showToast(`正在為第 ${afterIndex + 1} 章後生成新大綱...`);
+                
+                streamAPI(
+                    '/api/agent/incremental-plot',
+                    {
+                        novel_id: state.currentNovelId,
+                        insert_after_index: afterIndex,
+                        user_hint: hint || `在第 ${afterIndex + 1} 章後插入新的章節，推動主線劇情`
+                    },
+                    null,
+                    (delta) => {
+                        el.editorPlotJson.value += delta;
+                    },
+                    (err) => {
+                        showToast('AI 增產失敗: ' + err);
+                        hideAgentProcessingIndicator('plot');
+                    },
+                    async () => {
+                        hideAgentProcessingIndicator('plot');
+                        showToast('AI 大綱插入完成');
+                        await loadNovelDetails(state.currentNovelId);
+                    }
+                );
+            };
+        })(index));
+        
         // 刪除按鈕 - 使用正確的 index 引用
         const deleteBtn = item.querySelector('.delete-chapter-outline-btn');
         deleteBtn.addEventListener('click', (function(idx, chapter) {
-            return function() {
-                if (confirm(`刪除第 ${chapter.chapter_index} 章大綱？`)) {
+            return async function() {
+                if (await showCustomConfirm(`刪除第 ${chapter.chapter_index} 章大綱？`)) {
                     // 確保使用最新的 plotData
                     const freshPlotData = state.currentNovelData.plot;
                     if (freshPlotData && freshPlotData.chapters && freshPlotData.chapters[idx]) {
@@ -1149,6 +2889,94 @@ function renderPlotTab() {
         
         el.plotTimeline.appendChild(item);
     });
+}
+
+/**
+ * 手動插入章節大綱 Modal
+ */
+function openManualChapterInsertModal(afterChapterIndex) {
+    let modal = document.getElementById('modal-chapter-insert');
+    if (!modal) {
+        const html = `
+        <div id="modal-chapter-insert" class="modal-overlay">
+            <div class="modal-card" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h2>➕ 手動插入新章大綱</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>章節標題</label>
+                        <input type="text" id="insert-chapter-title" placeholder="新章節標題">
+                    </div>
+                    <div class="form-group">
+                        <label>章節目的/功能本質</label>
+                        <input type="text" id="insert-chapter-purpose" placeholder="本章存在的敘事目的">
+                    </div>
+                    <div class="form-group">
+                        <label>核心事件（每行一項）</label>
+                        <textarea id="insert-chapter-events" rows="3" placeholder="每行一個事件描述"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>伏筆提示（每行一項）</label>
+                        <textarea id="insert-chapter-foreshadowing" rows="2" placeholder="需要在本章埋下的伏筆"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>情緒基調</label>
+                        <select id="insert-chapter-tone">
+                            <option value="緊張">緊張</option>
+                            <option value="舒緩">舒緩</option>
+                            <option value="悲傷">悲傷</option>
+                            <option value="振奮">振奮</option>
+                            <option value="懸疑">懸疑</option>
+                            <option value="均衡" selected>均衡</option>
+                        </select>
+                    </div>
+                    <button id="btn-insert-chapter-submit" class="btn btn-primary btn-full mt-4">插入章節</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-chapter-insert');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+    
+    // Clear fields
+    document.getElementById('insert-chapter-title').value = '';
+    document.getElementById('insert-chapter-purpose').value = '';
+    document.getElementById('insert-chapter-events').value = '';
+    document.getElementById('insert-chapter-foreshadowing').value = '';
+    document.getElementById('insert-chapter-tone').value = '均衡';
+    
+    // Rebind submit
+    const submitBtn = document.getElementById('btn-insert-chapter-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+    
+    newBtn.addEventListener('click', async () => {
+        const chapterData = {
+            title: document.getElementById('insert-chapter-title').value || '新章節',
+            purpose: document.getElementById('insert-chapter-purpose').value || '推動劇情',
+            events: document.getElementById('insert-chapter-events').value.split('\n').map(s => s.trim()).filter(s => s),
+            foreshadowing: document.getElementById('insert-chapter-foreshadowing').value.split('\n').map(s => s.trim()).filter(s => s),
+            emotional_tone: document.getElementById('insert-chapter-tone').value
+        };
+        
+        try {
+            await requestAPI(`/api/novels/${state.currentNovelId}/plot/chapters/insert`, 'POST', {
+                insert_after_index: afterChapterIndex,
+                chapter_data: chapterData
+            });
+            modal.classList.remove('active');
+            showToast('新章節已插入');
+            await loadNovelDetails(state.currentNovelId);
+        } catch (e) {
+            showToast('插入失敗: ' + (e.message || '未知錯誤'));
+        }
+    });
+    
+    modal.classList.add('active');
 }
 
 // 新增：章節大綱編輯 Modal
@@ -1386,6 +3214,32 @@ function selectWriterChapter(chapterIndex) {
     }
 }
 
+/**
+ * 格式化時間戳為 HH:MM 格式
+ * @param {string|Date} timestamp - 時間戳或 Date 物件
+ * @returns {string} 格式化後的時間字串
+ */
+function formatTimestamp(timestamp) {
+    if (!timestamp) {
+        // 如果沒有時間戳，使用當前時間
+        const now = new Date();
+        return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    }
+    
+    try {
+        const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+        if (isNaN(date.getTime())) {
+            // 無效日期，使用當前時間
+            const now = new Date();
+            return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        }
+        return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    } catch (e) {
+        const now = new Date();
+        return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    }
+}
+
 function renderChatMessages() {
     // Keep first system prompt
     const systemMsg = el.chatMessagesContainer.firstElementChild.outerHTML;
@@ -1398,8 +3252,14 @@ function renderChatMessages() {
         const isUser = m.role === 'user';
         msg.className = `message ${isUser ? 'user-msg' : 'assistant-msg'}`;
         
+        // 格式化時間戳
+        const timestamp = formatTimestamp(m.created_at || m.timestamp);
+        
         msg.innerHTML = `
-            <div class="msg-sender">${isUser ? 'You' : 'Novel Director'}</div>
+            <div class="msg-sender-row">
+                <div class="msg-sender">${isUser ? 'You' : 'Novel Director'}</div>
+                <div class="msg-timestamp">${timestamp}</div>
+            </div>
             <div class="msg-content">${m.content}</div>
         `;
         el.chatMessagesContainer.appendChild(msg);
@@ -1917,13 +3777,14 @@ async function runDirectorDecision(currentStage) {
     return new Promise((resolve) => {
         const directorResponseContainer = document.createElement('div');
         directorResponseContainer.className = 'message assistant-msg';
-        directorResponseContainer.innerHTML = `<div class="msg-sender">🎬 AI 總監決策中...</div><div class="msg-content stream-typing"></div>`;
+        const directorTimestamp = formatTimestamp();
+        directorResponseContainer.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">🎬 AI 總監決策中...</div><div class="msg-timestamp">${directorTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
         el.chatMessagesContainer.appendChild(directorResponseContainer);
         el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
         
         const streamTarget = directorResponseContainer.querySelector('.stream-typing');
         
-        const userPrompt = el.promptDrawerTextarea.value;
+        const userPrompt = el.promptDrawerTextarea?.value || '';
         
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision',
@@ -1935,7 +3796,6 @@ async function runDirectorDecision(currentStage) {
             },
             (err) => {
                 streamTarget.textContent += `\n[總監連線錯誤: ${err}]`;
-                // 發生錯誤時也要停止閃爍
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
@@ -1944,62 +3804,135 @@ async function runDirectorDecision(currentStage) {
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
                 
-                // Parse director's response to determine if we should continue
                 const responseText = streamTarget.textContent;
                 
-                // Parse execution command from Director's response
-                // 解析【執行指令】區塊
-                const executionBlock = responseText.match(/\【執行指令\】\s*ACTION:\s*(\w+)/);
-                let action = executionBlock ? executionBlock[1].trim().toUpperCase() : null;
+                // === 多層次指令解析 ===
+                let action = null;
+                let target = null;
+                let hint = '';
+                let reason = '';
                 
-                // 解析目標階段
-                const targetBlock = responseText.match(/TARGET:\s*(\w+)/);
-                let target = targetBlock ? targetBlock[1].trim() : null;
-                
-                // 解析提示信息
-                const hintBlock = responseText.match(/HINT:\s*([\s\S]*?)(?=```|$)/);
-                let hint = hintBlock ? hintBlock[1].trim() : '';
-                
-                // 根據ACTION決定後續行動
-                let shouldContinue = false;
-                let shouldPause = false;
-                let regenerate = false;
-                let regenerateStage = null;
-                
-                if (action === 'CONTINUE') {
-                    shouldContinue = true;
-                    showToast("✅ 總監批准，繼續執行下一階段");
-                } else if (action === 'AUTO_REGENERATE') {
-                    shouldContinue = true;
-                    regenerate = true;
-                    regenerateStage = target || currentStage;
-                    showToast("⚡ 總監指示重跑/擴充，正在執行...");
-                } else if (action === 'WAIT_USER') {
-                    shouldPause = true;
-                    showToast("⏸️ 總監要求用戶確認");
-                } else {
-                    // 舊版解析邏輯（向後兼容）
-                    shouldContinue = responseText.includes('繼續') || responseText.includes('是');
-                    shouldPause = responseText.includes('暫停') || responseText.includes('等待') || responseText.includes('修改');
+                // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } ```）
+                const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+                if (jsonBlockMatch) {
+                    try {
+                        const jsonCmd = JSON.parse(jsonBlockMatch[1]);
+                        action = (jsonCmd.action || '').toUpperCase();
+                        target = jsonCmd.target || null;
+                        hint = jsonCmd.hint || jsonCmd.reason || '';
+                        reason = jsonCmd.reason || '';
+                    } catch (e) {
+                        console.warn('Failed to parse Director JSON command:', e);
+                    }
                 }
                 
-                // Add director's full response to chat
+                // 2) 回退：解析舊格式【執行指令】ACTION: XXX
+                if (!action) {
+                    const actionMatch = responseText.match(/【執行指令】[\s\S]*?ACTION:\s*(\w+)/);
+                    if (actionMatch) {
+                        action = actionMatch[1].trim().toUpperCase();
+                    }
+                    const targetMatch = responseText.match(/TARGET:\s*(\w+)/);
+                    if (targetMatch) target = targetMatch[1].trim();
+                    const hintMatch = responseText.match(/HINT:\s*([\s\S]*?)(?=```|【|$)/);
+                    if (hintMatch) hint = hintMatch[1].trim();
+                    const reasonMatch = responseText.match(/REASON:\s*([\s\S]*?)(?=```|【|$)/);
+                    if (reasonMatch) reason = reasonMatch[1].trim();
+                }
+                
+                // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
+                if (!action) {
+                    if (responseText.includes('WRITE_ALL_CHAPTERS') || responseText.includes('開始寫作所有章節')) {
+                        action = 'WRITE_ALL_CHAPTERS';
+                    } else if (responseText.includes('FINISH') || responseText.includes('全部完成')) {
+                        action = 'FINISH';
+                    } else if (responseText.includes('繼續') && !responseText.includes('暫停')) {
+                        action = 'CONTINUE';
+                    } else if (responseText.includes('暫停') || responseText.includes('等待用戶')) {
+                        action = 'WAIT_USER';
+                    }
+                }
+                
+                // 添加 director-response 樣式
                 directorResponseContainer.classList.add('director-response');
                 
-                resolve({ 
-                    continue: shouldContinue && !shouldPause, 
+                const decisionResult = { 
+                    continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS',
                     response: responseText,
-                    shouldPause: shouldPause,
+                    shouldPause: action === 'WAIT_USER',
                     action: action,
                     target: target,
                     hint: hint,
-                    regenerate: regenerate,
-                    regenerateStage: regenerateStage
-                });
+                    reason: reason,
+                    regenerate: action === 'AUTO_REGENERATE',
+                    regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null
+                };
+                
+                // 顯示解析結果的 Toast
+                const actionLabels = {
+                    'CONTINUE': '✅ 繼續下一階段',
+                    'AUTO_REGENERATE': '⚡ 重新生成',
+                    'GO_BACK_TO_WORLDVIEW': '↩️ 回退到世界觀',
+                    'GO_BACK_TO_CHARACTERS': '↩️ 回退到角色',
+                    'GO_BACK_TO_PLOT': '↩️ 回退到大綱',
+                    'WRITE_ALL_CHAPTERS': '📖 開始寫全書',
+                    'WAIT_USER': '⏸️ 等待確認',
+                    'FINISH': '🎉 任務完成'
+                };
+                if (action && actionLabels[action]) {
+                    showToast(`總監決策：${actionLabels[action]}`);
+                }
+                
+                // DUAL-MODE: Auto vs Normal
+                if (state.isAutoExecuteMode) {
+                    // 一鍵模式：自動執行總監的指令
+                    resolve(decisionResult);
+                } else {
+                    // 一般模式：顯示互動選項按鈕讓用戶選擇
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'chat-action-buttons';
+                    actionsDiv.innerHTML = `
+                        <button class="btn-chat-action" data-action="accept" title="執行總監建議的動作">✅ 接受總監決策${action ? ` (${actionLabels[action] || action})` : ''}</button>
+                        <button class="btn-chat-action" data-action="continue">▶️ 強制繼續下一階段</button>
+                        <button class="btn-chat-action" data-action="regen">🔄 重新生成此階段</button>
+                        <button class="btn-chat-action" data-action="pause">⏸️ 暫停並手動修改</button>
+                    `;
+                    directorResponseContainer.querySelector('.msg-content').appendChild(actionsDiv);
+                    
+                    actionsDiv.querySelectorAll('.btn-chat-action').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const userChoice = this.dataset.action;
+                            // Disable buttons after choice
+                            actionsDiv.querySelectorAll('.btn-chat-action').forEach(b => {
+                                b.disabled = true;
+                                b.style.opacity = '0.5';
+                            });
+                            this.style.opacity = '1';
+                            this.style.borderColor = 'var(--primary)';
+                            this.style.fontWeight = '700';
+                            
+                            if (userChoice === 'accept') {
+                                // 執行總監原始決策
+                                showToast('✅ 用戶接受總監決策');
+                                resolve(decisionResult);
+                            } else if (userChoice === 'continue') {
+                                showToast('▶️ 用戶強制繼續下一階段');
+                                resolve({ ...decisionResult, action: 'CONTINUE', continue: true, shouldPause: false });
+                            } else if (userChoice === 'regen') {
+                                showToast('🔄 用戶指示重新生成');
+                                resolve({ ...decisionResult, action: 'AUTO_REGENERATE', continue: true, regenerate: true, regenerateStage: currentStage, target: currentStage });
+                            } else {
+                                showToast('⏸️ 管線暫停，可手動修改後再繼續');
+                                resolve({ ...decisionResult, action: 'WAIT_USER', continue: false, shouldPause: true });
+                            }
+                        });
+                    });
+                }
             }
         );
     });
 }
+
 
 // 詢問用戶對於已有內容的處理方式（三選項：加強、重新生成、跳過）
 function askContentAction(stageName, callback) {
@@ -2507,11 +4440,13 @@ function handleDrawerPromptSubmit() {
     el.drawerPrompt.classList.remove('active');
     
     if (state.activeDrawerAction === 'pipeline_orchestration') {
-        if (!state.isAutoExecuteMode) {
-            showToast('請先開啟「一鍵執行模式」再開始'); 
-            return;
-        }
-        runFullPipeline(userPrompt);
+        // 保存用戶的創作需求到 pipeline prompt
+        savePipelinePrompt(userPrompt).catch(() => {});
+        // 設為一鍵執行模式並啟動統一管道
+        state.isAutoExecuteMode = true;
+        const toggle = document.getElementById('toggle-auto-execute');
+        if (toggle) toggle.checked = true;
+        runPipeline();
     }
     
     if (state.activeDrawerAction === 'architect') {
@@ -2591,7 +4526,7 @@ function setupEventListeners() {
         const styleText = el.inputNovelStyle.value.trim();
         
         if (!title) {
-            alert("請輸入書名！");
+            await showCustomAlert("請輸入書名！");
             return;
         }
         
@@ -2715,46 +4650,60 @@ function setupEventListeners() {
     el.btnProseSave.addEventListener('click', saveProseDirect);
     el.editorProse.addEventListener('blur', saveProseDirect);
     
-    // 5. Add Manual placeholders
+    // 5. Add Manual placeholders - WORK DIRECTLY WITH STATE, NOT TEXTAREA
     el.btnCharacterAdd.addEventListener('click', () => {
-        const rawText = el.editorCharactersJson.value;
-        let charData = { characters: [] };
-        try {
-            charData = JSON.parse(rawText);
-        } catch (e) {}
+        let charData = state.currentNovelData?.characters || { characters: [] };
+        if (!charData.characters) charData.characters = [];
         
-        charData.characters.push({
+        const newChar = {
             name: "新登場角色",
-            role: "主角 / 配角",
+            role: "配角",
             personality: ["勇敢", "冷酷"],
             flaws: ["傲慢"],
             motivation: "尋找真相",
             arc: "逐漸理解愛與奉獻"
-        });
+        };
         
-        el.editorCharactersJson.value = JSON.stringify(charData, null, 2);
-        saveCharactersDirect();
+        charData.characters.push(newChar);
+        state.currentNovelData.characters = charData;
+        state.currentNovelData.characters_raw = JSON.stringify(charData, null, 2);
+        
+        // Save directly to API
+        requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: charData })
+            .then(() => {
+                showToast('新角色已新增');
+                renderCharactersTab();
+                // Open edit modal for the new character
+                openCharacterEditModal(charData.characters.length - 1, newChar);
+            })
+            .catch(() => showToast('新增角色失敗'));
     });
     
     el.btnPlotAddChapter.addEventListener('click', () => {
-        const rawText = el.editorPlotJson.value;
-        let plotData = { chapters: [] };
-        try {
-            plotData = JSON.parse(rawText);
-        } catch (e) {}
+        let plotData = state.currentNovelData?.plot || { chapters: [] };
+        if (!plotData.chapters) plotData.chapters = [];
         
         const nextIdx = plotData.chapters.length + 1;
-        plotData.chapters.push({
+        const newChapter = {
             chapter_index: nextIdx,
             title: `第 ${nextIdx} 章故事`,
             events: ["發生了事件一", "發生了重要轉折"],
             purpose: "推動故事主線",
             foreshadowing: ["埋下一個線索"],
             emotional_tone: "緊張"
-        });
+        };
         
-        el.editorPlotJson.value = JSON.stringify(plotData, null, 2);
-        savePlotOutlineDirect();
+        plotData.chapters.push(newChapter);
+        state.currentNovelData.plot = plotData;
+        state.currentNovelData.plot_raw = JSON.stringify(plotData, null, 2);
+        
+        // Save directly to API
+        requestAPI(`/api/novels/${state.currentNovelId}/plot`, 'POST', { outline_json: plotData })
+            .then(() => {
+                showToast('新章節已新增');
+                renderPlotTab();
+            })
+            .catch(() => showToast('新增章節失敗'));
     });
     
     // 6. AGENTS PIPELINE TRIGGERS
@@ -2836,14 +4785,16 @@ function setupEventListeners() {
         // Render user message bubble locally
         const userMsg = document.createElement('div');
         userMsg.className = 'message user-msg';
-        userMsg.innerHTML = `<div class="msg-sender">You</div><div class="msg-content">${text}</div>`;
+        const userTimestamp = formatTimestamp();
+        userMsg.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">You</div><div class="msg-timestamp">${userTimestamp}</div></div><div class="msg-content">${text}</div>`;
         el.chatMessagesContainer.appendChild(userMsg);
         el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
         
         // Create assistant message stream bubble placeholder
         const assistantMsg = document.createElement('div');
         assistantMsg.className = 'message assistant-msg';
-        assistantMsg.innerHTML = `<div class="msg-sender">Novel Director</div><div class="msg-content stream-typing"></div>`;
+        const assistantTimestamp = formatTimestamp();
+        assistantMsg.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">Novel Director</div><div class="msg-timestamp">${assistantTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
         el.chatMessagesContainer.appendChild(assistantMsg);
         el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
         
@@ -2882,7 +4833,7 @@ function setupEventListeners() {
     
     el.btnClearChat.addEventListener('click', async () => {
         if (!state.currentNovelId) return;
-        if (confirm("清空與小說總監的對話記憶？(SQLite memory)")) {
+        if (await showCustomConfirm("清空與小說總監的對話記憶？(SQLite memory)")) {
             await requestAPI(`/api/novels/${state.currentNovelId}/clear-chat`, 'POST');
             await loadNovelDetails(state.currentNovelId);
         }
@@ -2924,6 +4875,24 @@ function setupEventListeners() {
                 
                 showToast(`正在匯出為 ${format.toUpperCase()} 格式...`);
             });
+        });
+    }
+    
+    // 9. FORESHADOWING SEEDS HANDLERS
+    const btnSeedAdd = document.getElementById('btn-seed-add');
+    if (btnSeedAdd) {
+        btnSeedAdd.addEventListener('click', async () => {
+            const seedText = await showCustomPrompt('請輸入伏筆內容：');
+            if (seedText) {
+                addWorldviewSeed(seedText);
+            }
+        });
+    }
+    
+    const btnSeedAiGenerate = document.getElementById('btn-seed-ai-generate');
+    if (btnSeedAiGenerate) {
+        btnSeedAiGenerate.addEventListener('click', () => {
+            generateWorldviewSeedsWithAI();
         });
     }
 }
@@ -2971,6 +4940,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     
     // 3. Setup execution mode toggle
     setupExecutionModeToggle();
+    
+    // 4. 初始化伏筆 Modal 事件
+    initSeedModalEvents();
 });
 /**
  * 當從後續階段回頭修改某個階段後，進行連鎖重新評估
@@ -3228,3 +5200,180 @@ function startStage4_Writer(regenerate = false) {
         }
     );
 }
+
+
+// ============================================================
+// Phase 5 Custom Dialog Modals & AI Enhancements (Antigravity)
+// ============================================================
+
+let currentDialogPromise = null;
+
+function closeCustomDialog() {
+    const modal = document.getElementById('modal-custom-dialog');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.style.display = 'none';
+    }
+}
+
+window.showCustomDialog = function({ title, message, type = 'alert', defaultValue = '', options = null }) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modal-custom-dialog');
+        const titleEl = document.getElementById('custom-dialog-title');
+        const msgEl = document.getElementById('custom-dialog-message');
+        const inputContainer = document.getElementById('custom-dialog-input-container');
+        const textarea = document.getElementById('custom-dialog-textarea');
+        const optionsContainer = document.getElementById('custom-dialog-options-container');
+        const standardActions = document.getElementById('custom-dialog-standard-actions');
+        const cancelBtn = document.getElementById('btn-custom-dialog-cancel');
+        const confirmBtn = document.getElementById('btn-custom-dialog-confirm');
+
+        if (!modal) {
+            if (type === 'confirm') resolve(confirm(message));
+            else if (type === 'prompt') resolve(prompt(message, defaultValue));
+            else { alert(message); resolve(); }
+            return;
+        }
+
+        // Reset display states
+        titleEl.textContent = title || '提示';
+        msgEl.textContent = message || '';
+        inputContainer.style.display = 'none';
+        optionsContainer.style.display = 'none';
+        standardActions.style.display = 'flex';
+        cancelBtn.style.display = 'block';
+        confirmBtn.style.display = 'block';
+
+        if (type === 'prompt') {
+            inputContainer.style.display = 'block';
+            textarea.value = defaultValue || '';
+        } else if (type === 'options' && options) {
+            optionsContainer.style.display = 'flex';
+            standardActions.style.display = 'none';
+            optionsContainer.innerHTML = '';
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className = opt.className || 'btn btn-primary';
+                btn.style.width = '100%';
+                btn.style.textAlign = 'left';
+                btn.style.padding = '12px 16px';
+                btn.style.borderRadius = '8px';
+                btn.style.border = '1px solid rgba(255,255,255,0.08)';
+                btn.style.background = 'rgba(255,255,255,0.03)';
+                btn.style.color = '#fff';
+                btn.style.cursor = 'pointer';
+                btn.style.transition = 'all 0.2s';
+                btn.innerHTML = opt.text;
+                
+                btn.onmouseover = () => {
+                    btn.style.background = 'rgba(255,255,255,0.08)';
+                    btn.style.transform = 'translateY(-1px)';
+                };
+                btn.onmouseout = () => {
+                    btn.style.background = 'rgba(255,255,255,0.03)';
+                    btn.style.transform = 'none';
+                };
+
+                btn.onclick = () => {
+                    closeCustomDialog();
+                    resolve(opt.value);
+                };
+                optionsContainer.appendChild(btn);
+            });
+        } else if (type === 'alert') {
+            cancelBtn.style.display = 'none';
+        }
+
+        // Bind Standard Buttons
+        confirmBtn.onclick = () => {
+            closeCustomDialog();
+            if (type === 'prompt') {
+                resolve(textarea.value);
+            } else {
+                resolve(true);
+            }
+        };
+
+        cancelBtn.onclick = () => {
+            closeCustomDialog();
+            if (type === 'prompt') {
+                resolve(null);
+            } else {
+                resolve(false);
+            }
+        };
+
+        // Show modal
+        modal.classList.add('active');
+        modal.style.display = 'flex';
+    });
+};
+
+window.showCustomAlert = function(msg, title = '系統提示') {
+    return window.showCustomDialog({ title, message: msg, type: 'alert' });
+};
+
+window.showCustomConfirm = function(msg, title = '確認操作') {
+    return window.showCustomDialog({ title, message: msg, type: 'confirm' });
+};
+
+window.showCustomPrompt = function(msg, defaultValue = '', title = '輸入內容') {
+    return window.showCustomDialog({ title, message: msg, type: 'prompt', defaultValue });
+};
+
+window.updateAgentStreamOutput = function(tabName, delta) {
+    const terminal = document.getElementById(`stream-output-${tabName}`);
+    if (terminal) {
+        terminal.textContent += delta;
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+};
+
+window.enhanceWorldviewSectionWithAI = async function(field, title) {
+    const hint = await window.showCustomPrompt(`請輸入 AI 規劃「${title}」的提示或方向（留空將以當前設定進行擴充）：`, '');
+    if (hint === null) return; 
+    
+    showAgentProcessingIndicator('worldview', `Story Architect (AI 規劃: ${title})`);
+    
+    streamAPI(
+        '/api/agent/incremental-architect',
+        {
+            novel_id: state.currentNovelId,
+            target_section: field,
+            user_hint: hint || `請為「${title}」生成或擴展深度設定，確保與目前小說的風格和背景完美相容。`
+        },
+        (delta) => {
+            window.updateAgentStreamOutput('worldview', delta);
+        },
+        (delta) => {
+            window.updateAgentStreamOutput('worldview', delta);
+        },
+        (err) => {
+            showToast('AI 規劃失敗: ' + err);
+            hideAgentProcessingIndicator('worldview');
+        },
+        async () => {
+            hideAgentProcessingIndicator('worldview');
+            showToast(`✨ ${title} AI 規劃與更新完成！`);
+            await loadNovelDetails(state.currentNovelId);
+        }
+    );
+};
+
+// Overwrite dead askContentAction with visual glassmorphism version
+window.askContentAction = async function(stageName, callback) {
+    const options = [
+        { text: "✨ AI 自動增強優化 (加強現有內容)", value: "enhance", className: "btn btn-primary" },
+        { text: "🔄 重新生成此步驟", value: "regenerate", className: "btn btn-secondary" },
+        { text: "⏩ 跳過並沿用當前設定", value: "skip", className: "btn btn-ghost" }
+    ];
+    
+    const choice = await window.showCustomDialog({
+        title: `【${stageName}】已有內容存在`,
+        message: `請選擇操作：`,
+        type: 'options',
+        options: options
+    });
+    
+    callback(choice || 'skip');
+};

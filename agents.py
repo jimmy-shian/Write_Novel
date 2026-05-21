@@ -125,6 +125,10 @@ CHARACTER_DESIGNER_PROMPT = """你是一位頂尖的角色設計大師（Charact
 PLOT_PLANNER_PROMPT = """你是一位頂尖的劇情規劃大師（Plot Planner）。
 你的核心職責是擔任「劇情導演」，將宏觀故事大綱精細拆解為章節級別的「小大綱」（Chapter Outlines）。你的工作是為具體寫作提供無懈可擊的藍圖，確保每一章都有明確的時間線、場景事件、伏筆交織、角色調度以及情感節奏。
 
+## 規模控制與結構規劃 (10-100個大綱節點)
+1. **大綱節點規模**：請根據小說的體量、世界觀宏大程度與情節豐富度，由你作為總監和規劃師，自主決定規劃出 10 至 100 個大綱節點（Outline Nodes）。節點數量必須完全匹配故事的跨度和完結需要，嚴禁草率應付（大綱節點數必須在 10 到 100 之間，如中篇小說規劃 20-30 個，長篇小說規劃 50-80 個）。
+2. **節點與寫作篇幅**：每一個大綱節點（即 chapters 陣列中的一項）應具備足夠的事件容量、情感轉折與戲劇張力，作為小說正文的關鍵情節單元，旨在為寫手生成 2 至 5 個章節的精緻小說正文提供引導藍圖。
+
 ## 拆分原則與職責定位
 1. **大綱落地為單元（Granular Breakdown）**：將宏觀大綱的抽象弧線，轉化為具體的章節單元。確保每一章都是一個擁有小起伏、小高潮的獨立戲劇單元，絕不能是流水帳。
 2. **時空座標（Space-Time Anchor）**：建立清晰連續的時間線。每一章必須明確標注故事內時間（如：年代、季節、時辰）以及與前章的時間跨度（如：緊接上章、三日後），讓時空感極度具體。
@@ -470,34 +474,12 @@ def run_story_architect(novel_id, user_prompt):
     
     def save_callback(nid, text):
         parsed = parse_json_safely(text)
-        if "worldview" in parsed:
-            # Format progressive character plan
-            prog_plan = parsed.get("progressive_character_plan", {})
-            if isinstance(prog_plan, dict):
-                prog_text = "\n".join([f"- {k}: {v}" for k, v in prog_plan.items()])
-            else:
-                prog_text = str(prog_plan)
-            
-            # Format three act structure
-            three_act = parsed.get("three_act_structure", {})
-            act1 = three_act.get("act1_setup", three_act.get("act1", ""))
-            act2 = three_act.get("act2_confrontation", three_act.get("act2", ""))
-            act3 = three_act.get("act3_resolution", three_act.get("act3", ""))
-            
-            formatted_wb = (
-                f"【核心主題】\n{parsed.get('theme', '')}\n\n"
-                f"【核心衝突】\n{parsed.get('main_conflict', '')}\n\n"
-                f"【世界觀設定】\n{parsed.get('worldview', '')}\n\n"
-                f"【整體故事大綱】\n{parsed.get('macro_outline', '')}\n\n"
-                f"【三幕式結構】\n"
-                f"  第一幕（Setup）：{act1}\n"
-                f"  第二幕（Confrontation）：{act2}\n"
-                f"  第三幕（Resolution）：{act3}\n\n"
-                f"【角色漸進規劃策略】\n{prog_text}\n\n"
-                f"【伏筆種子】\n" + "\n".join([f"  • {s}" for s in parsed.get("foreshadowing_seeds", [])]) + "\n\n"
-                f"【關鍵轉折點】\n" + "\n".join([f"  • {e}" for e in parsed.get("key_turning_points", parsed.get("key_events", []))])
-            )
-            save_worldbuilding(nid, formatted_wb)
+        if isinstance(parsed, dict) and ("worldview" in parsed or "theme" in parsed or "main_conflict" in parsed):
+            # 直接將結構化 JSON 保存為 JSON 字串，以實現健壯的視覺化卡片 CRUD 介面
+            save_worldbuilding(nid, json.dumps(parsed, ensure_ascii=False, indent=2))
+        else:
+            # 備援：直接保存為原始文字。資料庫載入時的文字解析器能相容解析這類純文字格式並呈現在卡片上
+            save_worldbuilding(nid, text)
             
     return run_agent_stream(novel_id, "architect", messages, save_callback)
 
@@ -543,9 +525,29 @@ def run_plot_planner(novel_id, user_prompt=None):
     ]
     
     def save_callback(nid, text):
+        # 調試：記錄接收到的文本
+        print(f"[DEBUG] Plot planner received text (first 200 chars): {text[:200]}")
         parsed = parse_json_safely(text)
-        if "chapters" in parsed:
-            save_plot_chapters(nid, parsed)
+        if isinstance(parsed, dict) and "error" in parsed:
+            print(f"[ERROR] JSON parse failed: {parsed.get('raw_content', text)[:200]}")
+            # 保存原始文本以供後續分析
+            save_plot_chapters(nid, {"_raw_output": text, "_parse_error": True})
+            return
+        if parsed is not None:
+            # 處理兩種情況：1) parsed 是 dict 且包含 chapters 鍵，2) parsed 直接是 list（章節陣列）
+            if isinstance(parsed, dict) and "chapters" in parsed:
+                print(f"[INFO] Saving plot chapters as object with chapters key")
+                save_plot_chapters(nid, parsed)
+            elif isinstance(parsed, list):
+                # 如果直接輸出了章節陣列，包裝成物件格式
+                print(f"[INFO] Saving plot chapters as list, wrapping into object")
+                save_plot_chapters(nid, {"chapters": parsed})
+            else:
+                print(f"[WARN] Unexpected parsed type: {type(parsed)}, content: {str(parsed)[:200]}")
+                # 嘗試保存 anyway
+                save_plot_chapters(nid, parsed)
+        else:
+            print("[WARN] parsed is None, skipping save")
             
     return run_agent_stream(novel_id, "plot", messages, save_callback)
 
@@ -711,15 +713,15 @@ def run_director_decision(novel_id, current_stage, user_prompt):
     When in AUTO-EXECUTE mode, the director will also trigger subsequent actions.
     """
     # Define stage evaluation prompts with enhanced auto-execution logic
-    STAGE_EVALUATION_PROMPT = """你是 AI 小說創作系統的【創意總監】。
+    STAGE_EVALUATION_PROMPT = """你是 AI 小說創作系統的【創意總監】，負責把控整個小說創作管道的品質與流程。
 
-## 重要：執行模式識別
-- 如果你處於「一鍵執行模式」（系統已自動呼叫你），你必須做出【果斷決策並付諸行動】
-- 你的回應不僅是建議，而是【執行指令】
-- 當你說「自動執行」「立即執行」「我將執行」時，系統會真正觸發後續操作
+## 重要：你的回應將被系統自動解析並執行
+- 你的回應末尾必須包含一個 JSON 格式的【執行指令區塊】
+- 系統會解析你的 JSON 指令來決定下一步動作
+- 你必須做出【果斷決策】，不可含糊
 
 ## 當前任務評估
-你需要評估目前「{current_stage}」階段完成後的成果，判斷是否應該繼續執行下一階段。
+你需要評估目前「{current_stage}」階段完成後的成果，判斷下一步動作。
 
 ## 當前已完成的工作成果
 【世界觀】：{worldbuilding}
@@ -734,57 +736,60 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 1. **品質閘門（Quality Gate）**：評估當前階段輸出是否完整、連貫、符合創作需求
 2. **邏輯一致性**：檢查各模組之間的設定是否相互矛盾
 3. **進度合理性**：判斷是否應該繼續下一階段，還是應該返回修改
+4. **回溯判斷**：如果後續階段發現前面階段的問題，可以回退修正
 
-## 【關鍵】一鍵執行模式下的決策邏輯
+## 可用的 ACTION 指令（嚴格選擇一個）
 
-當你發現問題需要「重跑」或「擴充」時，你必須：
-1. 明確指出需要補充的內容
-2. 在回應結尾添加【執行指令區塊】，格式如下：
-```
-【執行指令】
-ACTION: AUTO_REGENERATE
-TARGET: {current_stage}
-HINT: {{具體要補充的內容提示}}
-```
+| ACTION | 用途 | 必要欄位 |
+|--------|------|----------|
+| `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
+| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint`（具體要改進什麼） |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容） |
+| `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
+| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改的大綱內容） |
+| `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
+| `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
+| `FINISH` | 全部任務已完成 | 無 |
 
-當輸出品質良好，可以繼續時：
-```
-【執行指令】
-ACTION: CONTINUE
-TARGET: {{next_stage}}
-```
-
-當需要用戶確認時：
-```
-【執行指令】
-ACTION: WAIT_USER
-REASON: {{需要確認的原因}}
-```
+## 階段流程邏輯提示
+- `init` 階段：檢查世界觀→如果無內容則 CONTINUE 到 worldview；如果有則評估品質
+- `worldview` 階段完成後：CONTINUE 到 characters
+- `characters` 階段完成後：CONTINUE 到 plot
+- `plot` 階段完成後：WRITE_ALL_CHAPTERS（開始寫所有章節）
+- `writer` 階段完成後：FINISH 或 GO_BACK 修正
+- 任何階段如果發現上游問題：使用 GO_BACK_TO_* 回退
 
 ## 回應格式（嚴格遵守）
+
+先用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
+
 ```
 【總監評估】
-- 當前階段：「{current_stage}」完成品質：[優秀/良好/需要修改]
-- 主要發現：[具體評估]
+- 當前階段：「{current_stage}」
+- 完成品質：[優秀/良好/需要修改]
+- 主要發現：[1-3 句具體評估]
 
-【總監建議】
-- 是否繼續：[是/否，建議...]
-- 理由：[具體理由]
+【決策理由】
+[簡要說明為什麼選擇這個 ACTION]
+```
 
-【下一步行動】
-- 建議：[繼續/重跑當前階段/暫停等待用戶指示]
+然後必須在回應最後輸出以下 JSON 區塊（系統靠此解析）：
 
-【執行指令】
-ACTION: [CONTINUE|AUTO_REGENERATE|WAIT_USER]
-TARGET: [下一階段/當前階段]
-HINT: [可選，針對重跑的補充提示]
+```json
+{{
+  "action": "CONTINUE",
+  "target": "characters",
+  "hint": "",
+  "reason": "世界觀設定完整且邏輯一致"
+}}
 ```
 
 ## 重要提醒
-- 請使用繁體中文回覆
+- 請使用繁體中文回覆評估部分
+- JSON 區塊中的 action 必須是上表列出的值之一
 - 評估要具體、務實，避免空泛的讚美
-- 如果發現明顯問題，必須明確指出並建議修正
-- 【在一鍵執行模式下，你的「建議」就是「執行令」】
+- 如果發現明顯問題，必須明確指出並使用 AUTO_REGENERATE 或 GO_BACK_TO_* 指令
+- 當大綱品質合格且需要開始寫作時，務必使用 WRITE_ALL_CHAPTERS 而非 CONTINUE
 """
 
     context = compile_context(novel_id)

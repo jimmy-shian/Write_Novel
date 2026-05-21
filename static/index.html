@@ -125,8 +125,6 @@
             <div id="workpanels">
                 
                 <!-- 1. WORLDVIEW TAB -->
-                
-                <!-- 1. WORLDVIEW TAB -->
                 <section id="panel-worldview" class="workpanel">
                     <div class="panel-actions-header">
                         <div class="agent-badge">
@@ -152,9 +150,23 @@
                         </div>
                     </div>
                     
-                    <div class="editor-layout">
-                        <div class="editor-main">
+                    <div class="editor-layout worldview-layout">
+                        <div class="editor-main" style="display: none;">
+                            <div class="sidebar-label">世界觀設定 (主要內容)</div>
                             <textarea id="editor-worldview" placeholder="在此輸入世界觀、主題、核心衝突與結構。你也可以使用上方「AI 自動規劃世界觀」按鈕由 Story Architect Agent 幫忙起草..."></textarea>
+                        </div>
+                        <div class="editor-sidebar-seeds" style="flex: 1;">
+                            <div class="sidebar-label">
+                                <span>🌍 【全景世界觀設定】</span>
+                            </div>
+                            <div class="seeds-actions-bar" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                                <button id="btn-seed-add" class="btn btn-secondary btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">➕ 新增伏筆</button>
+                                <button id="btn-seed-ai-generate" class="btn btn-ai btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">✨ AI 規劃</button>
+                            </div>
+                            <div id="worldview-sections-container" class="worldview-sections" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;">
+                                <!-- Dynamic worldview sections here -->
+                                <div class="empty-placeholder">尚無世界觀內容。請在左側編輯器中輸入，或點擊「AI 自動規劃世界觀」生成。</div>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -190,11 +202,11 @@
                     </div>
                     
                     <div class="editor-layout">
-                        <div class="editor-sidebar-json">
+                        <div class="editor-sidebar-json" style="display: none;">
                             <div class="sidebar-label">角色 Bible (JSON 結構)</div>
                             <textarea id="editor-characters-json" placeholder="角色設定以 JSON 格式儲存於此..."></textarea>
                         </div>
-                        <div class="editor-preview-view">
+                        <div class="editor-preview-view" style="flex: 1;">
                             <div class="sidebar-label">視覺化角色卡</div>
                             <div id="characters-cards-grid" class="cards-grid">
                                 <!-- Cards injected here -->
@@ -224,6 +236,14 @@
                         </div>
                     </div>
                     
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-plot" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Plot Planner</strong> 正在分析與生成章節大綱...
+                        </div>
+                    </div>
+                    
                     <div class="editor-layout">
                         <div class="editor-sidebar-json">
                             <div class="sidebar-label">章節大綱大腦 (JSON 結構)</div>
@@ -241,6 +261,14 @@
                 
                 <!-- 4. WRITER TAB -->
                 <section id="panel-writer" class="workpanel">
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-writer" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Chapter Writer</strong> 正在分析與撰寫正文內容...
+                        </div>
+                    </div>
+                    
                     <div class="writer-split-container">
                         
                         <!-- Timeline Chapter Selector -->
@@ -466,6 +494,54 @@
         </div>
     </div>
     
+    <!-- 4. SEED MODAL (新增/編輯伏筆) -->
+    <div id="modal-seed" class="modal-overlay">
+        <div class="modal-card modal-small">
+            <div class="modal-header">
+                <h2 id="seed-modal-title">新增伏筆</h2>
+                <button class="btn-close-modal" onclick="closeSeedModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>伏筆內容</label>
+                    <textarea id="input-seed-content" rows="4" placeholder="輸入伏筆內容..."></textarea>
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 16px;">
+                    <button id="btn-seed-modal-cancel" class="btn btn-ghost" onclick="closeSeedModal()" style="flex: 1;">取消</button>
+                    <button id="btn-seed-modal-confirm" class="btn btn-primary" style="flex: 1;">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. REUSABLE CUSTOM DIALOG MODAL (PREMIUM UI DIALOGUE) -->
+    <div id="modal-custom-dialog" class="modal-overlay">
+        <div class="modal-card modal-small" style="max-width: 480px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 22, 33, 0.85); backdrop-filter: blur(16px); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); border-radius: 16px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <h2 id="custom-dialog-title" style="font-size: 1.15rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">提示</h2>
+                <button class="btn-close-modal" onclick="closeCustomDialog()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 4px; transition: color 0.2s;">✕</button>
+            </div>
+            <div class="modal-body" style="padding: 20px 0 0 0;">
+                <p id="custom-dialog-message" style="margin-bottom: 16px; font-size: 0.95rem; line-height: 1.6; color: rgba(255, 255, 255, 0.7); white-space: pre-wrap;"></p>
+                
+                <!-- Input field container for prompt type -->
+                <div id="custom-dialog-input-container" class="form-group" style="display: none; margin-bottom: 16px;">
+                    <textarea id="custom-dialog-textarea" rows="4" style="width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(12, 12, 18, 0.7); color: #fff; padding: 12px; font-size: 0.9rem; resize: vertical; outline: none; transition: border-color 0.2s;" placeholder="請輸入內容..."></textarea>
+                </div>
+                
+                <!-- Options buttons container for multiple-choice style -->
+                <div id="custom-dialog-options-container" style="display: none; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+                    <!-- Options buttons will be dynamically injected here -->
+                </div>
+                
+                <div style="display: flex; gap: 12px; margin-top: 24px;" id="custom-dialog-standard-actions">
+                    <button id="btn-custom-dialog-cancel" class="btn btn-ghost" onclick="closeCustomDialog()" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">取消</button>
+                    <button id="btn-custom-dialog-confirm" class="btn btn-primary" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Global Notification toast -->
     <div id="toast" class="hidden">儲存成功</div>
     

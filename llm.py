@@ -64,7 +64,7 @@ def get_default_config():
         "base_url": os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         "temperature": float(os.getenv("DEFAULT_TEMPERATURE", 0.7)),
         "top_p": float(os.getenv("DEFAULT_TOP_P", 0.95)),
-        "max_tokens": int(os.getenv("DEFAULT_MAX_TOKENS", 4096)),
+        "max_tokens": int(os.getenv("DEFAULT_MAX_TOKENS", 16384)),
         "enable_thinking": int(os.getenv("DEFAULT_ENABLE_THINKING", 1))
     }
 
@@ -152,8 +152,13 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         payload.update(custom_payload_overrides)
         
     try:
+        # Ensure proper endpoint path for NVIDIA API
+        base_url = config["base_url"].rstrip("/")
+        if not base_url.endswith("/chat/completions"):
+            base_url += "/chat/completions"
+        
         response = requests.post(
-            config["base_url"],
+            base_url,
             headers=headers,
             json=payload,
             stream=True,
@@ -209,8 +214,10 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                         continue
                         
                     if content:
-                        # Detect inline think blocks like 
-                        think_start = ""
+                        # Detect inline think blocks (some models use <think> tags)
+                        think_start = "<think>"
+                        think_end = "</think>"
+                        
                         if think_start in content:
                             in_think_block = True
                             parts = content.split(think_start)

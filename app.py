@@ -29,7 +29,8 @@ from db import (
     save_agent_config,
     append_foreshadowing,
     insert_plot_chapter,
-    update_character_single_field
+    update_character_single_field,
+    parse_worldview_to_json
 )
 from agents import (
     run_story_architect,
@@ -369,7 +370,48 @@ def api_export_novel(novel_id: str, format: str = "txt"):
         
         content += "## 📖 世界觀與核心設定\n\n"
         if wb and wb.get("content"):
-            content += f"{wb['content']}\n\n"
+            wb_content = wb['content'].strip()
+            if wb_content.startswith("{"):
+                try:
+                    js = parse_worldview_to_json(wb_content)
+                    content += f"### 🎯 核心主題\n{js.get('theme', '')}\n\n"
+                    content += f"### 💥 核心衝突\n{js.get('main_conflict', '')}\n\n"
+                    content += f"### 🌍 世界觀設定\n{js.get('worldview', '')}\n\n"
+                    content += f"### 📋 整體故事大綱\n{js.get('macro_outline', '')}\n\n"
+                    
+                    three_act = js.get("three_act_structure", {})
+                    content += f"### 🎬 三幕式結構\n"
+                    content += f"- **第一幕（Setup）**: {three_act.get('act1_setup', '')}\n"
+                    content += f"- **第二幕（Confrontation）**: {three_act.get('act2_confrontation', '')}\n"
+                    content += f"- **第三幕（Resolution）**: {three_act.get('act3_resolution', '')}\n\n"
+                    
+                    char_plan = js.get("progressive_character_plan", {})
+                    content += f"### 📈 角色漸進規劃策略\n"
+                    content += f"- **第一波開篇**: {char_plan.get('wave_1_opening', '')}\n"
+                    content += f"- **第二波發展**: {char_plan.get('wave_2_development', '')}\n"
+                    content += f"- **第三波高潮**: {char_plan.get('wave_3_climax', '')}\n\n"
+                    
+                    seeds = js.get("foreshadowing_seeds", [])
+                    content += f"### 🔑 伏筆種子\n"
+                    if seeds:
+                        for idx, s in enumerate(seeds, 1):
+                            content += f"{idx}. {s}\n"
+                    else:
+                        content += "*尚無伏筆種子*\n"
+                    content += "\n"
+                    
+                    pts = js.get("key_turning_points", [])
+                    content += f"### ⚡ 關鍵轉折點\n"
+                    if pts:
+                        for idx, p in enumerate(pts, 1):
+                            content += f"{idx}. {p}\n"
+                    else:
+                        content += "*尚無關鍵轉折點*\n"
+                    content += "\n"
+                except Exception as e:
+                    content += f"{wb['content']}\n\n"
+            else:
+                content += f"{wb['content']}\n\n"
         else:
             content += "*尚無設定*\n\n"
             
@@ -498,23 +540,27 @@ def api_update_character_field(novel_id: str, payload: CharacterFieldUpdate):
 # --- 增量生成 Agent 端點 ---
 class IncrementalArchitectRequest(BaseModel):
     """增量生成世界觀（局部上下文）"""
+    novel_id: str
     target_section: str  # 要生成的部分，如 "foreshadowing_seeds", "three_act_structure"
     user_hint: str       # 用戶的提示
 
 class IncrementalCharacterRequest(BaseModel):
     """增量生成角色（局部上下文）"""
+    novel_id: str
     target_char_index: Optional[int] = None  # 要修改的角色索引，None 表示新增
     field_name: Optional[str] = None         # 要修改的欄位，None 表示全部
     user_hint: str                           # 用戶的提示
 
 class IncrementalPlotRequest(BaseModel):
     """增量生成大綱（局部上下文）"""
+    novel_id: str
     insert_after_index: int                  # 插入位置
     user_hint: str                           # 用戶的提示
 
 @app.post("/api/agent/incremental-architect")
-def api_incremental_architect(novel_id: str = Body(...), payload: IncrementalArchitectRequest = Body(...)):
+def api_incremental_architect(payload: IncrementalArchitectRequest):
     """增量生成世界觀的特定部分（不重新生成全部）"""
+    novel_id = payload.novel_id
     if not get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
@@ -523,8 +569,9 @@ def api_incremental_architect(novel_id: str = Body(...), payload: IncrementalArc
     )
 
 @app.post("/api/agent/incremental-character")
-def api_incremental_character(novel_id: str = Body(...), payload: IncrementalCharacterRequest = Body(...)):
+def api_incremental_character(payload: IncrementalCharacterRequest):
     """增量生成/修改角色（局部上下文）"""
+    novel_id = payload.novel_id
     if not get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
@@ -533,8 +580,9 @@ def api_incremental_character(novel_id: str = Body(...), payload: IncrementalCha
     )
 
 @app.post("/api/agent/incremental-plot")
-def api_incremental_plot(novel_id: str = Body(...), payload: IncrementalPlotRequest = Body(...)):
+def api_incremental_plot(payload: IncrementalPlotRequest):
     """增量生成大綱章節（局部上下文，可在指定位置插入）"""
+    novel_id = payload.novel_id
     if not get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
