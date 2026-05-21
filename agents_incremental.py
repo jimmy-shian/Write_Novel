@@ -73,6 +73,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     
     def save_callback(nid, text):
         import json
+        import re as _re
         wb = get_latest_worldbuilding(nid)
         existing_content = wb["content"] if wb else ""
         
@@ -80,69 +81,198 @@ def run_incremental_architect(novel_id, target_section, user_hint):
             # 新的結構化 JSON 世界觀
             current_json = parse_worldview_to_json(existing_content)
             parsed = parse_json_safely(text)
+            
+            # Check if JSON parsing has failed (e.g. returns dict with "error")
+            parsing_failed = False
+            if isinstance(parsed, dict) and "error" in parsed and "raw_content" in parsed:
+                parsing_failed = True
+                parsed = text.strip()
+                
             if parsed is None:
                 parsed = text.strip()
+                parsing_failed = True
+            
+            def _strip_bullet(s):
+                """去除項目符號前綴"""
+                return s.strip().lstrip("-*•").strip()
+            
+            def _extract_after_colon(line):
+                """提取冒號後的內容，支持中英文冒號"""
+                if "：" in line:
+                    return line.split("：", 1)[-1].strip()
+                elif ":" in line:
+                    return line.split(":", 1)[-1].strip()
+                return line.strip()
+            
+            def _parse_bullet_list(raw_text):
+                """解析 bullet list 為字串列表，支持多種格式"""
+                if not raw_text:
+                    return []
+                lines = []
+                for line in raw_text.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 跳過常見的開場白
+                    if any(line.startswith(prefix) for prefix in ["Here is", "這是", "這裡有", "以下是", "Here are"]):
+                        continue
+                    # 去除 bullet 前綴
+                    cleaned = _strip_bullet(line)
+                    if cleaned:
+                        lines.append(cleaned)
+                return lines
+            
+            def _parse_act_from_line(line, act_key):
+                """從單行文字解析 act 內容，支持多種格式"""
+                line = line.strip()
+                if not line:
+                    return None
+                
+                # 模式 1: "第一幕：內容" 或 "Act 1: content"
+                patterns = [
+                    r'(?:第一幕|Act\s*1|Setup).*?[：:](.+)$',
+                    r'(?:第二幕|Act\s*2|Confrontation).*?[：:](.+)$',
+                    r'(?:第三幕|Act\s*3|Resolution).*?[：:](.+)$',
+                ]
+                for pattern in patterns:
+                    match = _re.search(pattern, line, _re.IGNORECASE)
+                    if match:
+                        return match.group(1).strip()
+                
+                # 模式 2: 整行就是內容（如果包含關鍵字）
+                if any(kw in line for kw in ["第一幕", "Act 1", "Setup", "第二幕", "Act 2", "Confrontation", "第三幕", "Act 3", "Resolution"]):
+                    return _extract_after_colon(line)
+                
+                return None
+            
+            def _parse_wave_from_line(line, wave_key):
+                """從單行文字解析 wave 內容，支持多種格式"""
+                line = line.strip()
+                if not line:
+                    return None
+                
+                # 模式 1: "wave_1_opening：內容" 或 "Wave 1: content"
+                wave_patterns = [
+                    r'(?:wave[_\s]*1|開篇|第一波).*?[：:](.+)$',
+                    r'(?:wave[_\s]*2|發展|第二波).*?[：:](.+)$',
+                    r'(?:wave[_\s]*3|高潮|第三波).*?[：:](.+)$',
+                ]
+                for pattern in wave_patterns:
+                    match = _re.search(pattern, line, _re.IGNORECASE)
+                    if match:
+                        return match.group(1).strip()
+                
+                # 模式 2: 整行就是內容（如果包含關鍵字）
+                if any(kw in line for kw in ["wave_1", "wave1", "開篇", "第一波", "wave_2", "wave2", "發展", "第二波", "wave_3", "wave3", "高潮", "第三波"]):
+                    return _extract_after_colon(line)
+                
+                return None
                 
             if target_section == "foreshadowing_seeds":
                 new_seeds = []
-                if isinstance(parsed, list):
+                if isinstance(parsed, list) and not parsing_failed:
                     new_seeds = [s for s in parsed if isinstance(s, str)]
-                elif isinstance(parsed, dict):
+                elif isinstance(parsed, dict) and not parsing_failed:
                     seeds_val = parsed.get("foreshadowing_seeds", parsed.get("seeds", []))
                     if isinstance(seeds_val, list):
                         new_seeds = [s for s in seeds_val if isinstance(s, str)]
-                elif isinstance(parsed, str):
-                    if "\n" in parsed:
-                        new_seeds = [line.strip().lstrip("-*•").strip() for line in parsed.split("\n") if line.strip()]
-                    else:
-                        new_seeds = [parsed]
+                elif isinstance(parsed, str) or parsing_failed:
+                    new_seeds = _parse_bullet_list(parsed if isinstance(parsed, str) else str(parsed))
                 if new_seeds:
                     current_json["foreshadowing_seeds"].extend(new_seeds)
                     
             elif target_section == "key_turning_points":
                 new_points = []
-                if isinstance(parsed, list):
+                if isinstance(parsed, list) and not parsing_failed:
                     new_points = [p for p in parsed if isinstance(p, str)]
-                elif isinstance(parsed, dict):
+                elif isinstance(parsed, dict) and not parsing_failed:
                     pts_val = parsed.get("key_turning_points", parsed.get("points", []))
                     if isinstance(pts_val, list):
                         new_points = [p for p in pts_val if isinstance(p, str)]
-                elif isinstance(parsed, str):
-                    if "\n" in parsed:
-                        new_points = [line.strip().lstrip("-*•").strip() for line in parsed.split("\n") if line.strip()]
-                    else:
-                        new_points = [parsed]
+                elif isinstance(parsed, str) or parsing_failed:
+                    new_points = _parse_bullet_list(parsed if isinstance(parsed, str) else str(parsed))
                 if new_points:
                     current_json["key_turning_points"].extend(new_points)
                     
             elif target_section == "three_act_structure":
                 act_data = {}
-                if isinstance(parsed, dict):
+                if isinstance(parsed, dict) and not parsing_failed:
                     act_data = parsed.get("three_act_structure", parsed)
-                if isinstance(act_data, dict):
+                if isinstance(act_data, dict) and act_data and not parsing_failed:
                     current_json["three_act_structure"]["act1_setup"] = act_data.get("act1_setup", act_data.get("act1", current_json["three_act_structure"]["act1_setup"]))
                     current_json["three_act_structure"]["act2_confrontation"] = act_data.get("act2_confrontation", act_data.get("act2", current_json["three_act_structure"]["act2_confrontation"]))
                     current_json["three_act_structure"]["act3_resolution"] = act_data.get("act3_resolution", act_data.get("act3", current_json["three_act_structure"]["act3_resolution"]))
+                else: # Plain text fallback with robust parsing
+                    raw_str = parsed if isinstance(parsed, str) else str(parsed)
+                    for line in raw_str.split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        # 嘗試解析第一幕
+                        if any(kw in line for kw in ["第一幕", "Act 1", "Setup", "act1"]):
+                            val = _parse_act_from_line(line, "act1")
+                            if val:
+                                current_json["three_act_structure"]["act1_setup"] = val
+                        # 嘗試解析第二幕
+                        elif any(kw in line for kw in ["第二幕", "Act 2", "Confrontation", "act2"]):
+                            val = _parse_act_from_line(line, "act2")
+                            if val:
+                                current_json["three_act_structure"]["act2_confrontation"] = val
+                        # 嘗試解析第三幕
+                        elif any(kw in line for kw in ["第三幕", "Act 3", "Resolution", "act3"]):
+                            val = _parse_act_from_line(line, "act3")
+                            if val:
+                                current_json["three_act_structure"]["act3_resolution"] = val
                     
             elif target_section == "progressive_character_plan":
                 plan_data = {}
-                if isinstance(parsed, dict):
+                if isinstance(parsed, dict) and not parsing_failed:
                     plan_data = parsed.get("progressive_character_plan", parsed)
-                if isinstance(plan_data, dict):
+                if isinstance(plan_data, dict) and plan_data and not parsing_failed:
                     current_json["progressive_character_plan"]["wave_1_opening"] = plan_data.get("wave_1_opening", plan_data.get("wave1", current_json["progressive_character_plan"]["wave_1_opening"]))
                     current_json["progressive_character_plan"]["wave_2_development"] = plan_data.get("wave_2_development", plan_data.get("wave2", current_json["progressive_character_plan"]["wave_2_development"]))
                     current_json["progressive_character_plan"]["wave_3_climax"] = plan_data.get("wave_3_climax", plan_data.get("wave3", current_json["progressive_character_plan"]["wave_3_climax"]))
-            else:
-                if isinstance(parsed, dict):
+                else: # Plain text fallback with robust parsing
+                    raw_str = parsed if isinstance(parsed, str) else str(parsed)
+                    for line in raw_str.split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        # 嘗試解析 wave 1
+                        if any(kw in line for kw in ["wave_1", "wave1", "開篇", "第一波"]):
+                            val = _parse_wave_from_line(line, "wave1")
+                            if val:
+                                current_json["progressive_character_plan"]["wave_1_opening"] = val
+                        # 嘗試解析 wave 2
+                        elif any(kw in line for kw in ["wave_2", "wave2", "發展", "第二波"]):
+                            val = _parse_wave_from_line(line, "wave2")
+                            if val:
+                                current_json["progressive_character_plan"]["wave_2_development"] = val
+                        # 嘗試解析 wave 3
+                        elif any(kw in line for kw in ["wave_3", "wave3", "高潮", "第三波"]):
+                            val = _parse_wave_from_line(line, "wave3")
+                            if val:
+                                current_json["progressive_character_plan"]["wave_3_climax"] = val
+            elif target_section in ("theme", "main_conflict", "worldview", "macro_outline"):
+                # 直接文本欄位：theme, main_conflict, worldview, macro_outline
+                val = ""
+                if isinstance(parsed, dict) and not parsing_failed:
                     val = parsed.get(target_section, parsed.get("content", ""))
-                else:
-                    val = str(parsed)
-                if val:
-                    current_json[target_section] = val
-                    
+                if not val:
+                    val = text.strip()
+                current_json[target_section] = val
+            else:
+                # 通用 fallback
+                val = ""
+                if isinstance(parsed, dict) and not parsing_failed:
+                    val = parsed.get(target_section, parsed.get("content", ""))
+                if not val:
+                    val = text.strip()
+                current_json[target_section] = val
+                
             save_worldbuilding(nid, json.dumps(current_json, ensure_ascii=False, indent=2))
         else:
-            # 備援至舊的平鋪文字解析/替換邏輯
+            # 備援至舊的平鬪文字解析/替換邏輯
             if target_section == "foreshadowing_seeds":
                 parsed = parse_json_safely(text)
                 if isinstance(parsed, list):

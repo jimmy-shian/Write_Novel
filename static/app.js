@@ -20,7 +20,13 @@ const state = {
     // Director execution mode: 一鍵執行模式 vs 一般模式
     // 一鍵執行模式：總監的建議即為執行令（自動執行）
     // 一般模式：總監提供建議，由用戶決定
-    isAutoExecuteMode: false
+    isAutoExecuteMode: false,
+    showStreamLog: true,
+    
+    // 策略卡片顯示狀態：'all' | '<' | '>'
+    strategyCardView: 'all',
+    // 當前顯示的卡片索引（0-3），用於 < 和 > 模式
+    currentCardIndex: 0
 };
 
 // ==========================================
@@ -163,10 +169,10 @@ function showAgentProcessingIndicator(tabName, agentName) {
         let terminal = indicator.querySelector('.agent-stream-output');
         if (!terminal) {
             terminal = document.createElement('div');
-            terminal.className = 'agent-stream-output active';
             terminal.id = `stream-output-${tabName}`;
             indicator.appendChild(terminal);
         }
+        terminal.className = `agent-stream-output active${state.showStreamLog ? '' : ' hidden'}`;
         terminal.textContent = ''; 
     }
     
@@ -267,6 +273,29 @@ function setupExecutionModeToggle() {
                 label.style.opacity = state.isAutoExecuteMode ? '1' : '0.5';
             } else {
                 label.style.opacity = state.isAutoExecuteMode ? '0.5' : '1';
+            }
+        });
+    });
+}
+
+/**
+ * 設置 AI 即時生成日誌切換開關
+ */
+function setupStreamLogToggle() {
+    const toggle = document.getElementById('toggle-stream-log');
+    if (!toggle) return;
+    
+    // 初始化 showStreamLog 狀態
+    state.showStreamLog = toggle.checked;
+    
+    toggle.addEventListener('change', () => {
+        state.showStreamLog = toggle.checked;
+        const terminals = document.querySelectorAll('.agent-stream-output');
+        terminals.forEach(term => {
+            if (state.showStreamLog) {
+                term.classList.remove('hidden');
+            } else {
+                term.classList.add('hidden');
             }
         });
     });
@@ -619,6 +648,7 @@ async function executePipelineStage(stage, userPrompt) {
         showToast(`🚀 正在啟動 ${stage} Agent...`);
         showAgentProcessingIndicator(stage, agentName);
         
+        let failed = false;
         streamAPI(
             endpoint,
             body,
@@ -633,12 +663,15 @@ async function executePipelineStage(stage, userPrompt) {
                 updateAgentStreamOutput(stage, delta);
             },
             (msg) => {
+                failed = true;
+                state.isPipelineRunning = false;
                 showToast(`${stage} Agent 執行失敗: ${msg}`);
                 updatePipelineStage(stage, 'error');
                 hideAgentProcessingIndicator(stage);
                 resolve();
             },
             async () => {
+                if (failed) return;
                 updatePipelineStage(stage, 'done');
                 hideAgentProcessingIndicator(stage);
                 
@@ -657,7 +690,6 @@ async function executePipelineStage(stage, userPrompt) {
         );
     });
 }
-
 /**
  * 自動撰寫所有章節正文（按大綱順序，每章寫完後詢問總監）
  */
@@ -877,6 +909,8 @@ async function requestAPI(url, method = 'GET', body = null) {
     }
 }
 
+
+
 async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone) {
     try {
         const response = await fetch(endpoint, {
@@ -887,8 +921,8 @@ async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone)
         
         if (!response.ok) {
             const errText = await response.text();
-            onError(`HTTP 錯誤 ${response.status}: ${errText}`);
-            onDone();
+            if (typeof onError === 'function') onError(`HTTP 錯誤 ${response.status}: ${errText}`);
+            if (typeof onDone === 'function') onDone();
             return;
         }
         
@@ -914,21 +948,21 @@ async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone)
                     const parsed = JSON.parse(dataStr);
                     
                     if (parsed.type === 'thinking') {
-                        onThinking(parsed.delta);
+                        if (typeof onThinking === 'function') onThinking(parsed.delta);
                     } else if (parsed.type === 'content') {
-                        onContent(parsed.delta);
+                        if (typeof onContent === 'function') onContent(parsed.delta);
                     } else if (parsed.type === 'error') {
-                        onError(parsed.message);
+                        if (typeof onError === 'function') onError(parsed.message);
                     }
                 } catch (e) {
                     // Ignore JSON parsing errors for partial chunks
                 }
             }
         }
-        onDone();
+        if (typeof onDone === 'function') onDone();
     } catch (err) {
-        onError(`網路連接錯誤: ${err.message}`);
-        onDone();
+        if (typeof onError === 'function') onError(`網路連接錯誤: ${err.message}`);
+        if (typeof onDone === 'function') onDone();
     }
 }
 
@@ -1014,15 +1048,22 @@ function loadAgentConfigFields(agentName) {
 
 async function saveCurrentAgentSettings() {
     const agentName = el.settingAgentName.value;
+    
+    const tempRaw = el.settingTemperature.value.trim();
+    const temperature = tempRaw === '' ? 0.7 : (isNaN(parseFloat(tempRaw)) ? 0.7 : parseFloat(tempRaw));
+    
+    const topPRaw = el.settingTopP.value.trim();
+    const top_p = topPRaw === '' ? 0.95 : (isNaN(parseFloat(topPRaw)) ? 0.95 : parseFloat(topPRaw));
+    
     const payload = {
         agent_name: agentName,
         api_key: el.settingApiKey.value,
         base_url: el.settingBaseUrl.value,
         model: el.settingModel.value,
-        temperature: parseFloat(el.settingTemperature.value) || 0.7,
-        top_p: parseFloat(el.settingTopP.value) || 0.95,
+        temperature: temperature,
+        top_p: top_p,
         max_tokens: parseInt(el.settingMaxTokens.value) || 4096,
-        enable_thinking: el.settingEnableThinking.checked
+        enable_thinking: el.settingEnableThinking.checked ? 1 : 0
     };
     
     try {
@@ -1174,16 +1215,16 @@ function parseWorldviewJSON(text) {
         main_conflict: "",
         worldview: "",
         macro_outline: "",
-        three_act_structure: {
-            act1_setup: "",
-            act2_confrontation: "",
-            act3_resolution: ""
-        },
-        progressive_character_plan: {
-            wave_1_opening: "",
-            wave_2_development: "",
-            wave_3_climax: ""
-        },
+        three_act_structure: [
+            { title: "第一幕 (Setup)", content: "" },
+            { title: "第二幕 (Confrontation)", content: "" },
+            { title: "第三幕 (Resolution)", content: "" }
+        ],
+        progressive_character_plan: [
+            { title: "第一波開篇 (Wave 1)", content: "" },
+            { title: "第二波發展 (Wave 2)", content: "" },
+            { title: "第三波高潮 (Wave 3)", content: "" }
+        ],
         foreshadowing_seeds: [],
         key_turning_points: []
     };
@@ -1196,21 +1237,64 @@ function parseWorldviewJSON(text) {
     if (textStripped.startsWith("{") && textStripped.endsWith("}")) {
         try {
             const parsed = JSON.parse(textStripped);
+            
+            // Normalize three_act_structure
+            let normalized_ta = [];
+            const ta = parsed.three_act_structure;
+            if (Array.isArray(ta)) {
+                normalized_ta = ta.map((item, idx) => {
+                    if (typeof item === 'object' && item !== null) {
+                        return { title: item.title || `項目 #${idx + 1}`, content: item.content || '' };
+                    } else {
+                        return { title: `項目 #${idx + 1}`, content: String(item) };
+                    }
+                });
+            } else if (typeof ta === 'object' && ta !== null) {
+                normalized_ta = [
+                    { title: '第一幕 (Setup)', content: ta.act1_setup || ta.act1 || '' },
+                    { title: '第二幕 (Confrontation)', content: ta.act2_confrontation || ta.act2 || '' },
+                    { title: '第三幕 (Resolution)', content: ta.act3_resolution || ta.act3 || '' }
+                ];
+            } else {
+                normalized_ta = [
+                    { title: '第一幕 (Setup)', content: '' },
+                    { title: '第二幕 (Confrontation)', content: '' },
+                    { title: '第三幕 (Resolution)', content: '' }
+                ];
+            }
+
+            // Normalize progressive_character_plan
+            let normalized_cp = [];
+            const cp = parsed.progressive_character_plan;
+            if (Array.isArray(cp)) {
+                normalized_cp = cp.map((item, idx) => {
+                    if (typeof item === 'object' && item !== null) {
+                        return { title: item.title || `階段 #${idx + 1}`, content: item.content || '' };
+                    } else {
+                        return { title: `階段 #${idx + 1}`, content: String(item) };
+                    }
+                });
+            } else if (typeof cp === 'object' && cp !== null) {
+                normalized_cp = [
+                    { title: '第一波開篇 (Wave 1)', content: cp.wave_1_opening || '' },
+                    { title: '第二波發展 (Wave 2)', content: cp.wave_2_development || '' },
+                    { title: '第三波高潮 (Wave 3)', content: cp.wave_3_climax || '' }
+                ];
+            } else {
+                normalized_cp = [
+                    { title: '第一波開篇 (Wave 1)', content: '' },
+                    { title: '第二波發展 (Wave 2)', content: '' },
+                    { title: '第三波高潮 (Wave 3)', content: '' }
+                ];
+            }
+
             return {
                 theme: parsed.theme || "",
                 main_conflict: parsed.main_conflict || "",
                 worldview: parsed.worldview || "",
                 macro_outline: parsed.macro_outline || "",
-                three_act_structure: {
-                    act1_setup: parsed.three_act_structure?.act1_setup || parsed.three_act_structure?.act1 || "",
-                    act2_confrontation: parsed.three_act_structure?.act2_confrontation || parsed.three_act_structure?.act2 || "",
-                    act3_resolution: parsed.three_act_structure?.act3_resolution || parsed.three_act_structure?.act3 || ""
-                },
-                progressive_character_plan: {
-                    wave_1_opening: parsed.progressive_character_plan?.wave_1_opening || "",
-                    wave_2_development: parsed.progressive_character_plan?.wave_2_development || "",
-                    wave_3_climax: parsed.progressive_character_plan?.wave_3_climax || ""
-                },
+                three_act_structure: normalized_ta,
+                progressive_character_plan: normalized_cp,
                 foreshadowing_seeds: Array.isArray(parsed.foreshadowing_seeds) ? parsed.foreshadowing_seeds : [],
                 key_turning_points: Array.isArray(parsed.key_turning_points) ? parsed.key_turning_points : []
             };
@@ -1258,11 +1342,11 @@ function parseWorldviewJSON(text) {
         lines.forEach(line => {
             const l = line.trim();
             if (l.includes("第一幕") || l.includes("Setup")) {
-                result.three_act_structure.act1_setup = l.split(/[：:]/).slice(1).join("：").trim() || l;
+                result.three_act_structure[0].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
             } else if (l.includes("第二幕") || l.includes("Confrontation")) {
-                result.three_act_structure.act2_confrontation = l.split(/[：:]/).slice(1).join("：").trim() || l;
+                result.three_act_structure[1].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
             } else if (l.includes("第三幕") || l.includes("Resolution")) {
-                result.three_act_structure.act3_resolution = l.split(/[：:]/).slice(1).join("：").trim() || l;
+                result.three_act_structure[2].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
             }
         });
     }
@@ -1280,20 +1364,20 @@ function parseWorldviewJSON(text) {
                 const k = parts[0].trim();
                 const v = parts.slice(1).join(sep).trim();
                 if (k.includes("wave_1") || k.includes("wave1") || k.includes("開篇") || k.includes("第一波")) {
-                    result.progressive_character_plan.wave_1_opening = v;
+                    result.progressive_character_plan[0].content = v;
                 } else if (k.includes("wave_2") || k.includes("wave2") || k.includes("第二波") || k.includes("發展")) {
-                    result.progressive_character_plan.wave_2_development = v;
+                    result.progressive_character_plan[1].content = v;
                 } else if (k.includes("wave_3") || k.includes("wave3") || k.includes("第三波") || k.includes("高潮")) {
-                    result.progressive_character_plan.wave_3_climax = v;
+                    result.progressive_character_plan[2].content = v;
                 }
             } else {
                 if (l) {
-                    if (!result.progressive_character_plan.wave_1_opening) {
-                        result.progressive_character_plan.wave_1_opening = l;
-                    } else if (!result.progressive_character_plan.wave_2_development) {
-                        result.progressive_character_plan.wave_2_development = l;
-                    } else if (!result.progressive_character_plan.wave_3_climax) {
-                        result.progressive_character_plan.wave_3_climax = l;
+                    if (!result.progressive_character_plan[0].content) {
+                        result.progressive_character_plan[0].content = l;
+                    } else if (!result.progressive_character_plan[1].content) {
+                        result.progressive_character_plan[1].content = l;
+                    } else if (!result.progressive_character_plan[2].content) {
+                        result.progressive_character_plan[2].content = l;
                     }
                 }
             }
@@ -1349,7 +1433,7 @@ async function saveWorldviewJSON(jsonObj) {
     }
 }
 
-function openWorldviewTextSectionEditModal(field, title, currentContent) {
+function openWorldviewTextSectionEditModal(field, title) {
     let modal = document.getElementById('modal-worldview-text-edit');
     if (!modal) {
         const html = `
@@ -1376,7 +1460,10 @@ function openWorldviewTextSectionEditModal(field, title, currentContent) {
 
     document.getElementById('wv-text-edit-title').innerText = `✏️ 編輯 ${title}`;
     document.getElementById('wv-text-edit-label').innerText = `${title} 詳細設定`;
-    document.getElementById('wv-text-edit-content').value = currentContent || '';
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    document.getElementById('wv-text-edit-content').value = js[field] || '';
 
     const submitBtn = document.getElementById('btn-wv-text-edit-submit');
     const newBtn = submitBtn.cloneNode(true);
@@ -1394,56 +1481,113 @@ function openWorldviewTextSectionEditModal(field, title, currentContent) {
     modal.classList.add('active');
 }
 
-function openThreeActEditModal(currentThreeAct) {
-    let modal = document.getElementById('modal-three-act-edit');
+function openWorldviewComplexListEditModal(field, title, defaultItemTitle = '') {
+    let modal = document.getElementById('modal-worldview-complex-list-edit');
     if (!modal) {
         const html = `
-        <div id="modal-three-act-edit" class="modal-overlay">
-            <div class="modal-card" style="max-width: 650px;">
+        <div id="modal-worldview-complex-list-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 650px; max-height: 85vh; display: flex; flex-direction: column;">
                 <div class="modal-header">
-                    <h2>🎬 編輯三幕式結構</h2>
+                    <h2 id="wv-complex-list-edit-title">編輯清單</h2>
                     <button class="btn-close-modal">✕</button>
                 </div>
-                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; max-height: 75vh; overflow-y: auto;">
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #93c5fd;">第一幕（Setup）</label>
-                        <textarea id="ta-act1" rows="4" placeholder="開端與鋪墊..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #a78bfa;">第二幕（Confrontation）</label>
-                        <textarea id="ta-act2" rows="4" placeholder="對抗與衝突..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #fca5a5;">第三幕（Resolution）</label>
-                        <textarea id="ta-act3" rows="4" placeholder="解決與高潮..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <button id="btn-three-act-submit" class="btn btn-primary btn-full mt-2">儲存三幕式結構</button>
+                <div class="modal-body" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; padding-bottom: 20px;">
+                    <div id="wv-complex-list-items-container" style="display: flex; flex-direction: column; gap: 16px;"></div>
+                    <button id="btn-wv-complex-list-add-item" class="btn btn-secondary btn-xs" style="align-self: flex-start; margin-top: 4px;">➕ 新增項目</button>
+                    <button id="btn-wv-complex-list-submit" class="btn btn-primary btn-full mt-4">儲存變更</button>
                 </div>
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
-        modal = document.getElementById('modal-three-act-edit');
+        modal = document.getElementById('modal-worldview-complex-list-edit');
         modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
     }
 
-    const ta = currentThreeAct || {};
-    document.getElementById('ta-act1').value = ta.act1_setup || '';
-    document.getElementById('ta-act2').value = ta.act2_confrontation || '';
-    document.getElementById('ta-act3').value = ta.act3_resolution || '';
+    document.getElementById('wv-complex-list-edit-title').innerText = `📋 編輯 ${title}`;
+    const container = document.getElementById('wv-complex-list-items-container');
+    container.innerHTML = '';
 
-    const submitBtn = document.getElementById('btn-three-act-submit');
-    const newBtn = submitBtn.cloneNode(true);
-    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    const list = Array.isArray(js[field]) ? JSON.parse(JSON.stringify(js[field])) : [];
 
-    newBtn.addEventListener('click', async () => {
+    function renderItems() {
+        container.innerHTML = '';
+        if (list.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
+            return;
+        }
+
+        list.forEach((item, index) => {
+            const card = document.createElement('div');
+            card.className = 'complex-list-card';
+            card.style = 'border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.02); padding: 12px; display: flex; flex-direction: column; gap: 8px; position: relative;';
+            card.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">項目 #${index + 1}</span>
+                    <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer; padding: 0 4px;">✕</button>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">標題名稱</label>
+                    <input type="text" class="wv-complex-item-title-input" data-index="${index}" value="${(item.title || '').replace(/"/g, '&quot;')}" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入標題 (例如：第一幕 (Setup) / 階段 1)...">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">詳細內容</label>
+                    <textarea class="wv-complex-item-content-input" data-index="${index}" rows="3" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;" placeholder="輸入內容描述...">${item.content || ''}</textarea>
+                </div>
+            `;
+            container.appendChild(card);
+
+            card.querySelector('.wv-complex-item-title-input').addEventListener('input', (e) => {
+                list[index].title = e.target.value;
+            });
+
+            card.querySelector('.wv-complex-item-content-input').addEventListener('input', (e) => {
+                list[index].content = e.target.value;
+            });
+
+            card.querySelector('.delete-item-btn').addEventListener('click', () => {
+                list.splice(index, 1);
+                renderItems();
+            });
+        });
+    }
+
+    renderItems();
+
+    // Rebind Add Button
+    const addBtn = document.getElementById('btn-wv-complex-list-add-item');
+    const newAddBtn = addBtn.cloneNode(true);
+    addBtn.parentNode.replaceChild(newAddBtn, addBtn);
+    newAddBtn.addEventListener('click', () => {
+        const defaultTitle = defaultItemTitle || `新項目 #${list.length + 1}`;
+        list.push({ title: defaultTitle, content: '' });
+        renderItems();
+        setTimeout(() => {
+            const inputs = container.querySelectorAll('.wv-complex-item-title-input');
+            if (inputs.length > 0) {
+                inputs[inputs.length - 1].focus();
+            }
+        }, 50);
+    });
+
+    // Rebind Submit Button
+    const submitBtn = document.getElementById('btn-wv-complex-list-submit');
+    const newSubmitBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newSubmitBtn, submitBtn);
+
+    newSubmitBtn.addEventListener('click', async () => {
+        const finalList = list.map(item => {
+            return {
+                title: (item.title || '').trim(),
+                content: (item.content || '').trim()
+            };
+        }).filter(item => item.title !== '' || item.content !== '');
+        
         const worldviewText = state.currentNovelData?.worldbuilding || '';
         const js = parseWorldviewJSON(worldviewText);
-        js.three_act_structure = {
-            act1_setup: document.getElementById('ta-act1').value.trim(),
-            act2_confrontation: document.getElementById('ta-act2').value.trim(),
-            act3_resolution: document.getElementById('ta-act3').value.trim()
-        };
+        js[field] = finalList;
         await saveWorldviewJSON(js);
         modal.classList.remove('active');
     });
@@ -1451,64 +1595,7 @@ function openThreeActEditModal(currentThreeAct) {
     modal.classList.add('active');
 }
 
-function openCharacterPlanEditModal(currentPlan) {
-    let modal = document.getElementById('modal-char-plan-edit');
-    if (!modal) {
-        const html = `
-        <div id="modal-char-plan-edit" class="modal-overlay">
-            <div class="modal-card" style="max-width: 650px;">
-                <div class="modal-header">
-                    <h2>👥 編輯角色漸進規劃策略</h2>
-                    <button class="btn-close-modal">✕</button>
-                </div>
-                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; max-height: 75vh; overflow-y: auto;">
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #67e8f9;">第一波開篇 (Wave 1)</label>
-                        <textarea id="cp-wave1" rows="4" placeholder="初期主要登場角色、核心人設與初始動機..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #fdba74;">第二波發展 (Wave 2)</label>
-                        <textarea id="cp-wave2" rows="4" placeholder="中期新登場角色、關係網交織與內部陣營演變..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label style="font-weight: 600; color: #f9a8d4;">第三波高潮 (Wave 3)</label>
-                        <textarea id="cp-wave3" rows="4" placeholder="後期關鍵底牌角色、決戰陣營確立與宿命大結局..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; resize: vertical;"></textarea>
-                    </div>
-                    <button id="btn-char-plan-submit" class="btn btn-primary btn-full mt-2">儲存角色漸進規劃</button>
-                </div>
-            </div>
-        </div>`;
-        document.body.insertAdjacentHTML('beforeend', html);
-        modal = document.getElementById('modal-char-plan-edit');
-        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
-        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
-    }
-
-    const cp = currentPlan || {};
-    document.getElementById('cp-wave1').value = cp.wave_1_opening || '';
-    document.getElementById('cp-wave2').value = cp.wave_2_development || '';
-    document.getElementById('cp-wave3').value = cp.wave_3_climax || '';
-
-    const submitBtn = document.getElementById('btn-char-plan-submit');
-    const newBtn = submitBtn.cloneNode(true);
-    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
-
-    newBtn.addEventListener('click', async () => {
-        const worldviewText = state.currentNovelData?.worldbuilding || '';
-        const js = parseWorldviewJSON(worldviewText);
-        js.progressive_character_plan = {
-            wave_1_opening: document.getElementById('cp-wave1').value.trim(),
-            wave_2_development: document.getElementById('cp-wave2').value.trim(),
-            wave_3_climax: document.getElementById('cp-wave3').value.trim()
-        };
-        await saveWorldviewJSON(js);
-        modal.classList.remove('active');
-    });
-
-    modal.classList.add('active');
-}
-
-function openWorldviewListEditModal(field, title, currentList) {
+function openWorldviewListEditModal(field, title) {
     let modal = document.getElementById('modal-worldview-list-edit');
     if (!modal) {
         const html = `
@@ -1535,7 +1622,9 @@ function openWorldviewListEditModal(field, title, currentList) {
     const container = document.getElementById('wv-list-items-container');
     container.innerHTML = '';
 
-    const list = Array.isArray(currentList) ? [...currentList] : [];
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    const list = Array.isArray(js[field]) ? [...js[field]] : [];
 
     function renderItems() {
         container.innerHTML = '';
@@ -1550,7 +1639,7 @@ function openWorldviewListEditModal(field, title, currentList) {
             div.innerHTML = `
                 <span style="font-size: 0.8rem; color: var(--text-muted); min-width: 24px;">#${index + 1}</span>
                 <input type="text" class="wv-list-item-input" data-index="${index}" value="${item.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="請輸入項目內容...">
-                <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem;">✕</button>
+                <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer;">✕</button>
             `;
             container.appendChild(div);
 
@@ -1606,16 +1695,15 @@ function renderWorldviewSections() {
     const worldviewText = state.currentNovelData?.worldbuilding || '';
     const js = parseWorldviewJSON(worldviewText);
     
-    let html = '';
-    
-    function makeTextCard(field, icon, title, value, badgeClass) {
+    // 輔助函數：建立核心文字卡片（用於 theme, main_conflict, worldview, macro_outline）
+    function makeCoreCard(field, icon, title, value, badgeClass) {
         if (!value || value.trim().length === 0) {
             return `
-                <div class="worldview-section-card empty-state" data-section="${field}" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewTextSectionEditModal('${field}', '${title}', '')">
-                    <span style="font-size: 1.5rem;">${icon}</span>
-                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">${title}</span>
-                    <div style="display: flex; gap: 8px; margin-top: 4px;">
-                        <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增設定</button>
+                <div class="worldview-core-card empty-state" data-section="${field}" onclick="openWorldviewTextSectionEditModal('${field}', '${title}')">
+                    <div class="core-card-icon">${icon}</div>
+                    <div class="core-card-title">${title}</div>
+                    <div class="core-card-actions">
+                        <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); openWorldviewTextSectionEditModal('${field}', '${title}')">➕ 新增</button>
                         <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')">✨ AI 規劃</button>
                     </div>
                 </div>
@@ -1623,192 +1711,122 @@ function renderWorldviewSections() {
         }
         
         return `
-            <div class="worldview-section-card" data-section="${field}">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge ${badgeClass}">${icon}</span>
-                        ${title}
+            <div class="worldview-core-card" data-section="${field}">
+                <div class="core-card-header">
+                    <div class="core-card-title-row">
+                        <span class="core-card-badge ${badgeClass}">${icon}</span>
+                        <span class="core-card-title-text">${title}</span>
                     </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('${field}')" title="展開/收合">↕</button>
-                        <button onclick="enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
-                        <button onclick="openWorldviewTextSectionEditModal('${field}', '${title}', \`${value.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`)" title="編輯">✏️ 編輯</button>
-                        <button onclick="deleteWorldviewSection('${field}', '${title}')" title="清空">🗑️ 刪除</button>
+                    <div class="core-card-actions-row">
+                        <button class="btn btn-ai btn-xs" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃">✨ AI</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); openWorldviewTextSectionEditModal('${field}', '${title}')" title="編輯">✏️</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); deleteWorldviewSection('${field}', '${title}')" title="清空">🗑️</button>
                     </div>
                 </div>
-                <div class="worldview-section-content" id="content-${field}">
+                <div class="core-card-content" id="content-${field}">
                     ${value}
                 </div>
             </div>
         `;
     }
     
-    html += makeTextCard('theme', '🎯', '核心主題', js.theme, 'theme');
-    html += makeTextCard('main_conflict', '⚔️', '核心衝突', js.main_conflict, 'conflict');
-    html += makeTextCard('worldview', '🌍', '世界觀設定', js.worldview, 'setting');
-    html += makeTextCard('macro_outline', '📖', '整體故事大綱', js.macro_outline, 'outline');
-    
-    const hasThreeAct = js.three_act_structure.act1_setup || js.three_act_structure.act2_confrontation || js.three_act_structure.act3_resolution;
-    if (!hasThreeAct) {
-        html += `
-            <div class="worldview-section-card empty-state" data-section="three-act" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openThreeActEditModal(null)">
-                <span style="font-size: 1.5rem;">📐</span>
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">三幕式結構</span>
-                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增三幕</button>
-                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('three_act_structure', '三幕式結構')">✨ AI 規劃</button>
-                </div>
-            </div>
-        `;
-    } else {
-        html += `
-            <div class="worldview-section-card" data-section="three-act">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge structure">📐</span>
-                        三幕式結構
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
-                        <button onclick="enhanceWorldviewSectionWithAI('three_act_structure', '三幕式結構')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
-                        <button onclick="openThreeActEditModal(JSON.parse(\`${JSON.stringify(js.three_act_structure).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
-                        <button onclick="deleteWorldviewSection('three-act', '三幕式結構')" title="清空">🗑️ 刪除</button>
+    // 輔助函數：建立結構/清單區塊（用於 three_act, character_plan, turning_points, seeds）
+    function makeSectionCard(sectionId, icon, title, field, items, itemRenderer, emptyAction) {
+        const hasItems = Array.isArray(items) && items.length > 0 && items.some(item => item && (typeof item === 'string' ? item.trim() !== '' : (item.content || '').trim() !== ''));
+        
+        if (!hasItems) {
+            return `
+                <div class="worldview-section-card empty-state" data-section="${sectionId}" onclick="${emptyAction}">
+                    <div class="section-card-icon">${icon}</div>
+                    <div class="section-card-title">${title}</div>
+                    <div class="section-card-actions">
+                        <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); ${emptyAction}">➕ 新增</button>
+                        <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')">✨ AI 規劃</button>
                     </div>
                 </div>
-                <div class="worldview-section-content" id="content-three-act">
-                    <div style="margin-bottom: 6px;"><strong>第一幕 (Setup)：</strong>${js.three_act_structure.act1_setup || '（未設定）'}</div>
-                    <div style="margin-bottom: 6px;"><strong>第二幕 (Confrontation)：</strong>${js.three_act_structure.act2_confrontation || '（未設定）'}</div>
-                    <div><strong>第三幕 (Resolution)：</strong>${js.three_act_structure.act3_resolution || '（未設定）'}</div>
+            `;
+        }
+        
+        return `
+            <div class="worldview-section-card" data-section="${sectionId}">
+                <div class="section-card-header">
+                    <div class="section-card-title-row">
+                        <span class="section-card-badge">${icon}</span>
+                        <span class="section-card-title-text">${title}</span>
+                    </div>
+                    <div class="section-card-actions-row">
+                        <button class="btn btn-ai btn-xs" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃">✨ AI</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); ${emptyAction}" title="編輯">✏️</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); deleteWorldviewSection('${sectionId}', '${title}')" title="清空">🗑️</button>
+                    </div>
+                </div>
+                <div class="section-card-content" id="content-${sectionId}">
+                    ${items.map(itemRenderer).join('')}
                 </div>
             </div>
         `;
     }
     
-    const hasCharPlan = js.progressive_character_plan.wave_1_opening || js.progressive_character_plan.wave_2_development || js.progressive_character_plan.wave_3_climax;
-    if (!hasCharPlan) {
-        html += `
-            <div class="worldview-section-card empty-state" data-section="character-waves" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openCharacterPlanEditModal(null)">
-                <span style="font-size: 1.5rem;">👥</span>
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">角色漸進規劃策略</span>
-                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增規劃</button>
-                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('progressive_character_plan', '角色漸進規劃策略')">✨ AI 規劃</button>
-                </div>
-            </div>
-        `;
-    } else {
-        html += `
-            <div class="worldview-section-card" data-section="character-waves">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge waves">👥</span>
-                        角色漸進規劃策略
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('character-waves')" title="展開/收合">↕</button>
-                        <button onclick="enhanceWorldviewSectionWithAI('progressive_character_plan', '角色漸進規劃策略')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
-                        <button onclick="openCharacterPlanEditModal(JSON.parse(\`${JSON.stringify(js.progressive_character_plan).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
-                        <button onclick="deleteWorldviewSection('character-waves', '角色漸進規劃策略')" title="清空">🗑️ 刪除</button>
-                    </div>
-                </div>
-                <div class="worldview-section-content" id="content-character-waves">
-                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 6px;">
-                        <div class="wave-name" style="color: #67e8f9; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第一波開篇 (Wave 1)</div>
-                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_1_opening || '（未設定）'}</div>
-                    </div>
-                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 6px;">
-                        <div class="wave-name" style="color: #fdba74; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第二波發展 (Wave 2)</div>
-                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_2_development || '（未設定）'}</div>
-                    </div>
-                    <div class="wave-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px;">
-                        <div class="wave-name" style="color: #f9a8d4; font-weight: 600; font-size: 0.75rem; margin-bottom: 2px;">第三波高潮 (Wave 3)</div>
-                        <div class="wave-content" style="font-size: 0.8rem;">${js.progressive_character_plan.wave_3_climax || '（未設定）'}</div>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
+    // ========== 核心設定區（2x2 網格） ==========
+    let coreHtml = `<div class="worldview-core-grid">`;
+    coreHtml += makeCoreCard('theme', '🎯', '核心主題', js.theme, 'theme');
+    coreHtml += makeCoreCard('main_conflict', '⚔️', '核心衝突', js.main_conflict, 'conflict');
+    coreHtml += makeCoreCard('worldview', '🌍', '世界觀設定', js.worldview, 'setting');
+    coreHtml += makeCoreCard('macro_outline', '📖', '整體故事大綱', js.macro_outline, 'outline');
+    coreHtml += `</div>`;
     
-    const hasTurningPoints = js.key_turning_points && js.key_turning_points.length > 0;
-    if (!hasTurningPoints) {
-        html += `
-            <div class="worldview-section-card empty-state" data-section="turning-points" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewListEditModal('key_turning_points', '關鍵轉折點', [])">
-                <span style="font-size: 1.5rem;">🔄</span>
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">關鍵轉折點</span>
-                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增轉折</button>
-                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('key_turning_points', '關鍵轉折點')">✨ AI 規劃</button>
-                </div>
-            </div>
-        `;
-    } else {
-        html += `
-            <div class="worldview-section-card" data-section="turning-points">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge turning">🔄</span>
-                        關鍵轉折點
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('turning-points')" title="展開/收合">↕</button>
-                        <button onclick="enhanceWorldviewSectionWithAI('key_turning_points', '關鍵轉折點')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
-                        <button onclick="openWorldviewListEditModal('key_turning_points', '關鍵轉折點', JSON.parse(\`${JSON.stringify(js.key_turning_points).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
-                        <button onclick="deleteWorldviewSection('turning-points', '關鍵轉折點')" title="清空">🗑️ 刪除</button>
-                    </div>
-                </div>
-                <div class="worldview-section-content" id="content-turning-points" style="display: flex; flex-direction: column; gap: 6px;">
-                    ${js.key_turning_points.map((point, idx) => `
-                        <div class="turning-point-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px;">
-                            <div class="turning-point-header" style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">
-                                <span class="turning-point-index" style="font-weight: 600; color: #fdba74;">轉折點 #${idx + 1}</span>
-                            </div>
-                            <div class="turning-point-content" style="font-size: 0.8rem; color: var(--text-secondary);">${point}</div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    }
+    // ========== 結構規劃區（並排） ==========
+    const threeActItems = js.three_act_structure || [];
+    const threeActRenderer = (item, idx) => `
+        <div class="structure-item">
+            <div class="structure-item-title">${item.title || `項目 #${idx + 1}`}</div>
+            <div class="structure-item-content">${item.content || '（未設定）'}</div>
+        </div>
+    `;
     
-    const hasSeeds = js.foreshadowing_seeds && js.foreshadowing_seeds.length > 0;
-    if (!hasSeeds) {
-        html += `
-            <div class="worldview-section-card empty-state" data-section="seeds" style="border: 2px dashed var(--border-color); opacity: 0.7; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 24px; text-align: center; gap: 8px; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border-color)'" onclick="openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', [])">
-                <span style="font-size: 1.5rem;">🌱</span>
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">伏筆種子</span>
-                <div style="display: flex; gap: 8px; margin-top: 4px;">
-                    <button class="btn btn-xs btn-outline-primary" style="pointer-events: none;">➕ 新增伏筆</button>
-                    <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('foreshadowing_seeds', '伏筆種子')">✨ AI 規劃</button>
-                </div>
-            </div>
-        `;
-    } else {
-        html += `
-            <div class="worldview-section-card" data-section="seeds">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge seeds">🌱</span>
-                        伏筆種子
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('seeds')" title="展開/收合">↕</button>
-                        <button onclick="enhanceWorldviewSectionWithAI('foreshadowing_seeds', '伏筆種子')" title="✨ AI 規劃" class="btn btn-ai btn-xs" style="margin-left: 6px; padding: 2px 6px;">✨ AI 規劃</button>
-                        <button onclick="openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', JSON.parse(\`${JSON.stringify(js.foreshadowing_seeds).replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`))" title="編輯">✏️ 編輯</button>
-                        <button onclick="deleteWorldviewSection('seeds', '伏筆種子')" title="清空">🗑️ 刪除</button>
-                    </div>
-                </div>
-                <div class="worldview-section-content" id="content-seeds" style="display: flex; flex-direction: column; gap: 6px;">
-                    ${js.foreshadowing_seeds.map((seed, idx) => `
-                        <div class="seed-item" style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px; font-size: 0.8rem; color: var(--text-secondary);">
-                            <span style="font-weight: 600; color: #f9a8d4; margin-right: 6px;">🌱 伏筆 #${idx + 1}:</span> ${seed}
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    }
+    const charPlanItems = js.progressive_character_plan || [];
+    const charPlanRenderer = (item, idx) => `
+        <div class="structure-item">
+            <div class="structure-item-title">${item.title || `階段 #${idx + 1}`}</div>
+            <div class="structure-item-content">${item.content || '（未設定）'}</div>
+        </div>
+    `;
     
-    container.innerHTML = `<div class="worldview-sections" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">${html}</div>`;
+    let structureHtml = `<div class="worldview-structure-row">`;
+    structureHtml += makeSectionCard('three-act', '📐', '三幕式結構', 'three_act_structure', threeActItems, threeActRenderer, "openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕')");
+    structureHtml += makeSectionCard('character-waves', '👥', '角色漸進規劃策略', 'progressive_character_plan', charPlanItems, charPlanRenderer, "openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波')");
+    structureHtml += `</div>`;
+    
+    // ========== 細節清單區（全寬列表） ==========
+    const turningPointsItems = js.key_turning_points || [];
+    const turningPointsRenderer = (item, idx) => `
+        <div class="detail-list-item">
+            <span class="detail-list-index">#${idx + 1}</span>
+            <span class="detail-list-content">${item}</span>
+        </div>
+    `;
+    
+    const seedsItems = js.foreshadowing_seeds || [];
+    const seedsRenderer = (item, idx) => `
+        <div class="detail-list-item">
+            <span class="detail-list-index seed">🌱</span>
+            <span class="detail-list-content">${item}</span>
+        </div>
+    `;
+    
+    let detailsHtml = `<div class="worldview-details-row">`;
+    detailsHtml += makeSectionCard('turning-points', '🔄', '關鍵轉折點', 'key_turning_points', turningPointsItems, turningPointsRenderer, "openWorldviewListEditModal('key_turning_points', '關鍵轉折點')");
+    detailsHtml += makeSectionCard('seeds', '🌱', '伏筆種子', 'foreshadowing_seeds', seedsItems, seedsRenderer, "openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子')");
+    detailsHtml += `</div>`;
+    
+    // ========== 組合所有區塊 ==========
+    container.innerHTML = `
+        <div class="worldview-layout-container">
+            ${coreHtml}
+            ${structureHtml}
+            ${detailsHtml}
+        </div>
+    `;
 }
 
 async function deleteWorldviewSection(sectionId, title) {
@@ -1823,12 +1841,8 @@ async function deleteWorldviewSection(sectionId, title) {
     else if (sectionId === 'main_conflict') js.main_conflict = '';
     else if (sectionId === 'worldview') js.worldview = '';
     else if (sectionId === 'macro_outline') js.macro_outline = '';
-    else if (sectionId === 'three-act') {
-        js.three_act_structure = { act1_setup: '', act2_confrontation: '', act3_resolution: '' };
-    }
-    else if (sectionId === 'character-waves') {
-        js.progressive_character_plan = { wave_1_opening: '', wave_2_development: '', wave_3_climax: '' };
-    }
+    else if (sectionId === 'three-act') js.three_act_structure = [];
+    else if (sectionId === 'character-waves') js.progressive_character_plan = [];
     else if (sectionId === 'turning-points') js.key_turning_points = [];
     else if (sectionId === 'seeds') js.foreshadowing_seeds = [];
     
@@ -1837,16 +1851,14 @@ async function deleteWorldviewSection(sectionId, title) {
 }
 
 function addWorldviewSection(sectionType) {
-    const worldviewText = state.currentNovelData?.worldbuilding || '';
-    const js = parseWorldviewJSON(worldviewText);
-    if (sectionType === 'core-theme') openWorldviewTextSectionEditModal('theme', '核心主題', js.theme);
-    else if (sectionType === 'core-conflict') openWorldviewTextSectionEditModal('main_conflict', '核心衝突', js.main_conflict);
-    else if (sectionType === 'world-setting') openWorldviewTextSectionEditModal('worldview', '世界觀設定', js.worldview);
-    else if (sectionType === 'overall-outline') openWorldviewTextSectionEditModal('macro_outline', '整體故事大綱', js.macro_outline);
-    else if (sectionType === 'three-act') openThreeActEditModal(js.three_act_structure);
-    else if (sectionType === 'character-waves') openCharacterPlanEditModal(js.progressive_character_plan);
-    else if (sectionType === 'turning-points') openWorldviewListEditModal('key_turning_points', '關鍵轉折點', js.key_turning_points);
-    else if (sectionType === 'seeds') openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子', js.foreshadowing_seeds);
+    if (sectionType === 'core-theme') openWorldviewTextSectionEditModal('theme', '核心主題');
+    else if (sectionType === 'core-conflict') openWorldviewTextSectionEditModal('main_conflict', '核心衝突');
+    else if (sectionType === 'world-setting') openWorldviewTextSectionEditModal('worldview', '世界觀設定');
+    else if (sectionType === 'overall-outline') openWorldviewTextSectionEditModal('macro_outline', '整體故事大綱');
+    else if (sectionType === 'three-act') openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕');
+    else if (sectionType === 'character-waves') openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波');
+    else if (sectionType === 'turning-points') openWorldviewListEditModal('key_turning_points', '關鍵轉折點');
+    else if (sectionType === 'seeds') openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子');
     else showToast('不支援新增此類型');
 }
 
@@ -2201,6 +2213,234 @@ function closeSeedModal() {
         editIndex: -1,
         originalText: ''
     };
+}
+
+// ==========================================
+// STRATEGY CARD VIEW TOGGLE (策略卡片視圖切換)
+// 三幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
+// ==========================================
+
+/**
+ * 切換策略卡片顯示模式
+ * @param {string} viewMode - 'all' | '<' | '>'
+ *   all: 全部展開顯示（預設）
+ *   <:  向左切換（向前一張卡片）
+ *   >:  向右切換（向後一張卡片）
+ */
+function setStrategyCardView(viewMode) {
+    const container = document.getElementById('worldview-sections-container');
+    if (!container) return;
+
+    const strategyCards = container.querySelectorAll('.worldview-section-card[data-section]');
+    if (strategyCards.length === 0) return;
+
+    // 過濾出四個策略卡片
+    const strategies = ['three-act', 'character-waves', 'turning-points', 'seeds'];
+    const strategyCardsArray = [];
+    strategies.forEach(id => {
+        const card = container.querySelector(`.worldview-section-card[data-section="${id}"]`);
+        if (card) strategyCardsArray.push(card);
+    });
+
+    const total = strategyCardsArray.length;
+    if (total === 0) return;
+
+    // 更新按鈕狀態
+    const toggleBtns = document.querySelectorAll('.view-toggle-btn');
+    toggleBtns.forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.view === viewMode) {
+            btn.classList.add('active');
+        }
+    });
+
+    if (viewMode === 'all') {
+        // 全部展開 - 顯示所有策略卡片
+        state.strategyCardView = 'all';
+        strategyCards.forEach(card => {
+            card.style.display = 'flex';
+            card.classList.remove('collapsed');
+            card.classList.add('expanded');
+        });
+    } else if (viewMode === '<') {
+        // 向左切換 - 顯示上一張卡片
+        state.currentCardIndex = (state.currentCardIndex - 1 + total) % total;
+        applySingleCardView(strategyCardsArray, state.currentCardIndex);
+    } else if (viewMode === '>') {
+        // 向右切換 - 顯示下一張卡片
+        state.currentCardIndex = (state.currentCardIndex + 1) % total;
+        applySingleCardView(strategyCardsArray, state.currentCardIndex);
+    }
+}
+
+/**
+ * 應用單張卡片顯示模式
+ * 其他卡片隱藏，只顯示指定的卡片
+ */
+function applySingleCardView(cards, activeIndex) {
+    state.strategyCardView = 'single';
+    cards.forEach((card, index) => {
+        if (index === activeIndex) {
+            card.style.display = 'flex';
+            card.classList.remove('collapsed');
+            card.classList.add('expanded');
+            // 滾動到視圖
+            card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else {
+            card.style.display = 'none';
+            card.classList.remove('expanded');
+            card.classList.add('collapsed');
+        }
+    });
+}
+
+// ==========================================
+// MARKDOWN 渲染支援
+// ==========================================
+
+/**
+ * 將 Markdown 語法渲染為 HTML
+ * 支援：標題、粗體、斜體、清單、引用、分隔線、連結
+ * @param {string} text - 原始 Markdown 文字
+ * @returns {string} 渲染後的 HTML
+ */
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    let html = text
+        // 轉義 HTML 特殊字元
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>');
+
+    // 標題 (h1-h3)
+    html = html.replace(/^#{3}\s*(.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^#{2}\s*(.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^#{1}\s*(.+)$/gm, '<h3>$1</h3>');
+
+    // 粗體與斜體
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // 刪除線
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+    // 連結 [文字](網址)
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    // 圖片 ![替代文字](網址)
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%; height:auto; border-radius:8px;">');
+
+    // 引用區塊
+    html = html.replace(/^>\s*(.+)$/gm, '<blockquote style="border-left:3px solid var(--primary); padding-left:12px; margin:8px 0; color:var(--text-secondary); font-style:italic;">$1</blockquote>');
+
+    // 分隔線
+    html = html.replace(/^[\s]*-{3,}[\s]*$/gm, '<hr style="border:none; border-top:1px solid var(--border-color); margin:16px 0;">');
+    html = html.replace(/^[\s]*\*{3,}[\s]*$/gm, '<hr style="border:none; border-top:1px solid var(--border-color); margin:16px 0;">');
+
+    // 無序清單
+    const lines = html.split('\n');
+    let inList = false;
+    let result = [];
+    for (const line of lines) {
+        const match = line.match(/^(\s*)[-*•]\s+(.+)$/);
+        if (match) {
+            if (!inList) {
+                result.push('<ul style="list-style:none; padding:0; margin:8px 0;">');
+                inList = true;
+            }
+            result.push(`<li style="padding:4px 0; padding-left:20px; position:relative;"><span style="position:absolute; left:0; color:var(--primary);">•</span>${match[2]}</li>`);
+        } else if (inList && line.trim() === '') {
+            result.push('</ul>');
+            inList = false;
+            result.push(line);
+        } else {
+            if (inList) {
+                result.push('</ul>');
+                inList = false;
+            }
+            result.push(line);
+        }
+    }
+    if (inList) result.push('</ul>');
+
+    // 有序清單
+    html = result.join('\n');
+    let inOrderedList = false;
+    const orderedLines = [];
+    for (const line of html.split('\n')) {
+        const match = line.match(/^(\s*)\d+\.(\s+.+)$/);
+        if (match) {
+            if (!inOrderedList) {
+                orderedLines.push('<ol style="list-style:none; padding:0; margin:8px 0; counter-reset:item;">');
+                inOrderedList = true;
+            }
+            orderedLines.push(`<li style="padding:4px 0; padding-left:28px; position:relative; counter-increment:item;"><span style="position:absolute; left:0; color:var(--primary); font-weight:600; font-size:0.85rem;">${match[0].match(/^\s*(\d+)\./)[1]}.</span>${match[2].trim()}</li>`);
+        } else if (inOrderedList && line.trim() === '') {
+            orderedLines.push('</ol>');
+            inOrderedList = false;
+            orderedLines.push(line);
+        } else {
+            if (inOrderedList) {
+                orderedLines.push('</ol>');
+                inOrderedList = false;
+            }
+            orderedLines.push(line);
+        }
+    }
+    if (inOrderedList) orderedLines.push('</ol>');
+    html = orderedLines.join('\n');
+
+    // 內聯程式碼
+    html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary); padding:2px 6px; border-radius:4px; font-family:\'SFMono-Regular\', Consolas, monospace; font-size:0.85em; color:var(--primary);">$1</code>');
+
+    // 程式碼區塊
+    html = html.replace(/```([\s\S]*?)```/g, '<pre style="background:var(--bg-tertiary); padding:12px; border-radius:8px; border:1px solid var(--border-color); overflow-x:auto; font-family:\'SFMono-Regular\', Consolas, monospace; font-size:0.85rem; line-height:1.6; margin:8px 0;"><code>$1</code></pre>');
+
+    // 自動換行處理段落
+    const paragraphLines = html.split('\n').map(line => {
+        line = line.trim();
+        if (!line) return '';
+        // 如果已經是 HTML 標籤，不包裝
+        if (line.startsWith('<') && (line.endsWith('>') || line.includes('</'))) return line;
+        return `<p style="margin:4px 0; line-height:1.6;">${line}</p>`;
+    });
+
+    return paragraphLines.join('\n');
+}
+
+/**
+ * 為指定的元素內容器渲染 Markdown 內容
+ * @param {string} elementId - 目標元素的 ID
+ * @param {string} markdownText - Markdown 原始文字
+ */
+function setMarkdownContent(elementId, markdownText) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.innerHTML = renderMarkdown(markdownText);
+    }
+}
+
+// ==========================================
+// 其他單個項目的高度與滾動設定
+// ==========================================
+
+/**
+ * 設定單一卡片為可滾動的固定高度
+ * @param {string} cardSelector - CSS 選擇器
+ * @param {number} maxHeight - 最大高度 (px)，預設 400
+ */
+function setupScrollableCard(cardSelector, maxHeight = 400) {
+    const cards = document.querySelectorAll(cardSelector);
+    cards.forEach(card => {
+        card.style.maxHeight = `${maxHeight}px`;
+        card.style.overflowY = 'auto';
+        card.style.overflowX = 'hidden';
+        // 自定義滾動條樣式
+        card.style.scrollbarWidth = 'thin';
+        card.style.scrollbarColor = 'var(--border-color) transparent';
+    });
 }
 
 /**
@@ -3138,8 +3378,9 @@ function renderWriterTab() {
         const li = document.createElement('li');
         li.dataset.index = ch.chapter_index;
         
-        // check if this chapter is written
-        const isWritten = writtenChapters.some(c => c.chapter_index === ch.chapter_index);
+        // check if this chapter has non-empty saved content
+        const chapterSaved = writtenChapters.find(c => c.chapter_index === ch.chapter_index);
+        const isWritten = chapterSaved && chapterSaved.content && chapterSaved.content.trim().length > 0;
         const statusText = isWritten ? '已寫作' : '草稿';
         const statusClass = isWritten ? 'status-written' : 'status-draft';
         
@@ -3193,9 +3434,23 @@ function selectWriterChapter(chapterIndex) {
     
     if (chapterOutline) {
         el.activeChapterTitle.textContent = `第 ${chapterOutline.chapter_index} 章：${chapterOutline.title}`;
+        const eventsHtml = (chapterOutline.events || []).map(e => {
+            if (typeof e === 'string') {
+                return `• ${e}`;
+            }
+            if (e && typeof e === 'object') {
+                const parts = [];
+                if (e.scene) parts.push(e.scene);
+                if (e.action) parts.push(e.action);
+                if (e.consequence) parts.push(`後果：${e.consequence}`);
+                if (!parts.length && e.description) parts.push(e.description);
+                return `• ${parts.filter(Boolean).join(' / ') || JSON.stringify(e)}`;
+            }
+            return `• ${String(e)}`;
+        }).join('<br>');
         el.chapterOutlineSummaryText.innerHTML = `
-            <strong>本章目的：</strong>${chapterOutline.purpose}<br>
-            <strong>情節事件：</strong><br>${(chapterOutline.events || []).map(e => `• ${e}`).join('<br>')}
+            <strong>本章目的：</strong>${chapterOutline.purpose || '未提供'}<br>
+            <strong>情節事件：</strong><br>${eventsHtml || '（尚無事件詳述）'}
         `;
     }
     
@@ -3203,12 +3458,12 @@ function selectWriterChapter(chapterIndex) {
     const writtenChapters = state.currentNovelData.chapters || [];
     const chapterProse = writtenChapters.find(c => c.chapter_index === state.activeChapterIndex);
     
-    if (chapterProse) {
+    if (chapterProse && chapterProse.content && chapterProse.content.trim().length > 0) {
         el.editorProse.value = chapterProse.content;
         el.activeChapterStatus.className = 'status-pill status-written';
         el.activeChapterStatus.textContent = '已寫作';
     } else {
-        el.editorProse.value = '';
+        el.editorProse.value = chapterProse ? chapterProse.content || '' : '';
         el.activeChapterStatus.className = 'status-pill status-draft';
         el.activeChapterStatus.textContent = '草稿';
     }
@@ -4442,10 +4697,11 @@ function handleDrawerPromptSubmit() {
     if (state.activeDrawerAction === 'pipeline_orchestration') {
         // 保存用戶的創作需求到 pipeline prompt
         savePipelinePrompt(userPrompt).catch(() => {});
-        // 設為一鍵執行模式並啟動統一管道
-        state.isAutoExecuteMode = true;
+        // 保持目前執行模式，不要在啟動管道時強制切換
         const toggle = document.getElementById('toggle-auto-execute');
-        if (toggle) toggle.checked = true;
+        if (toggle) {
+            state.isAutoExecuteMode = toggle.checked;
+        }
         runPipeline();
     }
     
@@ -4759,6 +5015,9 @@ function setupEventListeners() {
             el.editorProse,
             async () => {
                 showToast(`第 ${state.activeChapterIndex} 章正文撰寫完畢`);
+                if (el.editorProse.value.trim().length > 0) {
+                    await saveProseDirect();
+                }
                 await loadNovelDetails(state.currentNovelId);
             }
         );
@@ -4940,6 +5199,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     
     // 3. Setup execution mode toggle
     setupExecutionModeToggle();
+    setupStreamLogToggle();
     
     // 4. 初始化伏筆 Modal 事件
     initSeedModalEvents();
@@ -5377,3 +5637,19 @@ window.askContentAction = async function(stageName, callback) {
     
     callback(choice || 'skip');
 };
+
+// Global exports of worldview and modal handlers to prevent ReferenceError in inline onclick handlers
+window.openWorldviewTextSectionEditModal = openWorldviewTextSectionEditModal;
+window.openWorldviewComplexListEditModal = openWorldviewComplexListEditModal;
+window.openWorldviewListEditModal = openWorldviewListEditModal;
+window.deleteWorldviewSection = deleteWorldviewSection;
+window.addWorldviewSection = addWorldviewSection;
+window.toggleSectionExpand = toggleSectionExpand;
+window.closeSeedModal = closeSeedModal;
+window.closeCustomDialog = closeCustomDialog;
+window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallback
+
+// Export strategy card view toggle functions for inline onclick handlers
+window.setStrategyCardView = setStrategyCardView;
+window.applySingleCardView = applySingleCardView;
+

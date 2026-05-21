@@ -169,26 +169,9 @@ def db_init():
     )
     """)
     
-    # Pre-populate default agent configurations from AGENT_DEFAULTS
-    default_agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
-    for agent in default_agents:
-        cursor.execute("SELECT 1 FROM agent_configs WHERE agent_name = ?", (agent,))
-        if not cursor.fetchone():
-            defaults = AGENT_DEFAULTS.get(agent, AGENT_DEFAULTS["global"])
-            cursor.execute("""
-            INSERT INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                agent,
-                "", # Let the user enter their API key in UI
-                "https://integrate.api.nvidia.com/v1",
-                defaults["model"],
-                defaults["temperature"],
-                defaults["top_p"],
-                defaults["max_tokens"],
-                defaults["enable_thinking"]
-            ))
-            
+    # Clean up empty configurations to let .env configuration take priority
+    cursor.execute("DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL")
+    
     conn.commit()
     conn.close()
 

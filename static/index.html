@@ -62,6 +62,16 @@
                     </div>
                     
                     <div class="header-actions" id="novel-header-actions" style="display: none; gap: 8px;">
+                        <!-- 顯示即時日誌開關 -->
+                        <div class="execution-mode-toggle" title="顯示或隱藏 AI 即時生成日誌主控台">
+                            <span class="mode-label">隱藏日誌</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-stream-log" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="mode-label mode-auto">顯示即時日誌</span>
+                        </div>
+
                         <!-- 執行模式切換開關 -->
                         <div class="execution-mode-toggle" title="一鍵執行模式：總監建議即為執行令 | 一般模式：總監提供建議由用戶決定">
                             <span class="mode-label">一般模式</span>
@@ -159,11 +169,21 @@
                             <div class="sidebar-label">
                                 <span>🌍 【全景世界觀設定】</span>
                             </div>
-                            <div class="seeds-actions-bar" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                            <div class="seeds-actions-bar" style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
                                 <button id="btn-seed-add" class="btn btn-secondary btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">➕ 新增伏筆</button>
                                 <button id="btn-seed-ai-generate" class="btn btn-ai btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">✨ AI 規劃</button>
+                                <div style="flex: 1;"></div>
+                                <div class="strategy-card-view-toggle" style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="prev" onclick="setStrategyCardView('<')" style="padding: 4px 8px; font-size: 0.75rem;">‹</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: 0.75rem;">📐 三幕式</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="character-waves" onclick="jumpToStrategyCard(1)" style="padding: 4px 8px; font-size: 0.75rem;">👥 角色</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="turning-points" onclick="jumpToStrategyCard(2)" style="padding: 4px 8px; font-size: 0.75rem;">🔄 轉折</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="seeds" onclick="jumpToStrategyCard(3)" style="padding: 4px 8px; font-size: 0.75rem;">🌱 伏筆</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn active" data-view="all" onclick="setStrategyCardView('all')" style="padding: 4px 10px; font-size: 0.75rem;">全部</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="next" onclick="setStrategyCardView('>')" style="padding: 4px 8px; font-size: 0.75rem;">›</button>
+                                </div>
                             </div>
-                            <div id="worldview-sections-container" class="worldview-sections" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;">
+                            <div id="worldview-sections-container" class="worldview-sections strategy-cards-container" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;">
                                 <!-- Dynamic worldview sections here -->
                                 <div class="empty-placeholder">尚無世界觀內容。請在左側編輯器中輸入，或點擊「AI 自動規劃世界觀」生成。</div>
                             </div>

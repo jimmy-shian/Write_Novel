@@ -32,6 +32,7 @@ from db import (
     update_character_single_field,
     parse_worldview_to_json
 )
+
 from agents import (
     run_story_architect,
     run_character_designer,
@@ -52,6 +53,8 @@ from agents_incremental import (
 )
 from llm import get_config_for_agent, get_default_config
 from db import AGENT_DEFAULTS
+
+
 
 # Agent friendly names for frontend display
 AGENT_DISPLAY_NAMES = {
@@ -263,23 +266,19 @@ def api_agent_copilot_chat(novel_id: str = Body(...), user_message: str = Body(.
         media_type="text/event-stream"
     )
 
-# --- SETTINGS PANEL ROUTES ---
 @app.get("/api/settings")
 def api_get_settings():
     """
-    Returns agent configurations merged with .env defaults.
-    Priority: Database saved values > .env defaults
+    Returns agent configurations loaded strictly from .env.
     """
-    db_configs = get_agent_configs()
     defaults = get_default_config()
     all_agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
     
     merged = {}
     for agent in all_agents:
-        # Get config from llm.py (which handles .env defaults)
+        # Get config from robust function (strictly from .env/defaults)
         llm_config = get_config_for_agent(agent)
         
-        # Start with llm.py defaults (already includes .env)
         merged[agent] = {
             "api_key": llm_config.get("api_key", ""),
             "base_url": llm_config.get("base_url", defaults["base_url"]),
@@ -290,12 +289,6 @@ def api_get_settings():
             "enable_thinking": llm_config.get("enable_thinking", defaults["enable_thinking"]),
             "display_name": AGENT_DISPLAY_NAMES.get(agent, agent)
         }
-        
-        # Override with database values if they exist and are not empty
-        db_agent = db_configs.get(agent, {})
-        for key in merged[agent]:
-            if key in db_agent and db_agent[key] not in [None, ""]:
-                merged[agent][key] = db_agent[key]
     
     return merged
 
@@ -379,17 +372,27 @@ def api_export_novel(novel_id: str, format: str = "txt"):
                     content += f"### 🌍 世界觀設定\n{js.get('worldview', '')}\n\n"
                     content += f"### 📋 整體故事大綱\n{js.get('macro_outline', '')}\n\n"
                     
-                    three_act = js.get("three_act_structure", {})
+                    three_act = js.get("three_act_structure", [])
                     content += f"### 🎬 三幕式結構\n"
-                    content += f"- **第一幕（Setup）**: {three_act.get('act1_setup', '')}\n"
-                    content += f"- **第二幕（Confrontation）**: {three_act.get('act2_confrontation', '')}\n"
-                    content += f"- **第三幕（Resolution）**: {three_act.get('act3_resolution', '')}\n\n"
+                    if isinstance(three_act, list):
+                        for item in three_act:
+                            content += f"- **{item.get('title', '')}**: {item.get('content', '')}\n"
+                    elif isinstance(three_act, dict):
+                        content += f"- **第一幕（Setup）**: {three_act.get('act1_setup', '')}\n"
+                        content += f"- **第二幕（Confrontation）**: {three_act.get('act2_confrontation', '')}\n"
+                        content += f"- **第三幕（Resolution）**: {three_act.get('act3_resolution', '')}\n"
+                    content += "\n"
                     
-                    char_plan = js.get("progressive_character_plan", {})
+                    char_plan = js.get("progressive_character_plan", [])
                     content += f"### 📈 角色漸進規劃策略\n"
-                    content += f"- **第一波開篇**: {char_plan.get('wave_1_opening', '')}\n"
-                    content += f"- **第二波發展**: {char_plan.get('wave_2_development', '')}\n"
-                    content += f"- **第三波高潮**: {char_plan.get('wave_3_climax', '')}\n\n"
+                    if isinstance(char_plan, list):
+                        for item in char_plan:
+                            content += f"- **{item.get('title', '')}**: {item.get('content', '')}\n"
+                    elif isinstance(char_plan, dict):
+                        content += f"- **第一波開篇**: {char_plan.get('wave_1_opening', '')}\n"
+                        content += f"- **第二波發展**: {char_plan.get('wave_2_development', '')}\n"
+                        content += f"- **第三波高潮**: {char_plan.get('wave_3_climax', '')}\n"
+                    content += "\n"
                     
                     seeds = js.get("foreshadowing_seeds", [])
                     content += f"### 🔑 伏筆種子\n"

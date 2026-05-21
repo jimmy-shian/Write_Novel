@@ -619,7 +619,14 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
         return error_gen()
         
     context = compile_context(novel_id)
-    
+    plot_json = parse_json_safely(context['plot'])
+    current_chapter_outline = None
+    if "chapters" in plot_json:
+        for ch in plot_json["chapters"]:
+            if ch.get("chapter_index") == int(chapter_index):
+                current_chapter_outline = ch
+                break
+
     prompt_content = f"""【世界觀設定】
 {context['worldbuilding']}
 
@@ -629,6 +636,8 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
 【第 {chapter_index} 章 原始正文】
 {ch_data['content']}
 """
+    if current_chapter_outline:
+        prompt_content += f"\n\n【第 {chapter_index} 章大綱】\n{json.dumps(current_chapter_outline, ensure_ascii=False, indent=2)}\n"
     if edit_instructions:
         prompt_content += f"\n【用戶編輯指示】\n{edit_instructions}\n"
         
