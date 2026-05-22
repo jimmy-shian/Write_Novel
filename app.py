@@ -198,15 +198,37 @@ def api_get_pipeline_prompt(novel_id: str):
 
 # --- DIRECTOR PIPELINE STAGES ENDPOINT ---
 @app.post("/api/novels/{novel_id}/director-decision")
-def api_director_decision(novel_id: str, current_stage: str = Body(...), user_prompt: str = Body(...)):
+def api_director_decision(
+    novel_id: str,
+    current_stage: str = Body(...),
+    user_prompt: Optional[str] = Body(None),
+):
     """
     The Director (Copilot) evaluates whether to proceed to the next stage.
     Returns a decision with reasoning about whether to continue, skip, or adjust.
     """
-    if not get_novel(novel_id):
+    novel = get_novel(novel_id)
+    if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
+
+    # Single Source of Truth：若 request 沒帶/帶空字串，回退使用 DB 的 pipeline_prompt
+    effective_prompt = (user_prompt or "").strip()
+    if not effective_prompt:
+        effective_prompt = (novel.get("pipeline_prompt") or "").strip()
+
+    # 若兩者皆無，直接 fail-fast（避免 Director 與下游 agent 各用各的 fallback）
+    if not effective_prompt:
+        def error_gen():
+            yield "data: " + json.dumps({
+                "type": "error",
+                "message": "缺少創作需求（pipeline prompt）。請先在「一鍵生成全書」輸入你的創作需求。"
+            }, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
+        return StreamingResponse(error_gen(), media_type="text/event-stream")
+
     return StreamingResponse(
-        run_director_decision(novel_id, current_stage, user_prompt),
+        run_director_decision(novel_id, current_stage, effective_prompt),
         media_type="text/event-stream"
     )
 
