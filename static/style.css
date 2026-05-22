@@ -578,7 +578,16 @@ aside {
 }
 
 .worldview-layout {
-    grid-template-columns: 2fr 1fr;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .editor-main {
@@ -748,7 +757,7 @@ aside {
     flex-direction: column;
     gap: 10px;
     height: 220px;
-    overflow: hidden;
+    box-sizing: border-box;
 }
 
 .worldview-core-card:hover {
@@ -807,7 +816,7 @@ aside {
     font-size: var(--font-sm-plus);
     line-height: 1.6;
     color: var(--text-secondary);
-    white-space: pre-wrap;
+    white-space: normal;
     overflow-wrap: break-word;
     flex: 1;
     overflow-y: auto;
@@ -851,29 +860,35 @@ aside {
     justify-content: center;
 }
 
-/* Section Cards (three-act, character-waves, turning-points, seeds) */
+/* Section Cards (theme, main_conflict, worldview, macro_outline, three-act, character-waves, seeds, turning-points) */
 .worldview-section-card {
-    background: var(--bg-secondary);
+    background: var(--surface);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 14px;
+    padding: 18px;
     box-shadow: var(--shadow-sm);
-    transition: all 0.2s ease;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
+    height: auto; /* Allow auto height, custom heights applied below */
+    box-sizing: border-box;
+    position: relative;
 }
 
 .worldview-section-card:hover {
-    border-color: var(--primary);
-    box-shadow: var(--shadow-md);
+    border-color: rgba(0, 113, 227, 0.4);
+    box-shadow: var(--shadow-md), 0 8px 24px rgba(0, 113, 227, 0.06);
+    transform: translateY(-2px);
 }
 
 .worldview-section-card.empty-state {
     align-items: center;
     justify-content: center;
     text-align: center;
-    min-height: 120px;
+    height: 400px; /* fixed height! */
     cursor: pointer;
     border-style: dashed;
 }
@@ -1034,50 +1049,41 @@ aside {
 .worldview-section-badge {
     font-size: var(--font-sm-plus);
     font-weight: 600;
-    padding: 2px 8px;
+    padding: 4px 10px;
     border-radius: 20px;
-    background: var(--primary-glow);
-    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.worldview-section-badge.theme {
-    background: rgba(139, 92, 246, 0.15);
-    color: #a78bfa;
+.worldview-section-badge.badge-primary {
+    background: rgba(139, 92, 246, 0.15) !important;
+    color: #a78bfa !important;
 }
 
-.worldview-section-badge.conflict {
-    background: rgba(239, 68, 68, 0.15);
-    color: #fca5a5;
+.worldview-section-badge.badge-danger {
+    background: rgba(239, 68, 68, 0.15) !important;
+    color: #fca5a5 !important;
 }
 
-.worldview-section-badge.setting {
-    background: rgba(34, 197, 94, 0.15);
-    color: #86efac;
+.worldview-section-badge.badge-success {
+    background: rgba(34, 197, 94, 0.15) !important;
+    color: #86efac !important;
 }
 
-.worldview-section-badge.structure {
-    background: rgba(59, 130, 246, 0.15);
-    color: #93c5fd;
+.worldview-section-badge.badge-info {
+    background: rgba(6, 182, 212, 0.15) !important;
+    color: #67e8f9 !important;
 }
 
-.worldview-section-badge.outline {
-    background: rgba(251, 191, 36, 0.15);
-    color: #fcd34d;
+.worldview-section-badge.badge-warning {
+    background: rgba(251, 191, 36, 0.15) !important;
+    color: #fcd34d !important;
 }
 
-.worldview-section-badge.seeds {
-    background: rgba(236, 72, 153, 0.15);
-    color: #f9a8d4;
-}
-
-.worldview-section-badge.waves {
-    background: rgba(6, 182, 212, 0.15);
-    color: #67e8f9;
-}
-
-.worldview-section-badge.turning {
-    background: rgba(249, 115, 22, 0.15);
-    color: #fdba74;
+.worldview-section-badge.badge-purple {
+    background: rgba(168, 85, 247, 0.15) !important;
+    color: #c084fc !important;
 }
 
 .worldview-section-actions {
@@ -2249,159 +2255,781 @@ textarea:focus {
 }
 
 /* ==========================================
-   STRATEGY CARD VIEW TOGGLE (三幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子)
+   STRATEGY CARD VIEW TOGGLE & MODERN UI SYSTEM
    ========================================== */
 
-/* Container for strategy cards - supports scrolling */
-.strategy-cards-container {
-    max-height: calc(100vh - 280px);
-    overflow-y: auto;
-    padding-right: 4px;
+/* Strategy Container Modes */
+.worldview-strategy-container {
+    display: grid;
+    gap: 20px;
+    width: 100%;
+    margin-top: 16px;
+    box-sizing: border-box;
 }
 
-.strategy-cards-container::-webkit-scrollbar {
+.worldview-strategy-container.all-mode {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+@media (max-width: 1200px) {
+    .worldview-strategy-container.all-mode {
+        grid-template-columns: 1fr;
+    }
+}
+
+.worldview-strategy-container.single-mode {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    width: 100%;
+}
+
+/* Strategy cards specific sizes based on mode */
+.worldview-strategy-container.all-mode .worldview-section-card {
+    height: 380px;
+}
+
+.worldview-strategy-container.all-mode .worldview-section-content {
+    flex: 1;
+    max-height: 290px !important;
+    overflow-y: auto !important;
+}
+
+.worldview-strategy-container.single-mode .worldview-section-card {
+    width: 100%;
+    max-width: 800px;
+    height: auto;
+    min-height: 400px;
+    margin: 0 auto;
+}
+
+.worldview-strategy-container.single-mode .worldview-section-content {
+    max-height: 520px !important;
+    overflow-y: auto !important;
+}
+
+/* Sub items & Lists inside strategy cards */
+.worldview-sub-item {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    border-left: 3.5px solid var(--primary);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.worldview-sub-item:last-child {
+    margin-bottom: 0;
+}
+
+.worldview-sub-item:hover {
+    transform: translateX(4px);
+    background: rgba(0, 113, 227, 0.05);
+}
+
+.worldview-sub-item-title {
+    font-weight: 600;
+    font-size: var(--font-sm-plus);
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.worldview-sub-item-content {
+    font-size: var(--font-sm-plus);
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* Worldview custom list elements (Seeds, Turning points) */
+.worldview-list {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+.worldview-list li {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 10px;
+    border-left: 3.5px solid var(--success);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    font-size: var(--font-sm-plus);
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.worldview-list li:last-child {
+    margin-bottom: 0;
+}
+
+.worldview-list li:hover {
+    transform: translateX(4px);
+}
+
+/* Theme-specific styling for visual cards */
+.worldview-section-card[data-section="turning-points"] .worldview-list li {
+    border-left-color: var(--danger);
+}
+.worldview-section-card[data-section="turning-points"] .worldview-list li:hover {
+    background: rgba(255, 59, 48, 0.05);
+}
+
+.worldview-section-card[data-section="seeds"] .worldview-list li {
+    border-left-color: var(--success);
+}
+.worldview-section-card[data-section="seeds"] .worldview-list li:hover {
+    background: rgba(52, 199, 89, 0.05);
+}
+
+.worldview-section-card[data-section="character-waves"] .worldview-sub-item {
+    border-left-color: #a855f7;
+}
+.worldview-section-card[data-section="character-waves"] .worldview-sub-item:hover {
+    background: rgba(168, 85, 247, 0.05);
+}
+
+.worldview-section-card[data-section="three-act"] .worldview-sub-item {
+    border-left-color: var(--warning);
+}
+.worldview-section-card[data-section="three-act"] .worldview-sub-item:hover {
+    background: rgba(255, 159, 10, 0.05);
+}
+
+/* Custom Scrollbars for all worldview content */
+.worldview-section-content::-webkit-scrollbar {
     width: 6px;
 }
-
-.strategy-cards-container::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 3px;
-}
-
-.strategy-cards-container::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 3px;
-}
-
-.strategy-cards-container::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.25);
-}
-
-/* Strategy card collapsed/expanded states */
-.worldview-section-card {
-    transition: all 0.3s ease;
-    overflow: hidden;
-}
-
-/* Collapsed view - only show header with summary */
-.worldview-section-card.collapsed {
-    max-height: 60px;
-    overflow: hidden;
-}
-
-.worldview-section-card.collapsed .worldview-section-body,
-.worldview-section-card.collapsed .structure-item,
-.worldview-section-card.collapsed .detail-list-item {
-    display: none;
-}
-
-.worldview-section-card.collapsed .worldview-section-header {
-    border-bottom: none;
-    margin-bottom: 0;
-    padding-bottom: 12px;
-}
-
-.worldview-section-card.collapsed::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 20px;
-    background: linear-gradient(transparent, var(--bg-secondary));
-    pointer-events: none;
-}
-
-/* Expanded view - show full content with scrolling */
-.worldview-section-card.expanded {
-    max-height: 500px;
-    overflow-y: auto;
-}
-
-.worldview-section-card.expanded .worldview-section-body {
-    display: block;
-}
-
-.worldview-section-card.expanded .structure-item,
-.worldview-section-card.expanded .detail-list-item {
-    display: block;
-}
-
-/* Section body for scrolling content */
-.worldview-section-body {
-    padding: 12px;
-    max-height: 400px;
-    overflow-y: auto;
-}
-
-.worldview-section-body::-webkit-scrollbar {
-    width: 4px;
-}
-
-.worldview-section-body::-webkit-scrollbar-track {
+.worldview-section-content::-webkit-scrollbar-track {
     background: transparent;
 }
-
-.worldview-section-body::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
+.worldview-section-content::-webkit-scrollbar-thumb {
+    background: rgba(144, 144, 165, 0.2);
+    border-radius: 3px;
+}
+.worldview-section-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 113, 227, 0.3);
 }
 
-/* Structure items with max-height for scrolling */
-.structure-item {
-    max-height: 150px;
-    overflow-y: auto;
+/* Core Worldview Section Cards placement and limits */
+#worldview-sections-container > .worldview-section-card {
+    margin-bottom: 20px;
+    height: auto;
 }
 
-/* Detail list items with max-height for scrolling */
-.detail-list-item {
-    max-height: 120px;
-    overflow-y: auto;
+#worldview-sections-container > .worldview-section-card .worldview-section-content {
+    max-height: 250px !important;
+    overflow-y: auto !important;
+    padding-right: 6px;
 }
 
-/* View toggle button active state */
+/* Custom style for specific card markdown bodies */
+.worldview-section-content ul, .worldview-section-content ol {
+    padding-left: 20px;
+    margin-bottom: 12px;
+}
+
+.worldview-section-content li {
+    margin-bottom: 6px;
+    font-size: var(--font-sm-plus);
+    color: var(--text-secondary);
+}
+
+.worldview-section-content p {
+    margin-bottom: 10px;
+}
+
+.worldview-section-content blockquote {
+    border-left: 3px solid var(--primary);
+    padding-left: 12px;
+    color: var(--text-secondary);
+    background: rgba(0, 113, 227, 0.04);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin-bottom: 12px;
+    font-style: italic;
+}
+
+/* View Toggle Button Styling */
+.view-toggle-btn {
+    border-radius: 20px !important;
+    padding: 6px 14px !important;
+    font-weight: 500 !important;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    border: 1px solid transparent !important;
+    background: rgba(0, 0, 0, 0.04) !important;
+    color: var(--text-secondary) !important;
+}
+
+body.dark-theme .view-toggle-btn {
+    background: rgba(255, 255, 255, 0.04) !important;
+}
+
+.view-toggle-btn:hover {
+    background: rgba(0, 113, 227, 0.08) !important;
+    color: var(--primary) !important;
+    border-color: rgba(0, 113, 227, 0.2) !important;
+}
+
 .view-toggle-btn.active {
-    background: var(--primary) !important;
-    color: white !important;
-    border-color: var(--primary) !important;
+    background: linear-gradient(135deg, var(--primary), #8b5cf6) !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: 0 4px 12px rgba(0, 113, 227, 0.25) !important;
+    font-weight: 600 !important;
 }
 
-/* Strategy card section icons */
-.section-card-icon {
-    font-size: 1.5rem;
-    margin-right: 8px;
-}
+/* ==========================================
+   MODERN TIMELINE UI (PLOT OUTLINE)
+   ========================================== */
 
-/* Current view mode indicator */
-.strategy-cards-container[data-view="all"] .worldview-section-card {
-    max-height: 500px;
+.timeline-container {
+    position: relative;
+    padding: 24px 16px 24px 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
     overflow-y: auto;
+    max-height: calc(100vh - 240px);
+    min-height: 0;
+    box-sizing: border-box;
 }
 
-.strategy-cards-container[data-view="<"] .worldview-section-card,
-.strategy-cards-container[data-view=">"] .worldview-section-card {
-    max-height: 60px;
-    overflow: hidden;
+/* Glowing timeline rail track */
+.timeline-container::before {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: linear-gradient(to bottom, rgba(0, 113, 227, 0.4), rgba(139, 92, 246, 0.4));
+    border-radius: 2px;
+    box-shadow: 0 0 10px rgba(0, 113, 227, 0.15);
 }
 
-.strategy-cards-container[data-view="<"] .worldview-section-card:hover,
-.strategy-cards-container[data-view=">"] .worldview-section-card:hover {
-    max-height: 500px;
-    overflow-y: auto;
-    transition: max-height 0.4s ease;
+.plot-chapter-item {
+    position: relative;
+    background: var(--surface);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
 }
 
-/* Collapse indicator arrow */
-.worldview-section-header::after {
-    content: '▼';
-    font-size: 0.7rem;
+/* Dynamic line connector to rail track */
+.plot-chapter-item::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 32px;
+    width: 20px;
+    height: 2px;
+    background: rgba(0, 113, 227, 0.3);
+    transition: background-color 0.3s ease;
+}
+
+/* Animated node on rail track */
+.plot-chapter-item::after {
+    content: '';
+    position: absolute;
+    left: -28px;
+    top: 26px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    border: 3px solid rgba(0, 113, 227, 0.4);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 2;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Hover effects for premium tactile feedback */
+.plot-chapter-item:hover {
+    transform: translateX(6px) scale(1.015);
+    border-color: var(--primary);
+    box-shadow: 0 8px 32px rgba(0, 113, 227, 0.12), var(--shadow-md);
+}
+
+.plot-chapter-item:hover::before {
+    background: var(--primary);
+}
+
+.plot-chapter-item:hover::after {
+    background: var(--primary);
+    border-color: var(--bg-primary);
+    box-shadow: 0 0 0 6px rgba(0, 113, 227, 0.25);
+    transform: scale(1.25);
+}
+
+/* Chapter Number Pill Badge */
+.chapter-number {
+    font-size: var(--font-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 12px;
+    background: linear-gradient(135deg, rgba(0, 113, 227, 0.12), rgba(139, 92, 246, 0.12));
+    color: var(--primary);
+    border-radius: 20px;
+    display: inline-block;
+    margin-bottom: 12px;
+    border: 1px solid rgba(0, 113, 227, 0.15);
+    transition: all 0.3s ease;
+}
+
+.plot-chapter-item:hover .chapter-number {
+    background: linear-gradient(135deg, var(--primary), #8b5cf6);
+    color: #ffffff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(0, 113, 227, 0.2);
+}
+
+.chapter-title {
+    font-size: var(--font-md);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
+}
+
+.chapter-summary {
+    font-size: var(--font-sm-plus);
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    background: rgba(0, 0, 0, 0.018);
+    border-left: 3.5px solid rgba(0, 113, 227, 0.2);
+    padding: 10px 14px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+body.dark-theme .chapter-summary {
+    background: rgba(255, 255, 255, 0.018);
+    border-left-color: rgba(0, 113, 227, 0.4);
+}
+
+.chapter-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.chapter-time, .chapter-scene {
+    font-size: var(--font-xs);
     color: var(--text-muted);
-    margin-left: auto;
-    transition: transform 0.3s ease;
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.035);
+    border-radius: 6px;
+    border: 1px solid rgba(0, 0, 0, 0.02);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 
-.worldview-section-card.collapsed .worldview-section-header::after,
-.strategy-cards-container[data-view="<"] .worldview-section-card .worldview-section-header::after,
-.strategy-cards-container[data-view=">"] .worldview-section-card .worldview-section-header::after {
-    transform: rotate(-90deg);
+body.dark-theme .chapter-time, 
+body.dark-theme .chapter-scene {
+    background: rgba(255, 255, 255, 0.035);
+    border-color: rgba(255, 255, 255, 0.02);
+    color: var(--text-secondary);
+}
+
+/* ==========================================
+   MODERN CHARACTER CARDS (CHARACTER BIBLE)
+   ========================================== */
+.character-card-modern {
+    background: var(--surface);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: relative;
+}
+
+.character-card-modern:hover {
+    transform: translateY(-4px);
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md), 0 12px 30px rgba(0, 113, 227, 0.08);
+}
+
+.char-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.char-meta-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.char-role-badge {
+    font-size: var(--font-xs);
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 12px;
+    letter-spacing: 0.02em;
+}
+
+.role-protagonist {
+    background: rgba(0, 113, 227, 0.12);
+    color: var(--primary);
+    border: 1px solid rgba(0, 113, 227, 0.15);
+}
+
+.role-antagonist {
+    background: rgba(255, 59, 48, 0.12);
+    color: var(--danger);
+    border: 1px solid rgba(255, 59, 48, 0.15);
+}
+
+.role-mentor {
+    background: rgba(52, 199, 89, 0.12);
+    color: var(--success);
+    border: 1px solid rgba(52, 199, 89, 0.15);
+}
+
+.role-secondary {
+    background: rgba(144, 144, 165, 0.12);
+    color: var(--text-secondary);
+    border: 1px solid rgba(144, 144, 165, 0.15);
+}
+
+.char-entry-phase {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.char-card-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.char-action-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    font-size: 0.85rem;
+    border-radius: 50%;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    color: var(--text-secondary);
+}
+
+.char-action-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-primary);
+}
+
+body.dark-theme .char-action-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.char-name-heading {
+    font-size: var(--font-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.char-card-body-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.char-detail-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.char-detail-label {
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.char-detail-text {
+    font-size: var(--font-sm-plus);
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0;
+}
+
+.speech-style-text {
+    font-style: italic;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.015);
+    border-left: 2.5px solid var(--border-color);
+    padding-left: 8px;
+}
+
+body.dark-theme .speech-style-text {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.char-card-footer-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+    margin-top: 4px;
+}
+
+.char-pills-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pills-label {
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.pills-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.char-pill {
+    font-size: var(--font-2xs);
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+}
+
+.pill-personality {
+    background: rgba(0, 113, 227, 0.08);
+    color: var(--primary);
+    border: 1px solid rgba(0, 113, 227, 0.1);
+}
+
+.pill-flaw {
+    background: rgba(255, 59, 48, 0.08);
+    color: var(--danger);
+    border: 1px solid rgba(255, 59, 48, 0.1);
+}
+
+
+/* ==========================================
+   PLOT TIMELINE NODE WRAPPER & HOVER INSERTION
+   ========================================== */
+.plot-timeline-node-wrapper {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.plot-timeline-node-wrapper .plot-chapter-item {
+    margin-bottom: 0; /* Override */
+}
+
+.chapter-events-bullets {
+    padding-left: 18px;
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    margin: 8px 0;
+}
+
+.chapter-events-bullets li {
+    margin-bottom: 4px;
+}
+
+.chapter-foreshadow-bullets {
+    font-size: var(--font-xs);
+    color: var(--success);
+    font-weight: 500;
+    margin-top: 8px;
+    padding: 4px 8px;
+    background: rgba(52, 199, 89, 0.06);
+    border-radius: 4px;
+    border: 1px solid rgba(52, 199, 89, 0.1);
+    display: inline-block;
+    width: fit-content;
+}
+
+.timeline-insert-divider {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 32px;
+    position: relative;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    margin: 4px 0;
+}
+
+.plot-timeline-node-wrapper:hover .timeline-insert-divider {
+    opacity: 1;
+}
+
+.timeline-insert-divider::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    right: 0;
+    height: 1px;
+    border-top: 1.5px dashed var(--border-color);
+    z-index: 1;
+}
+
+.timeline-insert-divider .insert-btn {
+    z-index: 2;
+    border-radius: 20px;
+    font-size: var(--font-2xs) !important;
+    font-weight: 600 !important;
+    padding: 4px 10px !important;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+    background: var(--surface);
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+}
+
+.timeline-insert-divider .insert-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--bg-primary);
+    transform: scale(1.05);
+}
+
+
+/* ==========================================
+   STORY INSPECTOR CARD (CHAPTER WRITER)
+   ========================================== */
+.story-inspector-card {
+    background: var(--surface);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 18px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.story-inspector-card .inspector-card-header {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+}
+
+.story-inspector-card .inspector-card-header h4 {
+    margin: 0;
+    font-size: var(--font-base);
+    font-weight: 700;
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.story-inspector-card .inspector-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.insp-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 4px;
+}
+
+.insp-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.insp-label {
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.01em;
+}
+
+.insp-val {
+    font-size: var(--font-sm-plus);
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+}
+
+.insp-item.purpose {
+    background: rgba(0, 113, 227, 0.04);
+    border-left: 3px solid var(--primary);
+    padding: 8px 12px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.insp-item.cliffhanger {
+    background: rgba(255, 159, 10, 0.04);
+    border-left: 3px solid var(--warning);
+    padding: 8px 12px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.summary-text {
+    background: rgba(0, 0, 0, 0.01);
+    border-left: 3px solid var(--primary);
+    padding: 8px 12px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+body.dark-theme .summary-text {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.insp-tone-badge {
+    display: inline-block;
+    background: rgba(139, 92, 246, 0.12);
+    color: #8b5cf6;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: var(--font-xs);
+    border: 1px solid rgba(139, 92, 246, 0.15);
+    font-weight: 600;
+    width: fit-content;
+}
+
+.insp-events-list {
+    padding-left: 18px;
+    margin: 4px 0;
+    font-size: var(--font-sm);
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+.insp-events-list li {
+    margin-bottom: 4px;
 }

@@ -47,6 +47,52 @@ def parse_json_safely(text, default=None):
         print(f"Error parsing JSON: {e}\nRaw Text was:\n{text}")
         return default or {"error": "Failed to parse JSON", "raw_content": text}
 
+# --- PIPELINE VALIDATORS / FAIL-FAST HELPERS ---
+def _sse_error_done(message: str):
+    """回傳最小 SSE：error + done（避免 prerequisite 不足時仍呼叫 LLM 產生低品質內容）"""
+    def gen():
+        yield "data: " + json.dumps({"type": "error", "message": message}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+    return gen()
+
+
+def validate_worldview(worldbuilding_text: str):
+    if (not worldbuilding_text) or worldbuilding_text.strip() == "" or "No worldview defined yet." in worldbuilding_text:
+        return False, ["尚無世界觀設定"]
+    return True, []
+
+
+def validate_characters(characters_text: str):
+    if (not characters_text) or characters_text.strip() == "" or "No characters designed yet." in characters_text:
+        return False, ["尚無角色設定（Character Bible）"]
+    parsed = parse_json_safely(characters_text, default={})
+    chars = parsed.get("characters") if isinstance(parsed, dict) else None
+    if isinstance(chars, list) and len(chars) > 0:
+        return True, []
+    return False, ["角色設定 JSON 結構不完整（缺少 characters 陣列）"]
+
+
+def validate_plot(plot_text: str):
+    if (not plot_text) or plot_text.strip() == "" or "No plot chapters designed yet." in plot_text:
+        return False, ["尚無章節大綱（plot）"]
+    parsed = parse_json_safely(plot_text, default={})
+    chapters = parsed.get("chapters") if isinstance(parsed, dict) else None
+    if isinstance(chapters, list) and len(chapters) > 0:
+        return True, []
+    return False, ["章節大綱 JSON 結構不完整（缺少 chapters 陣列）"]
+
+
+def validate_plot_has_chapter(plot_text: str, chapter_index: int):
+    ok, errors = validate_plot(plot_text)
+    if not ok:
+        return False, errors
+    parsed = parse_json_safely(plot_text, default={})
+    chapters = parsed.get("chapters", []) if isinstance(parsed, dict) else []
+    for ch in chapters:
+        if isinstance(ch, dict) and ch.get("chapter_index") == int(chapter_index):
+            return True, []
+    return False, [f"章節大綱中找不到第 {chapter_index} 章 outline"]
+
 # --- SYSTEM PROMPTS ---
 
 STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事架構師（Story Architect）。
@@ -199,6 +245,9 @@ EDITOR_PROMPT = """你是一位具備鷹眼般洞察力的資深文學主編（E
 """
 
 CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼御用創作導演（Lead Director & Co-Pilot）。
+
+⚠️ 重要：目前此「Co-Pilot chat」僅作為諮詢對話展示，系統不會自動解析或執行任何 JSON「執行指令」、TOOL_CALL 或 INCREMENTAL_UPDATE。
+請不要輸出任何執行指令區塊；若需要建議下一步，請用自然語言清楚描述「應先做哪個階段」與「原因/風險」。
 
 ## 你的權威定位
 - 你是整個創作流程的最高決策者，掌握專案全貌
@@ -488,6 +537,10 @@ def run_character_designer(novel_id, user_prompt=None):
     Runs the Character Designer to generate/design character profiles based on worldview.
     """
     context = compile_context(novel_id)
+
+    ok, _ = validate_worldview(context.get("worldbuilding", ""))
+    if not ok:
+        return _sse_error_done("無法生成角色：缺少世界觀設定。請先完成世界觀（worldview）再進行角色設計。")
     
     prompt_content = f"以下是已確立的世界觀與故事架構：\n{context['worldbuilding']}\n\n"
     if context['characters'] != "No characters designed yet.":
@@ -513,6 +566,13 @@ def run_plot_planner(novel_id, user_prompt=None):
     Runs the Plot Planner to break the story worldview and character bible into chapters.
     """
     context = compile_context(novel_id)
+
+    ok_wb, _ = validate_worldview(context.get("worldbuilding", ""))
+    ok_char, _ = validate_characters(context.get("characters", ""))
+    if not ok_wb:
+        return _sse_error_done("無法生成章節大綱：缺少世界觀設定。請先完成世界觀（worldview）。")
+    if not ok_char:
+        return _sse_error_done("無法生成章節大綱：缺少角色設定（Character Bible）。請先完成角色設計（characters）。")
     
     prompt_content = f"以下是已確立的世界觀與故事架構：\n{context['worldbuilding']}\n\n角色聖經（Character Bible）：\n{context['characters']}\n\n"
     if user_prompt:
@@ -556,6 +616,16 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Swiss Modernism 2.
     Runs the Chapter Writer to write the actual prose for the specified chapter index.
     """
     context = compile_context(novel_id)
+
+    ok_wb, _ = validate_worldview(context.get("worldbuilding", ""))
+    ok_char, _ = validate_characters(context.get("characters", ""))
+    ok_plot_ch, _ = validate_plot_has_chapter(context.get("plot", ""), int(chapter_index))
+    if not ok_wb:
+        return _sse_error_done("無法撰寫正文：缺少世界觀設定。請先完成世界觀（worldview）。")
+    if not ok_char:
+        return _sse_error_done("無法撰寫正文：缺少角色設定（Character Bible）。請先完成角色設計（characters）。")
+    if not ok_plot_ch:
+        return _sse_error_done(f"無法撰寫正文：缺少第 {chapter_index} 章的大綱（outline）。請先完成章節大綱（plot）。")
     
     # Extract specific chapter details if we have plot chapter data
     plot_json = parse_json_safely(context["plot"])
