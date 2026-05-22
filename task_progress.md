@@ -1,67 +1,62 @@
-# 任務進度追蹤
+# app.js 簡化任務清單
 
-## 問題描述
-世界觀各項目的新增/刪除失敗，只有伏筆可以新增是不對的。每一個項目都要可以改（核心主題、核心衝突、世界觀設定、三幕式結構、整體故事大綱、角色漸進規劃策略、關鍵轉折點）。伏筆區域不見了。
+## 第一階段：導入模組支援
+- [ ] 修改 index.html 為 ES module 模式
+- [ ] 在 app.js 頂部添加 imports 語句（導入所有已拆分模組）
+- [ ] 刪除 app.js 中重複的 state 定義（1-30行）
+- [ ] 刪除 app.js 中重複的 el 定義（35-121行）
+- [ ] 刪除 app.js 中重複的 showToast 定義（126-132行）
+- [ ] 刪除 app.js 中重複的 requestAPI 定義（890-910行）
+- [ ] 刪除 app.js 中重複的 streamAPI 定義（914-967行）
 
-## 已完成修復
-- [x] 為每個世界觀區塊添加「編輯」和「刪除」按鈕
-- [x] 實現 `editWorldviewSection` 函數 - 允許用戶編輯任何區塊內容
-- [x] 實現 `deleteWorldviewSection` 函數 - 允許用戶刪除任何區塊
-- [x] 實現 `addWorldviewSection` 函數 - 允許用戶新增區塊
-- [x] 確保伏筆區域正確顯示（現在始終顯示在底部）
+## 第二階段：移除 utils 重複函式
+- [ ] 刪除 parseWorldviewJSON（重複，utils.js 已有）
+- [ ] 刪除 showCustomConfirm（重複，utils.js 已有）
+- [ ] 刪除 stripBulletPrefix（重複，utils.js 已有）
+- [ ] 刪除 formatDate（重複，utils.js 已有）
+- [ ] 刪除 parseWorldviewSeeds（重複，utils.js 已有）
+- [ ] 刪除 parseCoreTheme, parseCoreConflict, parseWorldSetting, parseThreeActStructure, parseOverallOutline, parseCharacterWavePlan, parseKeyTurningPoints（重複，utils.js 已有）
 
-## 修改內容摘要
-1. **更新 `renderWorldviewSection` 函數**：為所有區塊（核心主題、核心衝突、世界觀設定、三幕式結構、整體故事大綱）添加了 ✏️ 編輯和 🗑️ 刪除按鈕
+## 第三階段：移除 renderers 重複函式
+- [ ] 刪除 renderActiveTab（重複，renderers.js 已有）
+- [ ] 刪除 renderWorldviewTab（重複，renderers.js 已有）
+- [ ] 刪除 renderWorldviewSections（重複，renderers.js 已有）
+- [ ] 刪除 renderWorldviewSection（重複，renderers.js 已有）
+- [ ] 刪除 renderCharactersTab（重複，renderers.js 已有）
+- [ ] 刪除 renderPlotTab（重複，renderers.js 已有）
+- [ ] 刪除 renderWriterTab（重複，renderers.js 已有）
+- [ ] 刪除 selectWriterChapter（重複，renderers.js 已有）
+- [ ] 刪除 renderActiveChapter（重複，renderers.js 已有）
+- [ ] 刪除 renderChatMessages（重複，renderers.js 已有）
+- [ ] 刪除 appendChatMessage（重複，renderers.js 已有）
 
-2. **新增 `editWorldviewSection` 函數**：使用正則表達式替換指定區塊的內容
+## 第四階段：移除 novelLifecycle 重複函式
+- [ ] 刪除 loadNovels（重複，novelLifecycle.js 已有）
+- [ ] 刪除 loadNovelDetails（重複，novelLifecycle.js 已有）
+- [ ] 刪除 clearWorkspace（重複，novelLifecycle.js 已有）
+- [ ] 刪除 renderNovelsList（重複，novelLifecycle.js 已有）
 
-3. **新增 `deleteWorldviewSection` 函數**：使用正則表達式刪除整個區塊
+## 第五階段：移除 settings 重複函式
+- [ ] 刪除 loadSettings（重複，settings.js 已有）
+- [ ] 刪除 loadAgentConfigFields（重複，settings.js 已有）
+- [ ] 刪除 saveCurrentAgentSettings（重複，settings.js 已有）
 
-4. **新增 `addWorldviewSection` 函數**：允許用戶新增新的區塊類型
+## 第六階段：移除 pipeline 重複函式
+- [ ] 檢查 executePipelineStage（是否與 pipeline.js 相同）
+- [ ] 檢查 writeAllChaptersSequentially（是否與 pipeline.js 相同）
+- [ ] 刪除重複的管道相關函式（如果已移到 pipeline.js）
 
-5. **伏筆區域**：現在始終顯示在底部，包含 ➕ 新增按鈕和 ✕ 刪除按鈕
+## 第七階段：移除 agentProcessing 重複函式
+- [ ] 刪除 showAgentProcessingIndicator（重複，agentProcessing.js 已有）
+- [ ] 刪除 hideAgentProcessingIndicator（重複，agentProcessing.js 已有）
+- [ ] 刪除 hideAllAgentProcessingIndicators（重複，agentProcessing.js 已有）
 
-## 支援的區塊操作
-| 區塊 | 編輯 | 刪除 | 新增 |
-|------|------|------|------|
-| 核心主題 | ✅ | ✅ | ✅ |
-| 核心衝突 | ✅ | ✅ | ✅ |
-| 世界觀設定 | ✅ | ✅ | ✅ |
-| 三幕式結構 | ✅ | ✅ | ✅ |
-| 整體故事大綱 | ✅ | ✅ | ✅ |
-| 角色漸進規劃策略 | ✅ | ✅ | - |
-| 關鍵轉折點 | ✅ | ✅ | - |
-| 伏筆與設定種子 | - | ✅ | ✅ |
+## 第八階段：清理剩餘全域函式
+- [ ] 移至 EMB.中學模組刪除或移動未分類的輔助函式
+- [ ] 確認所有 DOM 事件監聽器的绑定仍正確
+- [ ] 驗證.module導入沒有 Circular Dependency 問題
 
----
-
-# Implementation Plan - Settings Syncing, Robust Stream Processing & Resilient AI Parsing
-
-## 實作狀態
-
-### 1. Database and Settings Component
-- [x] **db.py**: 移除 DB Prepopulation，添加 migration query 清理空配置
-  - 刪除 `db_init()` 中 prepopulate `agent_configs` 的迴圈
-  - 添加 `DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL` 清理空配置
-- [x] **app.py**: 移除 `parse_worldview_to_json_robust` 函數和 monkeypatching
-
-### 2. Frontend Interface and Stream Processing
-- [x] **static/app.js**: 
-  - 更新 `saveCurrentAgentSettings()` 正確處理 `0` 或 `0.0` 的 temperature 和 top_p
-  - 確保 `enable_thinking` 正確讀取布林值
-  - 在 `executePipelineStage()` 中添加 `failed` 標誌防止重複解析
-
-### 3. Story Architect Parsing Logic
-- [x] **agents_incremental.py**: 增強 `save_callback` 中的純文字解析 fallback
-  - 實現 `_strip_bullet()` 去除項目符號前綴
-  - 實現 `_extract_after_colon()` 提取冒號後內容
-  - 實現 `_parse_bullet_list()` 解析 bullet list 為字串列表
-  - 實現 `_parse_act_from_line()` 從單行解析 act 內容
-  - 實現 `_parse_wave_from_line()` 從單行解析 wave 內容
-  - 增強 `foreshadowing_seeds` 和 `key_turning_points` 的純文字 fallback
-  - 增強 `three_act_structure` 和 `progressive_character_plan` 的純文字 fallback
-
-## 驗證結果
-- [x] `/api/settings` 端點正確返回 `.env` 配置
-- [x] 應用程式成功啟動於 port 8001
-- [x] 設定從 `.env` 正確載入（temperature、top_p、enable_thinking 等）
+## 第九階段：測試與驗證
+- [ ] 檢查瀏覽器 Console 是否有錯誤
+- [ ] 驗證所有功能仍正常运行
+- [ ] 確認檔案大小顯著減小

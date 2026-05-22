@@ -2,8 +2,8 @@ import { state } from './state.js';
 import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI, streamAPI } from './api.js';
-import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown } from './utils.js';
-import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage, applySubSectionVisibility, getSubSectionCount } from './renderers.js';
+import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate } from './utils.js';
+import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage } from './renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators } from './agentProcessing.js';
@@ -58,13 +58,82 @@ function setupStreamLogToggle() {
     });
 }
 
+/**
+ * 顯示/隱藏管道進度條
+ */
+function showPipelineProgress(show) {
+    const progressBar = document.getElementById('pipeline-progress-bar');
+    if (progressBar) {
+        if (show) {
+            progressBar.classList.remove('hidden');
+        } else {
+            progressBar.classList.add('hidden');
+        }
+    }
+}
 
+/**
+ * 更新管道階段指示器的狀態
+ * @param {string} stage - 階段名稱：worldview, characters, plot, writer
+ * @param {string} status - 狀態：pending, running, done, error
+ */
+function updatePipelineStage(stage, status) {
+    const stageIndicator = document.querySelector(`.stage-indicator[data-stage="${stage}"]`);
+    if (!stageIndicator) return;
+    
+    // 移除所有狀態類
+    stageIndicator.classList.remove('pending', 'running', 'done', 'error');
+    // 添加新狀態
+    if (status) {
+        stageIndicator.classList.add(status);
+    }
+    
+    const statusDiv = stageIndicator.querySelector('.stage-status');
+    if (statusDiv) {
+        if (status === 'running') {
+            statusDiv.innerHTML = '<span class="loader-spinner"></span>';
+        } else if (status === 'done') {
+            statusDiv.textContent = '✓';
+        } else if (status === 'error') {
+            statusDiv.textContent = '✗';
+        } else {
+            statusDiv.textContent = '';
+        }
+    }
+}
 
+/**
+ * 更新總監訊息
+ */
+function updateDirectorMessage(message) {
+    const directorMsg = document.getElementById('director-message');
+    if (directorMsg) {
+        directorMsg.textContent = message;
+    }
+}
 
-
-
-
-
+/**
+ * 在 textarea 中顯示「生成中...」告示
+ * @param {string} tabName - 目標標籤：worldview, characters, plot
+ */
+function showGeneratingIndicator(tabName) {
+    let textarea = null;
+    
+    if (tabName === 'worldview') {
+        textarea = el.editorWorldview;
+    } else if (tabName === 'characters') {
+        textarea = el.editorCharactersJson;
+    } else if (tabName === 'plot') {
+        textarea = el.editorPlotJson;
+    } else if (tabName === 'writer') {
+        textarea = el.editorProse;
+    }
+    
+    if (textarea) {
+        textarea.value = '🔄 AI 正在生成中，請稍候...\n\n';
+        textarea.disabled = true;
+    }
+}
 
 /**
  * 隱藏生成中告示
@@ -290,8 +359,194 @@ async function executeNextMissingStage(userPrompt) {
     }
 }
 
-
-
+/**
+ * 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
+ * @param {string} stage - 階段名稱: worldview, characters, plot, writer
+ * @param {string} userPrompt - 用戶 prompt
+ */
+async function executePipelineStage(stage, userPrompt) {
+    return new Promise((resolve) => {
+        let endpoint, body, targetTextarea;
+        let agentName = '';
+        
+        switch (stage) {
+            case 'worldview':
+                endpoint = '/api/agent/story-architect';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorWorldview;
+                state.activeTab = 'worldview';
+                agentName = 'Story Architect (故事結構架構師)';
+                break;
+            case 'characters':
+                endpoint = '/api/agent/character-designer';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorCharactersJson;
+                state.activeTab = 'characters';
+                agentName = 'Character Designer (角色設計大師)';
+                break;
+            case 'plot':
+                endpoint = '/api/agent/plot-planner';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Plot Planner (章節劇情規劃師)';
+                break;
+            case 'writer':
+                endpoint = '/api/agent/write-chapter';
+                body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
+                targetTextarea = el.editorProse;
+                state.activeTab = 'writer';
+                agentName = 'Chapter Writer (小說正文寫作作家)';
+                break;
+            default:
+                resolve();
+                return;
+        }
+        
+        renderActiveTab();
+        if (targetTextarea) targetTextarea.value = '';
+        
+        showToast(`🚀 正在啟動 ${stage} Agent...`);
+        showAgentProcessingIndicator(stage, agentName);
+        
+        let failed = false;
+        streamAPI(
+            endpoint,
+            body,
+            (delta) => {
+                updateAgentStreamOutput(stage, delta);
+            },
+            (delta) => {
+                if (targetTextarea) {
+                    targetTextarea.value += delta;
+                    targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                }
+                updateAgentStreamOutput(stage, delta);
+            },
+            (msg) => {
+                failed = true;
+                state.isPipelineRunning = false;
+                showToast(`${stage} Agent 執行失敗: ${msg}`);
+                updatePipelineStage(stage, 'error');
+                hideAgentProcessingIndicator(stage);
+                resolve();
+            },
+            async () => {
+                if (failed) return;
+                updatePipelineStage(stage, 'done');
+                hideAgentProcessingIndicator(stage);
+                
+                // 刷新數據
+                await loadNovelDetails(state.currentNovelId);
+                
+                // 如果管道仍在運行，詢問總監下一步
+                if (state.isPipelineRunning) {
+                    showToast(`${stage} 完成，正在請求 AI 總監評估...`);
+                    const nextDecision = await runDirectorDecision(stage);
+                    await executeDirectorAction(nextDecision, userPrompt);
+                }
+                
+                resolve();
+            }
+        );
+    });
+}
+/**
+ * 自動撰寫所有章節正文（按大綱順序，每章寫完後詢問總監）
+ */
+async function writeAllChaptersSequentially(userPrompt) {
+    const plotChapters = state.currentNovelData?.plot?.chapters || [];
+    
+    if (plotChapters.length === 0) {
+        showToast('⚠️ 沒有大綱章節可寫，請先生成大綱');
+        state.isPipelineRunning = false;
+        return;
+    }
+    
+    const totalChapters = plotChapters.length;
+    showToast(`📖 共 ${totalChapters} 個大綱節點，開始逐章撰寫...`);
+    
+    // 找出已寫作的章節（跳過已完成的）
+    const existingChapters = state.currentNovelData?.chapters || [];
+    const writtenIndices = new Set(existingChapters.map(c => c.chapter_index));
+    
+    for (let i = 0; i < totalChapters; i++) {
+        const chapterIndex = i + 1; // 1-based
+        
+        // 跳過已寫作的章節
+        if (writtenIndices.has(chapterIndex)) {
+            updateDirectorMessage(`⏭️ 第 ${chapterIndex}/${totalChapters} 章已存在，跳過...`);
+            continue;
+        }
+        
+        if (!state.isPipelineRunning) {
+            showToast('⏸️ 管道已暫停');
+            break;
+        }
+        
+        updateDirectorMessage(`✍️ 正在撰寫第 ${chapterIndex}/${totalChapters} 章...`);
+        showToast(`✍️ 開始撰寫第 ${chapterIndex} 章（共 ${totalChapters} 章）`);
+        
+        state.activeTab = 'writer';
+        state.activeChapterIndex = chapterIndex;
+        renderActiveTab();
+        
+        // 撰寫單一章節
+        await new Promise((resolve) => {
+            if (el.editorProse) el.editorProse.value = '';
+            
+            streamAPI(
+                '/api/agent/write-chapter',
+                { novel_id: state.currentNovelId, chapter_index: chapterIndex },
+                () => {},
+                (delta) => {
+                    if (el.editorProse) {
+                        el.editorProse.value += delta;
+                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    }
+                },
+                (msg) => {
+                    showToast(`第 ${chapterIndex} 章寫作失敗: ${msg}`);
+                },
+                async () => {
+                    await loadNovelDetails(state.currentNovelId);
+                    resolve();
+                }
+            );
+        });
+        
+        // 每 3 章或最後一章時，請求總監評估
+        if ((chapterIndex % 3 === 0) || chapterIndex === totalChapters) {
+            updateDirectorMessage(`🎬 總監正在評估第 ${chapterIndex} 章...`);
+            const chapterDecision = await runDirectorDecision('writer');
+            
+            // 如果總監指示回退修改
+            if (chapterDecision.action === 'GO_BACK_TO_WORLDVIEW' ||
+                chapterDecision.action === 'GO_BACK_TO_CHARACTERS' ||
+                chapterDecision.action === 'GO_BACK_TO_PLOT') {
+                showToast(`⚡ 總監在第 ${chapterIndex} 章後指示回退修改...`);
+                await executeDirectorAction(chapterDecision, userPrompt);
+                return; // 回退後由 executeDirectorAction 接管流程
+            }
+            
+            if (chapterDecision.action === 'WAIT_USER') {
+                showToast('⏸️ 總監要求暫停，請確認後繼續');
+                state.isPipelineRunning = false;
+                return;
+            }
+        }
+    }
+    
+    // 全部章節寫作完成
+    updatePipelineStage('writer', 'done');
+    updateDirectorMessage('🎉 全書撰寫完畢！');
+    showToast('🎉 恭喜！全部章節正文已撰寫完成！');
+    state.isPipelineRunning = false;
+    
+    setTimeout(() => showPipelineProgress(false), 3000);
+    await loadNovelDetails(state.currentNovelId);
+    selectWriterChapter(1);
+}
 
 
 /**
@@ -393,38 +648,324 @@ async function executePlotAgent() {
 // ==========================================
 // API WRAPPERS & STREAMING CORE
 // ==========================================
+async function requestAPI(url, method = 'GET', body = null) {
+    try {
+        const options = {
+            method,
+            headers: { 'Content-Type': 'application/json' }
+        };
+        if (body) {
+            options.body = JSON.stringify(body);
+        }
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({ detail: response.statusText }));
+            throw new Error(errData.detail || response.statusText);
+        }
+        return await response.json();
+    } catch (e) {
+        console.error(`API Error: ${e.message}`);
+        showToast(`錯誤: ${e.message}`);
+        throw e;
+    }
+}
 
 
 
-
-
+async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone) {
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        
+        if (!response.ok) {
+            const errText = await response.text();
+            if (typeof onError === 'function') onError(`HTTP 錯誤 ${response.status}: ${errText}`);
+            if (typeof onDone === 'function') onDone();
+            return;
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); 
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('data:')) continue;
+                
+                try {
+                    const dataStr = trimmed.slice(5).trim();
+                    if (dataStr === '[DONE]') continue;
+                    const parsed = JSON.parse(dataStr);
+                    
+                    if (parsed.type === 'thinking') {
+                        if (typeof onThinking === 'function') onThinking(parsed.delta);
+                    } else if (parsed.type === 'content') {
+                        if (typeof onContent === 'function') onContent(parsed.delta);
+                    } else if (parsed.type === 'error') {
+                        if (typeof onError === 'function') onError(parsed.message);
+                    }
+                } catch (e) {
+                    // Ignore JSON parsing errors for partial chunks
+                }
+            }
+        }
+        if (typeof onDone === 'function') onDone();
+    } catch (err) {
+        if (typeof onError === 'function') onError(`網路連接錯誤: ${err.message}`);
+        if (typeof onDone === 'function') onDone();
+    }
+}
 
 // ==========================================
 // NOVEL LIFE CYCLE
 // ==========================================
+async function loadNovels() {
+    try {
+        state.novels = await requestAPI('/api/novels');
+        renderNovelsList();
+    } catch (e) {
+        console.error("Failed to load novels list");
+    }
+}
 
-
-
+async function loadNovelDetails(novelId) {
+    if (!novelId) return;
+    try {
+        el.currentNovelTitle.textContent = "載入中...";
+        const data = await requestAPI(`/api/novels/${novelId}`);
+        state.currentNovelId = novelId;
+        state.currentNovelData = data;
+        
+        // Update header UI
+        el.currentNovelTitle.textContent = data.novel.title;
+        el.currentNovelGenre.textContent = `${data.novel.genre} • Style: ${data.novel.style}`;
+        if (el.novelHeaderActions) el.novelHeaderActions.style.display = 'flex';
+        
+        // Render appropriate workspace components
+        renderActiveTab();
+        renderChatMessages();
+        
+        // Select active item in sidebar list
+        document.querySelectorAll('#novels-list li').forEach(li => {
+            if (li.dataset.id === novelId) {
+                li.classList.add('active');
+            } else {
+                li.classList.remove('active');
+            }
+        });
+    } catch (e) {
+        el.currentNovelTitle.textContent = "載入錯誤";
+    }
+}
 
 // ==========================================
 // SYSTEM SETTINGS CONTROLS
 // ==========================================
+async function loadSettings() {
+    try {
+        state.settingsData = await requestAPI('/api/settings');
+        loadAgentConfigFields(state.activeSettingAgent);
+    } catch (e) {
+        console.error("Failed to load settings");
+    }
+}
 
+function loadAgentConfigFields(agentName) {
+    const config = state.settingsData[agentName] || {};
+    
+    el.settingAgentName.value = agentName;
+    el.settingApiKey.value = config.api_key || '';
+    el.settingBaseUrl.value = config.base_url || 'https://integrate.api.nvidia.com/v1';
+    el.settingModel.value = config.model || '';
+    el.settingMaxTokens.value = config.max_tokens || '';
+    el.settingTemperature.value = config.temperature ?? '';
+    el.settingTopP.value = config.top_p ?? '';
+    el.settingEnableThinking.checked = config.enable_thinking === 1;
+    
+    // Auto-select match preset if it exists
+    if (el.settingPresetModel) {
+        const presetModels = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "mistralai/mistral-small-4-119b-2603", "stepfun-ai/step-3.5-flash", "google/gemma-3n-e4b-it", "qwen/qwen3.5-122b-a10b"];
+        if (config.model && presetModels.includes(config.model)) {
+            el.settingPresetModel.value = config.model;
+        } else {
+            el.settingPresetModel.value = "";
+        }
+    }
+    
+    // Use display_name from backend if available
+    el.settingsAgentTitle.textContent = config.display_name || agentName;
+}
 
-
-
-
+async function saveCurrentAgentSettings() {
+    const agentName = el.settingAgentName.value;
+    
+    const tempRaw = el.settingTemperature.value.trim();
+    const temperature = tempRaw === '' ? 0.7 : (isNaN(parseFloat(tempRaw)) ? 0.7 : parseFloat(tempRaw));
+    
+    const topPRaw = el.settingTopP.value.trim();
+    const top_p = topPRaw === '' ? 0.95 : (isNaN(parseFloat(topPRaw)) ? 0.95 : parseFloat(topPRaw));
+    
+    const payload = {
+        agent_name: agentName,
+        api_key: el.settingApiKey.value,
+        base_url: el.settingBaseUrl.value,
+        model: el.settingModel.value,
+        temperature: temperature,
+        top_p: top_p,
+        max_tokens: parseInt(el.settingMaxTokens.value) || 4096,
+        enable_thinking: el.settingEnableThinking.checked ? 1 : 0
+    };
+    
+    try {
+        await requestAPI('/api/settings', 'POST', payload);
+        showToast(`${agentName} 設定保存成功`);
+        loadSettings(); // refresh state
+    } catch (e) {
+        showToast("設定保存失敗");
+    }
+}
 
 // ==========================================
 // RENDERERS (DOM TREE BUILDERS)
 // ==========================================
+function clearWorkspace() {
+    state.currentNovelId = null;
+    state.currentNovelData = null;
+    
+    // Header
+    el.currentNovelTitle.textContent = "請選擇或建立一部小說";
+    el.currentNovelGenre.textContent = "小說類型";
+    if (el.novelHeaderActions) el.novelHeaderActions.style.display = 'none';
+    
+    // Worldview Tab
+    if (el.editorWorldview) el.editorWorldview.value = '';
+    
+    // Characters Tab
+    if (el.editorCharactersJson) el.editorCharactersJson.value = '{\n  "characters": []\n}';
+    if (el.charactersCardsGrid) el.charactersCardsGrid.innerHTML = '<div class="empty-placeholder">請建立或選擇小說以查看角色。</div>';
+    
+    // Plot Tab
+    if (el.editorPlotJson) el.editorPlotJson.value = '{\n  "chapters": []\n}';
+    if (el.plotTimeline) el.plotTimeline.innerHTML = '<div class="empty-placeholder">請建立或選擇小說以查看大綱。</div>';
+    
+    // Writer Tab
+    if (el.writerChaptersList) el.writerChaptersList.innerHTML = '<li class="loading-placeholder">請建立或選擇小說。</li>';
+    if (el.activeChapterTitle) el.activeChapterTitle.textContent = "請選擇章節";
+    if (el.activeChapterStatus) el.activeChapterStatus.textContent = "";
+    if (el.chapterOutlineSummaryText) el.chapterOutlineSummaryText.textContent = "等待選擇章節大綱...";
+    if (el.editorProse) el.editorProse.value = "";
+    if (el.aiThinkingStream) el.aiThinkingStream.classList.add('hidden');
+    if (el.aiThinkingText) el.aiThinkingText.textContent = "";
+    
+    // Chat messages
+    if (el.chatMessagesContainer) el.chatMessagesContainer.innerHTML = '<div class="chat-message system"><div class="msg-content">💡 選擇一部小說開始討論。</div></div>';
+}
 
+function renderNovelsList() {
+    el.novelsList.innerHTML = '';
+    if (state.novels.length === 0) {
+        el.novelsList.innerHTML = '<li class="loading-placeholder">目前尚無創作專案</li>';
+        return;
+    }
+    state.novels.forEach(n => {
+        const li = document.createElement('li');
+        li.dataset.id = n.id;
+        if (state.currentNovelId === n.id) {
+            li.className = 'active';
+        }
+        
+        const dateObj = new Date(n.created_at);
+        const formattedDate = `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+        
+        li.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span class="novel-title-text" style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${n.title}</span>
+                <span class="delete-novel-btn" style="color:var(--text-muted); cursor:pointer; font-size:0.8rem; padding: 2px 6px;" title="刪除小說">✕</span>
+            </div>
+            <div class="novel-meta">
+                <span>${n.genre}</span>
+                <span>${formattedDate}</span>
+            </div>
+        `;
+        
+        // Delete novel handler
+        li.querySelector('.delete-novel-btn').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (await showCustomConfirm(`確定要刪除「${n.title}」專案嗎？此操作無法還原！`)) {
+                try {
+                    await requestAPI(`/api/novels/${n.id}`, 'DELETE');
+                    if (state.currentNovelId === n.id) {
+                        clearWorkspace();
+                    }
+                    await loadNovels();
+                    showToast("專案已成功刪除");
+                } catch (err) {
+                    showToast("刪除失敗: " + err.message);
+                }
+            }
+        });
+        
+        // Select novel handler
+        li.addEventListener('click', (e) => {
+            if (e.target.closest('.delete-novel-btn')) {
+                return;
+            }
+            loadNovelDetails(n.id);
+        });
+        
+        el.novelsList.appendChild(li);
+    });
+}
 
+function renderActiveTab() {
+    // Hide all workpanels, activate correct nav tab
+    el.navTabs.forEach(t => {
+        if (t.dataset.tab === state.activeTab) {
+            t.classList.add('active');
+        } else {
+            t.classList.remove('active');
+        }
+    });
+    
+    el.workpanels.forEach(p => {
+        if (p.id === `panel-${state.activeTab}`) {
+            p.classList.add('active');
+        } else {
+            p.classList.remove('active');
+        }
+    });
+    
+    if (!state.currentNovelData) return;
+    
+    // Call specific tab renderer
+    if (state.activeTab === 'worldview') renderWorldviewTab();
+    if (state.activeTab === 'characters') renderCharactersTab();
+    if (state.activeTab === 'plot') renderPlotTab();
+    if (state.activeTab === 'writer') renderWriterTab();
+}
 
-
-
-
-
+function renderWorldviewTab() {
+    el.editorWorldview.value = state.currentNovelData.worldbuilding || '';
+    // 渲染世界觀各區塊的視覺化列表
+    renderWorldviewSections();
+    
+    // 確保 JSON sidebar 隱藏
+    const jsonSidebar = document.querySelector('#panel-worldview .editor-sidebar-json');
+    if (jsonSidebar) {
+        jsonSidebar.style.display = 'none';
+    }
+}
 
 
 async function saveWorldviewJSON(jsonObj) {
@@ -702,7 +1243,151 @@ function openWorldviewListEditModal(field, title) {
     modal.classList.add('active');
 }
 
-
+function renderWorldviewSections() {
+    const container = document.getElementById('worldview-sections-container');
+    if (!container) return;
+    
+    const worldviewText = state.currentNovelData?.worldbuilding || '';
+    const js = parseWorldviewJSON(worldviewText);
+    
+    // 輔助函數：建立核心文字卡片（用於 theme, main_conflict, worldview, macro_outline）
+    function makeCoreCard(field, icon, title, value, badgeClass) {
+        if (!value || value.trim().length === 0) {
+            return `
+                <div class="worldview-core-card empty-state" data-section="${field}" onclick="openWorldviewTextSectionEditModal('${field}', '${title}')">
+                    <div class="core-card-icon">${icon}</div>
+                    <div class="core-card-title">${title}</div>
+                    <div class="core-card-actions">
+                        <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); openWorldviewTextSectionEditModal('${field}', '${title}')">➕ 新增</button>
+                        <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')">✨ AI 規劃</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="worldview-core-card" data-section="${field}">
+                <div class="core-card-header">
+                    <div class="core-card-title-row">
+                        <span class="core-card-badge ${badgeClass}">${icon}</span>
+                        <span class="core-card-title-text">${title}</span>
+                    </div>
+                    <div class="core-card-actions-row">
+                        <button class="btn btn-ai btn-xs" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃">✨ AI</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); openWorldviewTextSectionEditModal('${field}', '${title}')" title="編輯">✏️</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); deleteWorldviewSection('${field}', '${title}')" title="清空">🗑️</button>
+                    </div>
+                </div>
+                <div class="core-card-content" id="content-${field}">
+                    ${renderMarkdown(value)}
+                </div>
+            </div>
+        `;
+    }
+    
+    // 輔助函數：建立結構/清單區塊（用於 three_act, character_plan, turning_points, seeds）
+    function makeSectionCard(sectionId, icon, title, field, items, itemRenderer, emptyAction) {
+        const hasItems = Array.isArray(items) && items.length > 0 && items.some(item => item && (typeof item === 'string' ? item.trim() !== '' : (item.content || '').trim() !== ''));
+        
+        if (!hasItems) {
+            return `
+                <div class="worldview-section-card empty-state" data-section="${sectionId}" onclick="${emptyAction}">
+                    <div class="section-card-icon">${icon}</div>
+                    <div class="section-card-title">${title}</div>
+                    <div class="section-card-actions">
+                        <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); ${emptyAction}">➕ 新增</button>
+                        <button class="btn btn-xs btn-ai" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')">✨ AI 規劃</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="worldview-section-card" data-section="${sectionId}">
+                <div class="section-card-header">
+                    <div class="section-card-title-row">
+                        <span class="section-card-badge">${icon}</span>
+                        <span class="section-card-title-text">${title}</span>
+                    </div>
+                    <div class="section-card-actions-row">
+                        <button class="btn btn-ai btn-xs" onclick="event.stopPropagation(); enhanceWorldviewSectionWithAI('${field}', '${title}')" title="✨ AI 規劃">✨ AI</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); ${emptyAction}" title="編輯">✏️</button>
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); deleteWorldviewSection('${sectionId}', '${title}')" title="清空">🗑️</button>
+                    </div>
+                </div>
+                <div class="section-card-content" id="content-${sectionId}">
+                    ${items.map(itemRenderer).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    // ========== 核心設定區（2x2 網格） ==========
+    let coreHtml = `<div class="worldview-core-grid">`;
+    coreHtml += makeCoreCard('theme', '🎯', '核心主題', js.theme, 'theme');
+    coreHtml += makeCoreCard('main_conflict', '⚔️', '核心衝突', js.main_conflict, 'conflict');
+    coreHtml += makeCoreCard('worldview', '🌍', '世界觀設定', js.worldview, 'setting');
+    coreHtml += makeCoreCard('macro_outline', '📖', '整體故事大綱', js.macro_outline, 'outline');
+    coreHtml += `</div>`;
+    
+    // ========== 結構規劃區（並排） ==========
+    const threeActItems = js.three_act_structure || [];
+    const threeActRenderer = (item, idx) => `
+        <div class="structure-item">
+            <div class="structure-item-title">${item.title || `項目 #${idx + 1}`}</div>
+            <div class="structure-item-content">${renderMarkdown(item.content || '（未設定）')}</div>
+        </div>
+    `;
+    
+    const charPlanItems = js.progressive_character_plan || [];
+    const charPlanRenderer = (item, idx) => `
+        <div class="structure-item">
+            <div class="structure-item-title">${item.title || `階段 #${idx + 1}`}</div>
+            <div class="structure-item-content">${renderMarkdown(item.content || '（未設定）')}</div>
+        </div>
+    `;
+    
+    // ========== 細節清單區（全寬列表） ==========
+    const turningPointsItems = js.key_turning_points || [];
+    const turningPointsRenderer = (item, idx) => `
+        <div class="detail-list-item">
+            <span class="detail-list-index">#${idx + 1}</span>
+            <span class="detail-list-content">${renderMarkdown(item)}</span>
+        </div>
+    `;
+    
+    const seedsItems = js.foreshadowing_seeds || [];
+    const seedsRenderer = (item, idx) => `
+        <div class="detail-list-item">
+            <span class="detail-list-index seed">🌱</span>
+            <span class="detail-list-content">${renderMarkdown(item)}</span>
+        </div>
+    `;
+    
+    let strategyHtml = `<div class="worldview-strategy-container all-mode">`;
+    strategyHtml += makeSectionCard('three-act', '📐', '三幕式結構', 'three_act_structure', threeActItems, threeActRenderer, "openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕')");
+    strategyHtml += makeSectionCard('character-waves', '👥', '角色漸進規劃策略', 'progressive_character_plan', charPlanItems, charPlanRenderer, "openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波')");
+    strategyHtml += makeSectionCard('turning-points', '🔄', '關鍵轉折點', 'key_turning_points', turningPointsItems, turningPointsRenderer, "openWorldviewListEditModal('key_turning_points', '關鍵轉折點')");
+    strategyHtml += makeSectionCard('seeds', '🌱', '伏筆種子', 'foreshadowing_seeds', seedsItems, seedsRenderer, "openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子')");
+    strategyHtml += `</div>`;
+    
+    // ========== 組合所有區塊 ==========
+    container.innerHTML = `
+        <div class="worldview-layout-container">
+            ${coreHtml}
+            ${strategyHtml}
+        </div>
+    `;
+    
+    // 保持並應用當前選擇的視圖狀態
+    setTimeout(() => {
+        if (state.strategyCardView === 'single') {
+            jumpToStrategyCard(state.currentCardIndex);
+        } else {
+            setStrategyCardView('all');
+        }
+    }, 50);
+}
 
 async function deleteWorldviewSection(sectionId, title) {
     if (!(await showCustomConfirm(`確定要清空/刪除【${title}】的設定內容嗎？`))) {
@@ -747,7 +1432,14 @@ function toggleSectionExpand(sectionId) {
     }
 }
 
-
+/**
+ * 去除文本前綴（-、*、•、數字編號等）
+ * @param {string} text - 原始文本
+ * @returns {string} 去除前綴後的文本
+ */
+function stripBulletPrefix(text) {
+    return text.replace(/^[-*•]\s*/, '').replace(/^\d+[.、]\s*/, '').trim();
+}
 
 /**
  * 解析世界觀文本中的伏筆種子
@@ -1097,7 +1789,6 @@ function closeSeedModal() {
  */
 function jumpToStrategyCard(index) {
     state.currentCardIndex = index;
-    state.currentSubSectionIndex = 'all'; // 進入單張卡片時，預設顯示全部子章節
     const container = document.getElementById('worldview-sections-container');
     if (!container) return;
     const strategyCardsArray = [
@@ -1108,7 +1799,6 @@ function jumpToStrategyCard(index) {
     ].filter(Boolean);
     
     applySingleCardView(strategyCardsArray, index);
-    applySubSectionVisibility();
 }
 
 function setStrategyCardView(viewMode) {
@@ -1125,7 +1815,6 @@ function setStrategyCardView(viewMode) {
 
     if (viewMode === 'all') {
         state.strategyCardView = 'all';
-        state.currentSubSectionIndex = 'all'; // 重設子章節
         
         const strategyWrapper = container.querySelector('.worldview-strategy-container');
         if (strategyWrapper) {
@@ -1137,25 +1826,6 @@ function setStrategyCardView(viewMode) {
             card.style.display = 'flex';
             card.classList.remove('collapsed');
             card.classList.add('expanded');
-            
-            // 恢復所有子章節/項目顯示
-            const activeSectionName = card.dataset.section;
-            let subItems = [];
-            if (activeSectionName === 'three-act' || activeSectionName === 'character-waves') {
-                subItems = Array.from(card.querySelectorAll('.worldview-sub-item'));
-            } else {
-                subItems = Array.from(card.querySelectorAll('.worldview-list > li'));
-            }
-            subItems.forEach(item => item.style.display = '');
-
-            // 恢復原始標題 (去除 statusText)
-            const titleContainer = card.querySelector('.worldview-section-title');
-            if (titleContainer && titleContainer.dataset.originalText) {
-                const badgeSpan = titleContainer.querySelector('.worldview-section-badge');
-                titleContainer.innerHTML = '';
-                if (badgeSpan) titleContainer.appendChild(badgeSpan);
-                titleContainer.appendChild(document.createTextNode(' ' + titleContainer.dataset.originalText));
-            }
         });
 
         const toggleBtns = document.querySelectorAll('.view-toggle-btn');
@@ -1166,45 +1836,11 @@ function setStrategyCardView(viewMode) {
             }
         });
     } else if (viewMode === '<') {
-        // 如果當前不在單卡檢視模式，直接進入第一張卡片
-        if (state.strategyCardView !== 'single') {
-            state.strategyCardView = 'single';
-            state.currentCardIndex = 0;
-            state.currentSubSectionIndex = 'all';
-        }
-
-        const count = getSubSectionCount(state.currentCardIndex);
-        if (count > 0) {
-            if (state.currentSubSectionIndex === 'all') {
-                state.currentSubSectionIndex = count - 1; // 到最後一個子項目
-            } else if (state.currentSubSectionIndex === 0) {
-                state.currentSubSectionIndex = 'all'; // 循環到 "全部"
-            } else {
-                state.currentSubSectionIndex--;
-            }
-        }
+        state.currentCardIndex = (state.currentCardIndex - 1 + total) % total;
         applySingleCardView(strategyCardsArray, state.currentCardIndex);
-        applySubSectionVisibility();
     } else if (viewMode === '>') {
-        // 如果當前不在單卡檢視模式，直接進入第一張卡片
-        if (state.strategyCardView !== 'single') {
-            state.strategyCardView = 'single';
-            state.currentCardIndex = 0;
-            state.currentSubSectionIndex = 'all';
-        }
-
-        const count = getSubSectionCount(state.currentCardIndex);
-        if (count > 0) {
-            if (state.currentSubSectionIndex === 'all') {
-                state.currentSubSectionIndex = 0; // 從第一個子項目開始
-            } else if (state.currentSubSectionIndex === count - 1) {
-                state.currentSubSectionIndex = 'all'; // 循環到 "全部"
-            } else {
-                state.currentSubSectionIndex++;
-            }
-        }
+        state.currentCardIndex = (state.currentCardIndex + 1) % total;
         applySingleCardView(strategyCardsArray, state.currentCardIndex);
-        applySubSectionVisibility();
     }
 }
 
@@ -1248,7 +1884,117 @@ function applySingleCardView(cards, activeIndex) {
 // MARKDOWN 渲染支援
 // ==========================================
 
-// renderMarkdown is now imported from ./utils.js
+/**
+ * 將 Markdown 語法渲染為 HTML
+ * 支援：標題、粗體、斜體、清單、引用、分隔線、連結
+ * @param {string} text - 原始 Markdown 文字
+ * @returns {string} 渲染後的 HTML
+ */
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    let html = text
+        // 轉義 HTML 特殊字元
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>');
+
+    // 標題 (h1-h3)
+    html = html.replace(/^#{3}\s*(.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^#{2}\s*(.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^#{1}\s*(.+)$/gm, '<h3>$1</h3>');
+
+    // 粗體與斜體
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // 刪除線
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+    // 連結 [文字](網址)
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    // 圖片 ![替代文字](網址)
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%; height:auto; border-radius:8px;">');
+
+    // 引用區塊
+    html = html.replace(/^>\s*(.+)$/gm, '<blockquote style="border-left:3px solid var(--primary); padding-left:12px; margin:8px 0; color:var(--text-secondary); font-style:italic;">$1</blockquote>');
+
+    // 分隔線
+    html = html.replace(/^[\s]*-{3,}[\s]*$/gm, '<hr style="border:none; border-top:1px solid var(--border-color); margin:16px 0;">');
+    html = html.replace(/^[\s]*\*{3,}[\s]*$/gm, '<hr style="border:none; border-top:1px solid var(--border-color); margin:16px 0;">');
+
+    // 無序清單
+    const lines = html.split('\n');
+    let inList = false;
+    let result = [];
+    for (const line of lines) {
+        const match = line.match(/^(\s*)[-*•]\s+(.+)$/);
+        if (match) {
+            if (!inList) {
+                result.push('<ul style="list-style:none; padding:0; margin:8px 0;">');
+                inList = true;
+            }
+            result.push(`<li style="padding:4px 0; padding-left:20px; position:relative;"><span style="position:absolute; left:0; color:var(--primary);">•</span>${match[2]}</li>`);
+        } else if (inList && line.trim() === '') {
+            result.push('</ul>');
+            inList = false;
+            result.push(line);
+        } else {
+            if (inList) {
+                result.push('</ul>');
+                inList = false;
+            }
+            result.push(line);
+        }
+    }
+    if (inList) result.push('</ul>');
+
+    // 有序清單
+    html = result.join('\n');
+    let inOrderedList = false;
+    const orderedLines = [];
+    for (const line of html.split('\n')) {
+        const match = line.match(/^(\s*)\d+\.(\s+.+)$/);
+        if (match) {
+            if (!inOrderedList) {
+                orderedLines.push('<ol style="list-style:none; padding:0; margin:8px 0; counter-reset:item;">');
+                inOrderedList = true;
+            }
+            orderedLines.push(`<li style="padding:4px 0; padding-left:28px; position:relative; counter-increment:item;"><span style="position:absolute; left:0; color:var(--primary); font-weight:600; font-size:0.85rem;">${match[0].match(/^\s*(\d+)\./)[1]}.</span>${match[2].trim()}</li>`);
+        } else if (inOrderedList && line.trim() === '') {
+            orderedLines.push('</ol>');
+            inOrderedList = false;
+            orderedLines.push(line);
+        } else {
+            if (inOrderedList) {
+                orderedLines.push('</ol>');
+                inOrderedList = false;
+            }
+            orderedLines.push(line);
+        }
+    }
+    if (inOrderedList) orderedLines.push('</ol>');
+    html = orderedLines.join('\n');
+
+    // 內聯程式碼
+    html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary); padding:2px 6px; border-radius:4px; font-family:\'SFMono-Regular\', Consolas, monospace; font-size:0.85em; color:var(--primary);">$1</code>');
+
+    // 程式碼區塊
+    html = html.replace(/```([\s\S]*?)```/g, '<pre style="background:var(--bg-tertiary); padding:12px; border-radius:8px; border:1px solid var(--border-color); overflow-x:auto; font-family:\'SFMono-Regular\', Consolas, monospace; font-size:0.85rem; line-height:1.6; margin:8px 0;"><code>$1</code></pre>');
+
+    // 自動換行處理段落
+    const paragraphLines = html.split('\n').map(line => {
+        line = line.trim();
+        if (!line) return '';
+        // 如果已經是 HTML 標籤，不包裝
+        if (line.startsWith('<') && (line.endsWith('>') || line.includes('</'))) return line;
+        return `<p style="margin:4px 0; line-height:1.6;">${line}</p>`;
+    });
+
+    return paragraphLines.join('\n');
+}
 
 /**
  * 為指定的元素內容器渲染 Markdown 內容
@@ -1489,7 +2235,154 @@ async function generateWorldviewSeedsWithAI() {
     );
 }
 
-
+function renderCharactersTab() {
+    // Sync JSON text
+    el.editorCharactersJson.value = state.currentNovelData.characters_raw || '{\n  "characters": []\n}';
+    
+    // Generate Cards
+    el.charactersCardsGrid.innerHTML = '';
+    const charData = state.currentNovelData.characters;
+    
+    if (!charData || !charData.characters || charData.characters.length === 0) {
+        el.charactersCardsGrid.innerHTML = '<div class="empty-placeholder">尚無角色。點擊「AI 自動設計角色」或「新增角色」開始。</div>';
+        return;
+    }
+    
+    charData.characters.forEach((c, index) => {
+        const card = document.createElement('div');
+        card.className = 'character-card';
+        card.dataset.index = index;
+        
+        // Interactive personality pills with ✕ delete
+        const traitsHtml = (c.personality || []).map((t, tIdx) => 
+            `<span class="char-trait-pill" data-char="${index}" data-field="personality" data-tidx="${tIdx}">${t} <button class="delete-pill-btn" title="刪除此特質">✕</button></span>`
+        ).join('');
+        
+        // Interactive flaw pills with ✕ delete
+        const flawsHtml = (c.flaws || []).map((f, fIdx) => 
+            `<span class="char-trait-pill" style="border-color:rgba(239, 68, 68, 0.2); color:#fca5a5;" data-char="${index}" data-field="flaws" data-tidx="${fIdx}">${f} <button class="delete-pill-btn" title="刪除此缺陷">✕</button></span>`
+        ).join('');
+        
+        card.innerHTML = `
+            <div class="char-header">
+                <span class="char-name">${c.name}</span>
+                <span class="char-role">${c.role}</span>
+            </div>
+            <div class="char-bio">
+                <strong>動機：</strong><span class="char-motivation">${c.motivation || '未設定'}</span><br>
+                <strong>成長弧線：</strong><span class="char-arc">${c.arc || '未設定'}</span>
+            </div>
+            <div class="char-traits">
+                ${traitsHtml}
+                <button class="btn-add-pill add-trait-btn" data-char="${index}" data-field="personality">+ 特質</button>
+                ${flawsHtml}
+                <button class="btn-add-pill add-flaw-btn" data-char="${index}" data-field="flaws">+ 缺陷</button>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                <button class="btn btn-secondary btn-xs edit-char-btn" data-index="${index}">編輯</button>
+                <button class="btn btn-ai btn-xs ai-enhance-char-btn" data-index="${index}">✨ AI 局部增強</button>
+                <button class="btn btn-ghost btn-xs delete-char-btn" data-index="${index}">刪除</button>
+            </div>
+        `;
+        
+        // Delete character handler - FIXED: properly capture index in closure
+        const deleteBtn = card.querySelector('.delete-char-btn');
+        deleteBtn.addEventListener('click', (function(idx, charName) {
+            return async function() {
+                if (await showCustomConfirm(`刪除角色「${charName}」？`)) {
+                    // Re-fetch fresh data from state to avoid stale reference
+                    const freshCharData = state.currentNovelData.characters;
+                    if (freshCharData && freshCharData.characters && freshCharData.characters[idx]) {
+                        freshCharData.characters.splice(idx, 1);
+                        state.currentNovelData.characters = freshCharData;
+                        const newRaw = JSON.stringify(freshCharData, null, 2);
+                        state.currentNovelData.characters_raw = newRaw;
+                        // 同步更新 textarea
+                        el.editorCharactersJson.value = newRaw;
+                        // 直接發送 API 請求保存
+                        requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: freshCharData })
+                            .then(() => {
+                                showToast('角色已刪除');
+                                renderCharactersTab();
+                            })
+                            .catch(() => {
+                                showToast('刪除失敗');
+                            });
+                    }
+                }
+            };
+        })(index, c.name));
+        
+        // Edit character handler - NEW: opens edit modal
+        const editBtn = card.querySelector('.edit-char-btn');
+        editBtn.addEventListener('click', (function(idx, char) {
+            return function() {
+                openCharacterEditModal(idx, char);
+            };
+        })(index, {...c})); // spread to avoid reference issues
+        
+        // Pill delete handlers: remove trait/flaw by clicking ✕
+        card.querySelectorAll('.delete-pill-btn').forEach(btn => {
+            btn.addEventListener('click', (function(charIdx) {
+                return function(e) {
+                    e.stopPropagation();
+                    const pill = e.target.closest('.char-trait-pill');
+                    if (!pill) return;
+                    const field = pill.dataset.field;
+                    const tidx = parseInt(pill.dataset.tidx);
+                    const freshCharData = state.currentNovelData.characters;
+                    if (freshCharData && freshCharData.characters && freshCharData.characters[charIdx]) {
+                        const arr = freshCharData.characters[charIdx][field];
+                        if (arr && tidx >= 0 && tidx < arr.length) {
+                            arr.splice(tidx, 1);
+                            state.currentNovelData.characters = freshCharData;
+                            state.currentNovelData.characters_raw = JSON.stringify(freshCharData, null, 2);
+                            requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: freshCharData })
+                                .then(() => { showToast('已刪除'); renderCharactersTab(); })
+                                .catch(() => showToast('刪除失敗'));
+                        }
+                    }
+                };
+            })(index));
+        });
+        
+        // Add trait/flaw handlers
+        card.querySelectorAll('.btn-add-pill').forEach(btn => {
+            btn.addEventListener('click', (function(charIdx) {
+                return async function(e) {
+                    const field = e.target.dataset.field;
+                    const label = field === 'personality' ? '新特質' : '新缺陷';
+                    const newVal = await showCustomPrompt(`請輸入${label}：`);
+                    if (!newVal || !newVal.trim()) return;
+                    const freshCharData = state.currentNovelData.characters;
+                    if (freshCharData && freshCharData.characters && freshCharData.characters[charIdx]) {
+                        if (!freshCharData.characters[charIdx][field]) {
+                            freshCharData.characters[charIdx][field] = [];
+                        }
+                        freshCharData.characters[charIdx][field].push(newVal.trim());
+                        state.currentNovelData.characters = freshCharData;
+                        state.currentNovelData.characters_raw = JSON.stringify(freshCharData, null, 2);
+                        requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: freshCharData })
+                            .then(() => { showToast(`${label}已新增`); renderCharactersTab(); })
+                            .catch(() => showToast('新增失敗'));
+                    }
+                };
+            })(index));
+        });
+        
+        // AI enhance handler
+        const aiBtn = card.querySelector('.ai-enhance-char-btn');
+        if (aiBtn) {
+            aiBtn.addEventListener('click', (function(charIdx, charName) {
+                return function() {
+                    openCharacterAIEnhanceModal(charIdx, charName);
+                };
+            })(index, c.name));
+        }
+        
+        el.charactersCardsGrid.appendChild(card);
+    });
+}
 
 /**
  * 開啟角色 AI 局部增強 Modal
@@ -1638,20 +2531,10 @@ function openCharacterEditModal(index, character) {
     // Populate fields
     document.getElementById('edit-char-name').value = character.name || '';
     document.getElementById('edit-char-role').value = character.role || '配角';
-    document.getElementById('edit-char-motivation').value = character.motivation || character.want || '';
-    document.getElementById('edit-char-arc').value = character.arc || character.need || '';
+    document.getElementById('edit-char-motivation').value = character.motivation || '';
+    document.getElementById('edit-char-arc').value = character.arc || '';
     document.getElementById('edit-char-personality').value = (character.personality || []).join(', ');
-    
-    // Support flaws as array or string or fatal_flaw
-    let flawsText = '';
-    if (Array.isArray(character.flaws)) {
-        flawsText = character.flaws.join(', ');
-    } else if (typeof character.flaws === 'string') {
-        flawsText = character.flaws;
-    } else if (character.fatal_flaw) {
-        flawsText = character.fatal_flaw;
-    }
-    document.getElementById('edit-char-flaws').value = flawsText;
+    document.getElementById('edit-char-flaws').value = (character.flaws || []).join(', ');
     
     // Save handler - 直接保存，不要觸發其他事件
     const saveBtn = document.getElementById('btn-save-character-edit');
@@ -1662,27 +2545,22 @@ function openCharacterEditModal(index, character) {
     
     newSaveBtn.addEventListener('click', () => {
         // 直接發送 API 請求，不要從 textarea 讀取
+        const updatedChar = {
+            name: document.getElementById('edit-char-name').value,
+            role: document.getElementById('edit-char-role').value,
+            motivation: document.getElementById('edit-char-motivation').value,
+            arc: document.getElementById('edit-char-arc').value,
+            personality: document.getElementById('edit-char-personality').value.split(',').map(s => s.trim()).filter(s => s),
+            flaws: document.getElementById('edit-char-flaws').value.split(',').map(s => s.trim()).filter(s => s)
+        };
+        
+        // 更新本地 state
         const charData = state.currentNovelData.characters;
         if (charData && charData.characters && charData.characters[index]) {
-            const originalChar = charData.characters[index];
-            const updatedChar = {
-                ...originalChar,
-                name: document.getElementById('edit-char-name').value,
-                role: document.getElementById('edit-char-role').value,
-                motivation: document.getElementById('edit-char-motivation').value,
-                want: document.getElementById('edit-char-motivation').value, // compatibility
-                arc: document.getElementById('edit-char-arc').value,
-                need: document.getElementById('edit-char-arc').value, // compatibility
-                personality: document.getElementById('edit-char-personality').value.split(',').map(s => s.trim()).filter(s => s),
-                flaws: document.getElementById('edit-char-flaws').value.split(',').map(s => s.trim()).filter(s => s),
-                fatal_flaw: document.getElementById('edit-char-flaws').value // compatibility
-            };
-            
             charData.characters[index] = updatedChar;
             state.currentNovelData.characters = charData;
             const newRaw = JSON.stringify(charData, null, 2);
             state.currentNovelData.characters_raw = newRaw;
-            if (el.editorCharactersJson) el.editorCharactersJson.value = newRaw;
             
             // 直接發送 API 請求保存
             requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: charData })
@@ -1702,7 +2580,142 @@ function openCharacterEditModal(index, character) {
     editModal.classList.add('active');
 }
 
-
+function renderPlotTab() {
+    el.editorPlotJson.value = state.currentNovelData.plot_raw || '{\n  "chapters": []\n}';
+    
+    el.plotTimeline.innerHTML = '';
+    const plotData = state.currentNovelData.plot;
+    
+    if (!plotData || !plotData.chapters || plotData.chapters.length === 0) {
+        el.plotTimeline.innerHTML = '<div class="empty-placeholder">尚無章節規劃。點擊「AI 自動拆分章節」來建立整本大綱。</div>';
+        return;
+    }
+    
+    plotData.chapters.forEach((ch, index) => {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+        item.dataset.index = index;
+        
+        // 處理 events 可能為字串陣列或物件陣列
+        let eventsContent = '';
+        if (Array.isArray(ch.events)) {
+            eventsContent = ch.events.map(e => {
+                if (typeof e === 'string') {
+                    return `<li>${e}</li>`;
+                } else if (typeof e === 'object' && e !== null) {
+                    // 處理物件格式的事件 {scene, action, consequence}
+                    return `<li><strong>${e.scene || ''}</strong>：${e.action || ''}</li>`;
+                }
+                return `<li>${String(e)}</li>`;
+            }).join('');
+        }
+        
+        // 處理 foreshadowing
+        let foreshadowHtml = '無設定伏筆';
+        if (ch.foreshadowing && Array.isArray(ch.foreshadowing) && ch.foreshadowing.length > 0) {
+            foreshadowHtml = `<strong>伏筆提示：</strong>` + ch.foreshadowing.map(f => {
+                if (typeof f === 'string') return f;
+                return JSON.stringify(f);
+            }).join('、');
+        } else if (ch.foreshadowing_plant && Array.isArray(ch.foreshadowing_plant)) {
+            foreshadowHtml = `<strong>伏筆提示：</strong>` + ch.foreshadowing_plant.join('、');
+        }
+            
+        item.innerHTML = `
+            <div class="timeline-header">
+                <span class="timeline-chapter-idx">第 ${ch.chapter_index} 章</span>
+                <span class="timeline-tone">${ch.emotional_tone || '均衡'}</span>
+            </div>
+            <div class="timeline-title">${ch.title || '未命名章節'}</div>
+            <div class="timeline-purpose"><strong>功能本質：</strong>${ch.purpose || '未定義'}</div>
+            <ul class="timeline-events-list">
+                ${eventsContent || '<li>無事件記錄</li>'}
+            </ul>
+            <div class="timeline-foreshadow">
+                ${foreshadowHtml}
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px; border-top:1px solid var(--border-color); padding-top:8px;">
+                <button class="btn btn-secondary btn-xs edit-chapter-outline-btn" data-index="${index}">編輯</button>
+                <button class="btn btn-ghost btn-xs insert-chapter-btn" data-index="${index}" title="在此章後插入新章">➕ 插入新章</button>
+                <button class="btn btn-ai btn-xs ai-insert-chapter-btn" data-index="${index}" title="AI 在此章後生成新大綱">✨ AI 增產</button>
+                <button class="btn btn-ghost btn-xs delete-chapter-outline-btn" data-index="${index}">刪除</button>
+            </div>
+        `;
+        
+        // 編輯按鈕 - 開啟編輯 Modal
+        const editBtn = item.querySelector('.edit-chapter-outline-btn');
+        editBtn.addEventListener('click', () => {
+            openChapterOutlineEditModal(index, ch);
+        });
+        
+        // ➕ 手動插入新章
+        const insertBtn = item.querySelector('.insert-chapter-btn');
+        insertBtn.addEventListener('click', (function(afterIndex) {
+            return function() {
+                openManualChapterInsertModal(afterIndex);
+            };
+        })(index));
+        
+        // ✨ AI 增產/插大綱
+        const aiInsertBtn = item.querySelector('.ai-insert-chapter-btn');
+        aiInsertBtn.addEventListener('click', (function(afterIndex) {
+            return async function() {
+                const hint = await showCustomPrompt('請輸入 AI 章節大綱生成提示（可留空）：', `在第 ${afterIndex + 1} 章後插入新的章節`);
+                if (hint === null) return;
+                
+                showAgentProcessingIndicator('plot', 'Plot Planner (增量插入)');
+                showToast(`正在為第 ${afterIndex + 1} 章後生成新大綱...`);
+                
+                streamAPI(
+                    '/api/agent/incremental-plot',
+                    {
+                        novel_id: state.currentNovelId,
+                        insert_after_index: afterIndex,
+                        user_hint: hint || `在第 ${afterIndex + 1} 章後插入新的章節，推動主線劇情`
+                    },
+                    null,
+                    (delta) => {
+                        el.editorPlotJson.value += delta;
+                    },
+                    (err) => {
+                        showToast('AI 增產失敗: ' + err);
+                        hideAgentProcessingIndicator('plot');
+                    },
+                    async () => {
+                        hideAgentProcessingIndicator('plot');
+                        showToast('AI 大綱插入完成');
+                        await loadNovelDetails(state.currentNovelId);
+                    }
+                );
+            };
+        })(index));
+        
+        // 刪除按鈕 - 使用正確的 index 引用
+        const deleteBtn = item.querySelector('.delete-chapter-outline-btn');
+        deleteBtn.addEventListener('click', (function(idx, chapter) {
+            return async function() {
+                if (await showCustomConfirm(`刪除第 ${chapter.chapter_index} 章大綱？`)) {
+                    // 確保使用最新的 plotData
+                    const freshPlotData = state.currentNovelData.plot;
+                    if (freshPlotData && freshPlotData.chapters && freshPlotData.chapters[idx]) {
+                        freshPlotData.chapters.splice(idx, 1);
+                        // reindex
+                        freshPlotData.chapters.forEach((item, i) => {
+                            item.chapter_index = i + 1;
+                        });
+                        // 同步更新 state
+                        state.currentNovelData.plot = freshPlotData;
+                        state.currentNovelData.plot_raw = JSON.stringify(freshPlotData, null, 2);
+                        el.editorPlotJson.value = state.currentNovelData.plot_raw;
+                        savePlotOutlineDirect();
+                    }
+                }
+            };
+        })(index, ch));
+        
+        el.plotTimeline.appendChild(item);
+    });
+}
 
 /**
  * 手動插入章節大綱 Modal
@@ -1930,7 +2943,55 @@ function openChapterOutlineEditModal(index, chapter) {
     editModal.classList.add('active');
 }
 
-
+function renderWriterTab() {
+    el.writerChaptersList.innerHTML = '';
+    const plotData = state.currentNovelData.plot;
+    const writtenChapters = state.currentNovelData.chapters || [];
+    
+    if (!plotData || !plotData.chapters || plotData.chapters.length === 0) {
+        el.writerChaptersList.innerHTML = '<li class="loading-placeholder">請先前往「劇情大綱」建立大綱章節。</li>';
+        disableWriterPanel();
+        return;
+    }
+    
+    // Enable buttons
+    el.btnWriteChapter.disabled = false;
+    el.btnEditChapter.disabled = false;
+    el.btnProseSave.disabled = false;
+    el.editorProse.disabled = false;
+    
+    plotData.chapters.forEach(ch => {
+        const li = document.createElement('li');
+        li.dataset.index = ch.chapter_index;
+        
+        // check if this chapter has non-empty saved content
+        const chapterSaved = writtenChapters.find(c => c.chapter_index === ch.chapter_index);
+        const isWritten = chapterSaved && chapterSaved.content && chapterSaved.content.trim().length > 0;
+        const statusText = isWritten ? '已寫作' : '草稿';
+        const statusClass = isWritten ? 'status-written' : 'status-draft';
+        
+        if (state.activeChapterIndex === ch.chapter_index) {
+            li.className = 'active';
+        }
+        
+        li.innerHTML = `
+            <span class="ch-num">Chapter ${ch.chapter_index}</span>
+            <span style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ch.title}</span>
+            <span class="status-pill ${statusClass}" style="align-self:flex-start; margin-top:2px; font-size:0.65rem;">${statusText}</span>
+        `;
+        
+        li.addEventListener('click', () => {
+            selectWriterChapter(ch.chapter_index);
+        });
+        
+        el.writerChaptersList.appendChild(li);
+    });
+    
+    // Auto select first chapter if none selected
+    if (state.activeChapterIndex === null && plotData.chapters.length > 0) {
+        selectWriterChapter(plotData.chapters[0].chapter_index);
+    }
+}
 
 function disableWriterPanel() {
     el.btnWriteChapter.disabled = true;
@@ -1942,7 +3003,57 @@ function disableWriterPanel() {
     el.chapterOutlineSummaryText.textContent = "選擇左側章節查看 AI 大綱事件...";
 }
 
-
+function selectWriterChapter(chapterIndex) {
+    state.activeChapterIndex = parseInt(chapterIndex);
+    
+    // Update active highlight in list
+    document.querySelectorAll('#writer-chapters-list li').forEach(li => {
+        if (parseInt(li.dataset.index) === state.activeChapterIndex) {
+            li.classList.add('active');
+        } else {
+            li.classList.remove('active');
+        }
+    });
+    
+    const plotData = state.currentNovelData.plot;
+    const chapterOutline = (plotData.chapters || []).find(ch => ch.chapter_index === state.activeChapterIndex);
+    
+    if (chapterOutline) {
+        el.activeChapterTitle.textContent = `第 ${chapterOutline.chapter_index} 章：${chapterOutline.title}`;
+        const eventsHtml = (chapterOutline.events || []).map(e => {
+            if (typeof e === 'string') {
+                return `• ${e}`;
+            }
+            if (e && typeof e === 'object') {
+                const parts = [];
+                if (e.scene) parts.push(e.scene);
+                if (e.action) parts.push(e.action);
+                if (e.consequence) parts.push(`後果：${e.consequence}`);
+                if (!parts.length && e.description) parts.push(e.description);
+                return `• ${parts.filter(Boolean).join(' / ') || JSON.stringify(e)}`;
+            }
+            return `• ${String(e)}`;
+        }).join('<br>');
+        el.chapterOutlineSummaryText.innerHTML = `
+            <strong>本章目的：</strong>${chapterOutline.purpose || '未提供'}<br>
+            <strong>情節事件：</strong><br>${eventsHtml || '（尚無事件詳述）'}
+        `;
+    }
+    
+    // Load chapter content from state
+    const writtenChapters = state.currentNovelData.chapters || [];
+    const chapterProse = writtenChapters.find(c => c.chapter_index === state.activeChapterIndex);
+    
+    if (chapterProse && chapterProse.content && chapterProse.content.trim().length > 0) {
+        el.editorProse.value = chapterProse.content;
+        el.activeChapterStatus.className = 'status-pill status-written';
+        el.activeChapterStatus.textContent = '已寫作';
+    } else {
+        el.editorProse.value = chapterProse ? chapterProse.content || '' : '';
+        el.activeChapterStatus.className = 'status-pill status-draft';
+        el.activeChapterStatus.textContent = '草稿';
+    }
+}
 
 /**
  * 格式化時間戳為 HH:MM 格式
@@ -1970,7 +3081,34 @@ function formatTimestamp(timestamp) {
     }
 }
 
-
+function renderChatMessages() {
+    // Keep first system prompt
+    const systemMsg = el.chatMessagesContainer.firstElementChild.outerHTML;
+    el.chatMessagesContainer.innerHTML = systemMsg;
+    
+    if (!state.currentNovelData || !state.currentNovelData.chat_memory) return;
+    
+    state.currentNovelData.chat_memory.forEach(m => {
+        const msg = document.createElement('div');
+        const isUser = m.role === 'user';
+        msg.className = `message ${isUser ? 'user-msg' : 'assistant-msg'}`;
+        
+        // 格式化時間戳
+        const timestamp = formatTimestamp(m.created_at || m.timestamp);
+        
+        msg.innerHTML = `
+            <div class="msg-sender-row">
+                <div class="msg-sender">${isUser ? 'You' : 'Novel Director'}</div>
+                <div class="msg-timestamp">${timestamp}</div>
+            </div>
+            <div class="msg-content">${m.content}</div>
+        `;
+        el.chatMessagesContainer.appendChild(msg);
+    });
+    
+    // scroll bottom
+    el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+}
 
 // ==========================================
 // DIRECT DATABASE SAVE CALLBACKS
@@ -4116,71 +5254,6 @@ window.toggleSectionExpand = toggleSectionExpand;
 window.closeSeedModal = closeSeedModal;
 window.closeCustomDialog = closeCustomDialog;
 window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallback
-
-// Direct aliases for worldview complex rendering
-window.editWorldviewComplexList = openWorldviewComplexListEditModal;
-window.editWorldviewList = openWorldviewListEditModal;
-
-// Character edit modal and delete handlers
-window.openCharacterEditModal = openCharacterEditModal;
-window.deleteCharacter = function(index) {
-    window.showCustomDialog({
-        title: '🗑️ 刪除角色設定',
-        message: '您確定要刪除這個角色設定嗎？此操作不可逆！',
-        type: 'confirm'
-    }).then(confirmed => {
-        if (confirmed) {
-            const charData = state.currentNovelData?.characters;
-            if (charData && charData.characters && charData.characters[index] !== undefined) {
-                charData.characters.splice(index, 1);
-                state.currentNovelData.characters = charData;
-                const newRaw = JSON.stringify(charData, null, 2);
-                state.currentNovelData.characters_raw = newRaw;
-                if (el.editorCharactersJson) el.editorCharactersJson.value = newRaw;
-                
-                requestAPI(`/api/novels/${state.currentNovelId}/characters`, 'POST', { json_data: charData })
-                    .then(() => {
-                        showToast('角色已刪除');
-                        renderCharactersTab();
-                    })
-                    .catch(() => {
-                        showToast('刪除失敗');
-                    });
-            }
-        }
-    });
-};
-
-// Plot Chapter handlers
-window.openChapterOutlineEditModal = openChapterOutlineEditModal;
-window.openManualChapterInsertModal = openManualChapterInsertModal;
-window.deletePlotChapter = function(index) {
-    window.showCustomDialog({
-        title: '🗑️ 刪除章節大綱',
-        message: '您確定要刪除此章節大綱嗎？（已寫完的正文不會受影響，但大綱本身會永久刪除）',
-        type: 'confirm'
-    }).then(confirmed => {
-        if (confirmed) {
-            const plotData = state.currentNovelData?.plot;
-            if (plotData && plotData.chapters && plotData.chapters[index] !== undefined) {
-                plotData.chapters.splice(index, 1);
-                
-                // Re-index remaining chapters
-                plotData.chapters.forEach((ch, i) => {
-                    ch.chapter_index = i + 1;
-                });
-                
-                state.currentNovelData.plot = plotData;
-                const newRaw = JSON.stringify(plotData, null, 2);
-                state.currentNovelData.plot_raw = newRaw;
-                if (el.editorPlotJson) el.editorPlotJson.value = newRaw;
-                
-                savePlotOutlineDirect();
-                showToast('章節大綱已刪除');
-            }
-        }
-    });
-};
 
 // Export strategy card view toggle functions for inline onclick handlers
 window.setStrategyCardView = setStrategyCardView;

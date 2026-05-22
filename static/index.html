@@ -166,13 +166,8 @@
                             <textarea id="editor-worldview" placeholder="在此輸入世界觀、主題、核心衝突與結構。你也可以使用上方「AI 自動規劃世界觀」按鈕由 Story Architect Agent 幫忙起草..."></textarea>
                         </div>
                         <div class="editor-sidebar-seeds" style="flex: 1;">
-                            <div class="sidebar-label">
-                                <span>🌍 【全景世界觀設定】</span>
-                            </div>
-                            <div class="seeds-actions-bar" style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
-                                <button id="btn-seed-add" class="btn btn-secondary btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">➕ 新增伏筆</button>
-                                <button id="btn-seed-ai-generate" class="btn btn-ai btn-xs" style="font-size: 0.75rem; padding: 4px 8px;">✨ AI 規劃</button>
-                                <div style="flex: 1;"></div>
+                            <div class="sidebar-label" style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                                <span style="font-weight: 600; font-size: 1.05rem; display: flex; align-items: center; gap: 6px; color: var(--text-primary);">🌍 【全景世界觀設定】</span>
                                 <div class="strategy-card-view-toggle" style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="prev" onclick="setStrategyCardView('<')" style="padding: 4px 8px; font-size: 0.75rem;">‹</button>
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: 0.75rem;">📐 三幕式</button>
@@ -565,7 +560,7 @@
     <!-- Global Notification toast -->
     <div id="toast" class="hidden">儲存成功</div>
     
-    <!-- JS files -->
-    <script src="app.js"></script>
+    <!-- JS modules -->
+    <script type="module" src="app.js"></script>
 </body>
 </html>
