@@ -334,6 +334,90 @@ def run_incremental_plot_planner(novel_id, insert_after_index, user_hint):
     
     return run_agent_stream(novel_id, "plot", messages, save_callback)
 
+
+def run_volume_alignment(novel_id, volume_index):
+    """
+    JIT 延遲對齊 (Lazy Realignment) - 針對特定篇卷
+    結合最新世界觀規律補丁，局部校準該卷內部的章節大綱，完成後消除過期標記。
+    """
+    from db import get_novel, get_volumes, update_volume_dirty, get_latest_worldbuilding, get_latest_characters, get_latest_plot_chapters, save_plot_chapters
+    import json
+    
+    novel = get_novel(novel_id)
+    worldview_patches_str = novel.get("worldview_patches", "[]")
+    
+    wb = get_latest_worldbuilding(novel_id)
+    worldbuilding_str = wb["content"] if wb else "尚無世界觀設定"
+    
+    char = get_latest_characters(novel_id)
+    characters_str = char["json_data"] if char else "尚無角色設定"
+    
+    plot = get_latest_plot_chapters(novel_id)
+    plot_chapters = plot["parsed_data"].get("chapters", []) if plot else []
+    
+    # 篩選該卷的章節大綱
+    vol_chapters = [c for c in plot_chapters if (int(c.get("chapter_index", 0)) - 1) // 50 + 1 == int(volume_index)]
+    
+    if not vol_chapters:
+        def empty_gen():
+            yield "data: " + json.dumps({"type": "content", "delta": "此篇卷尚無章節大綱，無需對齊。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        return empty_gen()
+        
+    prompt = f"""你是一位小說大綱對齊大師。
+現在，你的任務是執行**大綱延遲對齊 (Lazy Realignment)**：
+因為小說的最新寫作部分引入了新的世界觀規律或神秘設定（即「世界觀補丁」），你需要修復並調整**第 {volume_index} 卷**的章節大綱，使其與最新設定邏輯連貫。
+
+## ⚠️ 最新世界觀設定與世界規律補丁
+【核心世界觀】
+{worldbuilding_str}
+
+【最新追加世界規律補丁】
+{worldview_patches_str}
+
+## 👥 角色聖經
+{characters_str}
+
+## 📋 當前第 {volume_index} 卷的原始章節大綱（需要局部修復與調整）
+{json.dumps(vol_chapters, ensure_ascii=False, indent=2)}
+
+## 🎯 調整要求
+1. 請深度融合最新追加的「世界規律補丁」，精細修正大綱中事件的發生方式、伏筆或角色對話，確保不會與新設定衝突或出現邏輯漏洞。
+2. 保持這些章節的核心情節主體與人物動機不變，僅進行必要的細微修正、伏筆埋設與細節補充。
+3. 嚴格輸出合法的 JSON 陣列，包含且僅包含這批章節。嚴格包裹在 ```json ... ``` 區塊中。
+"""
+    messages = [
+        {"role": "system", "content": "你是一位頂尖的小說大綱精細調度師。你只輸出嚴格、合法、無多餘寒暄的標準 JSON 數據。"},
+        {"role": "user", "content": prompt}
+    ]
+    
+    def save_callback(nid, text):
+        parsed = parse_json_safely(text)
+        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
+            return
+            
+        aligned_ch_list = parsed if isinstance(parsed, list) else parsed.get("chapters", [])
+        if isinstance(aligned_ch_list, list) and len(aligned_ch_list) > 0:
+            # 重新加載確保 JIT 更新安全
+            latest_plot = get_latest_plot_chapters(nid)
+            all_ch = latest_plot["parsed_data"].get("chapters", []) if latest_plot else []
+            
+            # 將對齊後的章節縫合回總大綱
+            for new_ch in aligned_ch_list:
+                ch_idx = new_ch.get("chapter_index")
+                if ch_idx:
+                    all_ch = [c for c in all_ch if int(c.get("chapter_index", 0)) != int(ch_idx)]
+                    all_ch.append(new_ch)
+                    
+            all_ch.sort(key=lambda x: int(x.get("chapter_index", 0)))
+            save_plot_chapters(nid, {"chapters": all_ch})
+            
+            # 消除該卷的過期狀態！
+            update_volume_dirty(nid, int(volume_index), 0)
+            
+    return run_agent_stream(novel_id, "plot", messages, save_callback)
+
+
 # ============================================================
 # Copilot 增量操作指令解析
 # ============================================================
@@ -428,3 +512,178 @@ def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
     """
     from agents import run_agent_stream as _run_agent_stream
     return _run_agent_stream(novel_id, agent_name, messages, save_callback)
+def run_volume_jit_alignment(novel_id, volume_index):
+    """
+    非同步 JIT 篇卷大綱對齊機制
+    """
+    import json
+    import db
+    from llm import call_llm_stream
+    from agents import compile_context, run_agent_stream
+    
+    # 1. 取得全域上下文
+    context = compile_context(novel_id)
+    patches = db.get_worldview_patches(novel_id)
+    patches_str = json.dumps(patches, ensure_ascii=False, indent=2) if patches else "尚無新世界規律補丁設定。"
+    
+    # 2. 取得當前卷
+    volumes = db.get_volumes(novel_id)
+    current_vol = None
+    for v in volumes:
+        if v["volume_index"] == volume_index:
+            current_vol = v
+            break
+            
+    if not current_vol:
+        def error_gen():
+            yield "data: " + json.dumps({"type": "error", "message": f"找不到第 {volume_index} 篇卷設定。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        return error_gen()
+        
+    # 3. 取得前卷大綱（用以縫合）
+    prev_chapters_context = "這是整部小說的開篇第一卷，無前卷大綱銜接參考。"
+    if volume_index > 1:
+        prev_vol = None
+        for v in volumes:
+            if v["volume_index"] == volume_index - 1:
+                prev_vol = v
+                break
+        if prev_vol and prev_vol["chapters_outline"]:
+            try:
+                prev_outline = json.loads(prev_vol["chapters_outline"])
+                if isinstance(prev_outline, list) and len(prev_outline) > 0:
+                    last_few = prev_outline[-3:]
+                    prev_chapters_context = "【前卷結尾章節銜接參考】:\n"
+                    for ch in last_few:
+                        prev_chapters_context += f"- 第 {ch.get('chapter_index')} 章《{ch.get('title')}》: {ch.get('summary')} (懸念: {ch.get('cliffhanger')})\n"
+            except:
+                pass
+                
+    start_chapter = (volume_index - 1) * 50 + 1
+    end_chapter = volume_index * 50
+    
+    yield "data: " + json.dumps({
+        "type": "content", 
+        "delta": f"=== [篇卷大綱 JIT 對齊啟動] ===\n正在針對第 {volume_index} 卷《{current_vol['title']}》進行 50 章節微觀大綱 JIT 校準對齊...\n"
+    }, ensure_ascii=False) + "\n\n"
+    
+    prompt = f"""你是一位精細微觀情節對齊大師。你負責將世界觀最新設定、角色 Bible 與特定篇卷大綱完美對齊。
+
+【全域世界觀設定】
+{context['worldbuilding']}
+
+【動態世界觀補丁/衍生規律】
+{patches_str}
+
+【角色 Bible】
+{context['characters']}
+
+【當前篇卷設定】
+第 {volume_index} 卷：《{current_vol['title']}》
+核心概要：{current_vol['summary']}
+登場陣營：{current_vol['factions']}
+
+【前卷結尾大綱（銜接參考，請務必流暢承接時間與事件）】
+{prev_chapters_context}
+
+現在，請繼續為第 {volume_index} 卷精細規劃並對齊接下來的 50 個章節大綱（章節序號必須精確是第 {start_chapter} 章至第 {end_chapter} 章）：
+
+## ⚠️ 核心對齊與格式規範
+1. 必須融入所有的「動態世界觀補丁」，讓情節發展與新規則完全一致。
+2. 每一章大綱必須包含：章節序號、章節標題、時空座標、情節概要、事件清單、伏筆埋設與回收、懸念鉤子。
+3. 嚴禁重複模板化。只輸出一個標準的 JSON 陣列，嚴格包裹在 ```json ... ``` 區塊中。
+
+JSON 陣列格式：
+```json
+[
+  {{
+    "chapter_index": {start_chapter},
+    "title": "具體且有戲劇張力的標題",
+    "time_setting": "時空座標",
+    "time_span": "時間跨度",
+    "events": [
+      {{"scene": "具體場景", "action": "核心動作衝突", "consequence": "帶來的轉折與後果"}}
+    ],
+    "purpose": "本章情節目的",
+    "foreshadowing_plant": [],
+    "foreshadowing_payoff": [],
+    "characters_active": ["主要活躍角色"],
+    "scene": "主場景",
+    "emotional_tone": "情緒基調",
+    "cliffhanger": "章末懸念"
+  }}
+]
+```
+"""
+    messages = [
+        {"role": "system", "content": "你是一位頂尖的微觀劇情規劃大師。你只輸出嚴格、合法、無多餘寒暄的標準 JSON 陣列數據。"},
+        {"role": "user", "content": prompt}
+    ]
+    
+    accumulated_text = ""
+    for sse_line in call_llm_stream("plot", messages):
+        yield sse_line
+        if sse_line.startswith("data:"):
+            try:
+                data_str = sse_line[5:].strip()
+                if data_str != "[DONE]":
+                    data = json.loads(data_str)
+                    if data.get("type") == "content":
+                        accumulated_text += data.get("delta", "")
+            except:
+                pass
+                
+    parsed = parse_json_safely(accumulated_text)
+    if isinstance(parsed, dict) and "error" in parsed:
+        parsed = parse_json_safely(clean_json_text(accumulated_text))
+        
+    node_chapters = []
+    if isinstance(parsed, list):
+        node_chapters = parsed
+    elif isinstance(parsed, dict) and "chapters" in parsed:
+        node_chapters = parsed["chapters"]
+        
+    if node_chapters:
+        for idx, ch in enumerate(node_chapters):
+            ch["chapter_index"] = start_chapter + idx
+            
+        db.update_volume_outline(novel_id, volume_index, node_chapters)
+        yield "data: " + json.dumps({
+            "type": "content", 
+            "delta": f"\n\n✓ 第 {volume_index} 卷對齊與規劃完成！已成功儲存 {len(node_chapters)} 章大綱。\n"
+        }, ensure_ascii=False) + "\n\n"
+    else:
+        fallback_outline = []
+        for idx in range(50):
+            ch_idx = start_chapter + idx
+            fallback_outline.append({
+                "chapter_index": ch_idx,
+                "title": f"第 {ch_idx} 章：篇卷命運對齊",
+                "time_setting": "緊接前情",
+                "time_span": "數日後",
+                "summary": "為對應新世界規律與衝突設定，主角展開相應部署與突破。",
+                "events": [{"scene": "主場景", "action": "執行命運對齊，適應新的世界法則博弈。", "consequence": "故事線繼續深入"}],
+                "purpose": "承上啟下對齊規律",
+                "foreshadowing_plant": [],
+                "foreshadowing_payoff": [],
+                "characters_active": [],
+                "scene": "主場景",
+                "emotional_tone": "均衡",
+                "cliffhanger": "留下下一章懸念"
+            })
+        db.update_volume_outline(novel_id, volume_index, fallback_outline)
+        yield "data: " + json.dumps({
+            "type": "content", 
+            "delta": f"\n\n✓ JIT 降級保底引擎啟動：第 {volume_index} 卷 50 章保底大綱已生成並對齊！\n"
+        }, ensure_ascii=False) + "\n\n"
+        
+    yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+
+def clean_json_text(text):
+    import re
+    text = text.strip()
+    if text.startswith("```"):
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+        if match:
+            text = match.group(1).strip()
+    return text

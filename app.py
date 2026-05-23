@@ -132,6 +132,7 @@ def api_get_novel(novel_id: str):
     written_ch = get_all_chapters_latest(novel_id)
     memory = get_chat_memory(novel_id, limit=30)
     
+    from db import get_volumes, get_worldview_patches
     return {
         "novel": novel,
         "worldbuilding": wb["content"] if wb else "",
@@ -143,7 +144,9 @@ def api_get_novel(novel_id: str):
         "plot_raw": plot["outline_json"] if plot else "",
         "plot_version": plot["version"] if plot else 0,
         "chapters": written_ch,
-        "chat_memory": memory
+        "chat_memory": memory,
+        "volumes": get_volumes(novel_id),
+        "worldview_patches": get_worldview_patches(novel_id)
     }
 
 @app.delete("/api/novels/{novel_id}")
@@ -614,3 +617,16 @@ def api_incremental_plot(payload: IncrementalPlotRequest):
         run_incremental_plot_planner(novel_id, payload.insert_after_index, payload.user_hint),
         media_type="text/event-stream"
     )
+
+@app.post("/api/novels/{novel_id}/volumes/{volume_index}/align")
+def api_align_volume(novel_id: str, volume_index: int):
+    from agents_incremental import run_volume_jit_alignment
+    return StreamingResponse(
+        run_volume_jit_alignment(novel_id, volume_index),
+        media_type="text/event-stream"
+    )
+
+@app.get("/api/novels/{novel_id}/volumes")
+def api_list_volumes(novel_id: str):
+    from db import get_volumes
+    return get_volumes(novel_id)
