@@ -65,6 +65,39 @@ export function showGeneratingIndicator(tabName) {
     }
 }
 
+function getChapterIndex(outline, fallbackIndex) {
+    const raw = outline?.chapter_index;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackIndex;
+}
+
+function isPlaceholderOutline(outline) {
+    if (!outline || typeof outline !== 'object') return true;
+    const parts = [
+        outline.title,
+        outline.summary,
+        outline.purpose,
+        outline.cliffhanger,
+        outline.scene,
+        ...(Array.isArray(outline.events)
+            ? outline.events.flatMap(event => typeof event === 'object'
+                ? [event.scene, event.action, event.consequence]
+                : [String(event)])
+            : [])
+    ].filter(Boolean).join('\n').toLowerCase();
+
+    return [
+        '保底',
+        '占位',
+        '佔位',
+        'placeholder',
+        '命運波折之章',
+        '推進核心衝突',
+        '推動大綱情節發展',
+        '主角面臨新考驗'
+    ].some(token => parts.includes(token.toLowerCase()));
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt) {
     return new Promise((resolve) => {
@@ -153,28 +186,58 @@ export async function executePipelineStage(stage, userPrompt) {
 
 // 自動撰寫所有章節正文（按大綱順序，每章寫完後詢問總監）
 export async function writeAllChaptersSequentially(userPrompt) {
-    const plotChapters = state.currentNovelData?.plot?.chapters || [];
+    const plotChapters = [...(state.currentNovelData?.plot?.chapters || [])]
+        .sort((a, b) => getChapterIndex(a, 0) - getChapterIndex(b, 0));
     if (plotChapters.length === 0) {
         showToast('⚠️ 沒有大綱章節可寫，請先生成大綱');
         state.isPipelineRunning = false;
         return;
     }
+
+    const invalidOutlines = plotChapters.filter(isPlaceholderOutline);
+    const dirtyVolumes = (state.currentNovelData?.volumes || [])
+        .filter(v => Number(v.is_dirty || 0) === 1);
+    if (invalidOutlines.length > 0 || dirtyVolumes.length > 0) {
+        updateDirectorMessage('📋 偵測到髒卷或佔位大綱，先回到 Plot Planner 重新對齊...');
+        showToast('📋 大綱需要回退修復，正在重新規劃後再寫正文');
+        updatePipelineStage('writer', 'pending');
+        updatePipelineStage('plot', 'running');
+        await executePipelineStage('plot', userPrompt);
+        return;
+    }
+
     const totalChapters = plotChapters.length;
     showToast(`📖 共 ${totalChapters} 個大綱節點，開始逐章撰寫...`);
     const existingChapters = state.currentNovelData?.chapters || [];
-    const writtenIndices = new Set(existingChapters.map(c => c.chapter_index));
+    
+    // 精準過濾出真正有效且一致的正文章節索引
+    const writtenIndices = new Set(
+        existingChapters
+            .filter(c => {
+                const content = c.content || '';
+                const isPlaceholder = content.includes('保底') || 
+                                      content.includes('占位') || 
+                                      content.trim().length < 100;
+                const isDirty = c.is_dirty === 1 || c.is_dirty === true;
+                return !isPlaceholder && !isDirty;
+            })
+            .map(c => Number(c.chapter_index))
+    );
+    
     for (let i = 0; i < totalChapters; i++) {
-        const chapterIndex = i + 1;
+        const outline = plotChapters[i];
+        const position = i + 1;
+        const chapterIndex = getChapterIndex(outline, i + 1);
         if (writtenIndices.has(chapterIndex)) {
-            updateDirectorMessage(`⏭️ 第 ${chapterIndex}/${totalChapters} 章已存在，跳過...`);
+            updateDirectorMessage(`⏭️ 第 ${chapterIndex} 章已存在且內容完整，跳過... (${position}/${totalChapters})`);
             continue;
         }
         if (!state.isPipelineRunning) {
             showToast('⏸️ 管道已暫停');
             break;
         }
-        updateDirectorMessage(`✍️ 正在撰寫第 ${chapterIndex}/${totalChapters} 章...`);
-        showToast(`✍️ 開始撰寫第 ${chapterIndex} 章（共 ${totalChapters} 章）`);
+        updateDirectorMessage(`✍️ 正在撰寫第 ${chapterIndex} 章... (${position}/${totalChapters})`);
+        showToast(`✍️ 開始撰寫第 ${chapterIndex} 章（大綱節點 ${position}/${totalChapters}）`);
         state.activeTab = 'writer';
         state.activeChapterIndex = chapterIndex;
         state.currentlyWritingChapterIndex = chapterIndex; // 標記正在寫作此章節
@@ -204,7 +267,7 @@ export async function writeAllChaptersSequentially(userPrompt) {
             );
         });
         // 每 3 章或最後一章時，請求總監評估
-        if ((chapterIndex % 3 === 0) || chapterIndex === totalChapters) {
+        if ((position % 3 === 0) || position === totalChapters) {
             updateDirectorMessage(`🎬 總監正在評估第 ${chapterIndex} 章...`);
             const chapterDecision = await window.runDirectorDecision('writer');
             if (['GO_BACK_TO_WORLDVIEW', 'GO_BACK_TO_CHARACTERS', 'GO_BACK_TO_PLOT'].includes(chapterDecision.action)) {
@@ -221,10 +284,25 @@ export async function writeAllChaptersSequentially(userPrompt) {
     }
     // 全部章節寫作完成
     updatePipelineStage('writer', 'done');
-    updateDirectorMessage('🎉 全書撰寫完畢！');
-    showToast('🎉 恭喜！全部章節正文已撰寫完成！');
+    updateDirectorMessage('🎉 全書撰寫完畢！正在召開 AI 圓桌論壇...');
+    showToast('🎉 恭喜！全部章節已撰寫完成！正在召開圓桌復盤會議...');
+    
+    try {
+        // 向總監對話區追加進度條
+        window.appendChatMessage('system', '🎬 正在召開 AI 圓桌復盤論壇，集結 5 位設定專家與創意總監，提煉本次創作的終極金律與避坑指南，此報告將儲存在外部檔案中，請稍候...');
+        
+        const retroResult = await window.requestAPI(`/api/novels/${state.currentNovelId}/retrospective`, 'POST');
+        if (retroResult && retroResult.status === 'success') {
+            window.appendChatMessage('assistant', `🏆 **AI 復盤圓桌論壇暨創作避坑金律說明書產出完畢！**\n\n報告已成功強制以 UTF-8 儲存至外部安全路徑：\n📁 \`${retroResult.filepath}\`\n\n以下是圓桌會議摘錄：\n\n${retroResult.markdown.slice(0, 3000)}...\n\n*(完整報告請點擊外部 Markdown 檔案閱讀，該檔案在開發與 DB 清空期間依然會永久保留)*`);
+            showToast('🏆 創作避坑金律產出完畢！已安全儲存於外部目錄');
+        }
+    } catch (retroErr) {
+        console.error('Failed to run round-table retrospective:', retroErr);
+        showToast('圓桌復盤會議召開失敗，但小說正文已生成完畢！');
+    }
+    
     state.isPipelineRunning = false;
     setTimeout(() => showPipelineProgress(false), 3000);
     await window.loadNovelDetails(state.currentNovelId);
-    window.selectWriterChapter(1);
+    window.selectWriterChapter(getChapterIndex(plotChapters[0], 1));
 }

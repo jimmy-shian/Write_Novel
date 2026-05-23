@@ -25,6 +25,7 @@ from llm import call_llm_stream
 # ============================================================
 
 INCREMENTAL_ARCHITECT_PROMPT = """你是故事架構師，專精於對現有世界觀進行局部增強與擴充。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
 
 ## 核心原則
 1. **局部修改**：只生成/修改指定的特定部分，不重新生成全部內容。
@@ -141,6 +142,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
 # ============================================================
 
 INCREMENTAL_CHARACTER_PROMPT = """你是角色設計大師，專精於對現有角色設定進行局部增強與修改。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
 
 ## 核心原則
 1. **局部修改**：可以只修改特定角色的特定欄位，不重新生成全部。
@@ -240,6 +242,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
 # ============================================================
 
 INCREMENTAL_PLOT_PROMPT = """你是劇情規劃大師，專精於對現有章節大綱進行局部增強與擴充。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
 
 ## 核心原則
 1. **插入式生成**：可以在指定位置插入新的章節大綱，不破壞現有結構。
@@ -365,6 +368,8 @@ def run_volume_alignment(novel_id, volume_index):
         return empty_gen()
         
     prompt = f"""你是一位小說大綱對齊大師。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
 現在，你的任務是執行**大綱延遲對齊 (Lazy Realignment)**：
 因為小說的最新寫作部分引入了新的世界觀規律或神秘設定（即「世界觀補丁」），你需要修復並調整**第 {volume_index} 卷**的章節大綱，使其與最新設定邏輯連貫。
 
@@ -488,21 +493,40 @@ def parse_incremental_command(command_text, current_context):
 # Helper function
 # ============================================================
 
-def parse_json_safely(text, default=None):
-    """安全解析 JSON"""
+def clean_json_text(text):
+    """
+    Cleans raw markdown formatting around a JSON block.
+    Extracts the content between the first '{' or '[' and the last '}' or ']'.
+    """
     import re
     text = text.strip()
-    if text.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-        if match:
-            text = match.group(1).strip()
-    match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
-    if match:
-        text = match.group(1).strip()
+    
+    # 1. 優先尋找 Markdown 代碼區塊
+    code_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if code_blocks:
+        for block in reversed(code_blocks):
+            block_stripped = block.strip()
+            if block_stripped.startswith("{") or block_stripped.startswith("["):
+                return block_stripped
+                
+    # 2. 正則匹配最長的 JSON 區塊
+    all_braces = re.findall(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+    if all_braces:
+        all_braces.sort(key=len, reverse=True)
+        return all_braces[0].strip()
+        
+    return text
+
+def parse_json_safely(text, default=None):
+    """
+    Attempts to parse text as JSON. Returns default if parsing fails.
+    """
+    cleaned = clean_json_text(text)
     try:
-        return json.loads(text)
-    except:
+        return json.loads(cleaned)
+    except Exception as e:
         return default or {"error": "Failed to parse JSON", "raw_content": text}
+
 
 # 引用主 agents.py 的 run_agent_stream
 def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
@@ -519,7 +543,7 @@ def run_volume_jit_alignment(novel_id, volume_index):
     import json
     import db
     from llm import call_llm_stream
-    from agents import compile_context, run_agent_stream
+    from agents import compile_context, run_agent_stream, _normalize_chapter_outlines, _sse_content, _sse_error
     
     # 1. 取得全域上下文
     context = compile_context(novel_id)
@@ -637,11 +661,7 @@ JSON 陣列格式：
     if isinstance(parsed, dict) and "error" in parsed:
         parsed = parse_json_safely(clean_json_text(accumulated_text))
         
-    node_chapters = []
-    if isinstance(parsed, list):
-        node_chapters = parsed
-    elif isinstance(parsed, dict) and "chapters" in parsed:
-        node_chapters = parsed["chapters"]
+    node_chapters = _normalize_chapter_outlines(parsed, start_chapter, expected_count=50)
         
     if node_chapters:
         for idx, ch in enumerate(node_chapters):
@@ -653,37 +673,114 @@ JSON 陣列格式：
             "delta": f"\n\n✓ 第 {volume_index} 卷對齊與規劃完成！已成功儲存 {len(node_chapters)} 章大綱。\n"
         }, ensure_ascii=False) + "\n\n"
     else:
-        fallback_outline = []
-        for idx in range(50):
-            ch_idx = start_chapter + idx
-            fallback_outline.append({
-                "chapter_index": ch_idx,
-                "title": f"第 {ch_idx} 章：篇卷命運對齊",
-                "time_setting": "緊接前情",
-                "time_span": "數日後",
-                "summary": "為對應新世界規律與衝突設定，主角展開相應部署與突破。",
-                "events": [{"scene": "主場景", "action": "執行命運對齊，適應新的世界法則博弈。", "consequence": "故事線繼續深入"}],
-                "purpose": "承上啟下對齊規律",
-                "foreshadowing_plant": [],
-                "foreshadowing_payoff": [],
-                "characters_active": [],
-                "scene": "主場景",
-                "emotional_tone": "均衡",
-                "cliffhanger": "留下下一章懸念"
-            })
-        db.update_volume_outline(novel_id, volume_index, fallback_outline)
-        yield "data: " + json.dumps({
-            "type": "content", 
-            "delta": f"\n\n✓ JIT 降級保底引擎啟動：第 {volume_index} 卷 50 章保底大綱已生成並對齊！\n"
-        }, ensure_ascii=False) + "\n\n"
+        yield _sse_content(f"\n\n⚠️ 第 {volume_index} 卷 JIT 對齊失敗；停止保底佔位，改請總監救援診斷並重新操作。\n")
+
+        rescue_prompt = f"""你是 AI Novel Factory 的首席創意總監與流程救援官。
+
+第 {volume_index} 卷《{current_vol['title']}》的 JIT 篇卷對齊失敗，Plot Planner 沒有產出 50 個合法章節。
+你不能生成保底、占位、模板章。請診斷失敗原因，並給出能讓 Plot Planner 重新成功的具體救援指令。
+
+【世界觀】
+{context['worldbuilding']}
+
+【世界觀補丁】
+{patches_str}
+
+【角色 Bible】
+{context['characters']}
+
+【篇卷設定】
+核心概要：{current_vol['summary']}
+登場陣營：{current_vol['factions']}
+
+嚴格輸出 JSON：
+{{
+  "diagnosis": "失敗原因",
+  "planner_directive": "重新規劃第 {start_chapter} 章至第 {end_chapter} 章的具體操作策略",
+  "chapters": []
+}}
+
+若你能直接救援，`chapters` 可以直接填入 50 個合法章節；否則保持空陣列，系統會用 planner_directive 再請 Plot Planner 重試。
+"""
+        rescue_messages = [
+            {"role": "system", "content": "你是嚴格的流程救援總監，只輸出合法 JSON。"},
+            {"role": "user", "content": rescue_prompt}
+        ]
+        rescue_text = ""
+        for sse_line in call_llm_stream("copilot", rescue_messages):
+            yield sse_line
+            if sse_line.startswith("data:"):
+                try:
+                    data_str = sse_line[5:].strip()
+                    if data_str != "[DONE]":
+                        data = json.loads(data_str)
+                        if data.get("type") == "content":
+                            rescue_text += data.get("delta", "")
+                except:
+                    pass
+
+        parsed_rescue = parse_json_safely(rescue_text)
+        if isinstance(parsed_rescue, dict) and "error" in parsed_rescue:
+            parsed_rescue = parse_json_safely(clean_json_text(rescue_text))
+        node_chapters = _normalize_chapter_outlines(parsed_rescue, start_chapter, expected_count=50)
+
+        if not node_chapters:
+            planner_directive = ""
+            if isinstance(parsed_rescue, dict):
+                planner_directive = parsed_rescue.get("planner_directive", "") or parsed_rescue.get("diagnosis", "")
+            planner_directive = planner_directive or rescue_text
+
+            retry_prompt = f"""⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+你正在執行總監救援指令，重新規劃第 {volume_index} 卷第 {start_chapter} 章至第 {end_chapter} 章。
+
+【總監救援指令】
+{planner_directive}
+
+【世界觀】
+{context['worldbuilding']}
+
+【世界觀補丁】
+{patches_str}
+
+【角色 Bible】
+{context['characters']}
+
+【篇卷設定】
+第 {volume_index} 卷：《{current_vol['title']}》
+核心概要：{current_vol['summary']}
+登場陣營：{current_vol['factions']}
+
+請輸出精確 50 個非模板化章節大綱。只輸出 JSON 陣列或 {{"chapters": [...]}}。
+"""
+            retry_messages = [
+                {"role": "system", "content": "你是被總監救援指令接管的微觀劇情規劃師，只輸出合法 JSON。"},
+                {"role": "user", "content": retry_prompt}
+            ]
+            retry_text = ""
+            for sse_line in call_llm_stream("plot", retry_messages):
+                yield sse_line
+                if sse_line.startswith("data:"):
+                    try:
+                        data_str = sse_line[5:].strip()
+                        if data_str != "[DONE]":
+                            data = json.loads(data_str)
+                            if data.get("type") == "content":
+                                retry_text += data.get("delta", "")
+                    except:
+                        pass
+            parsed_retry = parse_json_safely(retry_text)
+            if isinstance(parsed_retry, dict) and "error" in parsed_retry:
+                parsed_retry = parse_json_safely(clean_json_text(retry_text))
+            node_chapters = _normalize_chapter_outlines(parsed_retry, start_chapter, expected_count=50)
+
+        if node_chapters:
+            db.update_volume_outline(novel_id, volume_index, node_chapters)
+            yield _sse_content(f"\n\n✓ 總監救援成功：第 {volume_index} 卷已重新生成並保存 {len(node_chapters)} 章合法大綱。\n")
+        else:
+            yield _sse_error(f"第 {volume_index} 卷總監救援仍未產出合法大綱；已停止保存，避免寫入保底佔位。")
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         
     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
-def clean_json_text(text):
-    import re
-    text = text.strip()
-    if text.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-        if match:
-            text = match.group(1).strip()
-    return text

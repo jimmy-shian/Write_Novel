@@ -137,49 +137,46 @@ export function parseWorldviewJSON(text) {
 
     if (sections["【三幕式結構】"]) {
         const lines = sections["【三幕式結構】"].split("\n");
+        const parsedItems = [];
         lines.forEach(line => {
             const l = line.trim();
-            if (l.includes("第一幕") || l.includes("Setup")) {
-                result.three_act_structure[0].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
-            } else if (l.includes("第二幕") || l.includes("Confrontation")) {
-                result.three_act_structure[1].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
-            } else if (l.includes("第三幕") || l.includes("Resolution")) {
-                result.three_act_structure[2].content = l.split(/[：:]/).slice(1).join("：").trim() || l;
+            if (!l) return;
+            const cleanLine = l.startsWith("-") || l.startsWith("•") || l.startsWith("*") ? l.substring(1).trim() : l;
+            if (cleanLine.includes(":") || cleanLine.includes("：")) {
+                const sep = cleanLine.includes("：") ? "：" : ":";
+                const parts = cleanLine.split(sep);
+                const title = parts[0].trim();
+                const content = parts.slice(1).join(sep).trim();
+                parsedItems.push({ title, content });
+            } else {
+                parsedItems.push({ title: `項目 #${parsedItems.length + 1}`, content: cleanLine });
             }
         });
+        if (parsedItems.length > 0) {
+            result.three_act_structure = parsedItems;
+        }
     }
 
     if (sections["【角色漸進規劃策略】"]) {
         const lines = sections["【角色漸進規劃策略】"].split("\n");
+        const parsedItems = [];
         lines.forEach(line => {
-            let l = line.trim();
-            if (l.startsWith("-") || l.startsWith("•") || l.startsWith("*")) {
-                l = l.substring(1).trim();
-            }
-            if (l.includes(":") || l.includes("：")) {
-                const sep = l.includes("：") ? "：" : ":";
-                const parts = l.split(sep);
-                const k = parts[0].trim();
-                const v = parts.slice(1).join(sep).trim();
-                if (k.includes("wave_1") || k.includes("wave1") || k.includes("開篇") || k.includes("第一波")) {
-                    result.progressive_character_plan[0].content = v;
-                } else if (k.includes("wave_2") || k.includes("wave2") || k.includes("第二波") || k.includes("發展")) {
-                    result.progressive_character_plan[1].content = v;
-                } else if (k.includes("wave_3") || k.includes("wave3") || k.includes("第三波") || k.includes("高潮")) {
-                    result.progressive_character_plan[2].content = v;
-                }
+            const l = line.trim();
+            if (!l) return;
+            const cleanLine = l.startsWith("-") || l.startsWith("•") || l.startsWith("*") ? l.substring(1).trim() : l;
+            if (cleanLine.includes(":") || cleanLine.includes("：")) {
+                const sep = cleanLine.includes("：") ? "：" : ":";
+                const parts = cleanLine.split(sep);
+                const title = parts[0].trim();
+                const content = parts.slice(1).join(sep).trim();
+                parsedItems.push({ title, content });
             } else {
-                if (l) {
-                    if (!result.progressive_character_plan[0].content) {
-                        result.progressive_character_plan[0].content = l;
-                    } else if (!result.progressive_character_plan[1].content) {
-                        result.progressive_character_plan[1].content = l;
-                    } else if (!result.progressive_character_plan[2].content) {
-                        result.progressive_character_plan[2].content = l;
-                    }
-                }
+                parsedItems.push({ title: `階段 #${parsedItems.length + 1}`, content: cleanLine });
             }
         });
+        if (parsedItems.length > 0) {
+            result.progressive_character_plan = parsedItems;
+        }
     }
 
     if (sections["【伏筆種子】"]) {

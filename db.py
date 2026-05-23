@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import sqlite3
 import json
 from datetime import datetime
@@ -526,11 +527,18 @@ def get_latest_plot_chapters(novel_id):
 def save_plot_chapters(novel_id, outline_json):
     if isinstance(outline_json, dict) or isinstance(outline_json, list):
         json_str = json.dumps(outline_json, ensure_ascii=False)
+        parsed_dict = outline_json
     else:
         json_str = outline_json
+        try:
+            parsed_dict = json.loads(outline_json)
+        except:
+            parsed_dict = {}
         
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # 1. Save to master plot_chapters table for versioning and fallback
     row = cursor.execute(
         "SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
         (novel_id,)
@@ -541,6 +549,47 @@ def save_plot_chapters(novel_id, outline_json):
         "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
         (novel_id, json_str, next_version)
     )
+    
+    # 2. Automatically sync and distribute chapters outlines to individual volumes in the volumes table
+    if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
+        chapters_list = parsed_dict["chapters"]
+        if isinstance(chapters_list, list):
+            # Group chapters by volume_index: (chapter_index - 1) // 50 + 1
+            vol_groups = {}
+            for ch in chapters_list:
+                try:
+                    c_idx = int(ch.get("chapter_index", 0))
+                except:
+                    c_idx = 0
+                if c_idx > 0:
+                    vol_idx = ((c_idx - 1) // 50) + 1
+                    if vol_idx not in vol_groups:
+                        vol_groups[vol_idx] = []
+                    vol_groups[vol_idx].append(ch)
+            
+            # Save or update chapters_outline in volumes table for each volume
+            for vol_idx, vol_chaps in vol_groups.items():
+                vol_chaps_str = json.dumps(vol_chaps, ensure_ascii=False)
+                
+                # Check if this volume exists in db
+                vol_row = cursor.execute(
+                    "SELECT id FROM volumes WHERE novel_id = ? AND volume_index = ?",
+                    (novel_id, vol_idx)
+                ).fetchone()
+                
+                if vol_row:
+                    cursor.execute(
+                        "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
+                        (vol_chaps_str, novel_id, vol_idx)
+                    )
+                else:
+                    # Dynamically create new volume card if it does not exist
+                    cursor.execute(
+                        "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
+                        "VALUES (?, ?, ?, ?, ?, 0, ?)",
+                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {(vol_idx-1)*50 + 1} 章至第 {vol_idx*50} 章的大綱規劃。", "全域陣列", vol_chaps_str)
+                    )
+                    
     conn.commit()
     conn.close()
     return next_version
@@ -779,40 +828,41 @@ def parse_worldview_to_json(content):
         
     if "【三幕式結構】" in sections:
         three_act_text = sections["【三幕式結構】"]
+        parsed_ta = []
         for line in three_act_text.split("\n"):
             line = line.strip()
-            if "第一幕" in line or "Setup" in line:
-                result["three_act_structure"][0]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
-            elif "第二幕" in line or "Confrontation" in line:
-                result["three_act_structure"][1]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
-            elif "第三幕" in line or "Resolution" in line:
-                result["three_act_structure"][2]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+            if not line:
+                continue
+            clean_line = line[1:].strip() if (line.startswith("-") or line.startswith("•") or line.startswith("*")) else line
+            if "：" in clean_line or ":" in clean_line:
+                sep = "：" if "：" in clean_line else ":"
+                parts = clean_line.split(sep, 1)
+                title = parts[0].strip()
+                content = parts[1].strip()
+                parsed_ta.append({"title": title, "content": content})
+            else:
+                parsed_ta.append({"title": f"項目 #{len(parsed_ta) + 1}", "content": clean_line})
+        if parsed_ta:
+            result["three_act_structure"] = parsed_ta
 
     if "【角色漸進規劃策略】" in sections:
         prog_text = sections["【角色漸進規劃策略】"]
+        parsed_cp = []
         for line in prog_text.split("\n"):
             line = line.strip()
-            if line.startswith("-") or line.startswith("•") or line.startswith("*"):
-                line = line[1:].strip()
-            if ":" in line or "：" in line:
-                sep = "：" if "：" in line else ":"
-                parts = line.split(sep, 1)
-                k = parts[0].strip()
-                v = parts[1].strip()
-                if "wave_1" in k or "wave1" in k or "開篇" in k or "第一波" in k:
-                    result["progressive_character_plan"][0]["content"] = v
-                elif "wave_2" in k or "wave2" in k or "第二波" in k or "發展" in k:
-                    result["progressive_character_plan"][1]["content"] = v
-                elif "wave_3" in k or "wave3" in k or "第三波" in k or "高潮" in k:
-                    result["progressive_character_plan"][2]["content"] = v
+            if not line:
+                continue
+            clean_line = line[1:].strip() if (line.startswith("-") or line.startswith("•") or line.startswith("*")) else line
+            if "：" in clean_line or ":" in clean_line:
+                sep = "：" if "：" in clean_line else ":"
+                parts = clean_line.split(sep, 1)
+                title = parts[0].strip()
+                content = parts[1].strip()
+                parsed_cp.append({"title": title, "content": content})
             else:
-                if line:
-                    if not result["progressive_character_plan"][0]["content"]:
-                        result["progressive_character_plan"][0]["content"] = line
-                    elif not result["progressive_character_plan"][1]["content"]:
-                        result["progressive_character_plan"][1]["content"] = line
-                    elif not result["progressive_character_plan"][2]["content"]:
-                        result["progressive_character_plan"][2]["content"] = line
+                parsed_cp.append({"title": f"階段 #{len(parsed_cp) + 1}", "content": clean_line})
+        if parsed_cp:
+            result["progressive_character_plan"] = parsed_cp
                         
     if "【伏筆種子】" in sections:
         seeds_text = sections["【伏筆種子】"]
@@ -892,7 +942,7 @@ def insert_plot_chapter(novel_id, insert_after_index, new_chapter):
         for i in range(insert_pos + 1, len(chapters)):
             chapters[i]["chapter_index"] = i + 1
     
-    return save_plot_chapters(plot_data)
+    return save_plot_chapters(novel_id, plot_data)
 
 def update_character_field(novel_id, char_index, field_name, new_value):
     char_data = get_latest_characters(novel_id)
@@ -933,3 +983,64 @@ def append_worldbuilding_list(novel_id, key_section, new_item):
             parsed[key_section].append(new_item)
             
     return save_worldbuilding(novel_id, json.dumps(parsed, ensure_ascii=False, indent=2))
+
+def update_volume(novel_id, volume_index, title, summary, factions):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if isinstance(factions, list) or isinstance(factions, dict):
+        factions = json.dumps(factions, ensure_ascii=False)
+        
+    # Check if volume already exists
+    row = cursor.execute(
+        "SELECT id FROM volumes WHERE novel_id = ? AND volume_index = ?",
+        (novel_id, volume_index)
+    ).fetchone()
+    
+    if row:
+        cursor.execute(
+            "UPDATE volumes SET title = ?, summary = ?, factions = ? WHERE novel_id = ? AND volume_index = ?",
+            (title, summary, factions, novel_id, volume_index)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
+            "VALUES (?, ?, ?, ?, ?, 0, '[]')",
+            (novel_id, volume_index, title, summary, factions)
+        )
+    conn.commit()
+    conn.close()
+
+def delete_volume(novel_id, volume_index):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?", (novel_id, volume_index))
+    conn.commit()
+    conn.close()
+
+def get_stitched_plot(novel_id):
+    volumes = get_volumes(novel_id)
+    stitched_chapters = []
+    has_chapters_in_volumes = False
+    
+    for vol in volumes:
+        ch_outline_str = vol.get("chapters_outline")
+        if ch_outline_str:
+            try:
+                ch_list = json.loads(ch_outline_str)
+                if isinstance(ch_list, list) and len(ch_list) > 0:
+                    stitched_chapters.extend(ch_list)
+                    has_chapters_in_volumes = True
+            except:
+                pass
+                
+    if has_chapters_in_volumes:
+        try:
+            stitched_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
+        except:
+            pass
+        return {"chapters": stitched_chapters}
+        
+    plot = get_latest_plot_chapters(novel_id)
+    return plot["parsed_data"] if plot else {"chapters": []}
+
+

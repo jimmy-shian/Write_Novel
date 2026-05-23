@@ -2073,33 +2073,41 @@ async function savePlotOutlineDirect() {
     }
 }
 
-async function saveProseDirect() {
-    if (!state.currentNovelId || !state.activeChapterIndex) return;
+async function saveProseDirect(chapterIndex = null) {
+    if (!state.currentNovelId) return;
     
-    // 💡 防禦安全鎖：如果當前活動章節正在 AI 背景寫作，優先保存快取，絕不讀取文本框 (防止切換章節時的 `blur` 覆蓋污染)
+    // Determine target chapter index: prioritize the passed index, then activeChapterIndex
+    const targetIdx = chapterIndex !== null ? parseInt(chapterIndex) : state.activeChapterIndex;
+    if (!targetIdx) return;
+    
+    // Determine content: if saving the chapter that is currently writing, prioritize writingBuffer
     let content = el.editorProse.value;
-    const isWriting = state.currentlyWritingChapterIndex === state.activeChapterIndex;
+    const isWriting = state.currentlyWritingChapterIndex === targetIdx;
     if (isWriting && state.writingBuffer !== undefined && state.writingBuffer !== null) {
         content = state.writingBuffer;
+    } else if (chapterIndex !== null) {
+        // If we are saving a specific chapter that is NOT the active one (meaning user switched away),
+        // and it's not currently writing (it just finished), we should save its writingBuffer or the cached content.
+        content = state.writingBuffer || content;
     }
     
     try {
-        await requestAPI(`/api/novels/${state.currentNovelId}/chapters/${state.activeChapterIndex}`, 'POST', { content });
+        await requestAPI(`/api/novels/${state.currentNovelId}/chapters/${targetIdx}`, 'POST', { content });
         
         // update memory state
         const chs = state.currentNovelData.chapters || [];
-        const existingIdx = chs.findIndex(c => c.chapter_index === state.activeChapterIndex);
+        const existingIdx = chs.findIndex(c => parseInt(c.chapter_index) === targetIdx);
         if (existingIdx !== -1) {
             chs[existingIdx].content = content;
         } else {
-            chs.push({ chapter_index: state.activeChapterIndex, content });
+            chs.push({ chapter_index: targetIdx, content });
         }
         state.currentNovelData.chapters = chs;
         
         renderWriterTab();
-        showToast(`第 ${state.activeChapterIndex} 章正文已保存`);
+        showToast(`第 ${targetIdx} 章正文已保存`);
     } catch (e) {
-        showToast("正文保存失敗");
+        showToast(`第 ${targetIdx} 章正文保存失敗`);
     }
 }
 
@@ -2402,13 +2410,15 @@ async function executeToolCall(tool, params) {
                             el.editorProse.scrollTop = el.editorProse.scrollHeight;
                         }
                     },
-                    get scrollTop() { return el.editorProse.scrollTop; },
+                    get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
                     set scrollTop(val) {
                         if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                            el.editorProse.scrollTop = val;
+                            if (el.editorProse) {
+                                el.editorProse.scrollTop = val;
+                            }
                         }
                     },
-                    get scrollHeight() { return el.editorProse.scrollHeight; }
+                    get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
                 };
 
                 streamAPI(
@@ -2416,10 +2426,14 @@ async function executeToolCall(tool, params) {
                     { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
                     null,
                     (delta) => { virtualTarget.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        showToast("Error: " + err);
+                        state.currentlyWritingChapterIndex = null;
+                        state.writingBuffer = "";
+                    },
                     async () => {
                         if (state.writingBuffer.trim().length > 0) {
-                            await saveProseDirect();
+                            await saveProseDirect(chapter_index || 1);
                         }
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
@@ -2551,7 +2565,12 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
             el.aiThinkingStream.classList.add('hidden');
             // Hide Agent processing indicator
             hideAgentProcessingIndicator(tabName);
-            if (!hasError && onDoneCallback) onDoneCallback();
+            if (!hasError && onDoneCallback) {
+                onDoneCallback();
+            } else if (hasError && tabName === 'writer') {
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
+            }
         }
     );
 }
@@ -3170,22 +3189,51 @@ function runFullPipeline(userPrompt) {
         showToast("總監批准！正在啟動小說作家 Agent 撰寫第一章...");
         
         state.activeChapterIndex = 1;
+        state.currentlyWritingChapterIndex = 1;
+        state.writingBuffer = "";
         if (el.editorProse) el.editorProse.value = '';
         
+        const virtualTarget = {
+            get value() { return state.writingBuffer; },
+            set value(val) {
+                state.writingBuffer = val;
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    if (el.editorProse) {
+                        el.editorProse.value = val;
+                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    }
+                }
+            },
+            get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
+            set scrollTop(val) {
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    if (el.editorProse) {
+                        el.editorProse.scrollTop = val;
+                    }
+                }
+            },
+            get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
+        };
+
         streamAPI(
             '/api/agent/write-chapter',
             { novel_id: state.currentNovelId, chapter_index: 1 },
             () => {},
             (delta) => {
-                if (el.editorProse) {
-                    el.editorProse.value += delta;
-                    el.editorProse.scrollTop = el.editorProse.scrollHeight;
-                }
+                virtualTarget.value += delta;
             },
             (msg) => {
                 showToast(`Chapter Writer Error: ${msg}`);
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
             },
             async () => {
+                if (state.writingBuffer.trim().length > 0) {
+                    await saveProseDirect(1);
+                }
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
+                
                 addSuccessGlow(writerTab);
                 
                 // 詢問總監是否繼續
@@ -3276,16 +3324,48 @@ async function handleDrawerPromptSubmit() {
     }
     
     if (state.activeDrawerAction === 'editor') {
+        const targetChapterIndex = state.activeChapterIndex;
+        state.currentlyWritingChapterIndex = targetChapterIndex;
+        state.writingBuffer = "";
+        
+        const virtualTarget = {
+            get value() { return state.writingBuffer; },
+            set value(val) {
+                state.writingBuffer = val;
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    if (el.editorProse) {
+                        el.editorProse.value = val;
+                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    }
+                }
+            },
+            get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
+            set scrollTop(val) {
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    if (el.editorProse) {
+                        el.editorProse.scrollTop = val;
+                    }
+                }
+            },
+            get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
+        };
+
         startAgentStream(
             '/api/agent/edit-chapter',
-            { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex, edit_instructions: userPrompt },
-            el.editorProse,
+            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex, edit_instructions: userPrompt },
+            virtualTarget,
             async () => {
                 showToast("本章正文精細編輯完畢");
+                if (state.writingBuffer.trim().length > 0) {
+                    await saveProseDirect(targetChapterIndex);
+                }
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
+                
                 await loadNovelDetails(state.currentNovelId);
                 
                 // 呼叫總監評估
-                showToast(`第 ${state.activeChapterIndex} 章優化完成，正在請求 AI 總監評估...`);
+                showToast(`第 ${targetChapterIndex} 章優化完成，正在請求 AI 總監評估...`);
                 await runDirectorDecision('writer');
             },
             { tabName: 'writer', agentName: 'Editor Agent' }
@@ -3473,31 +3553,104 @@ function setupEventListeners() {
             .catch(() => showToast('新增角色失敗'));
     });
     
-    el.btnPlotAddChapter.addEventListener('click', () => {
+    // Add Chapter to specific Volume helper (Volume-aware chapter creation)
+    window.addChapterToVolume = async function(volIdx) {
+        if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
+        
         let plotData = state.currentNovelData?.plot || { chapters: [] };
         if (!plotData.chapters) plotData.chapters = [];
         
-        const nextIdx = plotData.chapters.length + 1;
+        // Find all chapters belonging to volIdx
+        const volChapters = plotData.chapters.filter(c => {
+            const cIdx = parseInt(c.chapter_index);
+            return !isNaN(cIdx) && Math.floor((cIdx - 1) / 50) + 1 === volIdx;
+        });
+        
+        let nextIdx;
+        if (volChapters.length > 0) {
+            const maxChIdx = Math.max(...volChapters.map(c => parseInt(c.chapter_index) || 0));
+            nextIdx = maxChIdx + 1;
+            if (nextIdx > volIdx * 50) {
+                showToast(`⚠️ 本卷 (VOL. ${volIdx}) 的章節數已達上限 (50章)，無法新增更多章節。`);
+                return;
+            }
+        } else {
+            nextIdx = (volIdx - 1) * 50 + 1;
+        }
+        
+        const chIdxInVol = ((nextIdx - 1) % 50) + 1;
         const newChapter = {
             chapter_index: nextIdx,
-            title: `第 ${nextIdx} 章故事`,
-            events: ["發生了事件一", "發生了重要轉折"],
+            title: `第 ${volIdx} 卷 第 ${chIdxInVol} 章故事`,
+            events: ["發生了重要事件", "主線情節在此展開"],
             purpose: "推動故事主線",
-            foreshadowing: ["埋下一個線索"],
-            emotional_tone: "緊張"
+            foreshadowing: ["埋下一個新的線索伏筆"],
+            emotional_tone: "均衡"
         };
         
         plotData.chapters.push(newChapter);
+        plotData.chapters.sort((a, b) => (parseInt(a.chapter_index) || 0) - (parseInt(b.chapter_index) || 0));
         state.currentNovelData.plot = plotData;
         state.currentNovelData.plot_raw = JSON.stringify(plotData, null, 2);
         
-        // Save directly to API
-        requestAPI(`/api/novels/${state.currentNovelId}/plot`, 'POST', { outline_json: plotData })
-            .then(() => {
-                showToast('新章節已新增');
-                renderPlotTab();
-            })
-            .catch(() => showToast('新增章節失敗'));
+        try {
+            await requestAPI(`/api/novels/${state.currentNovelId}/plot`, 'POST', { outline_json: plotData });
+            showToast(`第 ${volIdx} 卷 第 ${chIdxInVol} 章已新增`);
+            
+            // Auto expand this volume so the user sees the new chapter!
+            state.expandedVolumes = state.expandedVolumes || new Set();
+            state.expandedVolumes.add(volIdx);
+            
+            await loadNovelDetails(state.currentNovelId);
+            renderPlotTab();
+        } catch (e) {
+            showToast('新增章節失敗: ' + e);
+        }
+    };
+
+    el.btnPlotAddChapter.addEventListener('click', async () => {
+        if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
+        
+        let volumes = state.currentNovelData?.volumes || [];
+        let targetVolIdx = 1;
+        
+        if (state.expandedVolumes && state.expandedVolumes.size > 0) {
+            // Get the first expanded volume index
+            targetVolIdx = [...state.expandedVolumes][0];
+        } else if (volumes.length > 0) {
+            // Default to the last volume
+            targetVolIdx = volumes[volumes.length - 1].volume_index;
+        }
+        
+        await window.addChapterToVolume(targetVolIdx);
+    });
+
+    el.btnPlotAddVolume.addEventListener('click', async () => {
+        if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
+        let volumes = state.currentNovelData?.volumes || [];
+        const nextVolIdx = volumes.length + 1;
+        try {
+            await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${nextVolIdx}`, 'POST', {
+                title: `第 ${nextVolIdx} 卷`,
+                summary: `本卷的全新大綱概要描述...`,
+                factions: `全域勢力`
+            });
+            showToast(`新篇卷 (VOL. ${nextVolIdx}) 已新增`);
+            
+            // Automatically expand the newly created volume
+            state.expandedVolumes = state.expandedVolumes || new Set();
+            state.expandedVolumes.add(nextVolIdx);
+            
+            await loadNovelDetails(state.currentNovelId);
+            renderPlotTab();
+            
+            // Focus and scroll to the new volume card
+            setTimeout(() => {
+                if (window.scrollToVolume) window.scrollToVolume(nextVolIdx);
+            }, 100);
+        } catch (e) {
+            showToast('新增篇卷失敗: ' + e);
+        }
     });
     
     // 6. AGENTS PIPELINE TRIGGERS
@@ -3551,7 +3704,8 @@ function setupEventListeners() {
     el.btnWriteChapter.addEventListener('click', () => {
         if (!state.currentNovelId || !state.activeChapterIndex) return;
         
-        state.currentlyWritingChapterIndex = state.activeChapterIndex;
+        const targetChapterIndex = state.activeChapterIndex;
+        state.currentlyWritingChapterIndex = targetChapterIndex;
         state.writingBuffer = "";
         
         const virtualTarget = {
@@ -3563,23 +3717,25 @@ function setupEventListeners() {
                     el.editorProse.scrollTop = el.editorProse.scrollHeight;
                 }
             },
-            get scrollTop() { return el.editorProse.scrollTop; },
+            get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
             set scrollTop(val) {
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    el.editorProse.scrollTop = val;
+                    if (el.editorProse) {
+                        el.editorProse.scrollTop = val;
+                    }
                 }
             },
-            get scrollHeight() { return el.editorProse.scrollHeight; }
+            get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
         };
 
         startAgentStream(
             '/api/agent/write-chapter',
-            { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex },
+            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex },
             virtualTarget,
             async () => {
-                showToast(`第 ${state.currentlyWritingChapterIndex} 章正文撰寫完畢`);
+                showToast(`第 ${targetChapterIndex} 章正文撰寫完畢`);
                 if (state.writingBuffer.trim().length > 0) {
-                    await saveProseDirect();
+                    await saveProseDirect(targetChapterIndex);
                 }
                 
                 state.currentlyWritingChapterIndex = null;
@@ -3588,7 +3744,7 @@ function setupEventListeners() {
                 await loadNovelDetails(state.currentNovelId);
                 
                 // 呼叫總監評估
-                showToast(`第 ${state.activeChapterIndex} 章已完成，正在請求 AI 總監評估...`);
+                showToast(`第 ${targetChapterIndex} 章已完成，正在請求 AI 總監評估...`);
                 await runDirectorDecision('writer');
             },
             { tabName: 'writer', agentName: 'Chapter Writer' }
@@ -3982,23 +4138,53 @@ function startStage4_Writer(regenerate = false) {
         state.activeChapterIndex = 1;
     }
     
+    const targetChapterIndex = state.activeChapterIndex || 1;
+    state.currentlyWritingChapterIndex = targetChapterIndex;
+    state.writingBuffer = "";
     if (el.editorProse) el.editorProse.value = '';
     showToast("總監批准！正在啟動小說作家 Agent...");
     
+    const virtualTarget = {
+        get value() { return state.writingBuffer; },
+        set value(val) {
+            state.writingBuffer = val;
+            if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                if (el.editorProse) {
+                    el.editorProse.value = val;
+                    el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                }
+            }
+        },
+        get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
+        set scrollTop(val) {
+            if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                if (el.editorProse) {
+                    el.editorProse.scrollTop = val;
+                }
+            }
+        },
+        get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
+    };
+
     streamAPI(
         '/api/agent/write-chapter',
-        { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 },
+        { novel_id: state.currentNovelId, chapter_index: targetChapterIndex },
         () => {},
         (delta) => {
-            if (el.editorProse) {
-                el.editorProse.value += delta;
-                el.editorProse.scrollTop = el.editorProse.scrollHeight;
-            }
+            virtualTarget.value += delta;
         },
         (msg) => {
             showToast(`Chapter Writer Error: ${msg}`);
+            state.currentlyWritingChapterIndex = null;
+            state.writingBuffer = "";
         },
         async () => {
+            if (state.writingBuffer.trim().length > 0) {
+                await saveProseDirect(targetChapterIndex);
+            }
+            state.currentlyWritingChapterIndex = null;
+            state.writingBuffer = "";
+            
             addSuccessGlow(writerTab);
             
             if (regenerate) {
@@ -4029,7 +4215,7 @@ function startStage4_Writer(regenerate = false) {
             
             // Reload novel details and select first chapter
             await loadNovelDetails(state.currentNovelId);
-            selectWriterChapter(state.activeChapterIndex || 1);
+            selectWriterChapter(targetChapterIndex);
         }
     );
 }
@@ -4347,3 +4533,91 @@ window.alignVolume = async function(volIdx) {
         }
     );
 };
+
+// ==========================================
+// VOLUME CRUD & MODAL CONTROLS
+// ==========================================
+window.openVolumeEditModal = function(volIdx, title, summary, factions) {
+    let modal = document.getElementById('modal-volume-edit');
+    if (!modal) {
+        const html = `
+        <div id="modal-volume-edit" class="modal-overlay">
+            <div class="modal-card" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h2>✏️ 編輯第 ${volIdx} 卷設定</h2>
+                    <button class="btn-close-modal">✕</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">篇卷標題</label>
+                        <input id="vol-edit-title" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入篇卷標題...">
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">核心情節概要</label>
+                        <textarea id="vol-edit-summary" rows="5" placeholder="請輸入本卷的核心情節概要與高潮點..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">登場勢力陣營</label>
+                        <input id="vol-edit-factions" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入登場勢力陣營，如：守夜人, 荒原反抗軍...">
+                    </div>
+                    <button id="btn-vol-edit-submit" class="btn btn-primary btn-full mt-4">儲存篇卷變更</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        modal = document.getElementById('modal-volume-edit');
+        modal.querySelector('.btn-close-modal').addEventListener('click', () => modal.classList.remove('active'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    }
+
+    document.getElementById('vol-edit-title').value = title || '';
+    document.getElementById('vol-edit-summary').value = summary || '';
+    document.getElementById('vol-edit-factions').value = factions || '';
+
+    const submitBtn = document.getElementById('btn-vol-edit-submit');
+    const newBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newBtn, submitBtn);
+
+    newBtn.addEventListener('click', async () => {
+        const newTitle = document.getElementById('vol-edit-title').value.trim();
+        const newSummary = document.getElementById('vol-edit-summary').value.trim();
+        const newFactions = document.getElementById('vol-edit-factions').value.trim();
+
+        if (!newTitle) {
+            showToast('篇卷標題為必填');
+            return;
+        }
+
+        try {
+            await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${volIdx}`, 'POST', {
+                title: newTitle,
+                summary: newSummary,
+                factions: newFactions
+            });
+            modal.classList.remove('active');
+            showToast('篇卷設定已儲存');
+            await loadNovelDetails(state.currentNovelId);
+            renderPlotTab();
+        } catch (e) {
+            showToast('更新失敗: ' + e);
+        }
+    });
+
+    modal.classList.add('active');
+};
+
+window.deleteVolume = async function(volIdx) {
+    if (!(await showCustomConfirm(`確定要刪除第 ${volIdx} 卷嗎？這將會從資料庫中移除這一卷，但會保留其底下的具體章節大綱。`))) {
+        return;
+    }
+
+    try {
+        await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${volIdx}`, 'DELETE');
+        showToast(`第 ${volIdx} 卷已刪除`);
+        await loadNovelDetails(state.currentNovelId);
+        renderPlotTab();
+    } catch (e) {
+        showToast('刪除失敗: ' + e);
+    }
+};
+

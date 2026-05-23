@@ -17,8 +17,10 @@ from db import (
     get_latest_worldbuilding,
     get_latest_characters,
     get_latest_plot_chapters,
+    get_stitched_plot,
     get_latest_chapter,
     get_all_chapters_latest,
+
     get_chat_memory,
     clear_chat_memory,
     save_worldbuilding,
@@ -128,6 +130,7 @@ def api_get_novel(novel_id: str):
         
     wb = get_latest_worldbuilding(novel_id)
     char = get_latest_characters(novel_id)
+    plot_data = get_stitched_plot(novel_id)
     plot = get_latest_plot_chapters(novel_id)
     written_ch = get_all_chapters_latest(novel_id)
     memory = get_chat_memory(novel_id, limit=30)
@@ -140,8 +143,8 @@ def api_get_novel(novel_id: str):
         "characters": char["parsed_data"] if char else None,
         "characters_raw": char["json_data"] if char else "",
         "characters_version": char["version"] if char else 0,
-        "plot": plot["parsed_data"] if plot else None,
-        "plot_raw": plot["outline_json"] if plot else "",
+        "plot": plot_data,
+        "plot_raw": json.dumps(plot_data, ensure_ascii=False, indent=2),
         "plot_version": plot["version"] if plot else 0,
         "chapters": written_ch,
         "chat_memory": memory,
@@ -504,16 +507,7 @@ def api_export_novel(novel_id: str, format: str = "txt"):
 # --- STATIC CONTENT HOSTING ---
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
-# Mount standard index fallback
-@app.get("/")
-def serve_index():
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"message": "AI Novel Factory UI files missing from /static"}
-
-# Mount other static files
-app.mount("/", StaticFiles(directory=static_dir), name="static")
+# Static files mounting moved to the end of this file to prevent routing shadowing.
 
 # ============================================================
 # INCREMENTAL UPDATE API ENDPOINTS (細粒度編輯)
@@ -630,3 +624,157 @@ def api_align_volume(novel_id: str, volume_index: int):
 def api_list_volumes(novel_id: str):
     from db import get_volumes
     return get_volumes(novel_id)
+
+class VolumeUpdatePayload(BaseModel):
+    title: str
+    summary: Optional[str] = ""
+    factions: Optional[str] = ""
+
+@app.post("/api/novels/{novel_id}/volumes/{volume_index}")
+def api_update_volume(novel_id: str, volume_index: int, payload: VolumeUpdatePayload):
+    from db import update_volume
+    update_volume(novel_id, volume_index, payload.title, payload.summary, payload.factions)
+    return {"status": "success"}
+
+@app.delete("/api/novels/{novel_id}/volumes/{volume_index}")
+def api_delete_volume(novel_id: str, volume_index: int):
+    from db import delete_volume
+    delete_volume(novel_id, volume_index)
+    return {"status": "success"}
+
+import concurrent.futures
+import re
+from typing import Dict, Any
+
+class RetrospectiveResponse(BaseModel):
+    status: str
+    filepath: str
+    markdown: str
+
+@app.post("/api/novels/{novel_id}/retrospective", response_model=RetrospectiveResponse)
+def api_novel_retrospective(novel_id: str):
+    """
+    召開 Agent 圓桌復盤會議，為 5 位 Agent 和 1 位總監生成心得說明與未來避坑金律，
+    並將金律強制使用 utf-8 編碼儲存至專案目錄的 gold_rules/ 資料夾中，
+    不存入隨時可能被清除的資料庫中。
+    """
+    novel = get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+        
+    wb = get_latest_worldbuilding(novel_id)
+    char = get_latest_characters(novel_id)
+    plot = get_latest_plot_chapters(novel_id)
+    chapters = get_all_chapters_latest(novel_id)
+    
+    # 建立上下文
+    context = {
+        "worldbuilding": wb["content"] if wb else "尚無世界觀設定",
+        "characters": char["json_data"] if char else "尚無角色設定",
+        "plot": plot["outline_json"] if plot else "尚無章節大綱",
+        "written_chapters": f"已寫作正文章節共 {len(chapters)} 章。" if chapters else "尚未開始寫作正文。"
+    }
+    
+    agents_to_call = {
+        "Story Architect": ("architect", "你作為 1️⃣ Story Architect (故事結構架構師)，請針對本次創作的世界觀底層設定、勢力結構與三幕式起承轉合，提出深刻的心得說明與注意事項。列出 3-5 條未來的世界觀設定避坑金律，以避免前後設定衝突或空泛。"),
+        "Character Designer": ("character", "你作為 2️⃣ Character Designer (角色設計大師)，請針對本次角色卡 Bible 的動機 (Want/Need) 與成長弧線設計，提出心得說明與注意事項。列出 3-5 條人物設定避坑金律，以確保角色靈魂豐滿且不扁平模板化。"),
+        "Plot Planner": ("plot", "你作為 3️⃣ Plot Planner (章節劇情規劃師)，請針對本次 5 章滾動式大綱規劃，以及大長篇在素材耗盡時如何啟動『創意膨脹與自我修復』以避免硬編碼保底的實踐，提出大綱規劃心得。列出 3-5 條章節情節避坑金律。"),
+        "Chapter Writer": ("writer", "你作為 4️⃣ Chapter Writer (小說正文寫作作家)，請針對本次正文 Prose 散文創作、對話與情緒渲染、以及如何順暢攔截與吸收『設定補丁』，提出心得。列出 3-5 條正文散文創作金律。"),
+        "Editor Agent": ("editor", "你作為 5️⃣ Editor Agent (精緻文風編輯)，請針對本次對已寫正文進行多維度精修拋光與文筆微調，提出精修心得。列出 3-5 條編輯避坑金律。"),
+        "Co-pilot Director": ("copilot", "你作為 🧠 Co-Pilot Orchestrator (首席創意總監)，請從全局多代理協作架構、小說文學高度與創意思維出發，對整部作品進行評審。總結出最重要的全局創作避坑指南與終極創作金律。")
+    }
+    
+    def get_agent_retrospective(agent_key, config):
+        agent_name, prompt_msg = config
+        from llm import call_llm_stream
+        
+        messages = [
+            {"role": "system", "content": "你是一位嚴謹的創作大師。請使用 zh-TW 繁體中文輸出簡潔、深刻、高水準的創作 retrospective 心得與金律。"},
+            {"role": "user", "content": f"""【小說全局內容參考】
+世界觀設定：
+{context["worldbuilding"]}
+
+角色卡：
+{context["characters"]}
+
+章節大綱：
+{context["plot"]}
+
+請根據以上參考，完成以下任務：
+{prompt_msg}
+"""}
+        ]
+        
+        text = ""
+        for sse_line in call_llm_stream(agent_name, messages):
+            if sse_line.startswith("data:"):
+                try:
+                    data_str = sse_line[5:].strip()
+                    if data_str == "[DONE]":
+                        continue
+                    data = json.loads(data_str)
+                    if data.get("type") == "content":
+                        text += data.get("delta", "")
+                except:
+                    pass
+        return text.strip()
+        
+    retrospectives = {}
+    # 使用 ThreadPoolExecutor 並行執行 6 個 LLM 呼叫，達到極致的性能！
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(get_agent_retrospective, k, v): k for k, v in agents_to_call.items()}
+        for future in concurrent.futures.as_completed(futures):
+            key = futures[future]
+            try:
+                retrospectives[key] = future.result()
+            except Exception as e:
+                retrospectives[key] = f"生成心得失敗：{str(e)}"
+                
+    # 組合 Markdown 內容
+    final_markdown = f"""# 🏆 《{novel["title"]}》- AI 創作圓桌論壇暨終極創作金律說明書
+
+本文件由 **天衍小說創作工廠 (AI Novel Factory)** 的 5 位創作領域 AI 專家與首席創意總監協同復盤產出。
+我們針對本次《{novel["title"]}》全書正文生成的經驗、邏輯瓶頸、設定衍生與 Lazy Realignment 對齊流程進行了深刻的復盤，並提煉出以下 **「黃金創作金律」** 以供未來創作嚴格遵守。
+
+---
+
+"""
+    for agent_display_name in ["Co-pilot Director", "Story Architect", "Character Designer", "Plot Planner", "Chapter Writer", "Editor Agent"]:
+        if agent_display_name in retrospectives:
+            final_markdown += f"## 👥 {agent_display_name} 的復盤心得與避坑金律\\n\\n"
+            final_markdown += f"{retrospectives[agent_display_name]}\\n\\n"
+            final_markdown += "---\\n\\n"
+            
+    # 建立外部目錄並儲存
+    gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
+    os.makedirs(gold_rules_dir, exist_ok=True)
+    
+    # 清理檔名以防 Windows 路徑出錯
+    safe_title = re.sub(r'[\\\\/*?:"<>|]', "", novel["title"])
+    if not safe_title:
+        safe_title = "novel"
+    filename = f"{safe_title}_retrospective_gold_rules.md"
+    filepath = os.path.join(gold_rules_dir, filename)
+    
+    # 強制以 utf-8 編碼寫入檔案
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(final_markdown)
+        
+    return {
+        "status": "success",
+        "filepath": filepath,
+        "markdown": final_markdown
+    }
+
+# --- STATIC CONTENT HOSTING ---
+# Mount standard index fallback at the very end to prevent shadowing dynamic API routes
+@app.get("/")
+def serve_index():
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "AI Novel Factory UI files missing from /static"}
+
+# Mount other static files
+app.mount("/", StaticFiles(directory=static_dir), name="static")
+

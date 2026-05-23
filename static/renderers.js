@@ -465,6 +465,8 @@ export function renderPlotTab() {
     const chapters = plotData?.chapters || [];
     let volumes = state.currentNovelData?.volumes || [];
     
+    state.expandedVolumes = state.expandedVolumes || new Set();
+    
     el.editorPlotJson.value = state.currentNovelData?.plot_raw || JSON.stringify({ chapters: [] }, null, 2);
     
     // Auto-generate virtual volumes if missing but chapters exist
@@ -482,6 +484,83 @@ export function renderPlotTab() {
         }
     }
     
+    // Expose scrollToVolume function globally
+    window.scrollToVolume = function(volIdx) {
+        const volCard = document.getElementById(`volume-card-${volIdx}`);
+        if (volCard) {
+            // Smooth scroll to card
+            volCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Highlight target card
+            document.querySelectorAll('.volume-card').forEach(el => el.classList.remove('active-target-glow'));
+            volCard.classList.add('active-target-glow');
+            
+            // Automatically expand if collapsed
+            if (!volCard.classList.contains('expanded')) {
+                window.toggleVolumeExpand(volIdx);
+            }
+            
+            // Update active roadmap node
+            document.querySelectorAll('.roadmap-node').forEach((node) => {
+                if (parseInt(node.getAttribute('data-volume-index')) === volIdx) {
+                    node.classList.add('active');
+                } else {
+                    node.classList.remove('active');
+                }
+            });
+        }
+    };
+
+    // Expose collapse function
+    window.toggleVolumeExpand = function(volIdx) {
+        const volCard = document.getElementById(`volume-card-${volIdx}`);
+        if (volCard) {
+            const chaptersList = volCard.querySelector('.volume-chapters-list');
+            const toggleBtn = volCard.querySelector('.expand-toggle-btn');
+            if (chaptersList) {
+                state.expandedVolumes = state.expandedVolumes || new Set();
+                const isExpanded = volCard.classList.contains('expanded');
+                if (isExpanded) {
+                    volCard.classList.remove('expanded');
+                    chaptersList.style.setProperty('display', 'none', 'important');
+                    if (toggleBtn) toggleBtn.innerText = '展開';
+                    state.expandedVolumes.delete(volIdx);
+                } else {
+                    volCard.classList.add('expanded');
+                    chaptersList.style.setProperty('display', 'flex', 'important');
+                    if (toggleBtn) toggleBtn.innerText = '收合';
+                    state.expandedVolumes.add(volIdx);
+                }
+            }
+        }
+    };
+    
+    // Helper to get emotional tone badge styling
+    function getToneBadge(tone) {
+        if (!tone) return '';
+        let bgColor = 'rgba(156, 163, 175, 0.12)';
+        let color = '#9ca3af';
+        let borderColor = 'rgba(156, 163, 175, 0.2)';
+        if (tone.includes('緊張') || tone.includes('紧张') || tone.includes('激烈') || tone.includes('衝突') || tone.includes('危險') || tone.includes('戰鬥')) {
+            bgColor = 'rgba(239, 68, 68, 0.12)';
+            color = '#ef4444';
+            borderColor = 'rgba(239, 68, 68, 0.2)';
+        } else if (tone.includes('舒緩') || tone.includes('舒缓') || tone.includes('溫馨') || tone.includes('日常') || tone.includes('輕鬆') || tone.includes('平靜') || tone.includes('放鬆')) {
+            bgColor = 'rgba(16, 185, 129, 0.12)';
+            color = '#10b981';
+            borderColor = 'rgba(16, 185, 129, 0.2)';
+        } else if (tone.includes('高潮') || tone.includes('爆發') || tone.includes('熱血') || tone.includes('反轉') || tone.includes('高能')) {
+            bgColor = 'rgba(139, 92, 246, 0.12)';
+            color = '#8b5cf6';
+            borderColor = 'rgba(139, 92, 246, 0.2)';
+        } else if (tone.includes('低谷') || tone.includes('悲傷') || tone.includes('壓抑') || tone.includes('絕望') || tone.includes('沉重')) {
+            bgColor = 'rgba(59, 130, 246, 0.12)';
+            color = '#3b82f6';
+            borderColor = 'rgba(59, 130, 246, 0.2)';
+        }
+        return `<span class="chapter-tone-badge" style="background: ${bgColor}; color: ${color}; border: 1px solid ${borderColor}; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600;">🎭 ${tone}</span>`;
+    }
+
     // 渲染時間線
     if (el.plotTimeline) {
         if (volumes.length === 0) {
@@ -491,82 +570,171 @@ export function renderPlotTab() {
                     <button class="btn btn-primary btn-sm mt-4" onclick="openManualChapterInsertModal(0)">➕ 手動新增第一章</button>
                 </div>`;
         } else {
-            // Expose collapse function
-            window.toggleVolumeExpand = function(volIdx) {
-                const volCard = document.getElementById(`volume-card-${volIdx}`);
-                if (volCard) {
-                    const chaptersList = volCard.querySelector('.volume-chapters-list');
-                    const toggleBtn = volCard.querySelector('.expand-toggle-btn');
-                    if (chaptersList) {
-                        const isHidden = chaptersList.style.display === 'none';
-                        chaptersList.style.display = isHidden ? 'block' : 'none';
-                        if (toggleBtn) {
-                            toggleBtn.innerText = isHidden ? '收合' : '展開';
-                        }
-                        volCard.classList.toggle('expanded', isHidden);
+            // Compute unique factions
+            const uniqueFactions = new Set();
+            volumes.forEach(vol => {
+                let factionsArr = [];
+                if (Array.isArray(vol.parsed_factions)) {
+                    factionsArr = vol.parsed_factions;
+                } else if (vol.factions) {
+                    try {
+                        const parsed = JSON.parse(vol.factions);
+                        if (Array.isArray(parsed)) factionsArr = parsed;
+                    } catch (e) {
+                        factionsArr = String(vol.factions).split(/[,,，、\n]+/).map(f => f.trim()).filter(Boolean);
                     }
                 }
-            };
-            
-            el.plotTimeline.innerHTML = volumes.map((vol) => {
+                factionsArr.forEach(f => uniqueFactions.add(f));
+            });
+            const uniqueFactionsCount = uniqueFactions.size;
+
+            // Generate Stats Dashboard and Volume Roadmap Track
+            const statsHtml = `
+                <div class="plot-metrics-dashboard" style="flex-shrink: 0;">
+                    <div class="metric-tile">
+                        <div class="metric-label">篇卷總數 (Volumes)</div>
+                        <div class="metric-value">📚 ${volumes.length}</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">對齊比例 (Aligned)</div>
+                        <div class="metric-value">⚡ ${volumes.filter(v => v.is_dirty !== 1).length} / ${volumes.length}</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">大綱章節 (Chapters)</div>
+                        <div class="metric-value">📋 ${chapters.length}</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">登場陣營 (Factions)</div>
+                        <div class="metric-value">🛡️ ${uniqueFactionsCount}</div>
+                    </div>
+                </div>
+            `;
+
+            const roadmapHtml = `
+                <div class="volume-roadmap-container" style="flex-shrink: 0;">
+                    <div class="roadmap-title">
+                        <span>🗺️ 篇卷導航圖 (Volume Roadmap Track)</span>
+                        <span style="font-size: 0.68rem; color: var(--text-muted); font-weight: normal; text-transform: none;">可按住滑鼠左右拖曳或點擊定位</span>
+                    </div>
+                    <div class="roadmap-track">
+                        ${volumes.map((vol) => {
+                            const volIdx = vol.volume_index;
+                            const isDirty = vol.is_dirty === 1;
+                            const statusClass = isDirty ? 'dirty' : 'aligned';
+                            return `
+                                <div class="roadmap-node" data-volume-index="${volIdx}" onclick="event.stopPropagation(); window.scrollToVolume(${volIdx})">
+                                    <span class="roadmap-node-index">Vol. ${volIdx}</span>
+                                    <span class="roadmap-node-title">${vol.title || `第 ${volIdx} 卷`}</span>
+                                    <span class="roadmap-node-status ${statusClass}"></span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+
+            const timelineCardsHtml = volumes.map((vol) => {
                 const volIdx = vol.volume_index;
                 const isDirty = vol.is_dirty === 1;
+                const isVolExpanded = state.expandedVolumes && state.expandedVolumes.has(volIdx);
+                
+                const factionsVal = Array.isArray(vol.parsed_factions) ? vol.parsed_factions.join(', ') : (vol.factions || '');
+                const safeTitle = (vol.title || '').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+                const safeSummary = (vol.summary || '').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+                const safeFactions = factionsVal.replace(/`/g, '\\`').replace(/\$/g, '\\$');
                 
                 // Filter chapters belonging to this volume (50 chapters per volume)
                 const volChapters = chapters.filter(c => {
                     const cIdx = parseInt(c.chapter_index);
                     return !isNaN(cIdx) && Math.floor((cIdx - 1) / 50) + 1 === volIdx;
                 });
+
+                // Calculate written progress inside this volume
+                const writtenChaptersCount = volChapters.filter(c => {
+                    const existing = state.currentNovelData?.chapters?.find(ec => parseInt(ec.chapter_index) === parseInt(c.chapter_index));
+                    return !!(existing && existing.content && existing.content.trim());
+                }).length;
+                const totalChaptersCount = volChapters.length;
+                const progressPercent = totalChaptersCount > 0 ? Math.round((writtenChaptersCount / totalChaptersCount) * 100) : 0;
                 
-                const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : '';
+                const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : `<span class="dirty-badge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">✓ 已對齊</span>`;
                 const alignButton = isDirty ? `
                     <button class="btn btn-secondary btn-xs align-vol-btn" onclick="event.stopPropagation(); window.alignVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: transform 0.2s;">
                         ⚡ 延遲對齊
                     </button>` : '';
                     
                 const chaptersHtml = volChapters.length === 0 ? `
-                    <div class="empty-placeholder" style="padding: 16px; font-size: 0.8rem; text-align: center; color: var(--text-muted);">
-                        📭 此篇卷尚無章節大綱。${isDirty ? '請點擊「⚡ 延遲對齊」進行世界觀校準。' : ''}
+                    <div class="empty-placeholder" style="padding: 16px; font-size: 0.8rem; text-align: center; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                        <span>📭 此篇卷尚無章節大綱。${isDirty ? '請點擊「⚡ 延遲對齊」進行世界觀校準。' : ''}</span>
+                        <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); window.addChapterToVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600;">➕ 新增本卷第一章</button>
                     </div>` : volChapters.map((chapter) => {
                     const globalIdx = chapters.indexOf(chapter);
-                    const emotionalToneText = chapter.emotional_tone ? `<span class="chapter-tone-badge">🎭 ${chapter.emotional_tone}</span>` : '';
-                    const purposeText = chapter.purpose ? `<div class="chapter-purpose-text">🎬 <strong>目標:</strong> ${chapter.purpose}</div>` : '';
+                    const chapterIndex = parseInt(chapter.chapter_index) || (globalIdx + 1);
+                    const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
                     
-                    // Bulleted list of events (limit to first 3 and show +N more if many)
-                    let eventsList = '';
+                    const emotionalToneText = getToneBadge(chapter.emotional_tone);
+                    const purposeText = chapter.purpose ? `
+                    <div class="chapter-grid-item">
+                        <div class="chapter-grid-label">🎯 敘事目的</div>
+                        <div class="chapter-grid-value" style="font-weight: 500; color: var(--text-primary);">${chapter.purpose}</div>
+                    </div>` : '';
+                    
+                    // Stepped Flowchart Events
+                    let eventsHtml = '';
                     if (Array.isArray(chapter.events) && chapter.events.length > 0) {
-                        const formatEventItem = (e) => {
-                            if (typeof e === 'string') return e;
-                            if (typeof e === 'object' && e !== null) {
-                                return [e.action, e.scene, e.consequence].filter(Boolean).join(' • ') || JSON.stringify(e);
-                            }
-                            return String(e);
-                        };
-                        const displayedEvents = chapter.events.slice(0, 3);
-                        const remaining = chapter.events.length - 3;
-                        eventsList = `
-                        <ul class="chapter-events-bullets">
-                            ${displayedEvents.map(e => `<li>${formatEventItem(e)}</li>`).join('')}
-                            ${remaining > 0 ? `<li class="more-events">+ ${remaining} 個事件...</li>` : ''}
-                        </ul>`;
+                        const displayedEvents = chapter.events.slice(0, 4);
+                        const remaining = chapter.events.length - 4;
+                        eventsHtml = `
+                        <div class="chapter-grid-item grid-col-span-2">
+                            <div class="chapter-grid-label">🎬 核心情節事件流 (Flowchart Events)</div>
+                            <div class="stepped-events" style="margin-top: 6px;">
+                                ${displayedEvents.map((e, eIdx) => {
+                                    const eventText = typeof e === 'string' ? e : [e.action, e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
+                                    return `
+                                        <div class="stepped-event-item" style="padding-left: 24px; position: relative; margin-bottom: 6px; font-size: 0.78rem; line-height: 1.5; color: var(--text-secondary);">
+                                            <span style="position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 800;">${eIdx + 1}</span>
+                                            <span style="font-weight: 500; color: var(--text-primary);">${eventText}</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                                ${remaining > 0 ? `
+                                    <div style="font-size: 0.72rem; color: var(--text-muted); padding-left: 24px; font-style: italic;">
+                                        + 還有 ${remaining} 個事件...
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>`;
                     }
 
-                    // Bulleted list of foreshadowings
-                    let foreshadowList = '';
+                    // Foreshadowings
+                    let foreshadowHtml = '';
                     if (Array.isArray(chapter.foreshadowing) && chapter.foreshadowing.length > 0) {
-                        foreshadowList = `
-                        <div class="chapter-foreshadow-bullets">
-                            🌱 ${chapter.foreshadowing.join(' | ')}
+                        foreshadowHtml = `
+                        <div class="chapter-grid-item grid-col-span-2">
+                            <div class="chapter-grid-label">🌱 伏筆線索種子 (Foreshadowing Seeds)</div>
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
+                                ${chapter.foreshadowing.map(f => `<span class="badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600;">${f}</span>`).join('')}
+                            </div>
+                        </div>`;
+                    }
+
+                    // Cliffhangers
+                    let cliffhangerHtml = '';
+                    if (chapter.cliffhanger && chapter.cliffhanger.trim()) {
+                        cliffhangerHtml = `
+                        <div class="chapter-grid-item grid-col-span-2" style="background: rgba(239, 68, 68, 0.03); border-color: rgba(239, 68, 68, 0.15); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 4px;">
+                            <div class="chapter-grid-label" style="color: #ef4444;">⚠️ 本章懸念 (Cliffhanger)</div>
+                            <div class="chapter-grid-value" style="color: var(--text-primary); font-style: italic; font-weight: 500; margin-top: 4px;">🔥 ${chapter.cliffhanger}</div>
                         </div>`;
                     }
 
                     return `
                     <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
-                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[globalIdx])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 14px; position: relative; transition: all 0.25s;">
-                            <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                <span class="chapter-number" style="font-weight: 700; color: var(--primary); font-size: 0.85rem;">第 ${chapter.chapter_index || (globalIdx + 1)} 章</span>
+                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
+                            <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
-                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[globalIdx])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">
+                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">
                                         ✏️
                                     </button>
                                     <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">
@@ -575,23 +743,37 @@ export function renderPlotTab() {
                                 </div>
                             </div>
                             
-                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1rem; font-weight: 600; color: var(--text-primary);">${chapter.title || '待設定標題'}</h3>
+                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">${chapter.title || '待設定標題'}</h3>
                             
-                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 8px;">${chapter.summary || '待設定摘要'}</div>
+                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${chapter.summary || '待設定摘要'}</div>
                             
-                            ${purposeText}
-                            ${eventsList}
-                            ${foreshadowList}
-                            
-                            <div class="chapter-meta" style="display: flex; gap: 12px; font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; flex-wrap: wrap;">
-                                <span class="chapter-time">⏰ ${chapter.time_setting || '待設定'}</span>
-                                <span class="chapter-scene">📍 ${chapter.scene || chapter.scene_setting || '待設定'}</span>
-                                ${emotionalToneText}
+                            <div class="chapter-layout-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 8px;">
+                                ${purposeText}
+                                
+                                <div class="chapter-grid-item">
+                                    <div class="chapter-grid-label">⏰ 時空座標</div>
+                                    <div class="chapter-grid-value">${chapter.time_setting || '待設定'}</div>
+                                </div>
+                                
+                                <div class="chapter-grid-item">
+                                    <div class="chapter-grid-label">📍 場景地點</div>
+                                    <div class="chapter-grid-value">${chapter.scene || chapter.scene_setting || '待設定'}</div>
+                                </div>
+                                
+                                ${emotionalToneText ? `
+                                <div class="chapter-grid-item grid-col-span-2" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                    <div class="chapter-grid-label" style="margin:0;">🎭 情緒基調</div>
+                                    <div>${emotionalToneText}</div>
+                                </div>` : ''}
+                                
+                                ${eventsHtml}
+                                ${foreshadowHtml}
+                                ${cliffhangerHtml}
                             </div>
                         </div>
                         
-                        <div class="timeline-insert-divider" style="display: flex; justify-content: center; margin: 10px 0;">
-                            <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapter.chapter_index || (globalIdx + 1)})" title="在此章後插入新章節大綱" style="font-size: 0.7rem; padding: 2px 8px;">
+                        <div class="timeline-insert-divider">
+                            <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapterIndex})" title="在此章後插入新章節大綱">
                                 ➕ 插入新章節大綱
                             </button>
                         </div>
@@ -599,33 +781,102 @@ export function renderPlotTab() {
                     `;
                 }).join('');
 
+                const factionBadges = (factionsVal || '全域勢力')
+                    .split(/[,,，、\n]+/)
+                    .map(f => f.trim())
+                    .filter(Boolean)
+                    .map(f => `<span class="badge" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">${f}</span>`)
+                    .join(' ');
+
                 return `
-                <div class="volume-card" id="volume-card-${volIdx}" onclick="window.toggleVolumeExpand(${volIdx})" style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: 16px; padding: 16px; cursor: pointer; display: flex; flex-direction: column; gap: 10px; transition: all 0.25s;">
-                    <div class="volume-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 10px;">
-                        <div class="volume-title-section" style="display: flex; align-items: center; gap: 8px;">
-                            <span class="volume-index-badge" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">第 ${volIdx} 卷</span>
-                            <h3 class="volume-title" style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">${vol.title}</h3>
+                <div class="volume-card ${isVolExpanded ? 'expanded' : ''}" id="volume-card-${volIdx}" style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: all 0.25s; position: relative; overflow: hidden; box-shadow: var(--shadow-sm); flex-shrink: 0;">
+                    <div style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--primary), #8b5cf6); pointer-events: none;"></div>
+                    
+                    <div class="volume-header" onclick="event.stopPropagation(); window.toggleVolumeExpand(${volIdx})" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 12px; cursor: pointer;">
+                        <div class="volume-title-section" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <span class="volume-index-badge" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2); padding: 2px 10px; border-radius: 6px; font-size: 0.78rem; font-weight: 800;">VOL. ${volIdx}</span>
+                            <h3 class="volume-title" style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">${vol.title}</h3>
                             ${dirtyBadge}
                         </div>
-                        <div class="volume-actions-section" onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px;">
+                        <div class="volume-actions-section" onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 12px;">
                             ${alignButton}
-                            <button class="btn btn-ghost btn-xs expand-toggle-btn" style="font-size: 0.75rem; padding: 4px 8px;">展開</button>
+                            <button class="char-action-btn edit-btn" onclick="window.openVolumeEditModal(${volIdx}, \`${safeTitle}\`, \`${safeSummary}\`, \`${safeFactions}\`)" title="編輯篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 1.05rem; transition: transform 0.2s;">
+                                ✏️
+                            </button>
+                            <button class="char-action-btn delete-btn" onclick="window.deleteVolume(${volIdx})" title="刪除篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 1.05rem; transition: transform 0.2s;">
+                                🗑️
+                            </button>
+                            <button class="btn btn-ghost btn-xs expand-toggle-btn" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border-color);">${isVolExpanded ? '收合' : '展開'}</button>
                         </div>
                     </div>
-                    <div class="volume-summary-box" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.01); padding: 8px 12px; border-radius: var(--radius-sm);">
-                        <p class="volume-summary-text" style="margin: 0 0 4px 0;"><strong>核心情節概要：</strong>${vol.summary || '尚無概要設定。'}</p>
-                        <p class="volume-factions-text" style="margin: 0;"><strong>登場勢力陣營：</strong>${vol.parsed_factions || vol.factions || '全域勢力。'}</p>
+
+                    <!-- Mini Progress indicator -->
+                    <div class="volume-progress-container" style="display: flex; flex-direction: column; gap: 4px; margin: 2px 0;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">
+                            <span>✍️ 正文寫作進度</span>
+                            <span>${writtenChaptersCount} / ${totalChaptersCount} 章 (${progressPercent}%)</span>
+                        </div>
+                        <div style="height: 4px; width: 100%; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden;">
+                            <div style="height: 100%; width: ${progressPercent}%; background: linear-gradient(90deg, var(--primary), #10b981); border-radius: 2px; transition: width 0.4s ease;"></div>
+                        </div>
                     </div>
-                    <div class="volume-chapters-list" style="display: none; border-top: 1px dashed var(--border-color); padding-top: 12px; margin-top: 4px;">
+                    
+                    <div class="volume-summary-box" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.12); padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px;">
+                        <div><strong>📌 核心情節概要：</strong>${vol.summary || '尚無概要設定。'}</div>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                            <strong>🛡️ 登場勢力陣營：</strong>
+                            ${factionBadges}
+                        </div>
+                    </div>
+                    
+                    <div class="volume-chapters-list" style="display: ${isVolExpanded ? 'flex' : 'none'}; border-top: 1px dashed var(--border-color); padding-top: 14px; margin-top: 6px; flex-direction: column; gap: 12px;">
                         ${chaptersHtml}
                     </div>
                 </div>
                 `;
             }).join('');
+
+            el.plotTimeline.innerHTML = statsHtml + roadmapHtml + timelineCardsHtml;
+
+            // Bind mouse drag-to-scroll for roadmap track
+            const track = el.plotTimeline.querySelector('.roadmap-track');
+            if (track) {
+                let isDown = false;
+                let startX;
+                let scrollLeft;
+                
+                track.addEventListener('mousedown', (e) => {
+                    isDown = true;
+                    track.classList.add('grabbing');
+                    startX = e.pageX - track.offsetLeft;
+                    scrollLeft = track.scrollLeft;
+                });
+                
+                track.addEventListener('mouseleave', () => {
+                    isDown = false;
+                    track.classList.remove('grabbing');
+                });
+                
+                track.addEventListener('mouseup', () => {
+                    isDown = false;
+                    track.classList.remove('grabbing');
+                });
+                
+                track.addEventListener('mousemove', (e) => {
+                    if (!isDown) return;
+                    e.preventDefault();
+                    const x = e.pageX - track.offsetLeft;
+                    const walk = (x - startX) * 1.5; // scroll speed multiplier
+                    track.scrollLeft = scrollLeft - walk;
+                });
+            }
         }
     }
 }
 
+/**
+ * 渲染寫作 Tab
+ */
 /**
  * 渲染寫作 Tab
  */
@@ -639,19 +890,25 @@ export function renderWriterTab() {
             el.writerChaptersList.innerHTML = '<li class="empty-placeholder">尚無大綱，請先生成大綱。</li>';
         } else {
             el.writerChaptersList.innerHTML = plotChapters.map((chapter, idx) => {
-                const chapterIndex = chapter.chapter_index || (idx + 1);
-                const existingChapter = chapters.find(c => c.chapter_index === chapterIndex);
-                const isWritten = !!existingChapter;
+                const chapterIndex = parseInt(chapter.chapter_index) || (idx + 1);
+                const existingChapter = chapters.find(c => parseInt(c.chapter_index) === chapterIndex);
+                const isWritten = !!(existingChapter && existingChapter.content && existingChapter.content.trim());
                 const isActive = state.activeChapterIndex === chapterIndex;
+                
+                const volIdx = Math.floor((chapterIndex - 1) / 50) + 1;
+                const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
                 
                 return `
                     <li class="chapter-list-item ${isWritten ? 'written' : ''} ${isActive ? 'active' : ''}" 
-                        data-chapter-index="${chapterIndex}">
-                        <div class="chapter-list-item-header">
-                            <span class="chapter-list-number">第 ${chapterIndex} 章</span>
-                            <span class="chapter-list-status">${isWritten ? '✓' : '○'}</span>
+                        data-chapter-index="${chapterIndex}"
+                        style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; width: 100%; border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; margin-bottom: 4px; box-sizing: border-box;">
+                        <div style="display: flex; justify-content: space-between; width: 100%; align-items: center; pointer-events: none;">
+                            <span class="chapter-list-number" style="font-size: 0.72rem; font-weight: 700; opacity: 0.85; letter-spacing: 0.02em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章</span>
+                            <span class="chapter-list-status" style="font-size: 0.75rem; font-weight: 800;">${isWritten ? '✓' : '○'}</span>
                         </div>
-                        <div class="chapter-list-title">${chapter.title || '待設定標題'}</div>
+                        <div class="chapter-list-title" style="font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
+                            ${chapter.title || '待設定標題'}
+                        </div>
                     </li>
                 `;
             }).join('');
@@ -681,12 +938,15 @@ export function selectWriterChapter(chapterIndex) {
     
     const chapters = state.currentNovelData?.chapters || [];
     const plotChapters = state.currentNovelData?.plot?.chapters || [];
-    const chapter = chapters.find(c => c.chapter_index === chapterIndex);
-    const plotChapter = plotChapters.find(c => (c.chapter_index || plotChapters.indexOf(c) + 1) === chapterIndex);
+    const chapter = chapters.find(c => parseInt(c.chapter_index) === parseInt(chapterIndex));
+    const plotChapter = plotChapters.find(c => parseInt(c.chapter_index || plotChapters.indexOf(c) + 1) === parseInt(chapterIndex));
+    
+    const volIdx = Math.floor((chapterIndex - 1) / 50) + 1;
+    const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
     
     // 更新標題和狀態
     if (el.activeChapterTitle) {
-        el.activeChapterTitle.textContent = `第 ${chapterIndex} 章：${plotChapter?.title || '待設定標題'}`;
+        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章：${plotChapter?.title || '待設定標題'}`;
     }
     
     // --- AI Thinking Process separated rendering ---
@@ -718,13 +978,11 @@ export function selectWriterChapter(chapterIndex) {
             thinkingPreviewText.textContent = '';
         }
     }
-    if (el.activeChapterTitle) {
-        el.activeChapterTitle.textContent = `第 ${chapterIndex} 章：${plotChapter?.title || '待設定標題'}`;
-    }
     
+    const isWritten = !!(chapter && chapter.content && chapter.content.trim());
     if (el.activeChapterStatus) {
-        el.activeChapterStatus.className = `status-pill ${chapter ? 'status-written' : 'status-draft'}`;
-        el.activeChapterStatus.textContent = chapter ? '✓ 已撰寫' : '○ 尚未撰寫';
+        el.activeChapterStatus.className = `status-pill ${isWritten ? 'status-written' : 'status-draft'}`;
+        el.activeChapterStatus.textContent = isWritten ? '✓ 已撰寫' : '○ 尚未撰寫';
     }
     
     const previewBox = document.getElementById('chapter-outline-preview');
