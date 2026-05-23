@@ -6,7 +6,7 @@ from db import get_agent_configs, AGENT_DEFAULTS
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # --- Nvidia Model Presets ---
 NVIDIA_MODEL_PRESETS = {
@@ -50,8 +50,8 @@ def get_agent_model(agent_name):
     model_map = {
         "global": global_default,
         "architect": os.getenv("MODEL_ARCHITECT") or global_default,
-        "character": os.getenv("MODEL_CHARACTER") or global_default,
-        "plot": os.getenv("MODEL_PLOT") or global_default,
+        "character": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY") or global_default,
+        "plot": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC") or global_default,
         "writer": os.getenv("MODEL_WRITER") or global_default,
         "editor": os.getenv("MODEL_EDITOR") or global_default,
         "copilot": os.getenv("MODEL_COPILOT") or global_default
@@ -96,6 +96,10 @@ def get_config_for_agent(agent_name):
     if global_cfg:
         for k in config:
             if k in global_cfg and global_cfg[k] not in [None, ""]:
+                # Only override model if agent doesn't have a specialized default model in .env
+                if k == "model" and agent_name != "global":
+                    if get_agent_model(agent_name) != get_agent_model("global"):
+                        continue
                 config[k] = global_cfg[k]
                 
     # Override with specific agent database values if present and not empty
@@ -211,6 +215,13 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                             "type": "thinking",
                             "delta": reasoning
                         }, ensure_ascii=False) + "\n\n"
+                        # If content is empty, also yield as content so models that return 
+                        # response under reasoning_content don't lose their output tokens
+                        if not content:
+                            yield "data: " + json.dumps({
+                                "type": "content",
+                                "delta": reasoning
+                            }, ensure_ascii=False) + "\n\n"
                         continue
                         
                     if content:
