@@ -124,7 +124,7 @@ cd "c:\Users\user\Desktop\test_html\新增資料夾\Write_Novel"
 
 ### 步驟 4：使用虛擬環境 Python 啟動伺服器
 ```powershell
-C:\Users\user\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ---
