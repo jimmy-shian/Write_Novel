@@ -1109,11 +1109,11 @@ aside {
 }
 
 .worldview-section-content {
-    font-size: var(--font-base);
+    font-size: var(--font-lg); /* Increased 2 sizes (0.85rem -> 1.0rem) */
     line-height: 1.6;
     color: var(--text-secondary);
     white-space: pre-wrap;
-    max-height: 200px;
+    max-height: 250px;
     overflow-y: auto;
 }
 
@@ -2329,15 +2329,16 @@ textarea:focus {
 
 .worldview-sub-item-title {
     font-weight: 600;
-    font-size: var(--font-sm-plus);
+    font-size: var(--font-lg); /* Increased 2 sizes (0.78rem -> 1.0rem) */
     color: var(--text-primary);
     margin-bottom: 6px;
 }
 
 .worldview-sub-item-content {
-    font-size: var(--font-sm-plus);
+    font-size: var(--font-md); /* Increased 2 sizes (0.78rem -> 0.9rem) */
     color: var(--text-secondary);
     line-height: 1.6;
+    white-space: pre-wrap;
 }
 
 /* Worldview custom list elements (Seeds, Turning points) */
@@ -2357,6 +2358,7 @@ textarea:focus {
     font-size: var(--font-sm-plus);
     color: var(--text-secondary);
     line-height: 1.6;
+    white-space: pre-wrap;
 }
 
 .worldview-list li:last-child {
@@ -3033,3 +3035,130 @@ body.dark-theme .summary-text {
 .insp-events-list li {
     margin-bottom: 4px;
 }
+
+/* ==========================================
+   MARKDOWN SPACING OVERRIDES
+   ========================================== */
+.msg-content,
+.section-card-content,
+.structure-item-content,
+.worldview-section-content {
+    white-space: normal !important;
+}
+
+.msg-content p,
+.section-card-content p,
+.structure-item-content p,
+.worldview-section-content p {
+    margin: 6px 0;
+    line-height: 1.6;
+}
+
+/* ==========================================
+   STRATEGY TIMELINE HORIZONTAL SCROLLER
+   ========================================== */
+.worldview-timeline-scroll {
+    display: flex;
+    gap: 20px;
+    overflow-x: auto;
+    padding: 24px 12px;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(144, 144, 165, 0.2) transparent;
+}
+
+.worldview-timeline-scroll::-webkit-scrollbar {
+    height: 6px;
+}
+
+.worldview-timeline-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.worldview-timeline-scroll::-webkit-scrollbar-thumb {
+    background: rgba(144, 144, 165, 0.2);
+    border-radius: 3px;
+}
+
+.worldview-timeline-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+}
+
+.worldview-timeline-track {
+    position: absolute;
+    top: 42px;
+    left: 24px;
+    right: 24px;
+    height: 4px;
+    border-radius: 2px;
+    z-index: 0;
+}
+
+.worldview-timeline-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 260px;
+    max-width: 320px;
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.worldview-timeline-node {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    border: 3px solid var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.worldview-timeline-item:hover .worldview-timeline-node {
+    transform: scale(1.2);
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    box-shadow: 0 0 15px var(--border-color);
+}
+
+.worldview-timeline-content-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    width: 100%;
+    box-sizing: border-box;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 180px;
+}
+
+.worldview-timeline-item:hover .worldview-timeline-content-card {
+    transform: translateY(-6px);
+    box-shadow: var(--shadow-md);
+    background: var(--surface);
+}
+
+body.dark-theme .worldview-timeline-content-card {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+body.dark-theme .worldview-timeline-item:hover .worldview-timeline-content-card {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+

@@ -1,3 +1,6 @@
+import { state } from './state.js';
+import { el } from './dom.js';
+
 export function showAgentProcessingIndicator(tabName, agentName) {
     let indicator = null;
     let navTab = null;

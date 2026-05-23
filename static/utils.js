@@ -300,7 +300,10 @@ export function formatDate(date) {
 export function renderMarkdown(text) {
     if (!text) return '';
 
-    let html = text
+    // 將字串中的字面量 \n 轉義符號還原為真實的換行字元，以利 Markdown 換行解析與 pre-wrap 渲染
+    const normalizedText = String(text).replace(/\\n/g, '\n');
+
+    let html = normalizedText
         // 轉義 HTML 特殊字元
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -391,14 +394,100 @@ export function renderMarkdown(text) {
     // 程式碼區塊
     html = html.replace(/```([\s\S]*?)```/g, '<pre style="background:var(--bg-tertiary); padding:12px; border-radius:8px; border:1px solid var(--border-color); overflow-x:auto; font-family:\'SFMono-Regular\', Consolas, monospace; font-size:0.85rem; line-height:1.6; margin:8px 0;"><code>$1</code></pre>');
 
-    // 自動換行處理段落
-    const paragraphLines = html.split('\n').map(line => {
-        line = line.trim();
-        if (!line) return '';
-        // 如果已經是 HTML 標籤，不包裝
-        if (line.startsWith('<') && (line.endsWith('>') || line.includes('</'))) return line;
-        return `<p style="margin:4px 0; line-height:1.6;">${line}</p>`;
-    });
+    // 自動換行處理段落：將非塊級 HTML 區塊按連續空行分段，並對每段中的單行換行使用 <br>
+    const isBlockHTML = (line) => {
+        return /^\s*<\/?(h[3-5]|blockquote|hr|ul|ol|li|pre|code|div|p)\b/i.test(line);
+    };
 
-    return paragraphLines.join('\n');
+    const paragraphLines = html.split('\n');
+    let currentParagraph = [];
+    const finalBlocks = [];
+
+    const flushParagraph = () => {
+        if (currentParagraph.length > 0) {
+            const content = currentParagraph.join('<br>');
+            finalBlocks.push(`<p style="margin:6px 0; line-height:1.6;">${content}</p>`);
+            currentParagraph = [];
+        }
+    };
+
+    for (let line of paragraphLines) {
+        const trimmed = line.trim();
+        if (trimmed === '') {
+            flushParagraph();
+        } else if (isBlockHTML(trimmed)) {
+            // 如果是塊級 HTML 標籤，先清空當前段落，再直接放入標籤
+            flushParagraph();
+            finalBlocks.push(trimmed);
+        } else {
+            // 普通文字行，加入當前段落中
+            currentParagraph.push(trimmed);
+        }
+    }
+    flushParagraph();
+
+    return finalBlocks.join('\n');
+}
+
+/**
+ * 解析總監回覆中的執行指令區塊 (共用於即時 Stream 及歷史載入畫面)
+ */
+export function parseDirectorDecisionText(responseText, currentStage) {
+    let action = null;
+    let target = null;
+    let hint = '';
+    let reason = '';
+    
+    // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } ```）
+    const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+    if (jsonBlockMatch) {
+        try {
+            const jsonCmd = JSON.parse(jsonBlockMatch[1]);
+            action = (jsonCmd.action || '').toUpperCase();
+            target = jsonCmd.target || null;
+            hint = jsonCmd.hint || jsonCmd.reason || '';
+            reason = jsonCmd.reason || '';
+        } catch (e) {
+            console.warn('Failed to parse Director JSON command:', e);
+        }
+    }
+    
+    // 2) 回退：解析舊格式【執行指令】ACTION: XXX
+    if (!action) {
+        const actionMatch = responseText.match(/【執行指令】[\s\S]*?ACTION:\s*(\w+)/) || responseText.match(/【執行指令\][\s\S]*?ACTION:\s*(\w+)/);
+        if (actionMatch) {
+            action = actionMatch[1].trim().toUpperCase();
+        }
+        const targetMatch = responseText.match(/TARGET:\s*(\w+)/);
+        if (targetMatch) target = targetMatch[1].trim();
+        const hintMatch = responseText.match(/HINT:\s*([\s\S]*?)(?=```|【|$)/);
+        if (hintMatch) hint = hintMatch[1].trim();
+        const reasonMatch = responseText.match(/REASON:\s*([\s\S]*?)(?=```|【|$)/);
+        if (reasonMatch) reason = reasonMatch[1].trim();
+    }
+    
+    // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
+    if (!action) {
+        if (responseText.includes('WRITE_ALL_CHAPTERS') || responseText.includes('開始寫作所有章節')) {
+            action = 'WRITE_ALL_CHAPTERS';
+        } else if (responseText.includes('FINISH') || responseText.includes('全部完成')) {
+            action = 'FINISH';
+        } else if (responseText.includes('繼續') && !responseText.includes('暫停')) {
+            action = 'CONTINUE';
+        } else if (responseText.includes('暫停') || responseText.includes('等待用戶')) {
+            action = 'WAIT_USER';
+        }
+    }
+    
+    return { 
+        continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS',
+        response: responseText,
+        shouldPause: action === 'WAIT_USER',
+        action: action,
+        target: target,
+        hint: hint,
+        reason: reason,
+        regenerate: action === 'AUTO_REGENERATE',
+        regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null
+    };
 }
