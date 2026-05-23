@@ -1961,6 +1961,292 @@ def get_director_user_prompt() -> str:
     """獲取當前用戶的創作需求 prompt"""
     return DIRECTOR_EXECUTION_MODE.get("user_prompt", "")
 
+def verify_novel_integrity(novel_id, context):
+    """
+    Programmatic structural and content verification check for AI Novel Factory.
+    Verifies:
+    1. Volume & Chapter quantity issues (數量問題).
+    2. Worldview settings usage (世界觀設定使用情況).
+    3. Chapter foreshadowing connection issues (章章節內容-伏筆銜接度).
+    """
+    import json
+    import re
+    import db
+    from db import get_volumes
+    
+    # Load worldview
+    wb_data = db.get_latest_worldbuilding(novel_id)
+    wb_json = parse_json_safely(wb_data["content"]) if wb_data else {}
+    if not isinstance(wb_json, dict):
+        wb_json = {}
+        
+    three_act = wb_json.get("three_act_structure", [])
+    has_three_act = False
+    if isinstance(three_act, list):
+        has_three_act = any(isinstance(item, dict) and item.get("content", "").strip() != "" for item in three_act)
+        
+    progressive_plan = wb_json.get("progressive_character_plan", [])
+    has_progressive_plan = False
+    if isinstance(progressive_plan, list):
+        has_progressive_plan = any(isinstance(item, dict) and item.get("content", "").strip() != "" for item in progressive_plan)
+        
+    vols = get_volumes(novel_id)
+    volumes_count = len(vols)
+    dirty_volume_indices = []
+    for vol in vols:
+        try:
+            if int(vol.get("is_dirty", 0)) == 1:
+                dirty_volume_indices.append(int(vol.get("volume_index", 0)))
+        except (TypeError, ValueError):
+            pass
+
+    plot_json_for_scan = parse_json_safely(context.get("plot", ""), default={})
+    plot_chapters_for_scan = plot_json_for_scan.get("chapters", []) if isinstance(plot_json_for_scan, dict) else []
+    
+    # ----------------------------------------------------
+    # 1. 📂 卷數量與章節數量檢驗 (Volume & Chapter Quantity Check)
+    # ----------------------------------------------------
+    chapter_indices = []
+    placeholder_outline_indices = []
+    if isinstance(plot_chapters_for_scan, list):
+        for ch in plot_chapters_for_scan:
+            if isinstance(ch, dict):
+                try:
+                    ch_idx = int(ch.get("chapter_index", 0))
+                    if ch_idx > 0:
+                        chapter_indices.append(ch_idx)
+                        if _looks_like_placeholder_chapter(ch):
+                            placeholder_outline_indices.append(ch_idx)
+                except (TypeError, ValueError):
+                    pass
+                    
+    max_chapter_idx = max(chapter_indices) if chapter_indices else 0
+    expected_vols_by_outline = (max_chapter_idx - 1) // 50 + 1 if max_chapter_idx > 0 else 0
+    
+    # Gaps check
+    gaps = []
+    for i in range(1, max_chapter_idx + 1):
+        if i not in chapter_indices:
+            gaps.append(i)
+            
+    vol_status_str = f"篇卷規劃數 (volumes)：共 {volumes_count} 卷"
+    if expected_vols_by_outline > volumes_count:
+        vol_status_str += f" ⚠️【🔴 卷數不足警告】：目前大綱已規劃到第 {max_chapter_idx} 章，對應至第 {expected_vols_by_outline} 卷，但當前資料庫中僅有 {volumes_count} 卷規劃設定！"
+    elif expected_vols_by_outline > 0 and volumes_count > expected_vols_by_outline:
+        vol_status_str += f" (大綱目前規劃到第 {expected_vols_by_outline} 卷，餘 {volumes_count - expected_vols_by_outline} 卷待後續滾動生成)"
+        
+    gap_status_str = "章節序號連續性：完整連續"
+    if gaps:
+        gap_status_str = f"⚠️【🔴 章節序號不連續】：缺失的章節序號為 {gaps}"
+        
+    # ----------------------------------------------------
+    # 2. 🌍 世界觀設定使用率檢驗 (Worldview Settings Usage Check)
+    # ----------------------------------------------------
+    # Factions check
+    all_factions = []
+    for vol in vols:
+        factions_field = vol.get("factions") or []
+        if isinstance(factions_field, str):
+            try:
+                f_list = json.loads(factions_field)
+            except:
+                f_list = [factions_field]
+        else:
+            f_list = factions_field
+            
+        if isinstance(f_list, list):
+            for f in f_list:
+                if isinstance(f, str) and f.strip() and f.strip() != "全域陣列":
+                    all_factions.append(f.strip())
+    all_factions = list(set(all_factions))
+    
+    used_factions = []
+    unused_factions = []
+    for faction in all_factions:
+        found = False
+        for ch in plot_chapters_for_scan:
+            ch_str = json.dumps(ch, ensure_ascii=False)
+            if faction in ch_str:
+                found = True
+                break
+        if found:
+            used_factions.append(faction)
+        else:
+            unused_factions.append(faction)
+            
+    faction_usage_rate = (len(used_factions) / len(all_factions) * 100) if all_factions else 100.0
+    faction_status = f"陣營/勢力設定使用率：{len(used_factions)}/{len(all_factions)} ({faction_usage_rate:.1f}%)"
+    if unused_factions:
+        faction_status += f" — ⚠️ 未在大綱中登場的勢力：{unused_factions}"
+        
+    # Seeds check
+    seeds = wb_json.get("foreshadowing_seeds", [])
+    used_seeds = []
+    unused_seeds = []
+    for idx, seed in enumerate(seeds):
+        seed_id_variants = [f"Seed-{idx+1}", f"Seed {idx+1}", f"seed-{idx+1}", f"seed {idx+1}"]
+        found = False
+        for ch in plot_chapters_for_scan:
+            ch_str = json.dumps(ch, ensure_ascii=False).lower()
+            if any(var.lower() in ch_str for var in seed_id_variants):
+                found = True
+                break
+            
+            # Clean seed prefix for keyword check
+            clean_seed = seed
+            for prefix in [f"Seed-{idx+1}:", f"Seed-{idx+1}", f"Seed {idx+1}:", f"Seed {idx+1}"]:
+                if clean_seed.startswith(prefix):
+                    clean_seed = clean_seed[len(prefix):].strip()
+            
+            if len(clean_seed) > 6:
+                phrases = [p.strip() for p in re.split(r'[，。：；！？\s\[\]]', clean_seed) if len(p.strip()) >= 4]
+                for phrase in phrases:
+                    if phrase.lower() in ch_str:
+                        found = True
+                        break
+            if found:
+                break
+        if found:
+            used_seeds.append(seed)
+        else:
+            unused_seeds.append(seed)
+            
+    seed_usage_rate = (len(used_seeds) / len(seeds) * 100) if seeds else 100.0
+    seed_status = f"世界觀伏筆種子使用率：{len(used_seeds)}/{len(seeds)} ({seed_usage_rate:.1f}%)"
+    if unused_seeds:
+        unused_show = [s[:15] + "..." if len(s) > 15 else s for s in unused_seeds[:5]]
+        seed_status += f" — ⚠️ 未使用的伏筆種子前五項：{unused_show}"
+        
+    # Key Turning Points check
+    tps = wb_json.get("key_turning_points", [])
+    used_tps = []
+    unused_tps = []
+    for idx, tp in enumerate(tps):
+        tp_variants = [f"TurningPoint-{idx+1}", f"TurningPoint {idx+1}", f"turningpoint-{idx+1}", f"turningpoint {idx+1}", f"轉折點-{idx+1}", f"轉折點 {idx+1}"]
+        found = False
+        for ch in plot_chapters_for_scan:
+            ch_str = json.dumps(ch, ensure_ascii=False).lower()
+            if any(var.lower() in ch_str for var in tp_variants):
+                found = True
+                break
+                
+            clean_tp = tp
+            for prefix in [f"TurningPoint-{idx+1}:", f"TurningPoint-{idx+1}", f"轉折點-{idx+1}:", f"轉折點-{idx+1}"]:
+                if clean_tp.startswith(prefix):
+                    clean_tp = clean_tp[len(prefix):].strip()
+            
+            if len(clean_tp) > 6:
+                phrases = [p.strip() for p in re.split(r'[，。：；！？\s\[\]]', clean_tp) if len(p.strip()) >= 4]
+                for phrase in phrases:
+                    if phrase.lower() in ch_str:
+                        found = True
+                        break
+            if found:
+                break
+        if found:
+            used_tps.append(tp)
+        else:
+            unused_tps.append(tp)
+            
+    tp_usage_rate = (len(used_tps) / len(tps) * 100) if tps else 100.0
+    tp_status = f"世界觀關鍵轉折點使用率：{len(used_tps)}/{len(tps)} ({tp_usage_rate:.1f}%)"
+    if unused_tps:
+        unused_tp_show = [t[:15] + "..." if len(t) > 15 else t for t in unused_tps[:5]]
+        tp_status += f" — ⚠️ 未使用的轉折點前五項：{unused_tp_show}"
+        
+    # ----------------------------------------------------
+    # 3. 🔑 章節內容伏筆收束銜接檢驗 (Chapter Foreshadowing Connection Check)
+    # ----------------------------------------------------
+    plants_map = {}
+    payoffs_map = {}
+    
+    for ch in plot_chapters_for_scan:
+        try:
+            ch_idx = int(ch.get("chapter_index", 0))
+        except:
+            continue
+        if ch_idx <= 0:
+            continue
+            
+        plants = ch.get("foreshadowing_plant", []) or []
+        payoffs = ch.get("foreshadowing_payoff", []) or []
+        if isinstance(plants, str):
+            plants = [plants]
+        if isinstance(payoffs, str):
+            payoffs = [payoffs]
+            
+        for p in plants:
+            if not isinstance(p, str):
+                continue
+            matches = re.findall(r'(?:[Ss]eed|伏筆)\s*[-\s]?\s*(\d+)', p)
+            for m in matches:
+                plants_map.setdefault(int(m), []).append(ch_idx)
+                
+        for py in payoffs:
+            if not isinstance(py, str):
+                continue
+            matches = re.findall(r'(?:[Ss]eed|伏筆)\s*[-\s]?\s*(\d+)', py)
+            for m in matches:
+                payoffs_map.setdefault(int(m), []).append(ch_idx)
+                
+    dangling_plants = []
+    baseless_payoffs = []
+    out_of_order_seeds = []
+    
+    for s_id, p_chaps in plants_map.items():
+        if s_id not in payoffs_map:
+            dangling_plants.append(f"[Seed-{s_id}] (埋設於第 {p_chaps} 章)")
+        else:
+            earliest_plant = min(p_chaps)
+            earliest_payoff = min(payoffs_map[s_id])
+            if earliest_payoff <= earliest_plant:
+                out_of_order_seeds.append(f"[Seed-{s_id}] (第 {earliest_payoff} 章回收，卻在第 {earliest_plant} 章才埋設)")
+                
+    for s_id, py_chaps in payoffs_map.items():
+        if s_id not in plants_map:
+            baseless_payoffs.append(f"[Seed-{s_id}] (第 {py_chaps} 章回收)")
+            
+    fores_plant_total = len(plants_map)
+    fores_payoff_total = len(payoffs_map)
+    
+    fores_status_str = f"大綱伏筆統計：共埋設了 {fores_plant_total} 組伏筆種子標籤，已回收 {fores_payoff_total} 組伏筆標籤"
+    
+    foreshadowing_violations = []
+    if dangling_plants:
+        foreshadowing_violations.append(f"  🔴【伏筆未回收 (Dangling Plants)】：{dangling_plants}")
+    if baseless_payoffs:
+        foreshadowing_violations.append(f"  🔴【伏筆憑空回收 (Baseless Payoffs)】：{baseless_payoffs}")
+    if out_of_order_seeds:
+        foreshadowing_violations.append(f"  🔴【伏筆時序顛倒 (Out of Order)】：{out_of_order_seeds}")
+        
+    fores_alignment_str = "章節伏筆時序與收束銜接度：完全符合時序且無遺漏" if not foreshadowing_violations else "\n".join(foreshadowing_violations)
+    
+    # Compile Everything Into Report
+    validation_report_str = f"""【底層結構完整性與情節邏輯校驗報告（硬性指標）】
+1. 📂 設定結構完整性：
+   - 多幕式結構 (three_act_structure) 是否有合法內容：{ "是" if has_three_act else "否 (異常！此欄位目前為空，前端無法渲染)" }
+   - 角色漸進登場規劃策略 (progressive_character_plan) 是否有合法內容：{ "是" if has_progressive_plan else "否 (異常！此欄位目前為空，前端無法渲染)" }
+   
+2. 📊 卷數與章節數量檢驗 (數量問題)：
+   - {vol_status_str}
+   - {gap_status_str}
+   - 待 Lazy Alignment 的髒卷：{ dirty_volume_indices if dirty_volume_indices else "無" }
+   - 偵測到的佔位/保底大綱章節：{ placeholder_outline_indices if placeholder_outline_indices else "無" }
+   
+3. 🌍 世界觀設定使用率檢驗：
+   - {faction_status}
+   - {seed_status}
+   - {tp_status}
+   
+4. 🔑 章節內容 - 伏筆時序與收束銜接度檢驗：
+   - {fores_status_str}
+   - {fores_alignment_str}
+
+⚠️ 重要品質控制紅線：
+- 如果上述任何一項存在紅色警告標記（如紅圈圖示）或「異常」警告，代表大綱邏輯或篇卷規劃存在缺陷。你作為【創意總監】，必須果斷做決策，發出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 指令，並在 `hint` 中明確列出需要規劃師修正的邏輯缺陷細節，嚴禁發出 `CONTINUE` 或 `WRITE_ALL_CHAPTERS` 進度指令！
+"""
+    return validation_report_str
+
 def run_director_decision(novel_id, current_stage, user_prompt):
     """
     The Director (Copilot) evaluates the current pipeline stage and decides 
@@ -1988,7 +2274,7 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 【章節大綱】：{plot}
 【已寫作章節】：{written_chapters}
 
-## 系統底層結構完整性校驗報告
+## 系統底層結構完整性與情節邏輯校驗報告
 {validation_report}
 
 ## 用戶原始創作需求
@@ -1999,6 +2285,7 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 2. **邏輯一致性**：檢查各模組之間的設定是否相互矛盾
 3. **進度合理性**：判斷是否應該繼續下一階段，還是應該返回修改
 4. **回溯判斷**：如果後續階段發現前面階段的問題，可以回退修正
+5. **伏筆與篇卷校驗**：若校驗報告中出現 `🔴【伏筆未回收】`、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】`、`🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！
 
 ## 可用的 ACTION 指令（嚴格選擇一個）
 
@@ -2061,57 +2348,8 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 
     context = compile_context(novel_id)
     
-    # 💡 後端在呼叫總監前先進行結構完整性掃描，強迫總監直面前端欄位為空的現實
-    import db
-    from db import get_volumes
-    
-    wb_data = db.get_latest_worldbuilding(novel_id)
-    wb_json = parse_json_safely(wb_data["content"]) if wb_data else {}
-    if not isinstance(wb_json, dict):
-        wb_json = {}
-        
-    three_act = wb_json.get("three_act_structure", [])
-    has_three_act = False
-    if isinstance(three_act, list):
-        has_three_act = any(isinstance(item, dict) and item.get("content", "").strip() != "" for item in three_act)
-        
-    progressive_plan = wb_json.get("progressive_character_plan", [])
-    has_progressive_plan = False
-    if isinstance(progressive_plan, list):
-        has_progressive_plan = any(isinstance(item, dict) and item.get("content", "").strip() != "" for item in progressive_plan)
-        
-    vols = get_volumes(novel_id)
-    volumes_count = len(vols)
-    dirty_volume_indices = []
-    for vol in vols:
-        try:
-            if int(vol.get("is_dirty", 0)) == 1:
-                dirty_volume_indices.append(int(vol.get("volume_index", 0)))
-        except (TypeError, ValueError):
-            pass
-
-    plot_json_for_scan = parse_json_safely(context.get("plot", ""), default={})
-    plot_chapters_for_scan = plot_json_for_scan.get("chapters", []) if isinstance(plot_json_for_scan, dict) else []
-    placeholder_outline_indices = []
-    if isinstance(plot_chapters_for_scan, list):
-        for ch in plot_chapters_for_scan:
-            if isinstance(ch, dict) and _looks_like_placeholder_chapter(ch):
-                try:
-                    placeholder_outline_indices.append(int(ch.get("chapter_index", 0)))
-                except (TypeError, ValueError):
-                    placeholder_outline_indices.append(0)
-    
-    validation_report_str = f"""【底層結構完整性校驗報告（硬性指標）】
-- 多幕式結構 (three_act_structure) 是否有合法內容：{ "是" if has_three_act else "否 (異常！此欄位目前為空，前端無法渲染)" }
-- 角色漸進登場規劃策略 (progressive_character_plan) 是否有合法內容：{ "是" if has_progressive_plan else "否 (異常！此欄位目前為空，前端無法渲染)" }
-- 篇卷規劃數 (volumes)：共 {volumes_count} 卷
-- 待 Lazy Alignment 的髒卷：{ dirty_volume_indices if dirty_volume_indices else "無" }
-- 偵測到的佔位/保底大綱章節：{ placeholder_outline_indices if placeholder_outline_indices else "無" }
-
-⚠️ 重要品質控制紅線：
-如果上述任何一項為「否」，代表前端無法渲染或大綱規劃師缺少依據，即使原始文字有內容，你也必須發出 `AUTO_REGENERATE` 重新生成世界觀設定，或指令回退，嚴禁發出 `CONTINUE` 進度指令！
-如果存在髒卷或佔位/保底大綱章節，你必須發出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot`，先修復大綱，嚴禁發出 `WRITE_ALL_CHAPTERS`。
-"""
+    # 💡 呼叫程式化完整性與情節邏輯校驗函數，強迫總監直面大綱在數量、世界觀及伏筆上的現實
+    validation_report_str = verify_novel_integrity(novel_id, context)
 
     # Determine next stage label
     stage_labels = {

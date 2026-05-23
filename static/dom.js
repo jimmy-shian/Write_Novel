@@ -30,6 +30,7 @@ export const el = {
     editorPlotJson: document.getElementById('editor-plot-json'),
     btnPlotGenerate: document.getElementById('btn-plot-generate'),
     btnPlotAddChapter: document.getElementById('btn-plot-add-chapter'),
+    btnPlotAddVolume: document.getElementById('btn-plot-add-volume'),
     btnPlotSave: document.getElementById('btn-plot-save'),
     plotTimeline: document.getElementById('plot-timeline'),
     
