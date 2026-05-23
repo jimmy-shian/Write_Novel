@@ -98,46 +98,52 @@ export async function executePipelineStage(stage, userPrompt) {
                 targetTextarea = el.editorProse;
                 state.activeTab = 'writer';
                 agentName = 'Chapter Writer (小說正文寫作作家)';
+                // 標記正在寫作此章節
+                state.currentlyWritingChapterIndex = state.activeChapterIndex || 1;
                 break;
             default:
                 resolve();
                 return;
         }
-        renderActiveTab();
+        window.renderActiveTab();
         if (targetTextarea) targetTextarea.value = '';
         showToast(`🚀 正在啟動 ${stage} Agent...`);
         showAgentProcessingIndicator(stage, agentName);
         let failed = false;
-        streamAPI(
+        // 保存寫作章節索引用於閉包
+        const writingChapterIndex = state.currentlyWritingChapterIndex;
+        window.streamAPI(
             endpoint,
             body,
             (delta) => {
                 // onThinking – not used here
             },
             (delta) => {
-                if (targetTextarea) {
+                // 檢查是否仍為當前寫作的章節，防止用戶切換後的串流內容寫入錯誤位置
+                if (targetTextarea && state.currentlyWritingChapterIndex === writingChapterIndex) {
                     targetTextarea.value += delta;
                     targetTextarea.scrollTop = targetTextarea.scrollHeight;
                 }
-                // updateAgentStreamOutput(stage, delta); // optional
             },
             (msg) => {
                 failed = true;
                 state.isPipelineRunning = false;
+                state.currentlyWritingChapterIndex = null;
                 showToast(`${stage} Agent 執行失敗: ${msg}`);
                 updatePipelineStage(stage, 'error');
                 hideAgentProcessingIndicator(stage);
                 resolve();
             },
             async () => {
+                state.currentlyWritingChapterIndex = null;
                 if (failed) return;
                 updatePipelineStage(stage, 'done');
                 hideAgentProcessingIndicator(stage);
-                await loadNovelDetails(state.currentNovelId);
+                await window.loadNovelDetails(state.currentNovelId);
                 if (state.isPipelineRunning) {
                     showToast(`${stage} 完成，正在請求 AI 總監評估...`);
-                    const nextDecision = await runDirectorDecision(stage);
-                    await executeDirectorAction(nextDecision, userPrompt);
+                    const nextDecision = await window.runDirectorDecision(stage);
+                    await window.executeDirectorAction(nextDecision, userPrompt);
                 }
                 resolve();
             }
@@ -171,24 +177,28 @@ export async function writeAllChaptersSequentially(userPrompt) {
         showToast(`✍️ 開始撰寫第 ${chapterIndex} 章（共 ${totalChapters} 章）`);
         state.activeTab = 'writer';
         state.activeChapterIndex = chapterIndex;
-        renderActiveTab();
+        state.currentlyWritingChapterIndex = chapterIndex; // 標記正在寫作此章節
+        window.renderActiveTab();
         await new Promise((resolve) => {
             if (el.editorProse) el.editorProse.value = '';
-            streamAPI(
+            window.streamAPI(
                 '/api/agent/write-chapter',
                 { novel_id: state.currentNovelId, chapter_index: chapterIndex },
                 () => {},
                 (delta) => {
-                    if (el.editorProse) {
+                    // 檢查是否仍為當前寫作的章節，防止切換後的串流內容寫入錯誤位置
+                    if (el.editorProse && state.currentlyWritingChapterIndex === chapterIndex) {
                         el.editorProse.value += delta;
                         el.editorProse.scrollTop = el.editorProse.scrollHeight;
                     }
                 },
                 (msg) => {
                     showToast(`第 ${chapterIndex} 章寫作失敗: ${msg}`);
+                    state.currentlyWritingChapterIndex = null;
                 },
                 async () => {
-                    await loadNovelDetails(state.currentNovelId);
+                    state.currentlyWritingChapterIndex = null;
+                    await window.loadNovelDetails(state.currentNovelId);
                     resolve();
                 }
             );
@@ -196,10 +206,10 @@ export async function writeAllChaptersSequentially(userPrompt) {
         // 每 3 章或最後一章時，請求總監評估
         if ((chapterIndex % 3 === 0) || chapterIndex === totalChapters) {
             updateDirectorMessage(`🎬 總監正在評估第 ${chapterIndex} 章...`);
-            const chapterDecision = await runDirectorDecision('writer');
+            const chapterDecision = await window.runDirectorDecision('writer');
             if (['GO_BACK_TO_WORLDVIEW', 'GO_BACK_TO_CHARACTERS', 'GO_BACK_TO_PLOT'].includes(chapterDecision.action)) {
                 showToast(`⚡ 總監在第 ${chapterIndex} 章後指示回退修改...`);
-                await executeDirectorAction(chapterDecision, userPrompt);
+                await window.executeDirectorAction(chapterDecision, userPrompt);
                 return;
             }
             if (chapterDecision.action === 'WAIT_USER') {
@@ -215,6 +225,6 @@ export async function writeAllChaptersSequentially(userPrompt) {
     showToast('🎉 恭喜！全部章節正文已撰寫完成！');
     state.isPipelineRunning = false;
     setTimeout(() => showPipelineProgress(false), 3000);
-    await loadNovelDetails(state.currentNovelId);
-    selectWriterChapter(1);
+    await window.loadNovelDetails(state.currentNovelId);
+    window.selectWriterChapter(1);
 }

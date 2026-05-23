@@ -6,7 +6,7 @@ import { state } from './state.js';
 import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI } from './api.js';
-import { parseWorldviewJSON, renderMarkdown } from './utils.js';
+import { parseWorldviewJSON, renderMarkdown, parseDirectorDecisionText } from './utils.js';
 
 /**
  * 渲染當前激活的 Tab
@@ -76,107 +76,131 @@ export function renderWorldviewSections() {
     // 渲染策略卡片，並使用容器包裹以便 Grid/分欄控制
     let strategyHtml = '';
     
-    // 三幕式結構 (data-section 映射為 three-act 配合 app.js)
-    if (js.three_act_structure && js.three_act_structure.length > 0) {
-        strategyHtml += `
-            <div class="worldview-section-card" data-section="three-act">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge badge-warning">🎭</span>
-                        三幕式結構
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
-                        <button onclick="editWorldviewComplexList('three_act_structure', '三幕式結構', 'title', 'content')" title="編輯">✏️</button>
-                    </div>
+    // 多幕式結構 (data-section 映射為 three-act 配合 app.js)
+    const threeActList = (js.three_act_structure && js.three_act_structure.length > 0) ? js.three_act_structure : [
+        { title: "第一幕 (Setup)", content: "" },
+        { title: "第二幕 (Confrontation)", content: "" },
+        { title: "第三幕 (Resolution)", content: "" }
+    ];
+    strategyHtml += `
+        <div class="worldview-section-card" data-section="three-act">
+            <div class="worldview-section-header">
+                <div class="worldview-section-title">
+                    <span class="worldview-section-badge badge-warning">🎭</span>
+                    多幕式劇情起伏結構
                 </div>
-                <div class="worldview-section-content" id="content-three-act">
-                    ${js.three_act_structure.map((item, idx) => `
-                        <div class="worldview-sub-item">
-                            <div class="worldview-sub-item-title">${item.title || `項目 ${idx + 1}`}</div>
-                            <div class="worldview-sub-item-content">${renderMarkdown(item.content) || '<em style="color:var(--text-muted)">尚無內容</em>'}</div>
-                        </div>
-                    `).join('')}
+                <div class="worldview-section-actions">
+                    <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
+                    <button onclick="editWorldviewComplexList('three_act_structure', '多幕式結構', '幕次')" title="編輯">✏️</button>
                 </div>
             </div>
-        `;
-    }
+            <div class="worldview-section-content" id="content-three-act">
+                ${threeActList.length > 0 ? `
+                    <div class="worldview-sub-items-list" style="display: flex; flex-direction: column; gap: 8px;">
+                        ${threeActList.map((item, idx) => `
+                            <div class="worldview-sub-item" onclick="editWorldviewComplexList('three_act_structure', '多幕式結構', '幕次')" style="cursor: pointer;">
+                                <div class="worldview-sub-item-title">${item.title || `幕次 ${idx + 1}`}</div>
+                                <div class="worldview-sub-item-content">${renderMarkdown(item.content) || '<em style="color:var(--text-muted)">尚無內容</em>'}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : `
+                    <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">🎭 尚無結構設定，請點擊編輯按鈕以新增</div>
+                `}
+            </div>
+        </div>
+    `;
     
     // 角色漸進規劃 (data-section 映射為 character-waves 配合 app.js)
-    if (js.progressive_character_plan && js.progressive_character_plan.length > 0) {
-        strategyHtml += `
-            <div class="worldview-section-card" data-section="character-waves">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge badge-purple">👥</span>
-                        角色漸進規劃策略
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('character-waves')" title="展開/收合">↕</button>
-                        <button onclick="editWorldviewComplexList('progressive_character_plan', '角色漸進規劃策略', 'title', 'content')" title="編輯">✏️</button>
-                    </div>
+    const charPlanList = (js.progressive_character_plan && js.progressive_character_plan.length > 0) ? js.progressive_character_plan : [
+        { title: "第一波開篇 (Wave 1)", content: "" },
+        { title: "第二波發展 (Wave 2)", content: "" },
+        { title: "第三波高潮 (Wave 3)", content: "" }
+    ];
+    strategyHtml += `
+        <div class="worldview-section-card" data-section="character-waves">
+            <div class="worldview-section-header">
+                <div class="worldview-section-title">
+                    <span class="worldview-section-badge badge-purple">👥</span>
+                    角色漸進登場規劃策略
                 </div>
-                <div class="worldview-section-content" id="content-character-waves">
-                    ${js.progressive_character_plan.map((item, idx) => `
-                        <div class="worldview-sub-item">
-                            <div class="worldview-sub-item-title">${item.title || `階段 ${idx + 1}`}</div>
-                            <div class="worldview-sub-item-content">${renderMarkdown(item.content) || '<em style="color:var(--text-muted)">尚無內容</em>'}</div>
-                        </div>
-                    `).join('')}
+                <div class="worldview-section-actions">
+                    <button onclick="toggleSectionExpand('character-waves')" title="展開/收合">↕</button>
+                    <button onclick="editWorldviewComplexList('progressive_character_plan', '角色漸進規劃策略', '波次')" title="編輯">✏️</button>
                 </div>
             </div>
-        `;
-    }
+            <div class="worldview-section-content" id="content-character-waves">
+                ${charPlanList.length > 0 ? `
+                    <div class="worldview-sub-items-list" style="display: flex; flex-direction: column; gap: 8px;">
+                        ${charPlanList.map((item, idx) => `
+                            <div class="worldview-sub-item" onclick="editWorldviewComplexList('progressive_character_plan', '角色漸進規劃策略', '波次')" style="cursor: pointer;">
+                                <div class="worldview-sub-item-title">${item.title || `波次 ${idx + 1}`}</div>
+                                <div class="worldview-sub-item-content">${renderMarkdown(item.content) || '<em style="color:var(--text-muted)">尚無內容</em>'}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : `
+                    <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">👥 尚無策略設定，請點擊編輯按鈕以新增</div>
+                `}
+            </div>
+        </div>
+    `;
     
     // 伏筆種子 (data-section 映射為 seeds 配合 app.js)
-    if (js.foreshadowing_seeds && js.foreshadowing_seeds.length > 0) {
-        strategyHtml += `
-            <div class="worldview-section-card" data-section="seeds">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge badge-info">🌱</span>
-                        伏筆種子
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('seeds')" title="展開/收合">↕</button>
-                        <button onclick="editWorldviewList('foreshadowing_seeds', '伏筆種子')" title="編輯">✏️</button>
-                    </div>
+    const seedsList = js.foreshadowing_seeds || [];
+    strategyHtml += `
+        <div class="worldview-section-card" data-section="seeds">
+            <div class="worldview-section-header">
+                <div class="worldview-section-title">
+                    <span class="worldview-section-badge badge-info">🌱</span>
+                    伏筆種子
                 </div>
-                <div class="worldview-section-content" id="content-seeds">
+                <div class="worldview-section-actions">
+                    <button onclick="toggleSectionExpand('seeds')" title="展開/收合">↕</button>
+                    <button onclick="editWorldviewList('foreshadowing_seeds', '伏筆種子')" title="編輯">✏️</button>
+                </div>
+            </div>
+            <div class="worldview-section-content" id="content-seeds">
+                ${seedsList.length > 0 ? `
                     <ul class="worldview-list">
-                        ${js.foreshadowing_seeds.map((item, idx) => `
+                        ${seedsList.map((item, idx) => `
                             <li>${renderMarkdown(typeof item === 'string' ? item : JSON.stringify(item))}</li>
                         `).join('')}
                     </ul>
-                </div>
+                ` : `
+                    <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">🌱 尚無伏筆設定，請點擊編輯按鈕以新增</div>
+                `}
             </div>
-        `;
-    }
+        </div>
+    `;
     
     // 關鍵轉折點 (data-section 映射為 turning-points 配合 app.js)
-    if (js.key_turning_points && js.key_turning_points.length > 0) {
-        strategyHtml += `
-            <div class="worldview-section-card" data-section="turning-points">
-                <div class="worldview-section-header">
-                    <div class="worldview-section-title">
-                        <span class="worldview-section-badge badge-danger">⚡</span>
-                        關鍵轉折點
-                    </div>
-                    <div class="worldview-section-actions">
-                        <button onclick="toggleSectionExpand('turning-points')" title="展開/收合">↕</button>
-                        <button onclick="editWorldviewList('key_turning_points', '關鍵轉折點')" title="編輯">✏️</button>
-                    </div>
+    const tpList = js.key_turning_points || [];
+    strategyHtml += `
+        <div class="worldview-section-card" data-section="turning-points">
+            <div class="worldview-section-header">
+                <div class="worldview-section-title">
+                    <span class="worldview-section-badge badge-danger">⚡</span>
+                    關鍵轉折點
                 </div>
-                <div class="worldview-section-content" id="content-turning-points">
+                <div class="worldview-section-actions">
+                    <button onclick="toggleSectionExpand('turning-points')" title="展開/收合">↕</button>
+                    <button onclick="editWorldviewList('key_turning_points', '關鍵轉折點')" title="編輯">✏️</button>
+                </div>
+            </div>
+            <div class="worldview-section-content" id="content-turning-points">
+                ${tpList.length > 0 ? `
                     <ul class="worldview-list">
-                        ${js.key_turning_points.map((item, idx) => `
+                        ${tpList.map((item, idx) => `
                             <li>${renderMarkdown(typeof item === 'string' ? item : JSON.stringify(item))}</li>
                         `).join('')}
                     </ul>
-                </div>
+                ` : `
+                    <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">⚡ 尚無轉折設定，請點擊編輯按鈕以新增</div>
+                `}
             </div>
-        `;
-    }
+        </div>
+    `;
 
     if (strategyHtml) {
         // 依據 state.strategyCardView 設定 Grid 排版樣式
@@ -242,7 +266,7 @@ export function applySubSectionVisibility() {
     // 找出所有子項目元素
     let subItems = [];
     if (activeSectionName === 'three-act' || activeSectionName === 'character-waves') {
-        subItems = Array.from(activeCard.querySelectorAll('.worldview-sub-item'));
+        subItems = Array.from(activeCard.querySelectorAll('.worldview-timeline-item, .worldview-sub-item'));
     } else {
         subItems = Array.from(activeCard.querySelectorAll('.worldview-list > li'));
     }
@@ -684,7 +708,14 @@ export function selectWriterChapter(chapterIndex) {
     
     // 更新正文編輯器
     if (el.editorProse) {
-        el.editorProse.value = chapter?.content || '';
+        const isCurrentChapterWriting = state.currentlyWritingChapterIndex === chapterIndex;
+        if (isCurrentChapterWriting) {
+            // 💡 核心優化：如果切換回到正在 AI 背景寫作的章節，直接讀取並銜接目前背景生成的緩衝區內容！
+            el.editorProse.value = state.writingBuffer || chapter?.content || '';
+        } else {
+            // 否則，正常載入資料庫中已有的內容
+            el.editorProse.value = chapter?.content || '';
+        }
         el.editorProse.disabled = false;
     }
     
@@ -717,22 +748,112 @@ export function renderActiveChapter() {
 export function renderChatMessages() {
     if (!el.chatMessagesContainer) return;
     
-    const messages = state.currentNovelData?.chat_messages || [];
+    const messages = state.currentNovelData?.chat_memory || state.currentNovelData?.chat_messages || [];
     
-    if (messages.length === 0) {
-        el.chatMessagesContainer.innerHTML = `
-            <div class="chat-message system">
-                <div class="msg-content">💡 選擇一部小說開始討論。</div>
-            </div>
-        `;
-        return;
-    }
-    
-    el.chatMessagesContainer.innerHTML = messages.map(msg => `
-        <div class="chat-message ${msg.role}">
-            <div class="msg-content">${msg.content}</div>
+    // Render the default system greeting first
+    el.chatMessagesContainer.innerHTML = `
+        <div class="message system-msg">
+            <div class="msg-sender">AI Novel Director</div>
+            <div class="msg-content">你好！我是你的小說創作協同總監。我擁有對當前小說的完整長期記憶 (SQLite)。<br><br>你可以對我發出指令，例如：<br>「幫我修改主角設定，讓他背景多一條伏筆」<br>「給我想 3 個世界觀的魔法限制」<br>「重寫第一章，讓氛圍更懸疑」<br><br>我會直接指導各個 Agent 配合，或是為你提供靈感！</div>
         </div>
-    `).join('');
+    `;
+    
+    if (messages.length > 0) {
+        messages.forEach((msg, idx) => {
+            const msgDiv = document.createElement('div');
+            const isUser = msg.role === 'user';
+            const isSystem = msg.role === 'system';
+            const className = isUser ? 'user-msg' : (isSystem ? 'system-msg' : 'assistant-msg');
+            const sender = isUser ? 'You' : (isSystem ? 'System' : 'Novel Director');
+            
+            msgDiv.className = `message ${className}`;
+            
+            // Format timestamp if available
+            const dateStr = msg.timestamp || msg.created_at;
+            let formattedTime = "";
+            if (dateStr) {
+                try {
+                    const d = new Date(dateStr);
+                    formattedTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                } catch(e) {}
+            }
+            
+            const isLatest = idx === messages.length - 1;
+            if (isLatest && !isUser && !isSystem && !state.isAutoExecuteMode) {
+                const parsed = parseDirectorDecisionText(msg.content, state.activeTab);
+                if (parsed && parsed.action && parsed.action !== 'FINISH') {
+                    const actionLabels = {
+                        'CONTINUE': '繼續下一階段',
+                        'AUTO_REGENERATE': '重新生成',
+                        'GO_BACK_TO_WORLDVIEW': '回退到世界觀',
+                        'GO_BACK_TO_CHARACTERS': '回退到角色',
+                        'GO_BACK_TO_PLOT': '回退到大綱',
+                        'WRITE_ALL_CHAPTERS': '開始寫全書',
+                        'WAIT_USER': '等待確認',
+                        'FINISH': '任務完成'
+                    };
+                    
+                    const buttonsHtml = `
+                        <div class="chat-action-buttons">
+                            <button class="btn-chat-action" data-action="accept" title="執行總監建議的動作">✅ 接受總監決策${parsed.action ? ` (${actionLabels[parsed.action] || parsed.action})` : ''}</button>
+                            <button class="btn-chat-action" data-action="continue">▶️ 強制繼續下一階段</button>
+                            <button class="btn-chat-action" data-action="regen">🔄 重新生成此階段</button>
+                            <button class="btn-chat-action" data-action="pause">⏸️ 暫停並手動修改</button>
+                        </div>
+                    `;
+                    
+                    msgDiv.innerHTML = `
+                        <div class="msg-sender-row">
+                            <div class="msg-sender">${sender}</div>
+                            ${formattedTime ? `<div class="msg-timestamp">${formattedTime}</div>` : ''}
+                        </div>
+                        <div class="msg-content">
+                            ${renderMarkdown(msg.content)}
+                            ${buttonsHtml}
+                        </div>
+                    `;
+                    
+                    setTimeout(() => {
+                        const buttonsContainer = msgDiv.querySelector('.chat-action-buttons');
+                        if (buttonsContainer) {
+                            buttonsContainer.querySelectorAll('.btn-chat-action').forEach(btn => {
+                                btn.addEventListener('click', async function() {
+                                    if (state.isPipelineRunning) {
+                                        showToast('⚠️ 管道正在運行中，請稍候...');
+                                        return;
+                                    }
+                                    const choice = this.dataset.action;
+                                    buttonsContainer.querySelectorAll('.btn-chat-action').forEach(b => {
+                                        b.disabled = true;
+                                        b.style.opacity = '0.5';
+                                    });
+                                    this.style.opacity = '1';
+                                    this.style.borderColor = 'var(--primary)';
+                                    this.style.fontWeight = '700';
+                                    
+                                    if (typeof window.resumePipelineWithDecision === 'function') {
+                                        await window.resumePipelineWithDecision(state.activeTab, parsed, choice);
+                                    }
+                                });
+                            });
+                        }
+                    }, 0);
+                    
+                    el.chatMessagesContainer.appendChild(msgDiv);
+                    return;
+                }
+            }
+            
+            msgDiv.innerHTML = `
+                <div class="msg-sender-row">
+                    <div class="msg-sender">${sender}</div>
+                    ${formattedTime ? `<div class="msg-timestamp">${formattedTime}</div>` : ''}
+                </div>
+                <div class="msg-content">${renderMarkdown(msg.content)}</div>
+            `;
+            el.chatMessagesContainer.appendChild(msgDiv);
+        });
+    }
     
     // 滾動到底部
     el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
@@ -747,8 +868,23 @@ export function appendChatMessage(role, content) {
     if (!el.chatMessagesContainer) return;
     
     const msgDiv = document.createElement('div');
-    msgDiv.className = `chat-message ${role}`;
-    msgDiv.innerHTML = `<div class="msg-content">${content}</div>`;
+    const isUser = role === 'user';
+    const isSystem = role === 'system';
+    const className = isUser ? 'user-msg' : (isSystem ? 'system-msg' : 'assistant-msg');
+    const sender = isUser ? 'You' : (isSystem ? 'System' : 'Novel Director');
+    
+    msgDiv.className = `message ${className}`;
+    
+    const now = new Date();
+    const formattedTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    
+    msgDiv.innerHTML = `
+        <div class="msg-sender-row">
+            <div class="msg-sender">${sender}</div>
+            <div class="msg-timestamp">${formattedTime}</div>
+        </div>
+        <div class="msg-content">${renderMarkdown(content)}</div>
+    `;
     
     el.chatMessagesContainer.appendChild(msgDiv);
     el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;

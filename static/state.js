@@ -12,6 +12,8 @@ export const state = {
     
     // Pipeline workflow state
     isPipelineRunning: false,
+    // 追蹤當前正在寫作的章節索引，用於防止串流內容寫入錯誤的章節
+    currentlyWritingChapterIndex: null,
     
     // Director pipeline stage control
     pipelineStages: ['worldview', 'characters', 'plot', 'writer'],
@@ -20,8 +22,8 @@ export const state = {
     // Director execution mode: 一鍵執行模式 vs 一般模式
     // 一鍵執行模式：總監的建議即為執行令（自動執行）
     // 一般模式：總監提供建議，由用戶決定
-    isAutoExecuteMode: false,
-    showStreamLog: true,
+    isAutoExecuteMode: localStorage.getItem('isAutoExecuteMode') !== 'false',
+    showStreamLog: localStorage.getItem('showStreamLog') !== 'false',
     
     // 策略卡片顯示狀態：'all' | '<' | '>'
     strategyCardView: 'all',
