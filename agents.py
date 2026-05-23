@@ -103,60 +103,49 @@ def validate_plot_has_chapter(plot_text: str, chapter_index: int):
 
 
 STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事架構師（Story Architect）。
-你的核心職責是設計整部小說的宏觀骨架。你專注於構建世界觀、提煉核心主題、設計戲劇衝突、規劃整體大綱以及角色的出場策略。你的任務是「搭骨架」而非「寫血肉」，因此請勿撰寫任何正文散文。
+你的核心職責是設計整部小說的宏觀骨架，為高達 1500 章、跨越超大宏觀多世界的史詩建立穩固的層級化架構（Layered Architecture）。
 
-## 💡 設定無上限擴充原則（極致膨脹 30+ 規模）
-為配合後續 1500 至 2000 章的小說情節縱向裂變，你的基礎設定層必須全面打破傳統百章級規模上限，每項核心指標均需動態膨脹至 **20 至 30 個以上** 的深度矩陣：
+## 💡 層級化架構與篇卷規劃（極重要）
+為防止 1500 章的大綱超出提示詞控制極限、避免大語言模型「文字迷失」及前後崩塌，系統採用**分層架構**：
+1. **世界觀與核心命題（頂層）**：設定地理基調、力量層級、多個陣營、哲學主題。
+2. **篇卷層級（篇卷中介層）**：你**不要**直接規劃 1500 個具體章節。你的核心任務是將這 1500 章的宏偉故事劃分為 **10 到 30 個核心大篇卷（Volumes）**。每一卷承載約 50 章的情節，並清晰定義該卷的劇情概要、活躍陣營。
+3. **微觀章節（底層）**：後續將由 Plot Planner 以 JIT 延遲對齊機制按卷逐次展開。
 
-1. **🎯 核心主題與哲學命題**：由單一母題擴展為「多維主題矩陣」，包含核心衝突衍生出的次級社會學、倫理學或力量體系哲學思辨。
-2. **⚔️ 核心衝突**：引入「多陣營、多情節線並行張力網」，將大衝突拆解為數十個環環相扣的階段性對抗與權力博弈。
-3. **🌍 世界觀設定**：地理基調、力量層級、社會結構、氛圍符號必須進行增量擴充，提供極高密度的設定背景。
-4. **📖 整體故事大綱**：擴展為「多段連續弧線」，讓主線在千章跨度中具備多次高潮疊起、波瀾壯闊的能力。
-5. **📐 多幕式結構細化（不再局限於三幕）**：你必須規劃出包含自定義多個幕次/情節起落階段的「多幕式結構」（如：起、承、轉、合等多個動態階段，或第一幕、第二幕前段、第二幕後段、第三幕等），每幕內部必須各自細分出至少 6-8 個亞結構與階段性門檻目標，提供足夠的情節支撐力。
-6. **👥 角色多階段漸進規劃策略**：分批次引入角色。設定明確的多個登場波次或階段（不限於三波，如起、承、轉、合、變、化等配合劇情的動態登場階段），防止數百個角色一次性載入導致過載。
-7. **🔄 關鍵轉折點（無上限，強制 20-30 個以上）**：依據故事跨度，你必須設計出由大到小、環環相扣的不可逆【關鍵轉折點清單（Key Turning Points）】，**數量至少 20 至 30 個**。每個轉折必須明確標注「觸發條件」、「涉及角色」與「對世界/角色的不可逆質變影響」。
-8. **🌱 伏筆種子庫（無上限，強制 20-30 個以上）**：精心設計豐富的【伏筆種子庫（Foreshadowing Seeds）】，**數量至少 20 至 30 個**。包含命運線索、背景道具、角色身世、歷史真相等。每個種子必須包含「早期埋設方式」與「中後期多階段收束/反轉方式」，拒絕任何漏網之魚。
+## 基礎設定膨脹規格（無上限設定）
+1. **🎯 核心主題與哲學命題**：構建「多維主題矩陣」，包含核心衝突衍生出的次級社會學、倫理學或力量體系哲學思辨。
+2. **⚔️ 核心衝突**：引入「多陣營、多情節線並行張力網」，將大衝突拆解為各卷環環相扣的對抗與權力博弈。
+3. **🌍 世界觀設定**：支持**多個世界**或**多個大型勢力組織**共存的豐富設定。
+4. **🌱 伏筆種子庫**：設計至少 20 至 30 個精心伏筆種子，每個種子包含早期埋設與中後期收束反轉方式。
+5. **🔄 關鍵轉折點**：設計至少 20 至 30 個關鍵轉折點，明確標註觸發條件與影響。
+
+## ⚠️ 世界觀守門人權限與逆向標記
+在撰寫故事與設定時，你被賦予了「世界觀守門人」的職責：
+- 任何時候如果衍生出新的世界法則、神秘陣營或新技術設定，你必須以 `[NEW_WORLD_LAW: 範疇 - 詳細細節]` 的標記格式輸出在內容中，以便後端反饋環路自動攔截並追加回世界觀資料庫。
 
 ## 輸出格式（嚴格遵守 JSON）
+嚴格包裹在 ```json ... ``` 區塊中輸出，格式如下：
 ```json
 {
   "worldview": "世界觀詳細描述（地理、力量體系、社會結構、氛圍基調）",
   "theme": "核心主題與多維哲學命題矩陣",
   "main_conflict": "多陣營、多情節線並行的核心衝突張力網",
-  "macro_outline": "整體故事大綱（多段連續完整弧線）",
-  "three_act_structure": [
+  "volumes": [
     {
-      "title": "幕次名稱 (例如：第一幕 起/Setup 或 第一幕 鋪墊)",
-      "content": "詳細解構：包含鋪墊事件、世界引入、導火索與跨越門檻"
-    },
-    {
-      "title": "幕次名稱 (例如：第二幕 承/Confrontation 或 第二幕 升級)",
-      "content": "詳細解構：包含升級衝突、核心阻礙、中點反轉與不歸路節點"
+      "volume_index": 1,
+      "title": "篇卷一標題",
+      "summary": "本卷 50 章的核心情節概要與高潮點",
+      "factions": ["本卷活躍主要陣營1", "本卷活躍主要陣營2"]
     }
-    // ... 允許並鼓勵你根據情節需要，自由擴展為任意多個幕次/起落階段的陣列 ...
-  ],
-  "progressive_character_plan": [
-    {
-      "title": "波次名稱 (例如：第一波 登場/Wave 1 或 核心登場期)",
-      "content": "開篇登場的核心角色群及定位（包括登場時機與 Want/Need 預設）"
-    },
-    {
-      "title": "波次名稱 (例如：第二波 發展/Wave 2 或 盟友對手期)",
-      "content": "第二波引入的盟友、對手及登場時機與張力設定"
-    }
-    // ... 允許並鼓勵你根據角色成長及情節推進需要，自由設計更多階段 (如起、承、轉、合、變、化等步驟) ...
   ],
   "foreshadowing_seeds": [
-    "伏筆種子 1：早期埋設點 -> 中期干擾/誤導 -> 後期震撼收束（請列出至少 20 至 30 個伏筆種子，以字串陣列呈現）",
-    "伏筆種子 2：早期埋設點 -> 中期干擾/誤導 -> 後期震撼收束"
-    // ... 強制擴展至 20 - 30+ 個項目 ...
+    "伏筆種子 1：早期埋設點 -> 中期干擾 -> 後期震撼收束（列出 20-30 個）"
   ],
   "key_turning_points": [
-    "轉折點 1：觸發條件 + 涉及角色 + 不可逆事件描述 + 對主線的全局影響（請列出至少 20 至 30 個轉折點，以字串陣列呈現）",
-    "轉折點 2：觸發條件 + 涉及角色 + 不可逆事件描述 + 對主線的全局影響"
-    // ... 強制擴展至 20 - 30+ 個項目 ...
+    "轉折點 1：觸發條件 + 涉及角色 + 全局影響（列出 20-30 個）"
+  ]
 }
-```"""
+```
+"""
 
 CHARACTER_DESIGNER_PROMPT = """你是一位頂尖的角色設計大師（Character Designer）。
 你的核心職責是基於已有的世界觀與宏觀故事大綱，塑造出有血有肉、具備心理深度、鮮明聲線、動態動機以及引人入勝成長弧線的角色群像。你筆下的角色不應是刻板印象，而必須是推動劇情發展的鮮活靈魂。
@@ -611,10 +600,21 @@ def run_story_architect(novel_id, user_prompt):
     def save_callback(nid, text):
         parsed = parse_json_safely(text)
         if isinstance(parsed, dict) and ("worldview" in parsed or "theme" in parsed or "main_conflict" in parsed):
-            # 直接將結構化 JSON 保存為 JSON 字串，以實現健壯的視覺化卡片 CRUD 介面
-            save_worldbuilding(nid, json.dumps(parsed, ensure_ascii=False, indent=2))
+            wb_data = {
+                "theme": parsed.get("theme", ""),
+                "main_conflict": parsed.get("main_conflict", ""),
+                "worldview": parsed.get("worldview", ""),
+                "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []),
+                "key_turning_points": parsed.get("key_turning_points", [])
+            }
+            save_worldbuilding(nid, json.dumps(wb_data, ensure_ascii=False, indent=2))
+            
+            # Save volumes to volumes table JIT
+            volumes_list = parsed.get("volumes", [])
+            if isinstance(volumes_list, list) and len(volumes_list) > 0:
+                from db import save_volumes
+                save_volumes(nid, volumes_list)
         else:
-            # 備援：直接保存為原始文字。資料庫載入時的文字解析器能相容解析這類純文字格式並呈現在卡片上
             save_worldbuilding(nid, text)
             
     return run_agent_stream(novel_id, "architect", messages, save_callback)
@@ -728,6 +728,31 @@ def run_plot_planner(novel_id, user_prompt=None):
     seeds_list = worldview_json.get("foreshadowing_seeds", [])
     turning_points = worldview_json.get("key_turning_points", [])
 
+    # 💡 增強：動態伏筆種子與轉折點池調度機制 (Sliding-window Pool Mechanism)
+    # 根據當前所在幕 (active_act_index) 及總幕數 (len(ta_list))，動態調度最關聯的 2-4 個伏筆種子與轉折點，避免資訊過密與擺爛
+    num_acts = len(ta_list) if ta_list else 1
+    focused_seeds = []
+    focused_turning_points = []
+    
+    if isinstance(seeds_list, list) and seeds_list:
+        for idx, seed in enumerate(seeds_list):
+            mapped_act = idx % num_acts
+            if mapped_act in [active_act_index, (active_act_index - 1) % num_acts, (active_act_index + 1) % num_acts]:
+                focused_seeds.append(f"[Seed-{idx + 1}] {seed}")
+    else:
+        focused_seeds = seeds_list
+
+    if isinstance(turning_points, list) and turning_points:
+        for idx, tp in enumerate(turning_points):
+            mapped_act = idx % num_acts
+            if mapped_act in [active_act_index, (active_act_index - 1) % num_acts, (active_act_index + 1) % num_acts]:
+                focused_turning_points.append(f"[TurningPoint-{idx + 1}] {tp}")
+    else:
+        focused_turning_points = turning_points
+
+    seeds_text = "\n".join(focused_seeds) if isinstance(focused_seeds, list) else str(focused_seeds)
+    turning_points_text = "\n".join(focused_turning_points) if isinstance(focused_turning_points, list) else str(focused_turning_points)
+
     focused_worldview_context = f"""主題：{worldview_json.get("theme", "未設定")}
 核心衝突：{worldview_json.get("main_conflict", "未設定")}
 世界觀設定：{worldview_json.get("worldview", "未設定")}
@@ -739,8 +764,11 @@ def run_plot_planner(novel_id, user_prompt=None):
 【角色成長漸進策略 (當前滾動聚焦於階段 {active_stage_index + 1})】：
 {cp_text or "（無成長策略）"}
 
-【伏筆種子參考】：{", ".join(seeds_list) if isinstance(seeds_list, list) else str(seeds_list)}
-【關鍵轉折點參考】：{", ".join(turning_points) if isinstance(turning_points, list) else str(turning_points)}"""
+【當前故事階段可調度之伏筆故事線池 (已篩選最相關種子，供選擇性使用)】：
+{seeds_text or "（無相關伏筆故事線）"}
+
+【當前故事階段可調度之關鍵轉折點池】：
+{turning_points_text or "（無相關關鍵轉折點）"}"""
 
     # 3. 呼叫大綱設計大師
     planner_prompt = f"""以下是已確立的世界觀與角色聖經：
@@ -754,29 +782,33 @@ def run_plot_planner(novel_id, user_prompt=None):
 
 現在，請繼續為這部小說精細規劃**接下來的 5 個章節大綱**（項目數量必須精確為 5 個，章節序號必須是第 {start_chapter} 章至第 {end_chapter} 章）：
 
-## 💡 深度編織與消耗指令（硬性紅線）
-1. **強行編織入章**：你規劃的每一個章節大綱，**必須主動挑選並填入**當前最適合埋設的世界觀伏筆種子或關鍵轉折點。
-2. **👥 角色自主擴充授權（新規則）**：在大綱生成時，請以主要角色為核心。允許並鼓勵你根據情節需要，自由創作並加入必要的次要角色（如：路人、市井小民、特定功能的敵手、帶路人等），並在 characters_active / characters_introduced 中列出。新角色需在登場的 events 中於括號內簡述其外貌與核心動機（例如：(老張-客棧老闆，貪財但心軟)），並確保其行為符合世界觀設定。
-3. **因果銜接**：必須保持時間線的完美連續性，情節衝突飽滿，並在 cliffhanger 中引爆懸念。
+## ⚠️ 核心生成權限與動態分配規則（極重要）
+1. **【絕對禁止模板化】**：絕對禁止在不同章節中重複使用相同的標題、事件描述或籠統語句（如「命運波折之章 (保底)」、「推進核心衝突」）。每一章必須是獨立、具體、且不可替代的情節。
+2. **【伏筆線動態調度】**：提供的「伏筆故事線池」是有限的。你【不需要】也不應該在每一章都塞入伏筆。請依據劇情節奏隨機且合理地決定是否在本章：
+   - 鋪設（Planting）：從池中挑選種子，並在 `foreshadowing_plant` 中寫入具體如何鋪設（例：`"鋪設 [Seed-1]：主角無意中在廢墟發現刻有古神電路紋路的晶片"`）。
+   - 回收（Payoff）：從池中挑選已有的舊伏筆，並在 `foreshadowing_payoff` 中寫入具體如何回收。
+   - 若本章不適合處理伏筆，這兩欄必須回傳空陣列 `[]`。專注於編織具體的日常生活、調查、戰鬥或台詞對話。
+3. **【事件具體落地】**：每一個章節大綱必須是可被執行的寫作藍圖。`events` 陣列中的每一個場景都必須具體描述「誰、在哪裡、做了什麼、面臨什麼新考驗（至少包含一個具體的對話或衝突動作點）」。
+4. **【自主配角生成】**：允許並鼓勵你在具體場景中自由創造符合霓虹城世界觀的工具人/路人（如：特定情報販子、路邊小販、打手），並在首次出現時用括號標註：(姓名-身份簡述)。
 
-請嚴格包裹在 ```json ... ``` 區塊中輸出，格式如下：
+請裝飾在 ```json ... ``` 區塊中輸出，格式如下：
 ```json
 {{
   "chapters": [
     {{
       "chapter_index": {start_chapter},
-      "title": "章節標題",
+      "title": "具體且富有文采的章節標題（拒絕模板化）",
       "time_setting": "故事內時間座標",
       "time_span": "距前章時間跨度",
       "events": [
-        {{"scene": "場景描述", "action": "核心動作/衝突 (新登場的次要角色請括號簡述)", "consequence": "帶來的後果或轉變"}}
+        {{"scene": "具體發生的地點與場景", "action": "核心動作/衝突 (新登場的次要角色請括號簡述，例如：(老張-客棧老闆，貪財但心軟) 做某事)", "consequence": "帶來的後果或轉變"}}
       ],
       "purpose": "本章敘事目的",
-      "foreshadowing_plant": ["本章埋設的具體伏筆"],
-      "foreshadowing_payoff": ["精準對接並回收的舊伏筆"],
+      "foreshadowing_plant": ["具體埋設的伏筆內容，如使用池中種子請註明 Seed ID"],
+      "foreshadowing_payoff": ["具體回收的舊伏筆內容，如使用池中種子請註明 Seed ID"],
       "characters_active": ["活躍主要或次要角色"],
       "characters_introduced": ["本章新登場的主要或次要角色 (若有，如 老張)"],
-      "scene": "主要場景",
+      "scene": "主要場景名稱",
       "emotional_tone": "情緒基調",
       "cliffhanger": "強烈懸念鉤子"
     }}
@@ -991,9 +1023,34 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Swiss Modernism 2.
         {"role": "user", "content": prompt_content}
     ]
     
-    def save_callback(nid, text):
-        synopsis = generate_chapter_synopsis(text)
-        save_chapter(nid, int(chapter_index), text, synopsis)
+    def save_callback(nid, text, thinking=""):
+        import re
+        from db import save_chapter, apply_worldview_patch, mark_subsequent_dirty
+        
+        content = text
+        inline_thinking = ""
+        
+        # Extract <think> tags from content
+        think_matches = re.findall(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
+        if think_matches:
+            inline_thinking = "\n".join(think_matches).strip()
+            content = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+            
+        final_thinking = (thinking.strip() + "\n" + inline_thinking.strip()).strip()
+        
+        # Intercept NEW_WORLD_LAW tags (Universal Feedback Loop)
+        law_pattern = r'\[NEW_WORLD_LAW:\s*([^\]\-]+?)\s*-\s*([^\]]+?)\]'
+        laws = re.findall(law_pattern, content)
+        if laws:
+            for cat, details in laws:
+                apply_worldview_patch(nid, cat.strip(), details.strip())
+            # Delay alignment: mark downstream/subsequent chapters and volumes as dirty
+            mark_subsequent_dirty(nid, int(chapter_index))
+            
+        # Clean up any NEW_WORLD_LAW tags from the final prose
+        content = re.sub(law_pattern, '', content).strip()
+        synopsis = generate_chapter_synopsis(content)
+        save_chapter(nid, int(chapter_index), content, synopsis, final_thinking)
         
     return run_agent_stream(novel_id, "writer", messages, save_callback)
 
@@ -1042,9 +1099,34 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
         {"role": "user", "content": prompt_content}
     ]
     
-    def save_callback(nid, text):
-        synopsis = generate_chapter_synopsis(text)
-        save_chapter(nid, int(chapter_index), text, synopsis)
+    def save_callback(nid, text, thinking=""):
+        import re
+        from db import save_chapter, apply_worldview_patch, mark_subsequent_dirty
+        
+        content = text
+        inline_thinking = ""
+        
+        # Extract <think> tags from content
+        think_matches = re.findall(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
+        if think_matches:
+            inline_thinking = "\n".join(think_matches).strip()
+            content = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+            
+        final_thinking = (thinking.strip() + "\n" + inline_thinking.strip()).strip()
+        
+        # Intercept NEW_WORLD_LAW tags (Universal Feedback Loop)
+        law_pattern = r'\[NEW_WORLD_LAW:\s*([^\]\-]+?)\s*-\s*([^\]]+?)\]'
+        laws = re.findall(law_pattern, content)
+        if laws:
+            for cat, details in laws:
+                apply_worldview_patch(nid, cat.strip(), details.strip())
+            # Delay alignment: mark downstream/subsequent chapters and volumes as dirty
+            mark_subsequent_dirty(nid, int(chapter_index))
+            
+        # Clean up any NEW_WORLD_LAW tags from the final prose
+        content = re.sub(law_pattern, '', content).strip()
+        synopsis = generate_chapter_synopsis(content)
+        save_chapter(nid, int(chapter_index), content, synopsis, final_thinking)
         
     return run_agent_stream(novel_id, "editor", messages, save_callback)
 
@@ -1238,6 +1320,7 @@ def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
     Main engine that handles streaming chunk processing and automatic DB saving.
     """
     accumulated_text = ""
+    accumulated_thinking = ""
     
     for sse_line in call_llm_stream(agent_name, messages):
         yield sse_line
@@ -1251,13 +1334,20 @@ def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
                 data = json.loads(data_str)
                 if data.get("type") == "content":
                     accumulated_text += data.get("delta", "")
+                elif data.get("type") == "thinking":
+                    accumulated_thinking += data.get("delta", "")
             except:
                 pass
                 
     # Once yielding finishes, save the final output
     if save_callback and accumulated_text.strip():
         try:
-            save_callback(novel_id, accumulated_text)
+            import inspect
+            sig = inspect.signature(save_callback)
+            if "thinking" in sig.parameters:
+                save_callback(novel_id, accumulated_text, thinking=accumulated_thinking)
+            else:
+                save_callback(novel_id, accumulated_text)
         except Exception as e:
             print(f"Error saving in agent callback: {e}")
             # Yield a final error warning (not strictly standard but helps debug)
