@@ -70,7 +70,7 @@ body.dark-theme {
 html, body {
     height: 100%;
     font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 18px;
+    font-size: 22px;
     line-height: 1.6;
     color: var(--text-primary);
     background: var(--bg-primary);
@@ -3160,5 +3160,150 @@ body.dark-theme .worldview-timeline-content-card {
 body.dark-theme .worldview-timeline-item:hover .worldview-timeline-content-card {
     background: rgba(255, 255, 255, 0.04);
 }
+
+/* ==========================================
+   VOLUME CARD & HIERARCHICAL OUTLINE STYLES
+   ========================================== */
+.volume-card {
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-lg) !important;
+    margin-bottom: 20px !important;
+    padding: 20px !important;
+    cursor: pointer !important;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+.volume-card:hover {
+    border-color: var(--primary) !important;
+    box-shadow: var(--shadow-md) !important;
+    transform: translateY(-2px) !important;
+}
+
+.volume-card.expanded {
+    background: var(--surface-solid) !important;
+    border-color: var(--primary) !important;
+    box-shadow: var(--shadow-lg) !important;
+}
+
+.volume-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.volume-title-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.volume-index-badge {
+    background: rgba(59, 130, 246, 0.12);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: var(--font-sm);
+    font-weight: 700;
+}
+
+.volume-title {
+    margin: 0;
+    font-size: var(--font-xl);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.dirty-badge {
+    animation: pulse-glow-orange 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow-orange {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.03); }
+}
+
+.volume-summary-box {
+    margin-top: 10px;
+    padding: 12px 16px;
+    background: rgba(0, 0, 0, 0.015);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-base);
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+body.dark-theme .volume-summary-box {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.volume-chapters-list {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* ==========================================
+   AI THINKING PROCESS ACCORDION STYLES
+   ========================================== */
+.chapter-thinking-preview-box {
+    border: 1px solid rgba(139, 92, 246, 0.18) !important;
+    border-radius: var(--radius-md) !important;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.02), rgba(59, 130, 246, 0.02)) !important;
+    margin-bottom: 16px !important;
+    overflow: hidden !important;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.chapter-thinking-preview-box:hover {
+    border-color: rgba(139, 92, 246, 0.35) !important;
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.05) !important;
+}
+
+.thinking-header {
+    padding: 12px 16px !important;
+    font-weight: 600 !important;
+    font-size: var(--font-base) !important;
+    color: #8b5cf6 !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    cursor: pointer !important;
+    user-select: none !important;
+    background: rgba(139, 92, 246, 0.04) !important;
+}
+
+.thinking-header:hover {
+    background: rgba(139, 92, 246, 0.08) !important;
+}
+
+.thinking-collapse-icon {
+    font-size: 0.8rem !important;
+    transition: transform 0.3s !important;
+    color: #8b5cf6 !important;
+}
+
+.thinking-content-body {
+    white-space: pre-wrap !important;
+    padding: 16px !important;
+    font-size: var(--font-base) !important;
+    line-height: 1.7 !important;
+    color: var(--text-secondary) !important;
+    background: rgba(0, 0, 0, 0.01) !important;
+    max-height: 400px !important;
+    overflow-y: auto !important;
+    border-top: 1px solid rgba(139, 92, 246, 0.08) !important;
+    font-family: inherit !important;
+}
+
+body.dark-theme .thinking-content-body {
+    background: rgba(255, 255, 255, 0.005) !important;
+}
+
 
 

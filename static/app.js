@@ -8,7 +8,23 @@ import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from '
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators } from './agentProcessing.js';
 import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage, writeAllChaptersSequentially } from './pipeline.js';
+// Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
+window.state = state;
 
+window.toggleThinkingProcessCollapse = function() {
+    const body = document.getElementById('chapter-thinking-preview-text');
+    const icon = document.querySelector('.thinking-collapse-icon');
+    if (body) {
+        body.classList.toggle('expanded');
+        if (body.classList.contains('expanded')) {
+            icon.innerText = '▲';
+            body.style.display = 'block';
+        } else {
+            icon.innerText = '▼';
+            body.style.display = 'none';
+        }
+    }
+};
 
 // ==========================================
 // DIRECTOR PIPELINE - 總監管道流程控制
@@ -4285,3 +4301,49 @@ window.executeDirectorAction = executeDirectorAction;
 window.selectWriterChapter = selectWriterChapter;
 window.parseDirectorDecisionText = parseDirectorDecisionText;
 window.resumePipelineWithDecision = resumePipelineWithDecision;
+
+window.alignVolume = async function(volIdx) {
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return;
+    }
+    
+    showToast(`🚀 開始為第 ${volIdx} 卷進行 JIT 世界觀對齊校準...`);
+    
+    const streamOutput = document.getElementById('plot-agent-stream-output') || document.querySelector('.agent-stream-output');
+    if (streamOutput) {
+        streamOutput.classList.remove('hidden');
+        streamOutput.innerHTML = `[JIT Volume Outline Alignment for Volume ${volIdx} started]\n`;
+    }
+    
+    const indicator = document.getElementById('agent-processing-plot');
+    if (indicator) {
+        indicator.classList.remove('hidden');
+        const textEl = indicator.querySelector('.processing-text');
+        if (textEl) {
+            textEl.innerHTML = `<strong>Plot Planner</strong> 正在進行第 ${volIdx} 卷大綱的 JIT 延遲對齊校準中...`;
+        }
+    }
+    
+    streamAPI(
+        `/api/novels/${state.currentNovelId}/volumes/${volIdx}/align`,
+        {},
+        null,
+        (content) => {
+            if (streamOutput) {
+                streamOutput.innerHTML += content;
+                streamOutput.scrollTop = streamOutput.scrollHeight;
+            }
+        },
+        (error) => {
+            showToast(`⚠️ 第 ${volIdx} 卷對齊失敗: ` + error);
+            if (indicator) indicator.classList.add('hidden');
+        },
+        async () => {
+            showToast(`✓ 第 ${volIdx} 卷大綱對齊與規劃校準完成！`);
+            if (indicator) indicator.classList.add('hidden');
+            await loadNovelDetails(state.currentNovelId);
+            renderPlotTab();
+        }
+    );
+};

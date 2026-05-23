@@ -331,6 +331,7 @@ export function applySubSectionVisibility() {
  * 渲染單個世界觀區塊（帶編輯/刪除按鈕，支援 Markdown 語法）
  */
 export function renderWorldviewSection(sectionId, icon, title, content, badgeClass) {
+    const safeContent = content || '';
     return `
         <div class="worldview-section-card" data-section="${sectionId}">
             <div class="worldview-section-header">
@@ -340,11 +341,11 @@ export function renderWorldviewSection(sectionId, icon, title, content, badgeCla
                 </div>
                 <div class="worldview-section-actions">
                     <button onclick="toggleSectionExpand('${sectionId}')" title="展開/收合">↕</button>
-                    <button onclick="editWorldviewSection('${sectionId}', '${title}', \`${content.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`)" title="編輯">✏️</button>
+                    <button onclick="editWorldviewSection('${sectionId}', '${title}')" title="編輯">✏️</button>
                 </div>
             </div>
             <div class="worldview-section-content" id="content-${sectionId}">
-                ${renderMarkdown(content)}
+                ${renderMarkdown(safeContent) || '<em style="color:var(--text-muted)">尚無內容</em>'}
             </div>
         </div>
     `;
@@ -462,84 +463,161 @@ export function renderCharactersTab() {
 export function renderPlotTab() {
     const plotData = state.currentNovelData?.plot;
     const chapters = plotData?.chapters || [];
+    let volumes = state.currentNovelData?.volumes || [];
     
     el.editorPlotJson.value = state.currentNovelData?.plot_raw || JSON.stringify({ chapters: [] }, null, 2);
     
+    // Auto-generate virtual volumes if missing but chapters exist
+    if (volumes.length === 0 && chapters.length > 0) {
+        const maxChapterIndex = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
+        const numVolumes = Math.ceil(maxChapterIndex / 50) || 1;
+        for (let i = 1; i <= numVolumes; i++) {
+            volumes.push({
+                volume_index: i,
+                title: `第 ${i} 卷`,
+                summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
+                factions: "全域陣列",
+                is_dirty: 0
+            });
+        }
+    }
+    
     // 渲染時間線
     if (el.plotTimeline) {
-        if (chapters.length === 0) {
+        if (volumes.length === 0) {
             el.plotTimeline.innerHTML = `
                 <div class="empty-placeholder">
-                    📋 尚無章節規劃。請點擊上方「AI 自動拆分章節」來建立整本小說大綱，或手動建立第一章。
+                    📋 尚無章節規劃。請點擊上方「一鍵生成全書」或「AI 自動拆分章節」來建立整本小說大綱，或手動建立第一章。
                     <button class="btn btn-primary btn-sm mt-4" onclick="openManualChapterInsertModal(0)">➕ 手動新增第一章</button>
                 </div>`;
         } else {
-            el.plotTimeline.innerHTML = chapters.map((chapter, idx) => {
-                const emotionalToneText = chapter.emotional_tone ? `<span class="chapter-tone-badge">🎭 ${chapter.emotional_tone}</span>` : '';
-                const purposeText = chapter.purpose ? `<div class="chapter-purpose-text">🎬 <strong>目標:</strong> ${chapter.purpose}</div>` : '';
-                
-                // Bulleted list of events (limit to first 3 and show +N more if many)
-                let eventsList = '';
-                if (Array.isArray(chapter.events) && chapter.events.length > 0) {
-                    const formatEventItem = (e) => {
-                        if (typeof e === 'string') return e;
-                        if (typeof e === 'object' && e !== null) {
-                            return [e.action, e.scene, e.consequence].filter(Boolean).join(' • ') || JSON.stringify(e);
+            // Expose collapse function
+            window.toggleVolumeExpand = function(volIdx) {
+                const volCard = document.getElementById(`volume-card-${volIdx}`);
+                if (volCard) {
+                    const chaptersList = volCard.querySelector('.volume-chapters-list');
+                    const toggleBtn = volCard.querySelector('.expand-toggle-btn');
+                    if (chaptersList) {
+                        const isHidden = chaptersList.style.display === 'none';
+                        chaptersList.style.display = isHidden ? 'block' : 'none';
+                        if (toggleBtn) {
+                            toggleBtn.innerText = isHidden ? '收合' : '展開';
                         }
-                        return String(e);
-                    };
-                    const displayedEvents = chapter.events.slice(0, 3);
-                    const remaining = chapter.events.length - 3;
-                    eventsList = `
-                    <ul class="chapter-events-bullets">
-                        ${displayedEvents.map(e => `<li>${formatEventItem(e)}</li>`).join('')}
-                        ${remaining > 0 ? `<li class="more-events">+ ${remaining} 個事件...</li>` : ''}
-                    </ul>`;
+                        volCard.classList.toggle('expanded', isHidden);
+                    }
                 }
+            };
+            
+            el.plotTimeline.innerHTML = volumes.map((vol) => {
+                const volIdx = vol.volume_index;
+                const isDirty = vol.is_dirty === 1;
+                
+                // Filter chapters belonging to this volume (50 chapters per volume)
+                const volChapters = chapters.filter(c => {
+                    const cIdx = parseInt(c.chapter_index);
+                    return !isNaN(cIdx) && Math.floor((cIdx - 1) / 50) + 1 === volIdx;
+                });
+                
+                const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : '';
+                const alignButton = isDirty ? `
+                    <button class="btn btn-secondary btn-xs align-vol-btn" onclick="event.stopPropagation(); window.alignVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: transform 0.2s;">
+                        ⚡ 延遲對齊
+                    </button>` : '';
+                    
+                const chaptersHtml = volChapters.length === 0 ? `
+                    <div class="empty-placeholder" style="padding: 16px; font-size: 0.8rem; text-align: center; color: var(--text-muted);">
+                        📭 此篇卷尚無章節大綱。${isDirty ? '請點擊「⚡ 延遲對齊」進行世界觀校準。' : ''}
+                    </div>` : volChapters.map((chapter) => {
+                    const globalIdx = chapters.indexOf(chapter);
+                    const emotionalToneText = chapter.emotional_tone ? `<span class="chapter-tone-badge">🎭 ${chapter.emotional_tone}</span>` : '';
+                    const purposeText = chapter.purpose ? `<div class="chapter-purpose-text">🎬 <strong>目標:</strong> ${chapter.purpose}</div>` : '';
+                    
+                    // Bulleted list of events (limit to first 3 and show +N more if many)
+                    let eventsList = '';
+                    if (Array.isArray(chapter.events) && chapter.events.length > 0) {
+                        const formatEventItem = (e) => {
+                            if (typeof e === 'string') return e;
+                            if (typeof e === 'object' && e !== null) {
+                                return [e.action, e.scene, e.consequence].filter(Boolean).join(' • ') || JSON.stringify(e);
+                            }
+                            return String(e);
+                        };
+                        const displayedEvents = chapter.events.slice(0, 3);
+                        const remaining = chapter.events.length - 3;
+                        eventsList = `
+                        <ul class="chapter-events-bullets">
+                            ${displayedEvents.map(e => `<li>${formatEventItem(e)}</li>`).join('')}
+                            ${remaining > 0 ? `<li class="more-events">+ ${remaining} 個事件...</li>` : ''}
+                        </ul>`;
+                    }
 
-                // Bulleted list of foreshadowings
-                let foreshadowList = '';
-                if (Array.isArray(chapter.foreshadowing) && chapter.foreshadowing.length > 0) {
-                    foreshadowList = `
-                    <div class="chapter-foreshadow-bullets">
-                        🌱 ${chapter.foreshadowing.join(' | ')}
-                    </div>`;
-                }
+                    // Bulleted list of foreshadowings
+                    let foreshadowList = '';
+                    if (Array.isArray(chapter.foreshadowing) && chapter.foreshadowing.length > 0) {
+                        foreshadowList = `
+                        <div class="chapter-foreshadow-bullets">
+                            🌱 ${chapter.foreshadowing.join(' | ')}
+                        </div>`;
+                    }
 
-                return `
-                <div class="plot-timeline-node-wrapper">
-                    <div class="plot-chapter-item" data-index="${idx}" onclick="openChapterOutlineEditModal(${idx}, state.currentNovelData.plot.chapters[${idx}])">
-                        <div class="plot-chapter-header">
-                            <span class="chapter-number">第 ${chapter.chapter_index || (idx + 1)} 章</span>
-                            <div class="chapter-card-actions" onclick="event.stopPropagation()">
-                                <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${idx}, state.currentNovelData.plot.chapters[${idx}])" title="編輯大綱">
-                                    ✏️
-                                </button>
-                                <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${idx})" title="刪除章節">
-                                    🗑️
-                                </button>
+                    return `
+                    <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
+                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[globalIdx])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 14px; position: relative; transition: all 0.25s;">
+                            <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <span class="chapter-number" style="font-weight: 700; color: var(--primary); font-size: 0.85rem;">第 ${chapter.chapter_index || (globalIdx + 1)} 章</span>
+                                <div class="chapter-card-actions" onclick="event.stopPropagation()">
+                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[globalIdx])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">
+                                        ✏️
+                                    </button>
+                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">
+                                        🗑️
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1rem; font-weight: 600; color: var(--text-primary);">${chapter.title || '待設定標題'}</h3>
+                            
+                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 8px;">${chapter.summary || '待設定摘要'}</div>
+                            
+                            ${purposeText}
+                            ${eventsList}
+                            ${foreshadowList}
+                            
+                            <div class="chapter-meta" style="display: flex; gap: 12px; font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; flex-wrap: wrap;">
+                                <span class="chapter-time">⏰ ${chapter.time_setting || '待設定'}</span>
+                                <span class="chapter-scene">📍 ${chapter.scene || chapter.scene_setting || '待設定'}</span>
+                                ${emotionalToneText}
                             </div>
                         </div>
                         
-                        <h3 class="chapter-title">${chapter.title || '待設定標題'}</h3>
-                        
-                        <div class="chapter-summary">${chapter.summary || '待設定摘要'}</div>
-                        
-                        ${purposeText}
-                        ${eventsList}
-                        ${foreshadowList}
-                        
-                        <div class="chapter-meta">
-                            <span class="chapter-time">⏰ ${chapter.time_setting || '待設定'}</span>
-                            <span class="chapter-scene">📍 ${chapter.scene || chapter.scene_setting || '待設定'}</span>
-                            ${emotionalToneText}
+                        <div class="timeline-insert-divider" style="display: flex; justify-content: center; margin: 10px 0;">
+                            <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapter.chapter_index || (globalIdx + 1)})" title="在此章後插入新章節大綱" style="font-size: 0.7rem; padding: 2px 8px;">
+                                ➕ 插入新章節大綱
+                            </button>
                         </div>
                     </div>
-                    
-                    <div class="timeline-insert-divider">
-                        <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapter.chapter_index || (idx + 1)})" title="在此章後插入新章節大綱">
-                            ➕ 插入新章節大綱
-                        </button>
+                    `;
+                }).join('');
+
+                return `
+                <div class="volume-card" id="volume-card-${volIdx}" onclick="window.toggleVolumeExpand(${volIdx})" style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: 16px; padding: 16px; cursor: pointer; display: flex; flex-direction: column; gap: 10px; transition: all 0.25s;">
+                    <div class="volume-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 10px;">
+                        <div class="volume-title-section" style="display: flex; align-items: center; gap: 8px;">
+                            <span class="volume-index-badge" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">第 ${volIdx} 卷</span>
+                            <h3 class="volume-title" style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">${vol.title}</h3>
+                            ${dirtyBadge}
+                        </div>
+                        <div class="volume-actions-section" onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px;">
+                            ${alignButton}
+                            <button class="btn btn-ghost btn-xs expand-toggle-btn" style="font-size: 0.75rem; padding: 4px 8px;">展開</button>
+                        </div>
+                    </div>
+                    <div class="volume-summary-box" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.01); padding: 8px 12px; border-radius: var(--radius-sm);">
+                        <p class="volume-summary-text" style="margin: 0 0 4px 0;"><strong>核心情節概要：</strong>${vol.summary || '尚無概要設定。'}</p>
+                        <p class="volume-factions-text" style="margin: 0;"><strong>登場勢力陣營：</strong>${vol.parsed_factions || vol.factions || '全域勢力。'}</p>
+                    </div>
+                    <div class="volume-chapters-list" style="display: none; border-top: 1px dashed var(--border-color); padding-top: 12px; margin-top: 4px;">
+                        ${chaptersHtml}
                     </div>
                 </div>
                 `;
@@ -607,6 +685,39 @@ export function selectWriterChapter(chapterIndex) {
     const plotChapter = plotChapters.find(c => (c.chapter_index || plotChapters.indexOf(c) + 1) === chapterIndex);
     
     // 更新標題和狀態
+    if (el.activeChapterTitle) {
+        el.activeChapterTitle.textContent = `第 ${chapterIndex} 章：${plotChapter?.title || '待設定標題'}`;
+    }
+    
+    // --- AI Thinking Process separated rendering ---
+    let thinkingPreview = document.getElementById('chapter-thinking-preview');
+    if (!thinkingPreview) {
+        const sheetContainer = document.querySelector('.sheet-container');
+        if (sheetContainer) {
+            thinkingPreview = document.createElement('div');
+            thinkingPreview.id = 'chapter-thinking-preview';
+            thinkingPreview.className = 'chapter-thinking-preview-box hidden';
+            thinkingPreview.innerHTML = `
+                <div class="thinking-header" onclick="window.toggleThinkingProcessCollapse()">
+                    <span>🧠 AI 歷史思考過程紀錄 (點擊展開/收合)</span>
+                    <span class="thinking-collapse-icon">▼</span>
+                </div>
+                <div class="thinking-content-body" id="chapter-thinking-preview-text" style="display:none; white-space:pre-wrap; padding:12px; font-size:0.8rem; line-height:1.6; color:var(--text-secondary); background:rgba(0,0,0,0.02); border-top:1px solid var(--border-color);"></div>
+            `;
+            sheetContainer.parentNode.insertBefore(thinkingPreview, sheetContainer);
+        }
+    }
+    
+    const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+    if (thinkingPreview && thinkingPreviewText) {
+        if (chapter && chapter.thinking && chapter.thinking.trim()) {
+            thinkingPreview.classList.remove('hidden');
+            thinkingPreviewText.textContent = chapter.thinking;
+        } else {
+            thinkingPreview.classList.add('hidden');
+            thinkingPreviewText.textContent = '';
+        }
+    }
     if (el.activeChapterTitle) {
         el.activeChapterTitle.textContent = `第 ${chapterIndex} 章：${plotChapter?.title || '待設定標題'}`;
     }
