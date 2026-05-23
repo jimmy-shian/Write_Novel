@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "novel_factory.db")
 
@@ -137,6 +137,7 @@ def db_init():
         novel_id TEXT,
         chapter_index INTEGER,
         content TEXT,
+        synopsis TEXT,
         version INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
@@ -171,6 +172,12 @@ def db_init():
     
     # Clean up empty configurations to let .env configuration take priority
     cursor.execute("DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL")
+    
+    # Ensure synopsis column exists in chapters table (migration helper)
+    try:
+        cursor.execute("ALTER TABLE chapters ADD COLUMN synopsis TEXT")
+    except sqlite3.OperationalError:
+        pass
     
     conn.commit()
     conn.close()
@@ -386,7 +393,7 @@ def get_all_chapters_latest(novel_id):
     conn.close()
     return [dict(r) for r in rows]
 
-def save_chapter(novel_id, chapter_index, content):
+def save_chapter(novel_id, chapter_index, content, synopsis=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     row = cursor.execute(
@@ -396,8 +403,8 @@ def save_chapter(novel_id, chapter_index, content):
     next_version = (row["max_v"] or 0) + 1
     
     cursor.execute(
-        "INSERT INTO chapters (novel_id, chapter_index, content, version) VALUES (?, ?, ?, ?)",
-        (novel_id, chapter_index, content, next_version)
+        "INSERT INTO chapters (novel_id, chapter_index, content, synopsis, version) VALUES (?, ?, ?, ?, ?)",
+        (novel_id, chapter_index, content, synopsis, next_version)
     )
     conn.commit()
     conn.close()
@@ -454,49 +461,92 @@ def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, 
 def parse_worldview_to_json(content):
     """
     將世界觀內容（可能是 JSON 或舊的標題純文字）統一解析為標準的 JSON 字典結構。
+    其中 three_act_structure 和 progressive_character_plan 統一標準化為包含 {"title": "...", "content": "..."} 的動態列表。
     """
+    default_structure = {
+        "theme": "",
+        "main_conflict": "",
+        "worldview": "",
+        "macro_outline": "",
+        "three_act_structure": [
+            {"title": "第一幕 (Setup)", "content": ""},
+            {"title": "第二幕 (Confrontation)", "content": ""},
+            {"title": "第三幕 (Resolution)", "content": ""}
+        ],
+        "progressive_character_plan": [
+            {"title": "第一波開篇 (Wave 1)", "content": ""},
+            {"title": "第二波發展 (Wave 2)", "content": ""},
+            {"title": "第三波高潮 (Wave 3)", "content": ""}
+        ],
+        "foreshadowing_seeds": [],
+        "key_turning_points": []
+    }
+
     if not content:
-        return {
-            "theme": "",
-            "main_conflict": "",
-            "worldview": "",
-            "macro_outline": "",
-            "three_act_structure": {
-                "act1_setup": "",
-                "act2_confrontation": "",
-                "act3_resolution": ""
-            },
-            "progressive_character_plan": {
-                "wave_1_opening": "",
-                "wave_2_development": "",
-                "wave_3_climax": ""
-            },
-            "foreshadowing_seeds": [],
-            "key_turning_points": []
-        }
+        return default_structure
     
     content_stripped = content.strip()
     if content_stripped.startswith("{") and content_stripped.endswith("}"):
         try:
             parsed = json.loads(content_stripped)
-            # 確保所有必填鍵與子結構存在，提供穩定預設值
+            
+            # 1. 處理 three_act_structure
+            ta = parsed.get("three_act_structure", [])
+            normalized_ta = []
+            if isinstance(ta, list):
+                for idx, item in enumerate(ta):
+                    if isinstance(item, dict):
+                        normalized_ta.append({
+                            "title": item.get("title", f"項目 #{idx + 1}"),
+                            "content": item.get("content", "")
+                        })
+                    else:
+                        normalized_ta.append({
+                            "title": f"項目 #{idx + 1}",
+                            "content": str(item)
+                        })
+            elif isinstance(ta, dict):
+                normalized_ta = [
+                    {"title": "第一幕 (Setup)", "content": ta.get("act1_setup", ta.get("act1", ""))},
+                    {"title": "第二幕 (Confrontation)", "content": ta.get("act2_confrontation", ta.get("act2", ""))},
+                    {"title": "第三幕 (Resolution)", "content": ta.get("act3_resolution", ta.get("act3", ""))}
+                ]
+            else:
+                normalized_ta = default_structure["three_act_structure"]
+
+            # 2. 處理 progressive_character_plan
+            cp = parsed.get("progressive_character_plan", [])
+            normalized_cp = []
+            if isinstance(cp, list):
+                for idx, item in enumerate(cp):
+                    if isinstance(item, dict):
+                        normalized_cp.append({
+                            "title": item.get("title", f"階段 #{idx + 1}"),
+                            "content": item.get("content", "")
+                        })
+                    else:
+                        normalized_cp.append({
+                            "title": f"階段 #{idx + 1}",
+                            "content": str(item)
+                        })
+            elif isinstance(cp, dict):
+                normalized_cp = [
+                    {"title": "第一波開篇 (Wave 1)", "content": cp.get("wave_1_opening", "")},
+                    {"title": "第二波發展 (Wave 2)", "content": cp.get("wave_2_development", "")},
+                    {"title": "第三波高潮 (Wave 3)", "content": cp.get("wave_3_climax", "")}
+                ]
+            else:
+                normalized_cp = default_structure["progressive_character_plan"]
+
             return {
                 "theme": parsed.get("theme", ""),
                 "main_conflict": parsed.get("main_conflict", ""),
                 "worldview": parsed.get("worldview", ""),
                 "macro_outline": parsed.get("macro_outline", ""),
-                "three_act_structure": {
-                    "act1_setup": parsed.get("three_act_structure", {}).get("act1_setup", parsed.get("three_act_structure", {}).get("act1", "")),
-                    "act2_confrontation": parsed.get("three_act_structure", {}).get("act2_confrontation", parsed.get("three_act_structure", {}).get("act2", "")),
-                    "act3_resolution": parsed.get("three_act_structure", {}).get("act3_resolution", parsed.get("three_act_structure", {}).get("act3", ""))
-                },
-                "progressive_character_plan": {
-                    "wave_1_opening": parsed.get("progressive_character_plan", {}).get("wave_1_opening", ""),
-                    "wave_2_development": parsed.get("progressive_character_plan", {}).get("wave_2_development", ""),
-                    "wave_3_climax": parsed.get("progressive_character_plan", {}).get("wave_3_climax", "")
-                },
-                "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []),
-                "key_turning_points": parsed.get("key_turning_points", [])
+                "three_act_structure": normalized_ta,
+                "progressive_character_plan": normalized_cp,
+                "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []) if isinstance(parsed.get("foreshadowing_seeds"), list) else [],
+                "key_turning_points": parsed.get("key_turning_points", []) if isinstance(parsed.get("key_turning_points"), list) else []
             }
         except Exception as e:
             print(f"[WARN] parse_worldview_to_json JSON load failed: {e}. Falling back to text parser.")
@@ -507,16 +557,16 @@ def parse_worldview_to_json(content):
         "main_conflict": "",
         "worldview": "",
         "macro_outline": "",
-        "three_act_structure": {
-            "act1_setup": "",
-            "act2_confrontation": "",
-            "act3_resolution": ""
-        },
-        "progressive_character_plan": {
-            "wave_1_opening": "",
-            "wave_2_development": "",
-            "wave_3_climax": ""
-        },
+        "three_act_structure": [
+            {"title": "第一幕 (Setup)", "content": ""},
+            {"title": "第二幕 (Confrontation)", "content": ""},
+            {"title": "第三幕 (Resolution)", "content": ""}
+        ],
+        "progressive_character_plan": [
+            {"title": "第一波開篇 (Wave 1)", "content": ""},
+            {"title": "第二波發展 (Wave 2)", "content": ""},
+            {"title": "第三波高潮 (Wave 3)", "content": ""}
+        ],
         "foreshadowing_seeds": [],
         "key_turning_points": []
     }
@@ -559,11 +609,11 @@ def parse_worldview_to_json(content):
         for line in three_act_text.split("\n"):
             line = line.strip()
             if "第一幕" in line or "Setup" in line:
-                result["three_act_structure"]["act1_setup"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+                result["three_act_structure"][0]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
             elif "第二幕" in line or "Confrontation" in line:
-                result["three_act_structure"]["act2_confrontation"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+                result["three_act_structure"][1]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
             elif "第三幕" in line or "Resolution" in line:
-                result["three_act_structure"]["act3_resolution"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
+                result["three_act_structure"][2]["content"] = line.split("：", 1)[-1] if "：" in line else (line.split(":", 1)[-1] if ":" in line else line)
 
     if "【角色漸進規劃策略】" in sections:
         prog_text = sections["【角色漸進規劃策略】"]
@@ -577,19 +627,19 @@ def parse_worldview_to_json(content):
                 k = parts[0].strip()
                 v = parts[1].strip()
                 if "wave_1" in k or "wave1" in k or "開篇" in k or "第一波" in k:
-                    result["progressive_character_plan"]["wave_1_opening"] = v
+                    result["progressive_character_plan"][0]["content"] = v
                 elif "wave_2" in k or "wave2" in k or "第二波" in k or "發展" in k:
-                    result["progressive_character_plan"]["wave_2_development"] = v
+                    result["progressive_character_plan"][1]["content"] = v
                 elif "wave_3" in k or "wave3" in k or "第三波" in k or "高潮" in k:
-                    result["progressive_character_plan"]["wave_3_climax"] = v
+                    result["progressive_character_plan"][2]["content"] = v
             else:
                 if line:
-                    if not result["progressive_character_plan"]["wave_1_opening"]:
-                        result["progressive_character_plan"]["wave_1_opening"] = line
-                    elif not result["progressive_character_plan"]["wave_2_development"]:
-                        result["progressive_character_plan"]["wave_2_development"] = line
-                    elif not result["progressive_character_plan"]["wave_3_climax"]:
-                        result["progressive_character_plan"]["wave_3_climax"] = line
+                    if not result["progressive_character_plan"][0]["content"]:
+                        result["progressive_character_plan"][0]["content"] = line
+                    elif not result["progressive_character_plan"][1]["content"]:
+                        result["progressive_character_plan"][1]["content"] = line
+                    elif not result["progressive_character_plan"][2]["content"]:
+                        result["progressive_character_plan"][2]["content"] = line
                         
     if "【伏筆種子】" in sections:
         seeds_text = sections["【伏筆種子】"]
@@ -610,6 +660,7 @@ def parse_worldview_to_json(content):
                 result["key_turning_points"].append(line)
                 
     return result
+
 
 def append_foreshadowing(novel_id, new_seed):
     """
@@ -710,3 +761,27 @@ def update_character_single_field(novel_id, char_index, field_name, new_value):
     if result:
         return {"status": "success", "version": result}
     return {"status": "error", "message": "Failed to update character field"}
+
+def append_worldbuilding_list(novel_id, key_section, new_item):
+    """
+    增量添加子項目到世界觀 JSON 中的特定列表欄位 (如 foreshadowing_seeds, key_turning_points)
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    if not wb:
+        return None
+    
+    current_content = wb["content"]
+    parsed = parse_worldview_to_json(current_content)
+    
+    if key_section not in parsed or not isinstance(parsed[key_section], list):
+        parsed[key_section] = []
+        
+    if isinstance(new_item, list):
+        for item in new_item:
+            if isinstance(item, str) and item not in parsed[key_section]:
+                parsed[key_section].append(item)
+    else:
+        if isinstance(new_item, str) and new_item not in parsed[key_section]:
+            parsed[key_section].append(new_item)
+            
+    return save_worldbuilding(novel_id, json.dumps(parsed, ensure_ascii=False, indent=2))

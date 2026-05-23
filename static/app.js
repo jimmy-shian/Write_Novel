@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI, streamAPI } from './api.js';
-import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown } from './utils.js';
+import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText } from './utils.js';
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage, applySubSectionVisibility, getSubSectionCount } from './renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
@@ -23,8 +23,10 @@ function setupExecutionModeToggle() {
     
     if (!toggle) return;
     
-    toggle.addEventListener('change', () => {
-        state.isAutoExecuteMode = toggle.checked;
+    // 同步 UI 狀態與全局 state
+    toggle.checked = state.isAutoExecuteMode;
+    
+    const updateLabels = () => {
         modeLabels.forEach(label => {
             if (label.classList.contains('mode-auto')) {
                 label.style.opacity = state.isAutoExecuteMode ? '1' : '0.5';
@@ -32,21 +34,28 @@ function setupExecutionModeToggle() {
                 label.style.opacity = state.isAutoExecuteMode ? '0.5' : '1';
             }
         });
+    };
+    
+    updateLabels();
+    
+    toggle.addEventListener('change', () => {
+        state.isAutoExecuteMode = toggle.checked;
+        localStorage.setItem('isAutoExecuteMode', state.isAutoExecuteMode);
+        updateLabels();
+        
+        // 當切換執行模式時，立即重繪聊天訊息以顯示或隱藏動作按鈕
+        renderChatMessages();
     });
 }
 
-/**
- * 設置 AI 即時生成日誌切換開關
- */
 function setupStreamLogToggle() {
     const toggle = document.getElementById('toggle-stream-log');
     if (!toggle) return;
     
-    // 初始化 showStreamLog 狀態
-    state.showStreamLog = toggle.checked;
+    // 同步 UI 狀態與全局 state
+    toggle.checked = state.showStreamLog;
     
-    toggle.addEventListener('change', () => {
-        state.showStreamLog = toggle.checked;
+    const applyToggleStatus = () => {
         const terminals = document.querySelectorAll('.agent-stream-output');
         terminals.forEach(term => {
             if (state.showStreamLog) {
@@ -55,6 +64,14 @@ function setupStreamLogToggle() {
                 term.classList.add('hidden');
             }
         });
+    };
+    
+    applyToggleStatus();
+    
+    toggle.addEventListener('change', () => {
+        state.showStreamLog = toggle.checked;
+        localStorage.setItem('showStreamLog', state.showStreamLog);
+        applyToggleStatus();
     });
 }
 
@@ -540,7 +557,10 @@ function openWorldviewComplexListEditModal(field, title, defaultItemTitle = '') 
             card.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">項目 #${index + 1}</span>
-                    <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer; padding: 0 4px;">✕</button>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="btn btn-ghost btn-xs insert-item-btn" data-index="${index}" style="color: var(--primary); font-size: 0.75rem; border: none; background: none; cursor: pointer; padding: 2px 6px;">➕ 在此後插入</button>
+                        <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer; padding: 0 4px;">✕</button>
+                    </div>
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">標題名稱</label>
@@ -559,6 +579,12 @@ function openWorldviewComplexListEditModal(field, title, defaultItemTitle = '') 
 
             card.querySelector('.wv-complex-item-content-input').addEventListener('input', (e) => {
                 list[index].content = e.target.value;
+            });
+
+            card.querySelector('.insert-item-btn').addEventListener('click', () => {
+                const defaultTitle = defaultItemTitle || `項目`;
+                list.splice(index + 1, 0, { title: `新${defaultTitle}`, content: '' });
+                renderItems();
             });
 
             card.querySelector('.delete-item-btn').addEventListener('click', () => {
@@ -2033,7 +2059,14 @@ async function savePlotOutlineDirect() {
 
 async function saveProseDirect() {
     if (!state.currentNovelId || !state.activeChapterIndex) return;
-    const content = el.editorProse.value;
+    
+    // 💡 防禦安全鎖：如果當前活動章節正在 AI 背景寫作，優先保存快取，絕不讀取文本框 (防止切換章節時的 `blur` 覆蓋污染)
+    let content = el.editorProse.value;
+    const isWriting = state.currentlyWritingChapterIndex === state.activeChapterIndex;
+    if (isWriting && state.writingBuffer !== undefined && state.writingBuffer !== null) {
+        content = state.writingBuffer;
+    }
+    
     try {
         await requestAPI(`/api/novels/${state.currentNovelId}/chapters/${state.activeChapterIndex}`, 'POST', { content });
         
@@ -2048,7 +2081,7 @@ async function saveProseDirect() {
         state.currentNovelData.chapters = chs;
         
         renderWriterTab();
-        showToast(`第 ${state.activeChapterIndex} 章正文已手動保存`);
+        showToast(`第 ${state.activeChapterIndex} 章正文已保存`);
     } catch (e) {
         showToast("正文保存失敗");
     }
@@ -2341,14 +2374,39 @@ async function executeToolCall(tool, params) {
         case 'write-chapter':
             showToast(`✍️ 執行章節寫手（第 ${chapter_index} 章）...`);
             return new Promise((resolve) => {
-                el.editorProse.value = '';
+                state.currentlyWritingChapterIndex = chapter_index || 1;
+                state.writingBuffer = "";
+                
+                const virtualTarget = {
+                    get value() { return state.writingBuffer; },
+                    set value(val) {
+                        state.writingBuffer = val;
+                        if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                            el.editorProse.value = val;
+                            el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                        }
+                    },
+                    get scrollTop() { return el.editorProse.scrollTop; },
+                    set scrollTop(val) {
+                        if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                            el.editorProse.scrollTop = val;
+                        }
+                    },
+                    get scrollHeight() { return el.editorProse.scrollHeight; }
+                };
+
                 streamAPI(
                     '/api/agent/write-chapter',
                     { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
                     null,
-                    (delta) => { el.editorProse.value += delta; },
+                    (delta) => { virtualTarget.value += delta; },
                     (err) => showToast("Error: " + err),
                     async () => {
+                        if (state.writingBuffer.trim().length > 0) {
+                            await saveProseDirect();
+                        }
+                        state.currentlyWritingChapterIndex = null;
+                        state.writingBuffer = "";
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2482,6 +2540,57 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
     );
 }
 
+
+
+/**
+ * 從歷史聊天按鈕或暫停後重新啟動 Pipeline
+ */
+async function resumePipelineWithDecision(activeTab, parsed, choice) {
+    const userPrompt = (state.pipelinePrompt || '').trim()
+        || (state.currentNovelData?.novel?.pipeline_prompt || '').trim()
+        || '';
+        
+    let decisionResult = { ...parsed };
+    
+    state.isPipelineRunning = true;
+    showPipelineProgress(true);
+    
+    if (choice === 'accept') {
+        showToast('✅ 用戶接受總監決策');
+        await executeDirectorAction(decisionResult, userPrompt);
+    } else if (choice === 'continue') {
+        showToast('▶️ 用戶強制繼續下一階段');
+        let nextTarget = decisionResult.target;
+        if (!nextTarget) {
+            if (activeTab === 'worldview') nextTarget = 'characters';
+            else if (activeTab === 'characters') nextTarget = 'plot';
+            else if (activeTab === 'plot') nextTarget = 'writer';
+        }
+        await executeDirectorAction({ 
+            ...decisionResult, 
+            action: 'CONTINUE', 
+            continue: true, 
+            shouldPause: false,
+            target: nextTarget 
+        }, userPrompt);
+    } else if (choice === 'regen') {
+        showToast('🔄 用戶指示重新生成');
+        await executeDirectorAction({ 
+            ...decisionResult, 
+            action: 'AUTO_REGENERATE', 
+            continue: true, 
+            regenerate: true, 
+            regenerateStage: activeTab, 
+            target: activeTab 
+        }, userPrompt);
+    } else {
+        showToast('⏸️ 管線已暫停');
+        state.isPipelineRunning = false;
+        showPipelineProgress(false);
+        await loadNovelDetails(state.currentNovelId);
+    }
+}
+
 async function runDirectorDecision(currentStage, providedUserPrompt = null) {
     return new Promise((resolve) => {
         const directorResponseContainer = document.createElement('div');
@@ -2518,67 +2627,11 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                 
                 const responseText = streamTarget.textContent;
                 
-                // === 多層次指令解析 ===
-                let action = null;
-                let target = null;
-                let hint = '';
-                let reason = '';
-                
-                // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } ```）
-                const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-                if (jsonBlockMatch) {
-                    try {
-                        const jsonCmd = JSON.parse(jsonBlockMatch[1]);
-                        action = (jsonCmd.action || '').toUpperCase();
-                        target = jsonCmd.target || null;
-                        hint = jsonCmd.hint || jsonCmd.reason || '';
-                        reason = jsonCmd.reason || '';
-                    } catch (e) {
-                        console.warn('Failed to parse Director JSON command:', e);
-                    }
-                }
-                
-                // 2) 回退：解析舊格式【執行指令】ACTION: XXX
-                if (!action) {
-                    const actionMatch = responseText.match(/【執行指令】[\s\S]*?ACTION:\s*(\w+)/);
-                    if (actionMatch) {
-                        action = actionMatch[1].trim().toUpperCase();
-                    }
-                    const targetMatch = responseText.match(/TARGET:\s*(\w+)/);
-                    if (targetMatch) target = targetMatch[1].trim();
-                    const hintMatch = responseText.match(/HINT:\s*([\s\S]*?)(?=```|【|$)/);
-                    if (hintMatch) hint = hintMatch[1].trim();
-                    const reasonMatch = responseText.match(/REASON:\s*([\s\S]*?)(?=```|【|$)/);
-                    if (reasonMatch) reason = reasonMatch[1].trim();
-                }
-                
-                // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
-                if (!action) {
-                    if (responseText.includes('WRITE_ALL_CHAPTERS') || responseText.includes('開始寫作所有章節')) {
-                        action = 'WRITE_ALL_CHAPTERS';
-                    } else if (responseText.includes('FINISH') || responseText.includes('全部完成')) {
-                        action = 'FINISH';
-                    } else if (responseText.includes('繼續') && !responseText.includes('暫停')) {
-                        action = 'CONTINUE';
-                    } else if (responseText.includes('暫停') || responseText.includes('等待用戶')) {
-                        action = 'WAIT_USER';
-                    }
-                }
-                
                 // 添加 director-response 樣式
                 directorResponseContainer.classList.add('director-response');
                 
-                const decisionResult = { 
-                    continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS',
-                    response: responseText,
-                    shouldPause: action === 'WAIT_USER',
-                    action: action,
-                    target: target,
-                    hint: hint,
-                    reason: reason,
-                    regenerate: action === 'AUTO_REGENERATE',
-                    regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null
-                };
+                const decisionResult = parseDirectorDecisionText(responseText, currentStage);
+                const action = decisionResult.action;
                 
                 // 顯示解析結果的 Toast
                 const actionLabels = {
@@ -3148,7 +3201,13 @@ async function savePipelinePrompt(prompt) {
 }
 
 async function handleDrawerPromptSubmit() {
-        const userPrompt = el.promptDrawerTextarea.value;
+    let userPrompt = el.promptDrawerTextarea.value.trim();
+    if (!userPrompt) {
+        const placeholderVal = el.promptDrawerTextarea.placeholder || '';
+        if (placeholderVal) {
+            userPrompt = placeholderVal.replace(/^例如[：:\s]*/, '');
+        }
+    }
     el.drawerPrompt.classList.remove('active');
     
     if (state.activeDrawerAction === 'pipeline_orchestration') {
@@ -3436,7 +3495,8 @@ function setupEventListeners() {
             
             // 讀取上次輸入的 prompt（如果有）
             const savedPrompt = state.currentNovelData?.novel?.pipeline_prompt || '';
-            el.promptDrawerTextarea.value = savedPrompt || "例如：仙俠題材。主角是一個身懷魔門功法的正道弟子，講述他如何游走黑白兩道，修得太上斬仙之路。基調宏大，充滿宿命感。";
+            el.promptDrawerTextarea.value = savedPrompt;
+            el.promptDrawerTextarea.placeholder = "例如：仙俠題材。主角是一個身懷魔門功法的正道弟子，講述他如何游走黑白兩道，修得太上斬仙之路。基調宏大，充滿宿命感。";
             
             el.drawerPrompt.classList.add('active');
         });
@@ -3447,7 +3507,8 @@ function setupEventListeners() {
         state.activeDrawerAction = 'architect';
         el.promptDrawerTitle.textContent = "🤖 1️⃣ Story Architect 世界觀規劃";
         el.promptDrawerDesc.textContent = "為這部小說構建一個引人入勝的世界觀。請輸入您的小說主線大綱構想或基本靈感條件：";
-        el.promptDrawerTextarea.value = "例如：仙俠題材。主角是一個身懷魔門功法的正道弟子，講述他如何游走黑白兩道，修得太上斬仙之路。基調宏大，充滿宿命感。";
+        el.promptDrawerTextarea.value = "";
+        el.promptDrawerTextarea.placeholder = "例如：仙俠題材。主角是一個身懷魔門功法的正道弟子，講述他如何游走黑白兩道，修得太上斬仙之路。基調宏大，充滿宿命感。";
         el.drawerPrompt.classList.add('active');
     });
     
@@ -3456,7 +3517,8 @@ function setupEventListeners() {
         state.activeDrawerAction = 'character';
         el.promptDrawerTitle.textContent = "🤖 2️⃣ Character Designer 角色設計";
         el.promptDrawerDesc.textContent = "根據目前已建立的世界觀，讓 AI 精細化設計所有核心要角。請輸入對角色的特定要求（可留空）：";
-        el.promptDrawerTextarea.value = "例如：需要一個性格極度腹黑的反派，看似是主角的師尊，但實際上有驚天密謀；還要設計一位背負家族血債的劍仙女主角。";
+        el.promptDrawerTextarea.value = "";
+        el.promptDrawerTextarea.placeholder = "例如：需要一個性格極度腹黑的反派，看似是主角的師尊，但實際上有驚天密謀；還要設計一位背負家族血債的劍仙女主角。";
         el.drawerPrompt.classList.add('active');
     });
     
@@ -3465,22 +3527,48 @@ function setupEventListeners() {
         state.activeDrawerAction = 'plot';
         el.promptDrawerTitle.textContent = "🤖 3️⃣ Plot Planner 章節拆分大綱";
         el.promptDrawerDesc.textContent = "AI 將自動依據世界觀與人物 Bible 拆分出整部小說的細節章節大綱。請輸入章節數量或核心情節走向指示：";
-        el.promptDrawerTextarea.value = "例如：規劃 10 個章節的大綱。故事前期要有正魔衝突爆發，中期是師尊反水，後期主角完成突破並封印神魔。每一章節情節密度要高。";
+        el.promptDrawerTextarea.value = "";
+        el.promptDrawerTextarea.placeholder = "例如：規劃 10 個章節的大綱。故事前期要有正魔衝突爆發，中期是師尊反水，後期主角完成突破並封印神魔。每一章節情節密度要高。";
         el.drawerPrompt.classList.add('active');
     });
     
     el.btnWriteChapter.addEventListener('click', () => {
         if (!state.currentNovelId || !state.activeChapterIndex) return;
-        // Chapter writer streams directly into editorProse
+        
+        state.currentlyWritingChapterIndex = state.activeChapterIndex;
+        state.writingBuffer = "";
+        
+        const virtualTarget = {
+            get value() { return state.writingBuffer; },
+            set value(val) {
+                state.writingBuffer = val;
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    el.editorProse.value = val;
+                    el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                }
+            },
+            get scrollTop() { return el.editorProse.scrollTop; },
+            set scrollTop(val) {
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    el.editorProse.scrollTop = val;
+                }
+            },
+            get scrollHeight() { return el.editorProse.scrollHeight; }
+        };
+
         startAgentStream(
             '/api/agent/write-chapter',
             { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex },
-            el.editorProse,
+            virtualTarget,
             async () => {
-                showToast(`第 ${state.activeChapterIndex} 章正文撰寫完畢`);
-                if (el.editorProse.value.trim().length > 0) {
+                showToast(`第 ${state.currentlyWritingChapterIndex} 章正文撰寫完畢`);
+                if (state.writingBuffer.trim().length > 0) {
                     await saveProseDirect();
                 }
+                
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
+                
                 await loadNovelDetails(state.currentNovelId);
                 
                 // 呼叫總監評估
@@ -3496,7 +3584,8 @@ function setupEventListeners() {
         state.activeDrawerAction = 'editor';
         el.promptDrawerTitle.textContent = "🤖 5️⃣ Editor Agent 精修優化";
         el.promptDrawerDesc.textContent = "請輸入您對此章節文字的精細修改方針（例如：增加懸疑細節、潤色對話、加快打鬥節奏，留空則由編輯自主優化）：";
-        el.promptDrawerTextarea.value = "例如：讓主角與師尊的對話更加綿裡藏針、話中有話，加強環境描寫的寂靜肃殺氛圍。";
+        el.promptDrawerTextarea.value = "";
+        el.promptDrawerTextarea.placeholder = "例如：讓主角與師尊的對話更加綿裡藏針、話中有話，加強環境描寫的寂靜肃殺氛圍。";
         el.drawerPrompt.classList.add('active');
     });
     
@@ -4186,3 +4275,13 @@ window.deletePlotChapter = function(index) {
 window.setStrategyCardView = setStrategyCardView;
 window.jumpToStrategyCard = jumpToStrategyCard;
 window.applySingleCardView = applySingleCardView;
+
+// Expose pipeline & streaming helpers to window for pipeline.js
+window.streamAPI = streamAPI;
+window.renderActiveTab = renderActiveTab;
+window.loadNovelDetails = loadNovelDetails;
+window.runDirectorDecision = runDirectorDecision;
+window.executeDirectorAction = executeDirectorAction;
+window.selectWriterChapter = selectWriterChapter;
+window.parseDirectorDecisionText = parseDirectorDecisionText;
+window.resumePipelineWithDecision = resumePipelineWithDecision;

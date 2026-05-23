@@ -94,3 +94,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         if (typeof onDone === 'function') onDone();
     }
 }
+
+// Expose globally for modules/scripts that rely on window.streamAPI
+window.streamAPI = streamAPI;
+window.requestAPI = requestAPI;
