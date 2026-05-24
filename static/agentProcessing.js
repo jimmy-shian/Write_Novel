@@ -8,7 +8,7 @@ let lastStreamContent = '';
 /**
  * 切換到串流頁籤
  */
-function switchToStreamTab() {
+export function switchToStreamTab() {
     const streamBtn = document.getElementById('tab-stream');
     const directorBtn = document.getElementById('tab-director');
     const streamContent = document.getElementById('tab-content-stream');
