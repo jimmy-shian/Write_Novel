@@ -1925,6 +1925,48 @@ def verify_novel_integrity(novel_id, context, current_stage=None):
 """
         return validation_report_str
     
+    # 💡 判斷是否為宏觀骨架階段（Stage 2 & Stage 3）
+    is_macro_skeleton_stage = (current_stage in ["macro_skeleton", "skeleton_review", "foreshadowing_align"])
+    
+    if is_macro_skeleton_stage:
+        vols = get_volumes(novel_id)
+        volumes_count = len(vols)
+        
+        # 計算全書總章節數
+        total_chapters = 0
+        for vol in vols:
+            try:
+                vol_chapters = int(vol.get("chapter_count", 0))
+                total_chapters += vol_chapters
+            except (TypeError, ValueError):
+                pass
+        
+        # 嘗試獲取已生成的骨架數量
+        plot_json_for_scan = parse_json_safely(context.get("plot", ""), default={})
+        plot_chapters_for_scan = plot_json_for_scan.get("chapters", []) if isinstance(plot_json_for_scan, dict) else []
+        skeleton_chapter_count = len(plot_chapters_for_scan)
+        
+        validation_report_str = f"""【底層結構完整性校驗報告 — 🌍 宏觀骨架審查模式】
+1. 📊 全書宏觀規模覆蓋率：
+   - 目前已規劃篇卷數：{volumes_count} 卷
+   - 目前骨架總章節數：{skeleton_chapter_count} 章
+   - 全書規劃總章節數：{total_chapters} 章
+   - 指標評定：{"🟢 骨架規模已達到千章大長篇標準" if skeleton_chapter_count >= 500 else "🟡 骨架規模尚未覆蓋全書，建議繼續催生後續卷章骨架"}
+
+2. 🌱 全局伏筆故事線分發率：
+   - 總監提示：此階段只需關注伏筆是否已在各卷章「預留定位（allocated_tasks）」，微觀細節尚未展開。
+   - 檢查重點：世界觀的 20-30 個種子是否成功分散部署，是否存在短距離（5章內）快速閉環的低級錯誤。
+
+⚠️ 宏觀放行紅線：
+- 若世界觀組織、設定太單薄，導致大綱骨架出現大量重複的暫定標題，總監必須下達 `AUTO_REGENERATE` 重新要求世界觀擴充，或調用 `PATCH_AND_RETRY` 催生新勢力、新地圖補丁！
+- 忽略微觀的「伏筆憑空回收」或「場景不具體」警告（因為此時尚未進行微觀展開）。
+
+🎯 宏觀骨架期決策導向：
+- 若全書骨架規模已足夠且長線佈局合理 ➔ 決策 `CONTINUE` 進入 `plot_expansion`（微觀大綱詳細展開階段）。
+- 若情節枯竭、素材不足 ➔ 決策 `GO_BACK_TO_WORLDVIEW` 並在 `hint` 中給出具體的「世界觀膨脹/催生補丁」文學指導方針。
+"""
+        return validation_report_str
+    
     # Load worldview
     wb_data = db.get_latest_worldbuilding(novel_id)
     wb_json = parse_json_safely(wb_data["content"]) if wb_data else {}
@@ -2384,6 +2426,17 @@ def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False)
 1. 評估核心角色的性格特點、動機、背景故事是否生動。
 2. 審查角色漸進登場策略 (progressive_character_plan) 是否合理（是否避免了一開始出場太多角色）。
 3. **動態數據調閱**：下游的大綱伏筆與描述已隱藏。若需要審查全套角色聖經完整 JSON，**你必須發出 `help_characters` 指令**，後端會為你動態加載並回傳完整數據重新決策！
+"""
+    elif current_stage in ["macro_skeleton", "skeleton_review", "foreshadowing_align"]:
+        stage_focus = """
+## 💡 當前審核重點：【全書千章宏觀大綱骨架與伏筆部署】
+1. **規模校驗**：檢查小說是否已經完整拆解出 10-30 卷、數百到上千章的簡易骨架（標題與里程碑宣言）。
+2. **素材厚度審計**：若發現大綱情節開始陷入重複、枯竭，說明上游世界觀與角色不夠用。你必須下達決策引導系統進行【增量創意膨脹（Creative Swelling）】，催生新勢力與人物！
+3. **伏筆紅線**：嚴禁優質伏筆種子在 5 章內迅速閉環。每個伏筆的埋設與回收之間必須有足夠的戲劇跨度（跨卷張力）。
+
+## 🎯 你的核心決策導向：
+- 若全書骨架規模已足夠且長線佈局合理 ➔ 決策 `CONTINUE` 進入 `plot_expansion`（微觀大綱詳細展開階段）。
+- 若情節枯竭、素材不足 ➔ 決策 `GO_BACK_TO_WORLDVIEW` 並在 `hint` 中給出具體的「世界觀膨脹/催生補丁」文學指導方針。
 """
     elif current_stage in ["plot", "plot_review", "plot_go_back"]:
         stage_focus = """
