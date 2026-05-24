@@ -88,7 +88,7 @@ html, body {
    ========================================== */
 #app-container {
     display: grid;
-    grid-template-columns: 240px 1fr 500px;
+    grid-template-columns: 240px 1fr var(--sidebar-right-width, 500px);
     height: 100vh;
     overflow: hidden;
     background: var(--bg-secondary);
@@ -109,6 +109,7 @@ aside {
 #sidebar-right {
     border-right: none;
     border-left: 1px solid var(--border-color);
+    position: relative; /* Anchor for absolute positioned resizer */
 }
 
 /* Left Sidebar */
@@ -1544,6 +1545,8 @@ textarea:focus {
     padding: 12px 16px;
     margin-bottom: 16px;
     font-size: var(--font-base);
+    max-height: 180px;
+    overflow-y: auto;
 }
 
 .chapter-outline-preview-box .label {
@@ -2230,7 +2233,7 @@ textarea:focus {
 /* Agent streaming output dark terminal console */
 .agent-stream-output {
     width: 100%;
-    max-height: 220px;
+    max-height: 80%;
     min-height: 120px;
     overflow-y: auto;
     background: #09090e;
@@ -3290,12 +3293,12 @@ body.dark-theme .volume-summary-box {
 
 .thinking-content-body {
     white-space: pre-wrap !important;
-    padding: 16px !important;
+    padding: 16px 16px 32px 16px !important;
     font-size: var(--font-base) !important;
     line-height: 1.7 !important;
     color: var(--text-secondary) !important;
     background: rgba(0, 0, 0, 0.01) !important;
-    max-height: 400px !important;
+    max-height: 250px !important;
     overflow-y: auto !important;
     border-top: 1px solid rgba(139, 92, 246, 0.08) !important;
     font-family: inherit !important;
@@ -3682,6 +3685,310 @@ body.dark-theme .modal-card {
 .volume-card.expanded {
     border-color: rgba(139, 92, 246, 0.4) !important;
 }
+
+/* ==========================================
+   RIGHT SIDEBAR GLASSMORPHIC TABS (ANTIGRAVITY)
+   ========================================== */
+.sidebar-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px;
+    background: rgba(15, 23, 42, 0.3);
+    border-bottom: 1px solid var(--border-color);
+    position: relative;
+    backdrop-filter: blur(10px);
+}
+
+body.light-theme .sidebar-tabs {
+    background: rgba(241, 245, 249, 0.6);
+}
+
+.sidebar-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    border-radius: 20px;
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    outline: none;
+}
+
+.sidebar-tab:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+}
+
+body.light-theme .sidebar-tab:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.sidebar-tab.active {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(168, 85, 247, 0.15));
+    color: var(--primary);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.25);
+    text-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
+}
+
+body.light-theme .sidebar-tab.active {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(168, 85, 247, 0.1));
+}
+
+.sidebar-tab svg {
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.sidebar-tab.active svg {
+    transform: scale(1.15);
+    color: var(--primary);
+}
+
+/* Tab Contents With Premium Transitions */
+.tab-content {
+    display: none !important;
+    height: 100%;
+}
+
+.tab-content.active {
+    display: flex !important;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    animation: premiumTabFadeIn 0.38s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes premiumTabFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Sidebar thinking stream adaptations */
+#ai-thinking-stream.thinking-stream-box {
+    margin: 16px;
+    padding: 14px;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(168, 85, 247, 0.03));
+    border: 1px solid rgba(59, 130, 246, 0.18);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    max-height: 160px;
+}
+
+body.light-theme #ai-thinking-stream.thinking-stream-box {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.04), rgba(168, 85, 247, 0.02));
+    border-color: rgba(59, 130, 246, 0.12);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+}
+
+.stream-content-area {
+    padding: 16px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.stream-empty-state {
+    color: var(--text-muted);
+    font-size: var(--font-base);
+    padding: 40px 20px;
+    text-align: center;
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.01);
+    margin-top: 16px;
+}
+
+/* Sidebar Drag Resizer */
+.sidebar-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 100;
+    background: transparent;
+    transition: background-color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-resizer:hover {
+    background-color: var(--border-color);
+}
+
+.resizer-handle {
+    pointer-events: none;
+    background: var(--surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-family: monospace;
+    padding: 12px 1px;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    user-select: none;
+    opacity: 0.7;
+    transition: opacity 0.2s, background-color 0.2s;
+    writing-mode: vertical-lr;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-resizer:hover .resizer-handle {
+    opacity: 1;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Stacked Stream Card Styles */
+.stream-step-card {
+    background: var(--surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    margin-bottom: 8px;
+    animation: slideInUp 0.3s ease;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.stream-step-card:hover {
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+.stream-step-header {
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.step-agent-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.step-agent-icon {
+    font-size: 1.1rem;
+}
+
+.step-agent-name {
+    font-weight: 600;
+    font-size: var(--font-base);
+    color: var(--text-primary);
+}
+
+.step-status-badge {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+    font-weight: 500;
+}
+
+.step-status-badge.completed {
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
+}
+
+.step-body-container {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.step-thinking-box {
+    background: rgba(59, 130, 246, 0.04);
+    border-left: 3px solid #3b82f6;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 8px 12px;
+}
+
+.step-thinking-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #3b82f6;
+    margin-bottom: 4px;
+}
+
+.step-thinking-body {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+.step-content-box {
+    background: rgba(255, 255, 255, 0.02);
+    border-left: 3px solid #10b981;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 8px 12px;
+}
+
+.step-content-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #10b981;
+    margin-bottom: 4px;
+}
+
+.step-content-body {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-family: inherit;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+/* Force Textareas to only resize vertically */
+textarea {
+    resize: vertical !important;
+}
+
 
 
 

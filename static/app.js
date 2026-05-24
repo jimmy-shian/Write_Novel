@@ -73,11 +73,16 @@ function setupStreamLogToggle() {
     
     const applyToggleStatus = () => {
         const terminals = document.querySelectorAll('.agent-stream-output');
+        const agentLabel = document.getElementById('stream-agent-label');
         terminals.forEach(term => {
             if (state.showStreamLog) {
                 term.classList.remove('hidden');
+                if (agentLabel && window.lastStreamAgentTab) {
+                    agentLabel.style.display = 'flex';
+                }
             } else {
                 term.classList.add('hidden');
+                if (agentLabel) agentLabel.style.display = 'none';
             }
         });
     };
@@ -2555,8 +2560,36 @@ async function executeToolCall(tool, params) {
                     set value(val) {
                         state.writingBuffer = val;
                         if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                            el.editorProse.value = val;
-                            el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                            let proseVal = val;
+                            let thinkingVal = "";
+                            const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                            let splitIndex = -1;
+                            for (const sw of specialWords) {
+                                const idx = val.indexOf(sw);
+                                if (idx !== -1) {
+                                    splitIndex = idx;
+                                    thinkingVal = val.substring(0, idx).trim();
+                                    proseVal = val.substring(idx + sw.length).trim();
+                                    break;
+                                }
+                            }
+                            if (splitIndex === -1) {
+                                thinkingVal = val;
+                                proseVal = "";
+                            }
+                            
+                            if (el.editorProse) {
+                                el.editorProse.value = proseVal;
+                                window.smartScrollToBottom(el.editorProse, false);
+                            }
+                            
+                            // Update thinking preview real-time
+                            const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                            const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                            if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                                thinkingPreview.classList.remove('hidden');
+                                thinkingPreviewText.textContent = thinkingVal;
+                            }
                         }
                     },
                     get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
@@ -2734,20 +2767,23 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
         // onThinking
         (delta) => {
             el.aiThinkingText.textContent += delta;
-            window.updateAgentStreamOutput(tabName, delta);
+            window.updateAgentStreamOutput(tabName, delta, 'thinking');
         },
         // onContent
         (delta) => {
             onContentTarget.value += delta;
-            // auto scroll textarea to bottom while streaming
-            onContentTarget.scrollTop = onContentTarget.scrollHeight;
-            window.updateAgentStreamOutput(tabName, delta);
+            if (typeof window.smartScrollToBottom === 'function') {
+                window.smartScrollToBottom(onContentTarget, false);
+            } else {
+                onContentTarget.scrollTop = onContentTarget.scrollHeight;
+            }
+            window.updateAgentStreamOutput(tabName, delta, 'content');
         },
         // onError
         (msg) => {
             showToast(msg);
             el.aiThinkingText.textContent += `\n[Error: ${msg}]`;
-            window.updateAgentStreamOutput(tabName, `\n[Error: ${msg}]`);
+            window.updateAgentStreamOutput(tabName, `\n[Error: ${msg}]`, 'content');
             hasError = true;
         },
         // onDone
@@ -2823,27 +2859,65 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
         const directorResponseContainer = document.createElement('div');
         directorResponseContainer.className = 'message assistant-msg';
         const directorTimestamp = formatTimestamp();
-        directorResponseContainer.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">🎬 AI 總監決策中...</div><div class="msg-timestamp">${directorTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
+        directorResponseContainer.innerHTML = `
+            <div class="msg-sender-row">
+                <div class="msg-sender">🎬 AI 總監決策中...</div>
+                <div class="msg-timestamp">${directorTimestamp}</div>
+            </div>
+            <div class="msg-content">
+                <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                        <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                    </summary>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                </details>
+                <div class="msg-text-markdown stream-typing"></div>
+            </div>
+        `;
         el.chatMessagesContainer.appendChild(directorResponseContainer);
-        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
         
         const streamTarget = directorResponseContainer.querySelector('.stream-typing');
+        const thinkingDetails = directorResponseContainer.querySelector('.thinking-details');
+        const thinkingPre = directorResponseContainer.querySelector('.thinking-pre');
         
         const userPrompt = (providedUserPrompt || '').trim()
             || (state.pipelinePrompt || '').trim()
             || (state.currentNovelData?.novel?.pipeline_prompt || '').trim()
             || '';
         
+        let responseText = "";
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision',
             { current_stage: currentStage, user_prompt: userPrompt },
-            () => {},
-            (delta) => {
-                streamTarget.textContent += delta;
-                el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+            // onThinking
+            (thinkingDelta) => {
+                // Safeguard: only show thinking section if it's not hidden
+                if (thinkingDetails && !thinkingDetails.classList.contains('hidden')) {
+                    thinkingDetails.open = true;
+                    thinkingPre.textContent += thinkingDelta;
+                }
+                // Always show thinking when we receive thinking content
+                if (thinkingDetails) {
+                    thinkingDetails.classList.remove('hidden');
+                    thinkingDetails.open = true;
+                    thinkingPre.textContent += thinkingDelta;
+                }
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
             },
+            // onContent
+            (delta) => {
+                responseText += delta;
+                // 寫入聊天區的 Markdown 渲染
+                streamTarget.innerHTML = renderMarkdown(responseText);
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
+                // 同時寫入 stream-output-worldview 終端（第四個串流）
+                window.updateAgentStreamOutput('worldview', delta);
+            },
+            // onError
             (err) => {
-                streamTarget.textContent += `\n[總監連線錯誤: ${err}]`;
+                responseText += `\n[總監連線錯誤: ${err}]`;
+                streamTarget.innerHTML = renderMarkdown(responseText);
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
@@ -2851,8 +2925,6 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                 // 回覆完成，停止閃爍效果
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
-                
-                const responseText = streamTarget.textContent;
                 
                 // 添加 director-response 樣式
                 directorResponseContainer.classList.add('director-response');
@@ -2932,22 +3004,49 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
         const directorResponseContainer = document.createElement('div');
         directorResponseContainer.className = 'message assistant-msg director-response';
         const directorTimestamp = formatTimestamp();
-        directorResponseContainer.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">🎬 AI 總監二次審查中...</div><div class="msg-timestamp">${directorTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
+        directorResponseContainer.innerHTML = `
+            <div class="msg-sender-row">
+                <div class="msg-sender">🎬 AI 總監二次審查中...</div>
+                <div class="msg-timestamp">${directorTimestamp}</div>
+            </div>
+            <div class="msg-content">
+                <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                        <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                    </summary>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                </details>
+                <div class="msg-text-markdown stream-typing"></div>
+            </div>
+        `;
         el.chatMessagesContainer.appendChild(directorResponseContainer);
-        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
         
         const streamTarget = directorResponseContainer.querySelector('.stream-typing');
+        const thinkingDetails = directorResponseContainer.querySelector('.thinking-details');
+        const thinkingPre = directorResponseContainer.querySelector('.thinking-pre');
         
+        let responseText = "";
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision/help',
             { current_stage: currentStage, help_action: helpAction, help_reason: helpReason },
-            () => {},
-            (delta) => {
-                streamTarget.textContent += delta;
-                el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+            // onThinking
+            (thinkingDelta) => {
+                thinkingDetails.classList.remove('hidden');
+                thinkingDetails.open = true;
+                thinkingPre.textContent += thinkingDelta;
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
             },
+            // onContent
+            (delta) => {
+                responseText += delta;
+                streamTarget.innerHTML = renderMarkdown(responseText);
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
+            },
+            // onError
             (err) => {
-                streamTarget.textContent += `\n[總監連線錯誤: ${err}]`;
+                responseText += `\n[總監連線錯誤: ${err}]`;
+                streamTarget.innerHTML = renderMarkdown(responseText);
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
@@ -2956,7 +3055,6 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
                 
-                const responseText = streamTarget.textContent;
                 const decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
                 
@@ -3218,7 +3316,7 @@ function enhanceExistingContent(stage) {
                     (delta) => {
                         if (el.editorWorldview) {
                             el.editorWorldview.value += delta;
-                            el.editorWorldview.scrollTop = el.editorWorldview.scrollHeight;
+                            window.smartScrollToBottom(el.editorWorldview, false);
                         }
                     },
                     (msg) => showToast(`Error: ${msg}`),
@@ -3239,7 +3337,7 @@ function enhanceExistingContent(stage) {
                     (delta) => {
                         if (el.editorCharactersJson) {
                             el.editorCharactersJson.value += delta;
-                            el.editorCharactersJson.scrollTop = el.editorCharactersJson.scrollHeight;
+                            window.smartScrollToBottom(el.editorCharactersJson, false);
                         }
                     },
                     (msg) => showToast(`Error: ${msg}`),
@@ -3260,7 +3358,7 @@ function enhanceExistingContent(stage) {
                     (delta) => {
                         if (el.editorPlotJson) {
                             el.editorPlotJson.value += delta;
-                            el.editorPlotJson.scrollTop = el.editorPlotJson.scrollHeight;
+                            window.smartScrollToBottom(el.editorPlotJson, false);
                         }
                     },
                     (msg) => showToast(`Error: ${msg}`),
@@ -3632,9 +3730,35 @@ function runFullPipeline(userPrompt) {
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    let proseVal = val;
+                    let thinkingVal = "";
+                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                    let splitIndex = -1;
+                    for (const sw of specialWords) {
+                        const idx = val.indexOf(sw);
+                        if (idx !== -1) {
+                            splitIndex = idx;
+                            thinkingVal = val.substring(0, idx).trim();
+                            proseVal = val.substring(idx + sw.length).trim();
+                            break;
+                        }
+                    }
+                    if (splitIndex === -1) {
+                        thinkingVal = val;
+                        proseVal = "";
+                    }
+                    
                     if (el.editorProse) {
-                        el.editorProse.value = val;
-                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                        el.editorProse.value = proseVal;
+                        window.smartScrollToBottom(el.editorProse, false);
+                    }
+                    
+                    // Update thinking preview real-time
+                    const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                    const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                    if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                        thinkingPreview.classList.remove('hidden');
+                        thinkingPreviewText.textContent = thinkingVal;
                     }
                 }
             },
@@ -3767,9 +3891,35 @@ async function handleDrawerPromptSubmit() {
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    let proseVal = val;
+                    let thinkingVal = "";
+                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                    let splitIndex = -1;
+                    for (const sw of specialWords) {
+                        const idx = val.indexOf(sw);
+                        if (idx !== -1) {
+                            splitIndex = idx;
+                            thinkingVal = val.substring(0, idx).trim();
+                            proseVal = val.substring(idx + sw.length).trim();
+                            break;
+                        }
+                    }
+                    if (splitIndex === -1) {
+                        thinkingVal = val;
+                        proseVal = "";
+                    }
+                    
                     if (el.editorProse) {
-                        el.editorProse.value = val;
-                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                        el.editorProse.value = proseVal;
+                        window.smartScrollToBottom(el.editorProse, false);
+                    }
+                    
+                    // Update thinking preview real-time
+                    const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                    const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                    if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                        thinkingPreview.classList.remove('hidden');
+                        thinkingPreviewText.textContent = thinkingVal;
                     }
                 }
             },
@@ -4212,8 +4362,36 @@ function setupEventListeners() {
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    el.editorProse.value = val;
-                    el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    let proseVal = val;
+                    let thinkingVal = "";
+                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                    let splitIndex = -1;
+                    for (const sw of specialWords) {
+                        const idx = val.indexOf(sw);
+                        if (idx !== -1) {
+                            splitIndex = idx;
+                            thinkingVal = val.substring(0, idx).trim();
+                            proseVal = val.substring(idx + sw.length).trim();
+                            break;
+                        }
+                    }
+                    if (splitIndex === -1) {
+                        thinkingVal = val;
+                        proseVal = "";
+                    }
+                    
+                    if (el.editorProse) {
+                        el.editorProse.value = proseVal;
+                        window.smartScrollToBottom(el.editorProse, false);
+                    }
+                    
+                    // Update thinking preview real-time
+                    const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                    const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                    if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                        thinkingPreview.classList.remove('hidden');
+                        thinkingPreviewText.textContent = thinkingVal;
+                    }
                 }
             },
             get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
@@ -4278,32 +4456,56 @@ function setupEventListeners() {
         const userTimestamp = formatTimestamp();
         userMsg.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">You</div><div class="msg-timestamp">${userTimestamp}</div></div><div class="msg-content">${text}</div>`;
         el.chatMessagesContainer.appendChild(userMsg);
-        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
         
         // Create assistant message stream bubble placeholder
         const assistantMsg = document.createElement('div');
         assistantMsg.className = 'message assistant-msg';
         const assistantTimestamp = formatTimestamp();
-        assistantMsg.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">Novel Director</div><div class="msg-timestamp">${assistantTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
+        assistantMsg.innerHTML = `
+            <div class="msg-sender-row">
+                <div class="msg-sender">Novel Director</div>
+                <div class="msg-timestamp">${assistantTimestamp}</div>
+            </div>
+            <div class="msg-content">
+                <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                        <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                    </summary>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                </details>
+                <div class="msg-text-markdown stream-typing"></div>
+            </div>
+        `;
         el.chatMessagesContainer.appendChild(assistantMsg);
-        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
         
         const streamTarget = assistantMsg.querySelector('.stream-typing');
+        const thinkingDetails = assistantMsg.querySelector('.thinking-details');
+        const thinkingPre = assistantMsg.querySelector('.thinking-pre');
         
+        let responseText = "";
         // Start streaming copilot response
         streamAPI(
             '/api/agent/copilot-chat',
             { novel_id: state.currentNovelId, user_message: text },
             // onThinking
-            () => {}, // don't show reasoning details in chat bubble to keep it clean
+            (thinkingDelta) => {
+                thinkingDetails.classList.remove('hidden');
+                thinkingDetails.open = true;
+                thinkingPre.textContent += thinkingDelta;
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
+            },
             // onContent
             (delta) => {
-                streamTarget.textContent += delta;
-                el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+                responseText += delta;
+                streamTarget.innerHTML = renderMarkdown(responseText);
+                window.smartScrollToBottom(el.chatMessagesContainer, false);
             },
             // onError
             (err) => {
-                streamTarget.textContent += `\n[Director connection lost: ${err}]`;
+                responseText += `\n[Director connection lost: ${err}]`;
+                streamTarget.innerHTML = renderMarkdown(responseText);
             },
             // onDone
             async () => {
@@ -4426,6 +4628,40 @@ function initializeChatHistory() {
 // INITIALIZATION
 // ==========================================
 window.addEventListener('DOMContentLoaded', async () => {
+    // Initialize Sidebar Resizer Dragging
+    const resizer = document.getElementById('sidebar-right-resizer');
+    const appContainer = document.getElementById('app-container');
+
+    if (resizer && appContainer) {
+        let isDragging = false;
+        
+        resizer.addEventListener('mousedown', function(e) {
+            isDragging = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging) return;
+            const newWidth = window.innerWidth - e.clientX;
+            const minWidth = 300;
+            const maxWidth = window.innerWidth * 0.8;
+            
+            if (newWidth >= minWidth && newWidth <= maxWidth) {
+                appContainer.style.setProperty('--sidebar-right-width', `${newWidth}px`);
+            }
+        });
+        
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    }
+
     // 0. 初始化聊天歷史顯示
     initializeChatHistory();
     
@@ -4704,9 +4940,35 @@ function startStage4_Writer(regenerate = false) {
         set value(val) {
             state.writingBuffer = val;
             if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                let proseVal = val;
+                let thinkingVal = "";
+                const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                let splitIndex = -1;
+                for (const sw of specialWords) {
+                    const idx = val.indexOf(sw);
+                    if (idx !== -1) {
+                        splitIndex = idx;
+                        thinkingVal = val.substring(0, idx).trim();
+                        proseVal = val.substring(idx + sw.length).trim();
+                        break;
+                    }
+                }
+                if (splitIndex === -1) {
+                    thinkingVal = val;
+                    proseVal = "";
+                }
+                
                 if (el.editorProse) {
-                    el.editorProse.value = val;
-                    el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    el.editorProse.value = proseVal;
+                    window.smartScrollToBottom(el.editorProse, false);
+                }
+                
+                // Update thinking preview real-time
+                const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                    thinkingPreview.classList.remove('hidden');
+                    thinkingPreviewText.textContent = thinkingVal;
                 }
             }
         },
@@ -4895,32 +5157,210 @@ window.showCustomPrompt = function(msg, defaultValue = '', title = '輸入內容
     return window.showCustomDialog({ title, message: msg, type: 'prompt', defaultValue });
 };
 
-window.updateAgentStreamOutput = function(tabName, delta) {
-    const terminal = document.getElementById(`stream-output-${tabName}`);
-    if (!terminal) return;
-    
-    // 智能捲動：記錄是否已經綁定捲動事件監聽器
-    if (!terminal._smartScrollInitialized) {
-        terminal._smartScrollInitialized = true;
-        terminal._userScrolled = false;
-        
-        // 監聽使用者手動捲動事件
-        terminal.addEventListener('scroll', function() {
-            // 檢查是否接近底部（容差 50px）
-            const isNearBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 50;
-            terminal._userScrolled = !isNearBottom;
-        });
+// smart scroll helper to support scroll-back
+window.smartScrollToBottom = function(container, force = false) {
+    if (!container) return;
+    if (force) {
+        container.scrollTop = container.scrollHeight;
+        return;
     }
-    
-    // 追加內容
-    terminal.textContent += delta;
-    
-    // 只有在未手動捲動（已在底部）或首次更新時才自動捲動到底部
-    if (!terminal._userScrolled || terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 50) {
-        terminal.scrollTop = terminal.scrollHeight;
-        terminal._userScrolled = false; // 重置狀態
+    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 120;
+    if (isNearBottom) {
+        container.scrollTop = container.scrollHeight;
     }
 };
+
+function getAgentDetails(endpoint) {
+    if (endpoint.includes('story-architect') || endpoint.includes('incremental-architect')) {
+        return { name: '故事結構架構師 (Story Architect)', icon: '🌍' };
+    } else if (endpoint.includes('character-designer')) {
+        return { name: '角色設計大師 (Character Designer)', icon: '👥' };
+    } else if (endpoint.includes('plot-planner')) {
+        return { name: '章節劇情規劃師 (Plot Planner)', icon: '📋' };
+    } else if (endpoint.includes('write-chapter')) {
+        return { name: '章節寫作作家 (Chapter Writer)', icon: '✍️' };
+    } else if (endpoint.includes('edit-chapter')) {
+        return { name: '正文編輯編審 (Editor Agent)', icon: '✏️' };
+    } else if (endpoint.includes('copilot-chat')) {
+        return { name: '協同總監 (Co-pilot Novel Director)', icon: '🧠' };
+    }
+    return { name: 'AI Agent', icon: '🤖' };
+}
+
+window.currentActiveStreamCardId = null;
+window.currentStreamCardCreated = false; // 標記是否已創建過卡片
+
+window.onStreamAPIStart = function(endpoint, body) {
+    const container = document.getElementById('stream-content-area');
+    if (!container) return;
+    
+    // Hide empty placeholder
+    const emptyState = container.querySelector('.stream-empty-state');
+    if (emptyState) {
+        emptyState.style.display = 'none';
+    }
+    
+    const details = getAgentDetails(endpoint);
+    
+    // 如果已經有活躍卡片，只更新 header 的內容，不要創建新卡片
+    if (window.currentActiveStreamCardId) {
+        const existingCard = document.getElementById(window.currentActiveStreamCardId);
+        if (existingCard) {
+            // 更新 header 資訊（只更新 agent 名稱和狀態）
+            const headerInfo = existingCard.querySelector('.step-agent-info');
+            const statusBadge = existingCard.querySelector('.step-status-badge');
+            if (headerInfo) {
+                headerInfo.innerHTML = `
+                    <span class="step-agent-icon">${details.icon}</span>
+                    <span class="step-agent-name">${details.name}</span>
+                `;
+            }
+            if (statusBadge) {
+                statusBadge.textContent = '🔄 執行中...';
+                statusBadge.classList.remove('completed');
+            }
+            // Scroll to make sure the existing card is visible
+            window.smartScrollToBottom(container, true);
+            return;
+        }
+    }
+    
+    // 否則創建新的卡片（這是第一次或有舊卡片但已經結束）
+    const uniqueId = 'stream-card-' + Date.now();
+    window.currentActiveStreamCardId = uniqueId;
+    window.currentStreamCardCreated = true;
+    
+    const card = document.createElement('div');
+    card.className = 'stream-step-card';
+    card.id = uniqueId;
+    card.innerHTML = `
+        <div class="stream-step-header">
+            <div class="step-agent-info">
+                <span class="step-agent-icon">${details.icon}</span>
+                <span class="step-agent-name">${details.name}</span>
+            </div>
+            <div class="step-status-badge">🔄 執行中...</div>
+        </div>
+        <div class="step-body-container">
+            <div class="step-thinking-box hidden">
+                <div class="step-thinking-title">🧠 思考過程 (enable_thinking)</div>
+                <pre class="step-thinking-body"></pre>
+            </div>
+            <div class="step-content-box hidden">
+                <div class="step-content-title">📝 生成內容</div>
+                <pre class="step-content-body"></pre>
+            </div>
+        </div>
+    `;
+    
+    container.appendChild(card);
+    
+    // Keep only last 5 cards
+    const cards = container.querySelectorAll('.stream-step-card');
+    if (cards.length > 5) {
+        cards[0].remove();
+    }
+    
+    // Scroll container to bottom
+    window.smartScrollToBottom(container, true);
+};
+
+window.onStreamAPIEnd = function(endpoint) {
+    if (window.currentActiveStreamCardId) {
+        const card = document.getElementById(window.currentActiveStreamCardId);
+        if (card) {
+            const badge = card.querySelector('.step-status-badge');
+            if (badge) {
+                badge.textContent = '✓ 已完成';
+                badge.classList.add('completed');
+            }
+        }
+    }
+    window.currentActiveStreamCardId = null;
+};
+
+/**
+ * 統一的串流輸出函數
+ * 同時處理兩種輸出模式：
+ * 1. stream-step-card 模式（動態卡片，用於一般 Agent）
+ * 2. stream-output-<tabName> 模式（傳統終端模式，用於向後兼容）
+ * 
+ * Header 只在第一次創建卡片時產生，之後只修改內容
+ *
+ * @param {string} tabName   - 目標分頁名稱，例如 'worldview'、'characters'、'plot'、'writer'、'director'
+ * @param {string} delta     - 本次要輸出的文字片段
+ * @param {string} [type]    - 'thinking' 或 'content'，預設為 'content'
+ */
+window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
+    // 1️⃣ 首先嘗試寫入動態卡片（stream-step-card 模式）
+    if (window.currentActiveStreamCardId) {
+        const activeCard = document.getElementById(window.currentActiveStreamCardId);
+        if (activeCard) {
+            if (type === 'thinking') {
+                const thinkingBox = activeCard.querySelector('.step-thinking-box');
+                const thinkingBody = activeCard.querySelector('.step-thinking-body');
+                if (thinkingBox && thinkingBody) {
+                    thinkingBox.classList.remove('hidden');
+                    thinkingBody.textContent += delta;
+                    window.smartScrollToBottom(thinkingBody, false);
+                }
+            } else {
+                const contentBox = activeCard.querySelector('.step-content-box');
+                const contentBody = activeCard.querySelector('.step-content-body');
+                if (contentBox && contentBody) {
+                    contentBox.classList.remove('hidden');
+                    contentBody.textContent += delta;
+                    window.smartScrollToBottom(contentBody, false);
+                }
+            }
+            // 如果是 Director 總監的串流，同時寫入對應的終端
+            if (tabName === 'director' || tabName === 'worldview') {
+                writeToLegacyTerminal(tabName, delta);
+            }
+            return;
+        }
+    }
+    
+    // 2️⃣ 如果沒有活躍卡片，直接寫入對應的終端元素
+    writeToLegacyTerminal(tabName, delta);
+};
+
+/**
+ * 寫入傳統終端元素（向後兼容）
+ */
+function writeToLegacyTerminal(tabName, delta) {
+    const targetId = `stream-output-${tabName}`;
+    let targetEl = document.getElementById(targetId);
+    
+    // 若尚未建立，於 body 結尾新增一個簡潔的容器
+    if (!targetEl) {
+        targetEl = document.createElement('div');
+        targetEl.id = targetId;
+        targetEl.className = 'agent-stream-output';
+        targetEl.style.cssText = `
+            width: 100%;
+            max-height: 250px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 8px;
+            margin-top: 4px;
+            background: rgba(0,0,0,0.02);
+            font-family: monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        `;
+        // 插入至右側面板的最底部
+        const sidebar = document.querySelector('.right-sidebar') || document.body;
+        sidebar.appendChild(targetEl);
+    }
+    
+    // 直接追加文字（保留換行與原始格式）
+    targetEl.textContent += delta;
+    
+    // 確保自動捲動到底部
+    window.smartScrollToBottom(targetEl, false);
+}
 
 window.enhanceWorldviewSectionWithAI = async function(field, title) {
     const hint = await window.showCustomPrompt(`請輸入 AI 規劃「${title}」的提示或方向（留空將以當前設定進行擴充）：`, '');
@@ -5217,4 +5657,6 @@ window.deleteVolume = async function(volIdx) {
         showToast('刪除失敗: ' + e);
     }
 };
+
+
 

@@ -20,16 +20,20 @@ function getPipelinePrompt({ inputPrompt, statePrompt, dbPrompt, fallbackPrompt 
 function resolveNextStageFromDecision(decision, currentStage) {
   const action = decision?.action;
   
-  switch (action) {
+    switch (action) {
     case 'CONTINUE':
-      // 根據當前階段決定下一階段
+      // 根據當前階段決定下一階段（四階段漏斗流）
       switch (currentStage) {
         case 'worldview':
           return 'characters';
         case 'characters':
           return 'plot';
         case 'plot':
-          return 'writer';
+          return 'volume_skeleton';  // 新增：Stage 2 簡易章綱
+        case 'volume_skeleton':
+          return 'foreshadowing_orchestration';  // 新增：Stage 3 伏筆編織
+        case 'foreshadowing_orchestration':
+          return 'writer';  // Stage 4 微觀細修完成後進入正文寫作
         case 'writer':
           return null; // 寫作階段完成
         default:

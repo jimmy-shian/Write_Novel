@@ -7,6 +7,10 @@ import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI } from './api.js';
 import { parseWorldviewJSON, renderMarkdown, parseDirectorDecisionText } from './utils.js';
+// Escape backticks to prevent markdown code fence issues
+function escapeBackticks(str) {
+    return typeof str === 'string' ? str.replace(/`/g, '\\`') : str;
+}
 
 /**
  * 渲染當前激活的 Tab
@@ -934,6 +938,14 @@ export function renderWriterTab() {
  * @param {number} chapterIndex - 章節索引（1-based）
  */
 export function selectWriterChapter(chapterIndex) {
+    // 若目前有正在寫作的章節且使用者切換至不同章節，則中斷寫作流
+    if (state.currentlyWritingChapterIndex && state.currentlyWritingChapterIndex !== chapterIndex) {
+        // 清除寫作指示，讓後續的串流不會誤寫入舊章節
+        state.currentlyWritingChapterIndex = null;
+        // 隱藏正在寫作的 processing indicator（若有顯示的話）
+        try { hideAgentProcessingIndicator('writer'); } catch(e) {}
+    }
+
     state.activeChapterIndex = chapterIndex;
     
     const chapters = state.currentNovelData?.chapters || [];
@@ -1171,13 +1183,26 @@ export function renderChatMessages() {
                         </div>
                     `;
                     
+                    let thinkingHtml = '';
+                    if (msg.thinking && msg.thinking.trim()) {
+                        thinkingHtml = `
+                            <details class="thinking-details" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                                <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                                    <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                                </summary>
+                                <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
+                            </details>
+                        `;
+                    }
+                    
                     msgDiv.innerHTML = `
                         <div class="msg-sender-row">
                             <div class="msg-sender">${sender}</div>
                             ${formattedTime ? `<div class="msg-timestamp">${formattedTime}</div>` : ''}
                         </div>
                         <div class="msg-content">
-                            ${renderMarkdown(msg.content)}
+                            ${thinkingHtml}
+                <div class="msg-text-markdown">${renderMarkdown(escapeBackticks(msg.content))}</div>
                             ${buttonsHtml}
                         </div>
                     `;
@@ -1213,19 +1238,38 @@ export function renderChatMessages() {
                 }
             }
             
+            let thinkingHtml = '';
+            if (msg.thinking && msg.thinking.trim()) {
+                thinkingHtml = `
+                    <details class="thinking-details" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                        <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                            <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                        </summary>
+                        <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
+                    </details>
+                `;
+            }
+
             msgDiv.innerHTML = `
                 <div class="msg-sender-row">
                     <div class="msg-sender">${sender}</div>
                     ${formattedTime ? `<div class="msg-timestamp">${formattedTime}</div>` : ''}
                 </div>
-                <div class="msg-content">${renderMarkdown(msg.content)}</div>
+                <div class="msg-content">
+                    ${thinkingHtml}
+                <div class="msg-text-markdown">${renderMarkdown(escapeBackticks(msg.content))}</div>
+                </div>
             `;
             el.chatMessagesContainer.appendChild(msgDiv);
         });
     }
     
     // 滾動到底部
-    el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+    if (typeof window.smartScrollToBottom === 'function') {
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
+    } else {
+        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+    }
 }
 
 /**
@@ -1252,9 +1296,15 @@ export function appendChatMessage(role, content) {
             <div class="msg-sender">${sender}</div>
             <div class="msg-timestamp">${formattedTime}</div>
         </div>
-        <div class="msg-content">${renderMarkdown(content)}</div>
+        <div class="msg-content">
+            <div class="msg-text-markdown">${renderMarkdown(content)}</div>
+        </div>
     `;
     
     el.chatMessagesContainer.appendChild(msgDiv);
-    el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+    if (typeof window.smartScrollToBottom === 'function') {
+        window.smartScrollToBottom(el.chatMessagesContainer, true);
+    } else {
+        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+    }
 }

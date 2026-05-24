@@ -24,12 +24,14 @@ export async function loadNovels() {
  * 載入指定小說的詳細資料
  * @param {string} novelId - 小說 ID
  */
-export async function loadNovelDetails(novelId) {
+    export async function loadNovelDetails(novelId) {
     if (!novelId) return;
     try {
         el.currentNovelTitle.textContent = "載入中...";
         const data = await requestAPI(`/api/novels/${novelId}`);
         state.currentNovelId = novelId;
+        // 持久化保存當前選中的小說
+        localStorage.setItem('currentNovelId', novelId);
         state.currentNovelData = data;
         
         // Update header UI
@@ -37,9 +39,23 @@ export async function loadNovelDetails(novelId) {
         el.currentNovelGenre.textContent = `${data.novel.genre} • Style: ${data.novel.style}`;
         if (el.novelHeaderActions) el.novelHeaderActions.style.display = 'flex';
         
-        // Render appropriate workspace components
+        // Always render all tabs to ensure worldview data is visible when switching tabs
         renderActiveTab();
         renderChatMessages();
+        
+        // 確保 worldview sections 被渲染（無論當前在哪個 tab）
+        // 這樣當用戶切換到 worldview tab 時就能看到最新的世界觀數據
+        const worldviewSectionsContainer = document.getElementById('worldview-sections-container');
+        if (worldviewSectionsContainer) {
+            // 使用 requestAnimationFrame 確保在 DOM 更新後執行
+            requestAnimationFrame(() => {
+                import('./renderers.js').then(module => {
+                    if (module.renderWorldviewSections) {
+                        module.renderWorldviewSections();
+                    }
+                });
+            });
+        }
         
         // Select active item in sidebar list
         document.querySelectorAll('#novels-list li').forEach(li => {
@@ -59,6 +75,7 @@ export async function loadNovelDetails(novelId) {
  */
 export function clearWorkspace() {
     state.currentNovelId = null;
+    localStorage.removeItem('currentNovelId');
     state.currentNovelData = null;
     
     // Header
@@ -128,9 +145,12 @@ export function renderNovelsList() {
                     await requestAPI(`/api/novels/${n.id}`, 'DELETE');
                     if (state.currentNovelId === n.id) {
                         clearWorkspace();
+                        // 刪除當前選中的小說後，刷新頁面以清除殘留內容
+                        window.location.reload();
+                    } else {
+                        await loadNovels();
+                        showToast("專案已成功刪除");
                     }
-                    await loadNovels();
-                    showToast("專案已成功刪除");
                 } catch (err) {
                     showToast("刪除失敗: " + err.message);
                 }

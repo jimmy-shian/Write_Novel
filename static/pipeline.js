@@ -125,6 +125,24 @@ export async function executePipelineStage(stage, userPrompt) {
                 state.activeTab = 'plot';
                 agentName = 'Plot Planner (章節劇情規劃師)';
                 break;
+            case 'volume_skeleton':
+                // Stage 2: 為特定卷生成簡易章節骨架
+                endpoint = '/api/agent/volume-skeleton';
+                // 預設生成第 1 卷，用戶可以在 userPrompt 中指定其他卷
+                const skeletonVolumeIndex = state.activeVolumeIndex || 1;
+                body = { novel_id: state.currentNovelId, volume_index: skeletonVolumeIndex, user_prompt: userPrompt };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Volume Skeleton Planner (簡易章節骨架生成器)';
+                break;
+            case 'foreshadowing_orchestration':
+                // Stage 3: 全局伏筆編織對齊
+                endpoint = '/api/agent/foreshadowing-orchestrate';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Foreshadowing Orchestrator (伏筆編織導演)';
+                break;
             case 'writer':
                 endpoint = '/api/agent/write-chapter';
                 body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
@@ -145,19 +163,65 @@ export async function executePipelineStage(stage, userPrompt) {
         let failed = false;
         // 保存寫作章節索引用於閉包
         const writingChapterIndex = state.currentlyWritingChapterIndex;
+        // Initialize buffer
+        if (stage === 'writer') {
+            state.writingBuffer = "";
+        }
         window.streamAPI(
             endpoint,
             body,
             (delta) => {
-                window.updateAgentStreamOutput(stage, delta);
+                window.updateAgentStreamOutput(stage, delta, 'thinking');
             },
             (delta) => {
-                // 檢查是否仍為當前寫作的章節，防止用戶切換後的串流內容寫入錯誤位置
-                if (targetTextarea && state.currentlyWritingChapterIndex === writingChapterIndex) {
-                    targetTextarea.value += delta;
-                    targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                if (targetTextarea) {
+                    if (stage === 'writer') {
+                        state.writingBuffer = (state.writingBuffer || "") + delta;
+                        
+                        let proseVal = state.writingBuffer;
+                        let thinkingVal = "";
+                        const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                        let splitIndex = -1;
+                        for (const sw of specialWords) {
+                            const idx = state.writingBuffer.indexOf(sw);
+                            if (idx !== -1) {
+                                splitIndex = idx;
+                                thinkingVal = state.writingBuffer.substring(0, idx).trim();
+                                proseVal = state.writingBuffer.substring(idx + sw.length).trim();
+                                break;
+                            }
+                        }
+                        if (splitIndex === -1) {
+                            thinkingVal = state.writingBuffer;
+                            proseVal = "";
+                        }
+                        
+                        if (state.activeChapterIndex === writingChapterIndex) {
+                            targetTextarea.value = proseVal;
+                            if (typeof window.smartScrollToBottom === 'function') {
+                                window.smartScrollToBottom(targetTextarea, false);
+                            } else {
+                                targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                            }
+                            
+                            // Update thinking preview real-time
+                            const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                            const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                            if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                                thinkingPreview.classList.remove('hidden');
+                                thinkingPreviewText.textContent = thinkingVal;
+                            }
+                        }
+                    } else {
+                        targetTextarea.value += delta;
+                        if (typeof window.smartScrollToBottom === 'function') {
+                            window.smartScrollToBottom(targetTextarea, false);
+                        } else {
+                            targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                        }
+                    }
                 }
-                window.updateAgentStreamOutput(stage, delta);
+                window.updateAgentStreamOutput(stage, delta, 'content');
             },
             (msg) => {
                 failed = true;
@@ -250,19 +314,51 @@ export async function writeAllChaptersSequentially(userPrompt) {
         
         await new Promise((resolve) => {
             if (el.editorProse) el.editorProse.value = '';
+            state.writingBuffer = "";
             window.streamAPI(
                 '/api/agent/write-chapter',
                 { novel_id: state.currentNovelId, chapter_index: chapterIndex },
                 (delta) => {
-                    window.updateAgentStreamOutput('writer', delta);
+                    window.updateAgentStreamOutput('writer', delta, 'thinking');
                 },
                 (delta) => {
-                    // 檢查是否仍為當前寫作的章節，防止切換後的串流內容寫入錯誤位置
-                    if (el.editorProse && state.currentlyWritingChapterIndex === chapterIndex) {
-                        el.editorProse.value += delta;
-                        el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                    state.writingBuffer = (state.writingBuffer || "") + delta;
+                    
+                    let proseVal = state.writingBuffer;
+                    let thinkingVal = "";
+                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                    let splitIndex = -1;
+                    for (const sw of specialWords) {
+                        const idx = state.writingBuffer.indexOf(sw);
+                        if (idx !== -1) {
+                            splitIndex = idx;
+                            thinkingVal = state.writingBuffer.substring(0, idx).trim();
+                            proseVal = state.writingBuffer.substring(idx + sw.length).trim();
+                            break;
+                        }
                     }
-                    window.updateAgentStreamOutput('writer', delta);
+                    if (splitIndex === -1) {
+                        thinkingVal = state.writingBuffer;
+                        proseVal = "";
+                    }
+                    
+                    if (el.editorProse && state.activeChapterIndex === chapterIndex) {
+                        el.editorProse.value = proseVal;
+                        if (typeof window.smartScrollToBottom === 'function') {
+                            window.smartScrollToBottom(el.editorProse, false);
+                        } else {
+                            el.editorProse.scrollTop = el.editorProse.scrollHeight;
+                        }
+                        
+                        // Update thinking preview real-time
+                        const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                        const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                        if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                            thinkingPreview.classList.remove('hidden');
+                            thinkingPreviewText.textContent = thinkingVal;
+                        }
+                    }
+                    window.updateAgentStreamOutput('writer', delta, 'content');
                 },
                 (msg) => {
                     window.updateAgentStreamOutput('writer', `\n[Error: ${msg}]`);

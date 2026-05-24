@@ -1,8 +1,8 @@
 export const state = {
     novels: [],
-    currentNovelId: null,
+    currentNovelId: localStorage.getItem('currentNovelId') || null,
     currentNovelData: null,
-    activeTab: 'worldview', // worldview, characters, plot, writer
+    activeTab: localStorage.getItem('activeTab') || 'worldview', // worldview, characters, plot, writer
     activeChapterIndex: null,
     settingsData: {},
     activeSettingAgent: 'global',
@@ -15,8 +15,11 @@ export const state = {
     // 追蹤當前正在寫作的章節索引，用於防止串流內容寫入錯誤的章節
     currentlyWritingChapterIndex: null,
     
-    // Director pipeline stage control
-    pipelineStages: ['worldview', 'characters', 'plot', 'writer'],
+    // 當前正在操作的大綱卷索引（用於 volume_skeleton 階段）
+    activeVolumeIndex: 1,
+    
+    // Director pipeline stage control（四階段漏斗流）
+    pipelineStages: ['worldview', 'characters', 'plot', 'volume_skeleton', 'foreshadowing_orchestration', 'writer'],
     currentPipelineStageIndex: 0,
     
     // Director execution mode: 一鍵執行模式 vs 一般模式
