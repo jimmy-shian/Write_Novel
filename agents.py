@@ -2338,17 +2338,96 @@ def verify_novel_integrity(novel_id, context):
 """
     return validation_report_str
 
-def run_director_decision(novel_id, current_stage, user_prompt):
+def pre_check_next_agent(novel_id, current_stage):
     """
-    The Director (Copilot) evaluates the current pipeline stage and decides 
-    whether to proceed to the next stage. This enables staged, supervised 
-    generation rather than automatic full pipeline.
+    在總監決定前，先透過程式對當前資料狀態進行基本健康度判斷，並識別即將準備呼叫的下一個 Agent。
+    這可為總監提供極具針對性的引導，預防資料缺失。
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    has_wb = wb and len(wb.get("content", "").strip()) > 100
     
-    Returns a streaming response with the director's decision and reasoning.
-    When in AUTO-EXECUTE mode, the director will also trigger subsequent actions.
+    char = get_latest_characters(novel_id)
+    has_char = char and len(char.get("json_data", "").strip()) > 100
+    
+    plot_data = get_stitched_plot(novel_id)
+    has_plot = plot_data and len(plot_data) > 0
+    
+    chapters = get_all_chapters_latest(novel_id)
+    written_count = len(chapters)
+    
+    suggested_agent = ""
+    status_summary = ""
+    suggestion = ""
+    
+    if current_stage == "init":
+        if has_wb and has_char:
+            suggested_agent = "大綱規劃規劃師 (Plot Planner Agent)"
+            status_summary = "世界觀與角色聖經皆已存在於資料庫中。"
+            suggestion = "🚨 【當前重點】：請重新閱讀完整世界觀，深度查看是否有正確且精細完成各設定細項（如三幕式結構、角色漸進登場策略等）。若無誤請 CONTINUE 進度到 plot；若有缺陷，必須立刻呼叫 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 進行細項修改！"
+        else:
+            suggested_agent = "世界觀架構師 (Story Architect Agent)"
+            status_summary = "世界觀目前為空白。"
+            suggestion = "請做出 CONTINUE 正常流向 worldview 的決策，以便開始規劃底層世界觀。"
+            
+    elif current_stage in ["worldview", "worldview_review", "worldview_go_back"]:
+        suggested_agent = "角色設計師 (Character Designer Agent)"
+        if has_wb:
+            status_summary = f"世界觀設定已就緒（字數：{len(wb.get('content', ''))} 字）。"
+            suggestion = "若評估世界觀架構完整，請做出 CONTINUE 進度到 characters 的決策；若不合格，請 AUTO_REGENERATE target='worldview' 重新生成。"
+        else:
+            status_summary = "⚠️ 警報！資料庫中未檢測到有效世界觀設定！"
+            suggestion = "不可繼續！必須決策 AUTO_REGENERATE target='worldview' 重新規劃世界觀！"
+            
+    elif current_stage in ["characters", "characters_review", "characters_go_back"]:
+        suggested_agent = "大綱規劃師 (Plot Planner Agent)"
+        if not has_wb:
+            status_summary = "⚠️ 警報！缺失上游世界觀資料！"
+            suggestion = "必須決策 GO_BACK_TO_WORLDVIEW 退回補全世界觀。"
+        elif not has_char:
+            status_summary = "⚠️ 警報！資料庫中角色聖經資料為空！"
+            suggestion = "不可繼續！必須決策 AUTO_REGENERATE target='characters' 重新生成角色聖經！"
+        else:
+            status_summary = f"角色聖經已就緒（資料長度：{len(char.get('json_data', ''))} 字符）。"
+            suggestion = "若角色設計滿意，請做出 CONTINUE 進度到 plot 的決策；若需精細修改，請 AUTO_REGENERATE target='characters'。"
+            
+    elif current_stage in ["plot", "plot_review", "plot_go_back"]:
+        suggested_agent = "正文寫作姬 (Novel Writer Agent)"
+        if not has_wb or not has_char:
+            status_summary = "⚠️ 警報！上游世界觀或角色資料不完整！"
+            suggestion = "請做出 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 決策退回修正。"
+        elif not has_plot:
+            status_summary = "⚠️ 警報！資料庫中尚未生成章節大綱！"
+            suggestion = "不可寫作！必須決策 AUTO_REGENERATE target='plot' 重新生成大綱。"
+        else:
+            try:
+                vol_count = len(set(c.get("volume_index", 1) for c in plot_data))
+                status_summary = f"大綱已生成，共 {vol_count} 卷，{len(plot_data)} 章。"
+            except Exception:
+                status_summary = "大綱已生成但解析異常。"
+            suggestion = "請仔細審核下方的情節完整性校驗報告。若無逆天紅線警告，請決策 WRITE_ALL_CHAPTERS 開始寫作；若有嚴重錯誤，必須 GO_BACK_TO_PLOT / AUTO_REGENERATE target='plot' 駁回！"
+            
+    elif current_stage in ["writer", "writer_review"]:
+        suggested_agent = "正文寫作姬 (Novel Writer Agent) / 全書完成"
+        status_summary = f"正文已撰寫 {written_count} 章節。"
+        suggestion = "若已寫正文無明顯漏洞且完成度高，可決策 CONTINUE 或 FINISH；若個別章節存在嚴重問題，可決策 AUTO_REGENERATE target='writer' 並指定卷章號重寫該章。"
+        
+    else:
+        suggested_agent = "系統流程控制"
+        status_summary = "未知或自訂階段。"
+        suggestion = "請根據專案現狀做出最優下一步決策。"
+        
+    return f"""【程式基本判斷結果（總監決策前預檢）】：
+- 🎯 當前階段：{current_stage}
+- 準備呼叫的下一個 Agent：{suggested_agent}
+- 📊 資料庫當前設定狀態：{status_summary}
+- 💡 程式建議總監動作：{suggestion}"""
+
+def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False):
     """
-    # Define stage evaluation prompts with enhanced auto-execution logic
-    STAGE_EVALUATION_PROMPT = """你是 AI 小說創作系統的【創意總監】，負責把控整個小說創作管道的品質與流程。
+    根據總監評估的當前階段，動態生成極簡特化的 system prompt。
+    在早期階段完全剔除下游（如大綱伏筆、正文篇卷等）冗長規則，防範總監模糊焦點。
+    """
+    common_header = """你是 AI 小說創作系統的【創意總監】，負責把控整個小說創作管道的品質與流程。
 ⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容（包含評估回應和JSON指令區塊）。
 
 ## 重要：你的回應將被系統自動解析並執行
@@ -2357,50 +2436,33 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 - 你必須做出【果斷決策】，不可含糊
 
 ## 當前任務評估
-你需要評估目前「{current_stage}」階段完成後的成果，判斷下一步動作。
+你目前正在評估「{current_stage}」階段完成後的成果，判斷下一步動作。
 
-## 當前已完成的工作成果
+## 當前已完成的工作成果（精簡 Context 視圖）
 【世界觀】：{worldbuilding}
 【角色 Bible】：{characters}
 【章節大綱】：{plot}
 【已寫作章節】：{written_chapters}
+"""
 
-## 系統底層結構完整性與情節邏輯校驗報告
-{validation_report}
-
-## 用戶原始創作需求
-{user_prompt}
-
-## 決策準則
-1. **品質閘門（Quality Gate）**：評估當前階段輸出是否完整、連貫、符合創作需求
-2. **邏輯一致性**：檢查各模組之間的設定是否相互矛盾
-3. **進度合理性**：判斷是否應該繼續下一階段，還是應該返回修改
-4. **回溯判斷**：如果後續階段發現前面階段的問題，可以回退修正
-5. **伏筆與篇卷校驗**：若校驗報告中出現 `🔴【伏筆未回收】`（僅在全書完結大綱時會出現）、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】`或 `🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！但若報告中僅出現 `🟡【伏筆暫未收束（深遠鋪陳中）】`，代表這是 1500 章左右大長篇小說正常的跨章節、跨卷慢慢鋪陳與慢慢收尾之合理現象，**你絕對不應該為此擋下大綱或要求退回重寫**。請直接予以放行！
-
-## 可用的 ACTION 指令（嚴格選擇一個）
+    common_footer = """
+## 可點擊可用的 ACTION 指令（嚴格選擇一個）
 
 | ACTION | 用途 | 必要欄位 |
 |--------|------|----------|
 | `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
-| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint`（具體要改進什麼）, `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
+| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
 | `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
 | `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
-| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改的大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
+| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
 | `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
+| `help_worldview` | 請求調閱完整的世界觀詳細設定與結構（因預設為精簡上下文） | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
+| `help_characters` | 請求調閱角色 Bible 完整的詳細 JSON 數據 | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
+| `help_plot` | 請求調閱完整的劇情大綱細部 JSON 數據 | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
 | `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
 | `FINISH` | 全部任務已完成 | 無 |
 
-## 階段流程邏輯提示
-- `init` 階段：檢查世界觀→如果無內容則 CONTINUE 到 worldview；如果有則評估品質
-- `worldview` 階段完成後：CONTINUE 到 characters
-- `characters` 階段完成後：CONTINUE 到 plot
-- `plot` 階段完成後：WRITE_ALL_CHAPTERS（開始寫所有章節）
-- `writer` 階段完成後：FINISH 或 GO_BACK 修正
-- 任何階段如果發現上游問題：使用 GO_BACK_TO_* 回退
-
-## 回應格式（嚴格遵守）
-
+## 回應格式（嚴格遵守，否則解析出錯）
 請用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
 
 ```
@@ -2420,29 +2482,302 @@ def run_director_decision(novel_id, current_stage, user_prompt):
   "action": "CONTINUE",
   "target": "characters",
   "hint": "",
-  "reason": "世界觀設定完整且邏輯一致",
+  "reason": "決策原因說明。若你呼叫了 help_* 調閱，請在 reason 中詳細摘要你在此模組中發現的疑點與想調閱的原因",
   "volume_index": null,
   "chapter_index": null
 }}
 ```
 
-## Auto-Expansion Safety Rule:
-1. Every time a chapter is successfully written or edited, evaluate whether unrecorded characters, turning points, or foreshadowing seeds emerged in the story text.
-2. In this staged pipeline, you must use only the ACTION table above. If the blueprint needs synchronization, choose `GO_BACK_TO_WORLDVIEW`, `GO_BACK_TO_CHARACTERS`, `GO_BACK_TO_PLOT`, or `AUTO_REGENERATE` with a concrete `hint`.
-3. Do not emit unsupported actions such as `INCREMENTAL_UPDATE` in this pipeline decision endpoint; unsupported actions can stop the one-click flow.
+## 重要提醒
+- ⚠️ 重要：所有輸出內容（包含評估回應）必須使用 zh-TW 繁體中文
+- JSON 區塊中的 action 必須是上表列出的值之一
+- 評估要具體、務實，避免空泛的讚美
+- 當大綱品質合格且需要開始寫作時，務必使用 WRITE_ALL_CHAPTERS 而非 CONTINUE
+"""
+
+    if current_stage in ["init", "worldview", "worldview_review", "worldview_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【世界觀設定與底層架構】
+1. 評估世界觀核心設定、魔法系統/法則、世界衝突是否豐富合理。
+2. 檢查三幕式結構是否規劃妥善。
+3. **動態數據調閱**：為了防範 Context 膨脹，我們對下游的大綱與正文做了精簡隱藏。若你發現需要審查世界觀的所有子項細節以決定是否放行，**你必須發出 `help_worldview` 行動指令**，後端將會為你動態加載並回傳完整世界觀說明重新做決策！
+"""
+        if has_wb_and_char_at_init:
+            stage_focus += """
+🔥【創意總監緊急指令 - 強調當前事項重點】：
+當前系統中「世界觀設定」與「角色聖經」均已存在！請你深度並重新閱讀完整世界觀設定，查看是否有正確且精細地完成各個世界觀設定細項（如三幕式起承轉合、關鍵轉折、伏筆種子等）。
+- 如果發現任何設定細項存在邏輯不符、漏洞或需要拋光，你必須立刻決策 `GO_BACK_TO_WORLDVIEW` 或 `GO_BACK_TO_CHARACTERS`（並在 `hint` 中詳細指明需要規劃師修改的細項描述），呼叫細項修改流程！
+- 如果你審查後確認完全無誤、無任何邏輯疏漏，才可以決策 `CONTINUE` 進度到大綱（`plot`）正常流程。請嚴格執行此項評估，拒絕含糊！
+"""
+    elif current_stage in ["characters", "characters_review", "characters_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【角色 Bible 與登場策略】
+1. 評估核心角色的性格特點、動機、背景故事是否生動。
+2. 審查角色漸進登場策略 (progressive_character_plan) 是否合理（是否避免了一開始出場太多角色）。
+3. **動態數據調閱**：下游的大綱伏筆與描述已隱藏。若需要審查全套角色聖經完整 JSON，**你必須發出 `help_characters` 指令**，後端會為你動態加載並回傳完整數據重新決策！
+"""
+    elif current_stage in ["plot", "plot_review", "plot_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【篇卷規劃、章節大綱與情節邏輯】
+1. 這是品質把關的最核心關卡！請依據下方的「校驗報告」判斷大綱邏輯。
+2. **伏筆時序與大綱硬性紅線**：
+   - 若校驗報告中出現 `🔴【伏筆未回收】`（僅在全書完結大綱時會出現）、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】` 或 `🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！
+   - 若報告中僅出現 `🟡【伏筆暫未收束（深遠鋪陳中）】`，代表這是大長篇小說正常的跨章節跨卷慢慢鋪陳與慢慢收尾之合理現象，**你絕對不應該為此擋下大綱或要求退回重寫**。請直接予以放行！
+3. **動態數據調閱**：為了防止大綱 Context 膨脹，我們只提供了基本校驗報告。若你發現自己需要調閱完整的劇情大綱細部 JSON 數據來查核情節，**你必須發出 `help_plot` 行動指令**，後端會為你動態加載並回傳完整大綱數據重新決策！
+"""
+    elif current_stage in ["writer", "writer_review"]:
+        stage_focus = """
+## 💡 當前審核重點：【正文正篇寫作品質】
+1. 審核正篇小說寫作風格、對話自然度與鋪陳節奏。
+2. 核對已寫正文是否與大綱情節、伏筆種子對齊，有無產生情節衝突。
+3. 若寫作品質合格，請決策 `CONTINUE` 或 `WRITE_ALL_CHAPTERS`；若有嚴重錯誤，請使用 `AUTO_REGENERATE` target=`writer` 指定卷章進行重寫。
+"""
+    else:
+        stage_focus = """
+## 💡 當前審核重點：【常規階段把關】
+1. 檢查目前產出的資料是否合格。若無誤請決策 `CONTINUE`。
+"""
+
+    return common_header + stage_focus + "\n{pre_check}\n\n## 系統底層結構完整性與情節邏輯校驗報告\n{validation_report}\n\n## 用戶原始創作需求\n{user_prompt}\n" + common_footer
+
+def pre_check_next_agent(novel_id, current_stage):
+    """
+    在總監決定前，先透過程式對當前資料狀態進行基本健康度判斷，並識別即將準備呼叫的下一個 Agent。
+    這可為總監提供極具針對性的引導，預防資料缺失。
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    has_wb = wb and len(wb.get("content", "").strip()) > 100
+    
+    char = get_latest_characters(novel_id)
+    has_char = char and len(char.get("json_data", "").strip()) > 100
+    
+    plot_data = get_stitched_plot(novel_id)
+    has_plot = plot_data and len(plot_data) > 0
+    
+    chapters = get_all_chapters_latest(novel_id)
+    written_count = len(chapters)
+    
+    suggested_agent = ""
+    status_summary = ""
+    suggestion = ""
+    
+    if current_stage == "init":
+        if has_wb and has_char:
+            suggested_agent = "大綱規劃規劃師 (Plot Planner Agent)"
+            status_summary = "世界觀與角色聖經皆已存在於資料庫中。"
+            suggestion = "🚨 【當前重點】：請重新閱讀完整世界觀，深度查看是否有正確且精細完成各設定細項（如三幕式結構、角色漸進登場策略等）。若無誤請 CONTINUE 進度到 plot；若有缺陷，必須立刻呼叫 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 進行細項修改！"
+        else:
+            suggested_agent = "世界觀架構師 (Story Architect Agent)"
+            status_summary = "世界觀目前為空白。"
+            suggestion = "請做出 CONTINUE 正常流向 worldview 的決策，以便開始規劃底層世界觀。"
+            
+    elif current_stage in ["worldview", "worldview_review", "worldview_go_back"]:
+        suggested_agent = "角色設計師 (Character Designer Agent)"
+        if has_wb:
+            status_summary = f"世界觀設定已就緒（字數：{len(wb.get('content', ''))} 字）。"
+            suggestion = "若評估世界觀架構完整，請做出 CONTINUE 進度到 characters 的決策；若不合格，請 AUTO_REGENERATE target='worldview' 重新生成。"
+        else:
+            status_summary = "⚠️ 警報！資料庫中未檢測到有效世界觀設定！"
+            suggestion = "不可繼續！必須決策 AUTO_REGENERATE target='worldview' 重新規劃世界觀！"
+            
+    elif current_stage in ["characters", "characters_review", "characters_go_back"]:
+        suggested_agent = "大綱規劃師 (Plot Planner Agent)"
+        if not has_wb:
+            status_summary = "⚠️ 警報！缺失上游世界觀資料！"
+            suggestion = "必須決策 GO_BACK_TO_WORLDVIEW 退回補全世界觀。"
+        elif not has_char:
+            status_summary = "⚠️ 警報！資料庫中角色聖經資料為空！"
+            suggestion = "不可繼續！必須決策 AUTO_REGENERATE target='characters' 重新生成角色聖經！"
+        else:
+            status_summary = f"角色聖經已就緒（資料長度：{len(char.get('json_data', ''))} 字符）。"
+            suggestion = "若角色設計滿意，請做出 CONTINUE 進度到 plot 的決策；若需精細修改，請 AUTO_REGENERATE target='characters'。"
+            
+    elif current_stage in ["plot", "plot_review", "plot_go_back"]:
+        suggested_agent = "正文寫作姬 (Novel Writer Agent)"
+        if not has_wb or not has_char:
+            status_summary = "⚠️ 警報！上游世界觀或角色資料不完整！"
+            suggestion = "請做出 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 決策退回修正。"
+        elif not has_plot:
+            status_summary = "⚠️ 警報！資料庫中尚未生成章節大綱！"
+            suggestion = "不可寫作！必須決策 AUTO_REGENERATE target='plot' 重新生成大綱。"
+        else:
+            try:
+                vol_count = len(set(c.get("volume_index", 1) for c in plot_data))
+                status_summary = f"大綱已生成，共 {vol_count} 卷，{len(plot_data)} 章。"
+            except Exception:
+                status_summary = "大綱已生成但解析異常。"
+            suggestion = "請仔細審核下方的情節完整性校驗報告。若無逆天紅線警告，請決策 WRITE_ALL_CHAPTERS 開始寫作；若有嚴重錯誤，必須 GO_BACK_TO_PLOT / AUTO_REGENERATE target='plot' 駁回！"
+            
+    elif current_stage in ["writer", "writer_review"]:
+        suggested_agent = "正文寫作姬 (Novel Writer Agent) / 全書完成"
+        status_summary = f"正文已撰寫 {written_count} 章節。"
+        suggestion = "若已寫正文無明顯漏洞且完成度高，可決策 CONTINUE 或 FINISH；若個別章節存在嚴重問題，可決策 AUTO_REGENERATE target='writer' 並指定卷章號重寫該章。"
+        
+    else:
+        suggested_agent = "系統流程控制"
+        status_summary = "未知或自訂階段。"
+        suggestion = "請根據專案現狀做出最優下一步決策。"
+        
+    return f"""【程式基本判斷結果（總監決策前預檢）】：
+- 🎯 當前階段：{current_stage}
+- 準備呼叫的下一個 Agent：{suggested_agent}
+- 📊 資料庫當前設定狀態：{status_summary}
+- 💡 程式建議總監動作：{suggestion}"""
+
+def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False):
+    """
+    根據總監評估的當前階段，動態生成極簡特化的 system prompt。
+    在早期階段完全剔除下游（如大綱伏筆、正文篇卷等）冗長規則，防範總監模糊焦點。
+    """
+    common_header = """你是 AI 小說創作系統的【創意總監】，負責把控整個小說創作管道的品質與流程。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容（包含評估回應和JSON指令區塊）。
+
+## 重要：你的回應將被系統自動解析並執行
+- 你的回應末尾必須包含一個 JSON 格式的【執行指令區塊】
+- 系統會解析你的 JSON 指令來決定下一步動作
+- 你必須做出【果斷決策】，不可含糊
+
+## 當前任務評估
+你目前正在評估「{current_stage}」階段完成後的成果，判斷下一步動作。
+
+## 當前已完成的工作成果（精簡 Context 視圖）
+【世界觀】：{worldbuilding}
+【角色 Bible】：{characters}
+【章節大綱】：{plot}
+【已寫作章節】：{written_chapters}
+"""
+
+    common_footer = """
+## 可點擊可用的 ACTION 指令（嚴格選擇一個）
+
+| ACTION | 用途 | 必要欄位 |
+|--------|------|----------|
+| `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
+| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
+| `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
+| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
+| `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
+| `help_worldview` | 請求調閱完整的世界觀詳細設定與結構（因預設為精簡上下文） | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
+| `help_characters` | 請求調閱角色 Bible 完整的詳細 JSON 數據 | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
+| `help_plot` | 請求調閱完整的劇情大綱細部 JSON 數據 | `reason`（為什麼需要調閱此細項，請在此詳細寫下你摘要的問題） |
+| `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
+| `FINISH` | 全部任務已完成 | 無 |
+
+## 回應格式（嚴格遵守，否則解析出錯）
+請用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
+
+```
+【總監評估】
+- 當前階段：「{current_stage}」
+- 完成品質：[優秀/良好/需要修改]
+- 主要發現：[1-3 句具體評估]
+
+【決策理由】
+[簡要說明為什麼選擇這個 ACTION]
+```
+
+然後必須在回應最後輸出以下 JSON 區塊（系統靠此解析）：
+
+```json
+{{
+  "action": "CONTINUE",
+  "target": "characters",
+  "hint": "",
+  "reason": "決策原因說明。若你呼叫了 help_* 調閱，請在 reason 中詳細摘要你在此模組中發現的疑點與想調閱的原因",
+  "volume_index": null,
+  "chapter_index": null
+}}
+```
 
 ## 重要提醒
 - ⚠️ 重要：所有輸出內容（包含評估回應）必須使用 zh-TW 繁體中文
 - JSON 區塊中的 action 必須是上表列出的值之一
 - 評估要具體、務實，避免空泛的讚美
-- 如果發現明顯問題，必須明確指出並使用 AUTO_REGENERATE 或 GO_BACK_TO_* 指令
 - 當大綱品質合格且需要開始寫作時，務必使用 WRITE_ALL_CHAPTERS 而非 CONTINUE
 """
 
+    if current_stage in ["init", "worldview", "worldview_review", "worldview_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【世界觀設定與底層架構】
+1. 評估世界觀核心設定、魔法系統/法則、世界衝突是否豐富合理。
+2. 檢查三幕式結構是否規劃妥善。
+3. **動態數據調閱**：為了防範 Context 膨脹，我們對下游的大綱與正文做了精簡隱藏。若你發現需要審查世界觀的所有子項細節以決定是否放行，**你必須發出 `help_worldview` 行動指令**，後端將會為你動態加載並回傳完整世界觀說明重新做決策！
+"""
+        if has_wb_and_char_at_init:
+            stage_focus += """
+🔥【創意總監緊急指令 - 強調當前事項重點】：
+當前系統中「世界觀設定」與「角色聖經」均已存在！請你深度並重新閱讀完整世界觀設定，查看是否有正確且精細地完成各個世界觀設定細項（如三幕式起承轉合、關鍵轉折、伏筆種子等）。
+- 如果發現任何設定細項存在邏輯不符、漏洞或需要拋光，你必須立刻決策 `GO_BACK_TO_WORLDVIEW` 或 `GO_BACK_TO_CHARACTERS`（並在 `hint` 中詳細指明需要規劃師修改的細項描述），呼叫細項修改流程！
+- 如果你審查後確認完全無誤、無任何邏輯疏漏，才可以決策 `CONTINUE` 進度到大綱（`plot`）正常流程。請嚴格執行此項評估，拒絕含糊！
+"""
+    elif current_stage in ["characters", "characters_review", "characters_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【角色 Bible 與登場策略】
+1. 評估核心角色的性格特點、動機、背景故事是否生動。
+2. 審查角色漸進登場策略 (progressive_character_plan) 是否合理（是否避免了一開始出場太多角色）。
+3. **動態數據調閱**：下游的大綱伏筆與描述已隱藏。若需要審查全套角色聖經完整 JSON，**你必須發出 `help_characters` 指令**，後端會為你動態加載並回傳完整數據重新決策！
+"""
+    elif current_stage in ["plot", "plot_review", "plot_go_back"]:
+        stage_focus = """
+## 💡 當前審核重點：【篇卷規劃、章節大綱與情節邏輯】
+1. 這是品質把關的最核心關卡！請依據下方的「校驗報告」判斷大綱邏輯。
+2. **伏筆時序與大綱硬性紅線**：
+   - 若校驗報告中出現 `🔴【伏筆未回收】`（僅在全書完結大綱時會出現）、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】` 或 `🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！
+   - 若報告中僅出現 `🟡【伏筆暫未收束（深遠鋪陳中）】`，代表這是大長篇小說正常的跨章節跨卷慢慢鋪陳與慢慢收尾之合理現象，**你絕對不應該為此擋下大綱或要求退回重寫**。請直接予以放行！
+3. **動態數據調閱**：為了防止大綱 Context 膨脹，我們只提供了基本校驗報告。若你發現自己需要調閱完整的劇情大綱細部 JSON 數據來查核情節，**你必須發出 `help_plot` 行動指令**，後端會為你動態加載並回傳完整大綱數據重新決策！
+"""
+    elif current_stage in ["writer", "writer_review"]:
+        stage_focus = """
+## 💡 當前審核重點：【正文正篇寫作品質】
+1. 審核正篇小說寫作風格、對話自然度與鋪陳節奏。
+2. 核對已寫正文是否與大綱情節、伏筆種子對齊，有無產生情節衝突。
+3. 若寫作品質合格，請決策 `CONTINUE` 或 `WRITE_ALL_CHAPTERS`；若有嚴重錯誤，請使用 `AUTO_REGENERATE` target=`writer` 指定卷章進行重寫。
+"""
+    else:
+        stage_focus = """
+## 💡 當前審核重點：【常規階段把關】
+1. 檢查目前產出的資料是否合格。若無誤請決策 `CONTINUE`。
+"""
+
+    return common_header + stage_focus + "\n{pre_check}\n\n## 系統底層結構完整性與情節邏輯校驗報告\n{validation_report}\n\n## 用戶原始創作需求\n{user_prompt}\n" + common_footer
+
+def run_director_decision(novel_id, current_stage, user_prompt):
+    """
+    創意總監決策核心（首輪啟動）：
+    結合程式智慧 pre-check、精簡 Context 視圖、當前階段特化 Prompt 與 init 重點強勢引導。
+    """
     context = compile_context(novel_id)
     
     # 💡 呼叫程式化完整性與情節邏輯校驗函數，強迫總監直面大綱在數量、世界觀及伏筆上的現實
     validation_report_str = verify_novel_integrity(novel_id, context)
+
+    # 💡 程式智慧裁切：不要將無關的下游大綱等雜亂細項放入，以防範 Context 膨脹並避免總監評估模糊焦點！
+    effective_worldbuilding = context["worldbuilding"]
+    effective_characters = context["characters"]
+    effective_plot = context["plot"]
+    effective_written_chapters = context["written_chapters"]
+    
+    if current_stage in ["init", "worldview", "worldview_review", "worldview_go_back"]:
+        effective_plot = "（大綱尚未規劃，隱藏大綱詳細數據，防止模糊焦點）"
+        effective_written_chapters = "（正文寫作未開始，隱藏正文數據）"
+        if current_stage in ["worldview", "worldview_review", "worldview_go_back"]:
+            effective_characters = "（角色設計前，隱藏角色 Bible，避免干擾世界觀結構把控）"
+            
+    elif current_stage in ["characters", "characters_review", "characters_go_back"]:
+        effective_plot = "（大綱尚未規劃，隱藏大綱詳細設定，避免角色評審模糊焦點）"
+        effective_written_chapters = "（正文寫作未開始，隱藏正文數據）"
+
+    # 💡 檢測是否為 init 階段且世界觀與角色皆已存在
+    wb_data = get_latest_worldbuilding(novel_id)
+    char_data = get_latest_characters(novel_id)
+    has_wb = wb_data and len(wb_data.get("content", "").strip()) > 100
+    has_char = char_data and len(char_data.get("json_data", "").strip()) > 100
+    
+    has_wb_and_char_at_init = (current_stage == "init" and has_wb and has_char)
+
+    # 💡 調用程式預檢，取得當前 Agent 預判及資料就緒狀況
+    pre_check_str = pre_check_next_agent(novel_id, current_stage)
 
     # Determine next stage label
     stage_labels = {
@@ -2453,12 +2788,16 @@ def run_director_decision(novel_id, current_stage, user_prompt):
     }
     current_label = stage_labels.get(current_stage, current_stage)
     
-    prompt_content = STAGE_EVALUATION_PROMPT.format(
+    # 💡 獲取當前階段特化精簡 Prompt
+    stage_prompt_template = get_simplified_director_prompt(current_stage, has_wb_and_char_at_init)
+    
+    prompt_content = stage_prompt_template.format(
         current_stage=current_label,
-        worldbuilding=context["worldbuilding"] if context["worldbuilding"] != "No worldview defined yet." else "（尚無世界觀）",
-        characters=context["characters"] if context["characters"] != "No characters designed yet." else "（尚無角色）",
-        plot=context["plot"] if context["plot"] != "No plot chapters designed yet." else "（尚無大綱）",
-        written_chapters=context["written_chapters"],
+        worldbuilding=effective_worldbuilding if effective_worldbuilding != "No worldview defined yet." else "（尚無世界觀）",
+        characters=effective_characters if effective_characters != "No characters designed yet." else "（尚無角色）",
+        plot=effective_plot if effective_plot != "No plot chapters designed yet." else "（尚無大綱）",
+        written_chapters=effective_written_chapters,
+        pre_check=pre_check_str,
         user_prompt=user_prompt,
         validation_report=validation_report_str
     )
@@ -2474,7 +2813,114 @@ def run_director_decision(novel_id, current_stage, user_prompt):
         
     return run_agent_stream(novel_id, "copilot", messages, save_director_decision_callback)
 
-# --- RUNNER ENGINE ---
+def run_director_decision_help(novel_id, current_stage, help_action, help_reason):
+    """
+    後端驅動的動態數據調閱與二次審核流：
+    當總監提出 help_worldview / help_characters / help_plot 時，後端載入完整資料庫內容，
+    結合總監原本的摘要問題（reason），促使 LLM 進行二次精準把關。
+    """
+    help_target = help_action.replace("help_", "")
+    help_labels = {
+        "worldview": "世界觀設定",
+        "characters": "角色聖經",
+        "plot": "章節大綱"
+    }
+    help_label = help_labels.get(help_target, help_target)
+    
+    # 讀取完整設定數據
+    detail_data = ""
+    if help_target == "worldview":
+        wb = get_latest_worldbuilding(novel_id)
+        detail_data = wb["content"] if wb else "（目前世界觀為空）"
+    elif help_target == "characters":
+        char = get_latest_characters(novel_id)
+        detail_data = char["json_data"] if char else "（目前角色聖經為空）"
+    elif help_target == "plot":
+        plot_list = get_stitched_plot(novel_id)
+        detail_data = json.dumps(plot_list, ensure_ascii=False, indent=2) if plot_list else "（目前大綱為空）"
+        
+    from db import get_novel
+    novel = get_novel(novel_id)
+    user_prompt = novel.get("pipeline_prompt", "") if novel else ""
+    
+    help_prompt = f"""【總監數據調閱回傳 - 這是第二次啟動】
+你剛才因以下原因評估「{current_stage}」階段並請求調閱「{help_label}」的完整詳細說明：
+💬 你的問題摘要與調閱理由：{help_reason}
+
+以下是系統為你從資料庫中動態讀取並加載的【{help_label} 完整詳細說明】：
+=========================================
+{detail_data}
+=========================================
+
+請結合你剛才引發此調閱的問題摘要與理由，對這份詳細數據進行最終評審，並重新做出正確的下一步決定（例如 CONTINUE 進入下一階段，或 GO_BACK_* / AUTO_REGENERATE 修正）。
+
+用戶原始創作需求：
+{user_prompt}
+"""
+
+    STAGE_EVALUATION_PROMPT = """你是 AI 小說創作系統的【創意總監】，負責把控整個小說創作管道的品質與流程。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容（包含評估回應和JSON指令區塊）。
+
+## 當前任務評估
+你目前正在處理【總監數據調閱】後的二次審核決策。
+
+## 數據調閱內容與指引
+{help_prompt}
+
+## 可用的 ACTION 指令（嚴格選擇一個，不允許再呼叫 help_*，必須做出實質下一步決定）
+
+| ACTION | 用途 | 必要欄位 |
+|--------|------|----------|
+| `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
+| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
+| `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
+| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
+| `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
+| `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
+| `FINISH` | 全部任務已完成 | 無 |
+
+## 回應格式（嚴格遵守）
+請用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
+
+```
+【總監評估】
+- 當前階段：「{current_stage} (數據調閱二次審查)」
+- 完成品質：[優秀/良好/需要修改]
+- 主要發現：[1-3 句具體評估]
+
+【決策理由】
+[簡要說明為什麼選擇這個 ACTION]
+```
+
+然後必須在回應最後輸出以下 JSON 區塊（系統靠此解析）：
+
+```json
+{{
+  "action": "CONTINUE",
+  "target": "characters",
+  "hint": "",
+  "reason": "二次審查完整設定後，確認無誤放行",
+  "volume_index": null,
+  "chapter_index": null
+}}
+```
+"""
+    prompt_content = STAGE_EVALUATION_PROMPT.format(
+        current_stage=current_stage,
+        help_prompt=help_prompt
+    )
+    
+    messages = [
+        {"role": "system", "content": "你是一位嚴謹的創意總監，負責把控小說創作的品質與邏輯一致性。你的風格是專業、直接、建設性反饋。"},
+        {"role": "user", "content": prompt_content}
+    ]
+    
+    def save_director_decision_callback(nid, text):
+        save_chat_message(nid, "assistant", text)
+        
+    return run_agent_stream(novel_id, "copilot", messages, save_director_decision_callback)
+
 def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
     """
     Main engine that handles streaming chunk processing and automatic DB saving.

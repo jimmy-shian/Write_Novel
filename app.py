@@ -55,6 +55,7 @@ from agents import (
     run_editor_agent,
     run_copilot_chat,
     run_director_decision,
+    run_director_decision_help,
     set_director_auto_execute,
     set_director_user_prompt,
     get_director_auto_execute
@@ -247,6 +248,36 @@ def api_director_decision(
 
     return StreamingResponse(
         run_director_decision(novel_id, current_stage, effective_prompt),
+        media_type="text/event-stream"
+    )
+
+class DirectorHelpPayload(BaseModel):
+    current_stage: str
+    help_action: str
+    help_reason: str
+
+@app.post("/api/novels/{novel_id}/director-decision/help")
+def api_director_decision_help(
+    novel_id: str,
+    payload: DirectorHelpPayload
+):
+    """
+    Backend-driven dynamic context loading endpoint.
+    Retrieves the requested full detail from database, formats a helper prompt,
+    and runs the director's secondary decision streaming.
+    """
+    from db import get_novel
+    novel = get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+        
+    return StreamingResponse(
+        run_director_decision_help(
+            novel_id=novel_id,
+            current_stage=payload.current_stage,
+            help_action=payload.help_action,
+            help_reason=payload.help_reason
+        ),
         media_type="text/event-stream"
     )
 

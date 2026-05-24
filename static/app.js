@@ -6,7 +6,7 @@ import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, r
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage, applySubSectionVisibility, getSubSectionCount } from './renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
-import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators } from './agentProcessing.js';
+import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators, switchToDirectorTab, switchToStreamTab } from './agentProcessing.js';
 import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage, writeAllChaptersSequentially } from './pipeline.js';
 // Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
 window.state = state;
@@ -267,12 +267,25 @@ async function executeDirectorAction(decision, userPrompt) {
         }
         
         case 'GO_BACK_TO_CHARACTERS': {
-            showToast('⚡ 總監指示回頭修改角色設計...');
-            updatePipelineStage('characters', 'running');
-            const charPrompt = hint 
-                ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
-                : userPrompt;
-            await executePipelineStage('characters', charPrompt);
+            // 檢查是否為合併重複角色的請求
+            const mergeResult = mergeDuplicateCharacters(decision.hint);
+            if (mergeResult) {
+                showToast('⚡ 總監指示合併重複角色...');
+                updateDirectorMessage(`🔧 角色合併完成，重新生成角色設定...`);
+                // 合併後繼續重新生成角色
+                updatePipelineStage('characters', 'running');
+                const charPrompt = hint
+                    ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
+                    : userPrompt;
+                await executePipelineStage('characters', charPrompt);
+            } else {
+                showToast('⚡ 總監指示回頭修改角色設計...');
+                updatePipelineStage('characters', 'running');
+                const charPrompt = hint
+                    ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
+                    : userPrompt;
+                await executePipelineStage('characters', charPrompt);
+            }
             break;
         }
         
@@ -314,6 +327,25 @@ async function executeDirectorAction(decision, userPrompt) {
             state.isPipelineRunning = false;
             setTimeout(() => showPipelineProgress(false), 3000);
             await loadNovelDetails(state.currentNovelId);
+            break;
+        }
+        
+        case 'help_worldview':
+        case 'help_characters':
+        case 'help_plot': {
+            const helpTarget = action.replace('help_', '');
+            const helpLabels = {
+                'worldview': '世界觀設定',
+                'characters': '角色聖經',
+                'plot': '章節大綱'
+            };
+            showToast(`🔍 總監請求調閱「${helpLabels[helpTarget]}」詳細數據...`);
+            appendChatMessage('system', `🔍 **[總監調閱數據]** 總監因『${decision.reason || '深度審查需要'}』請求查看完整的${helpLabels[helpTarget]}。正在動態加載並回傳給總監...`);
+            
+            setTimeout(async () => {
+                const nextDecision = await window.runDirectorDecisionHelp(state.activeTab || 'init', action, decision.reason || '');
+                await window.executeDirectorAction(nextDecision, userPrompt);
+            }, 2000);
             break;
         }
         
@@ -2785,6 +2817,8 @@ async function resumePipelineWithDecision(activeTab, parsed, choice) {
 }
 
 async function runDirectorDecision(currentStage, providedUserPrompt = null) {
+    // 總監開始決策時，自動跳轉至總監頁籤 (僅在初始化時觸發 1 次)
+    switchToDirectorTab();
     return new Promise((resolve) => {
         const directorResponseContainer = document.createElement('div');
         directorResponseContainer.className = 'message assistant-msg';
@@ -2891,6 +2925,100 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
     });
 }
 
+async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
+    // 總監開始決策時，自動跳轉至總監頁籤
+    switchToDirectorTab();
+    return new Promise((resolve) => {
+        const directorResponseContainer = document.createElement('div');
+        directorResponseContainer.className = 'message assistant-msg director-response';
+        const directorTimestamp = formatTimestamp();
+        directorResponseContainer.innerHTML = `<div class="msg-sender-row"><div class="msg-sender">🎬 AI 總監二次審查中...</div><div class="msg-timestamp">${directorTimestamp}</div></div><div class="msg-content stream-typing"></div>`;
+        el.chatMessagesContainer.appendChild(directorResponseContainer);
+        el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+        
+        const streamTarget = directorResponseContainer.querySelector('.stream-typing');
+        
+        streamAPI(
+            '/api/novels/' + state.currentNovelId + '/director-decision/help',
+            { current_stage: currentStage, help_action: helpAction, help_reason: helpReason },
+            () => {},
+            (delta) => {
+                streamTarget.textContent += delta;
+                el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
+            },
+            (err) => {
+                streamTarget.textContent += `\n[總監連線錯誤: ${err}]`;
+                streamTarget.classList.remove('stream-typing');
+                streamTarget.classList.add('streaming-done');
+            },
+            async () => {
+                // 回覆完成，停止閃爍效果
+                streamTarget.classList.remove('stream-typing');
+                streamTarget.classList.add('streaming-done');
+                
+                const responseText = streamTarget.textContent;
+                const decisionResult = parseDirectorDecisionText(responseText, currentStage);
+                const action = decisionResult.action;
+                
+                // 顯示解析結果的 Toast
+                const actionLabels = {
+                    'CONTINUE': '✅ 繼續下一階段',
+                    'AUTO_REGENERATE': '⚡ 重新生成',
+                    'GO_BACK_TO_WORLDVIEW': '↩️ 回退到世界觀',
+                    'GO_BACK_TO_CHARACTERS': '↩️ 回退到角色',
+                    'GO_BACK_TO_PLOT': '↩️ 回退到大綱',
+                    'WRITE_ALL_CHAPTERS': '📖 開始寫全書',
+                    'WAIT_USER': '⏸️ 等待確認',
+                    'FINISH': '🎉 任務完成'
+                };
+                if (action && actionLabels[action]) {
+                    showToast(`總監二次決策：${actionLabels[action]}`);
+                }
+                
+                if (state.isAutoExecuteMode) {
+                    resolve(decisionResult);
+                } else {
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'chat-action-buttons';
+                    actionsDiv.innerHTML = `
+                        <button class="btn-chat-action" data-action="accept" title="執行總監建議的動作">✅ 接受總監決策${action ? ` (${actionLabels[action] || action})` : ''}</button>
+                        <button class="btn-chat-action" data-action="continue">▶️ 強制繼續下一階段</button>
+                        <button class="btn-chat-action" data-action="regen">🔄 重新生成此階段</button>
+                        <button class="btn-chat-action" data-action="pause">⏸️ 暫停並手動修改</button>
+                    `;
+                    directorResponseContainer.querySelector('.msg-content').appendChild(actionsDiv);
+                    
+                    actionsDiv.querySelectorAll('.btn-chat-action').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const userChoice = this.dataset.action;
+                            actionsDiv.querySelectorAll('.btn-chat-action').forEach(b => {
+                                b.disabled = true;
+                                b.style.opacity = '0.5';
+                            });
+                            this.style.opacity = '1';
+                            this.style.borderColor = 'var(--primary)';
+                            this.style.fontWeight = '700';
+                            
+                            if (userChoice === 'accept') {
+                                showToast('✅ 用戶接受總監決策');
+                                resolve(decisionResult);
+                            } else if (userChoice === 'continue') {
+                                showToast('▶️ 用戶強制繼續下一階段');
+                                resolve({ ...decisionResult, action: 'CONTINUE', continue: true, shouldPause: false });
+                            } else if (userChoice === 'regen') {
+                                showToast('🔄 用戶指示重新生成');
+                                resolve({ ...decisionResult, action: 'AUTO_REGENERATE', continue: true, regenerate: true, regenerateStage: currentStage, target: currentStage });
+                            } else {
+                                showToast('⏸️ 管線暫停，可手動修改後再繼續');
+                                resolve({ ...decisionResult, action: 'WAIT_USER', continue: false, shouldPause: true });
+                            }
+                        });
+                    });
+                }
+            }
+        );
+    });
+}
 
 // 詢問用戶對於已有內容的處理方式（三選項：加強、重新生成、跳過）
 function askContentAction(stageName, callback) {
@@ -2902,6 +3030,154 @@ function askContentAction(stageName, callback) {
         callback('regenerate');
     } else {
         callback('skip');
+    }
+}
+
+/**
+ * 檢查是否為合併重複角色的請求
+ * 解析 hint 中的重複角色資訊，並執行合併操作
+ * @param {string|null} hint - 總監決策中的 hint
+ * @returns {object|null} 合併結果，包含被刪除和保留的角色資訊，如果不需要合併則返回 null
+ */
+function isMergeDuplicateCharacters(hint) {
+    if (!hint) return false;
+    
+    const lowerHint = hint.toLowerCase();
+    return (
+        lowerHint.includes('重複') ||
+        lowerHint.includes('合併') ||
+        lowerHint.includes('duplicate') ||
+        (lowerHint.includes('角色') && lowerHint.includes('entries'))
+    );
+}
+
+/**
+ * 合併重複角色
+ * 從 hint 中提取重複角色清單，並在 characters_raw 中執行合併
+ * @param {string|null} hint - 總監決策中的 hint
+ * @returns {object|null} 合併結果，包含成功與否和詳細資訊
+ */
+function mergeDuplicateCharacters(hint) {
+    if (!isMergeDuplicateCharacters(hint)) {
+        return null;
+    }
+    
+    try {
+        const charactersData = state.currentNovelData?.characters;
+        if (!charactersData || !charactersData.characters) {
+            console.warn('[mergeDuplicateCharacters] 角色資料為空或格式錯誤');
+            return null;
+        }
+        
+        const characters = charactersData.characters;
+        
+        // 從 hint 中提取角色名稱對（格式：「美娜（第71章與第106章）」）
+        const duplicatePattern = /([^\s（(]+)[（(](第?\d+章[^）)]+)與(第?\d+章[^）)]+)[)）]/g;
+        const duplicates = [];
+        let match;
+        
+        while ((match = duplicatePattern.exec(hint)) !== null) {
+            const charName = match[1];
+            const firstEntry = match[2]; // 例如 "第71章"
+            const secondEntry = match[3]; // 例如 "第106章"
+            duplicates.push({ name: charName, entries: [firstEntry, secondEntry] });
+        }
+        
+        if (duplicates.length === 0) {
+            console.warn('[mergeDuplicateCharacters] 無法從 hint 中解析重複角色資訊:', hint);
+            return null;
+        }
+        
+        const result = {
+            success: true,
+            merged: [],
+            deleted: [],
+            totalMerged: 0
+        };
+        
+        // 對每個重複角色執行合併
+        for (const dup of duplicates) {
+            // 找到所有同名角色
+            const matchingChars = characters.filter(c => c.name === dup.name);
+            
+            if (matchingChars.length < 2) {
+                console.warn(`[mergeDuplicateCharacters] 角色「${dup.name}」在角色 Bible 中沒有重複`);
+                continue;
+            }
+            
+            // 根據 entry_phase 排序，保留第一個（entry_phase 較小的），刪除其餘
+            matchingChars.sort((a, b) => {
+                const phaseA = parseInt(a.entry_phase) || 0;
+                const phaseB = parseInt(b.entry_phase) || 0;
+                return phaseA - phaseB;
+            });
+            
+            const keepChar = matchingChars[0];
+            const deleteChars = matchingChars.slice(1);
+            
+            // 合併 entry_phase（取所有 entry_phase 的並集）
+            const allPhases = new Set();
+            for (const char of matchingChars) {
+                if (char.entry_phase) {
+                    const phases = Array.isArray(char.entry_phase) 
+                        ? char.entry_phase 
+                        : [char.entry_phase];
+                    phases.forEach(p => allPhases.add(p));
+                }
+            }
+            keepChar.entry_phase = Array.from(allPhases);
+            
+            // 合併其他欄位（取最完整的）
+            for (const delChar of deleteChars) {
+                result.deleted.push({
+                    name: delChar.name,
+                    reason: `與第${matchingChars.indexOf(delChar)}個${dup.name}重複`
+                });
+            }
+            
+            result.merged.push({
+                name: dup.name,
+                kept: keepChar,
+                mergedEntries: duplicates.length,
+                combinedPhases: keepChar.entry_phase
+            });
+            result.totalMerged += deleteChars.length;
+        }
+        
+        // 從陣列中刪除重複角色
+        for (const dup of duplicates) {
+            const indicesToRemove = [];
+            let firstFound = false;
+            
+            for (let i = 0; i < characters.length; i++) {
+                if (characters[i].name === dup.name) {
+                    if (firstFound) {
+                        indicesToRemove.push(i);
+                    } else {
+                        firstFound = true;
+                    }
+                }
+            }
+            
+            // 從後往前刪除（避免索引偏移）
+            for (let i = indicesToRemove.length - 1; i >= 0; i--) {
+                characters.splice(indicesToRemove[i], 1);
+            }
+        }
+        
+        // 更新狀態和顯示
+        state.currentNovelData.characters = charactersData;
+        state.currentNovelData.characters_raw = JSON.stringify(charactersData, null, 2);
+        if (el.editorCharactersJson) {
+            el.editorCharactersJson.value = state.currentNovelData.characters_raw;
+        }
+        
+        console.log('[mergeDuplicateCharacters] 合併完成:', result);
+        return result;
+        
+    } catch (error) {
+        console.error('[mergeDuplicateCharacters] 合併失敗:', error);
+        return null;
     }
 }
 
@@ -3539,6 +3815,7 @@ function setupEventListeners() {
     el.navTabs.forEach(tab => {
         tab.addEventListener('click', () => {
             state.activeTab = tab.dataset.tab;
+            localStorage.setItem('activeTab', state.activeTab);
             renderActiveTab();
         });
     });
@@ -3990,6 +4267,9 @@ function setupEventListeners() {
         const text = el.chatInput.value.trim();
         if (!text || !state.currentNovelId) return;
         
+        // 使用者發送訊息時，自動跳轉至總監對話頁籤 (僅在初始化時觸發 1 次)
+        switchToDirectorTab();
+        
         el.chatInput.value = '';
         
         // Render user message bubble locally
@@ -4048,6 +4328,18 @@ function setupEventListeners() {
             await loadNovelDetails(state.currentNovelId);
         }
     });
+    
+    // 綁定右側小說總監對話框的頁籤點擊事件
+    const tabDirectorBtn = document.getElementById('tab-director');
+    const tabStreamBtn = document.getElementById('tab-stream');
+    if (tabDirectorBtn && tabStreamBtn) {
+        tabDirectorBtn.addEventListener('click', () => {
+            switchToDirectorTab();
+        });
+        tabStreamBtn.addEventListener('click', () => {
+            switchToStreamTab();
+        });
+    }
     
     // 8. EXPORT DROPDOWN HANDLERS
     if (el.btnExportDropdown && el.exportDropdownMenu) {
@@ -4140,19 +4432,34 @@ window.addEventListener('DOMContentLoaded', async () => {
     // 1. Load initial novels
     await loadNovels();
     
-    // Auto select first novel if available
-    if (state.novels.length > 0) {
+    // 2. Try to restore last selected novel from localStorage
+    const savedNovelId = localStorage.getItem('currentNovelId');
+    if (savedNovelId) {
+        // Check if the saved novel still exists in the list
+        const novelExists = state.novels.some(n => String(n.id) === String(savedNovelId));
+        if (novelExists) {
+            await loadNovelDetails(savedNovelId);
+        } else {
+            // Saved novel no longer exists, clear the stale localStorage
+            localStorage.removeItem('currentNovelId');
+            // Auto select first novel if available
+            if (state.novels.length > 0) {
+                await loadNovelDetails(state.novels[0].id);
+            }
+        }
+    } else if (state.novels.length > 0) {
+        // No saved novel, auto select first novel if available
         await loadNovelDetails(state.novels[0].id);
     }
     
-    // 2. Setup buttons and tabs handlers
+    // 3. Setup buttons and tabs handlers
     setupEventListeners();
     
-    // 3. Setup execution mode toggle
+    // 4. Setup execution mode toggle
     setupExecutionModeToggle();
     setupStreamLogToggle();
     
-    // 4. 初始化伏筆 Modal 事件
+    // 5. 初始化伏筆 Modal 事件
     initSeedModalEvents();
 });
 /**
@@ -4590,9 +4897,28 @@ window.showCustomPrompt = function(msg, defaultValue = '', title = '輸入內容
 
 window.updateAgentStreamOutput = function(tabName, delta) {
     const terminal = document.getElementById(`stream-output-${tabName}`);
-    if (terminal) {
-        terminal.textContent += delta;
+    if (!terminal) return;
+    
+    // 智能捲動：記錄是否已經綁定捲動事件監聽器
+    if (!terminal._smartScrollInitialized) {
+        terminal._smartScrollInitialized = true;
+        terminal._userScrolled = false;
+        
+        // 監聽使用者手動捲動事件
+        terminal.addEventListener('scroll', function() {
+            // 檢查是否接近底部（容差 50px）
+            const isNearBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 50;
+            terminal._userScrolled = !isNearBottom;
+        });
+    }
+    
+    // 追加內容
+    terminal.textContent += delta;
+    
+    // 只有在未手動捲動（已在底部）或首次更新時才自動捲動到底部
+    if (!terminal._userScrolled || terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 50) {
         terminal.scrollTop = terminal.scrollHeight;
+        terminal._userScrolled = false; // 重置狀態
     }
 };
 
@@ -4731,6 +5057,7 @@ window.streamAPI = streamAPI;
 window.renderActiveTab = renderActiveTab;
 window.loadNovelDetails = loadNovelDetails;
 window.runDirectorDecision = runDirectorDecision;
+window.runDirectorDecisionHelp = runDirectorDecisionHelp;
 window.executeDirectorAction = executeDirectorAction;
 window.selectWriterChapter = selectWriterChapter;
 window.parseDirectorDecisionText = parseDirectorDecisionText;
