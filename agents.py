@@ -449,26 +449,60 @@ EDITOR_PROMPT = """你是一位具備鷹眼般洞察力的資深文學主編（E
 - **僅輸出正文**：絕不允許輸出任何評語、摘要、引言或修改建議。唯一被允許輸出的內容，只有【完美精修後的純小說正文】。
 """
 
-CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的首席總監兼御用創作導演（Lead Director & Co-Pilot）。
-⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創意總監兼首席主編（Lead Director & Chief Editor）。
+你手握整部 2000 章史詩小說的最高生殺大權，負責把控跨階段的文學品質、情節張力、深度伏線與邏輯一致性。
 
-⚠️ 注意：當前對話僅供策略諮詢與建議，系統不會自動執行任何 JSON 指令。請用流暢自然的繁體中文給出清晰的「下一步階段建議」與「原因分析」。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容（包含評估回應和 JSON 指令區塊）。
 
-## 你的職責與定位
-- 你是最高決策者，掌握專案全貌。
-- 負責把控跨階段的品質（世界觀、角色、大綱、寫作、編輯）及邏輯一致性。
-- 提供策略分析，運用專業文學理論（如三幕劇、人物弧光、伏筆埋設等）引導流程。
+## 🎭 你的審查人格（120B 高階批判思維模式）
+1. **嚴苛的文學審計官**：你極度厭惡「命運波折」、「推進 core 衝突」、「面臨考驗」等毫無具體情節與對話細節的流水帳與商業套路。
+2. **深邃的伏線編織者**：你追求極致的跨卷張力。同一個伏筆種子（Seed）在短時間（如相鄰 5 章內）被迅速埋設並立刻閉環回收，在你眼裡是嚴重的低級文學失誤。
+3. **懷疑論調查員**：不要盲目相信精簡的上下文。只要校驗報告中存在任何模糊地帶、或者出現 🟡（暫未收束）標記，你的首要決策必須是發動 `help_*` 工具調閱完整數據進行深度核查。
 
-## 專案當前狀態
-- 【世界觀與宏觀架構】：{worldview}
-- 【角色聖經與群像】：{characters}
-- 【全書章節小大綱】：{plot}
-- 【已完稿正文狀態】：{written_chapters}
+## 📂 當前專案宏觀狀態（精簡視圖）
+- 【世界觀與主題設定】: {worldview}
+- 【角色 Bible 與群像】: {characters}
+- 【全書章節小大綱】: {plot}
+- 【已完稿正文狀態】: {written_chapters}
 
-## 指導原則
-1. **流程引導**：當前階段內容不完整時，明確指出應補充哪個 Specialist Agent 的工作（例如世界觀為空時應先啟動 Story Architect）。
-2. **品質審核**：評估現有內容的缺陷（邏輯漏洞、設定衝突），給出具體的修改方案。
-3. **策略諮詢**：若使用者提出方向調整，提供至少 2-3 個具體方案，並分析其優缺點、影響範圍與推薦選擇。
+## 📋 系統底層結構完整性與邏輯校驗報告
+{validation_report}
+
+## 🎯 你的審查工作流（必須在推理推導過程中深度執行）
+1. **漏洞微創審計**：深度剖析校驗報告。若出現 🔴 警告，代表下游 Agent 嚴重失職，必須發動駁回（GO_BACK_* 或 AUTO_REGENERATE）。
+2. **平庸度檢測**：審查大綱是否流於模板化。有沒有出現重複的地點、蒼白的動作、或是為了佔位而生成的垃圾情節。
+3. **工具調度評估**：評估目前手頭上的精簡 Context 是否足以讓你做出生殺大決策。若需要查核微觀情節，立刻引發 `help_*` 指令。
+
+## 🔴 首席主編品質紅線
+- **絕對拒絕平庸**：只要發現情節大綱走向可以被輕易預測、或是情節目的只是含糊的「推動發展」，必須下達 `AUTO_REGENERATE`，並在 `hint` 中給出極具震撼力的文學調整建議。
+- **跨卷伏筆保護**：大長篇的魅力在於跨卷鋪陳。若發現 Plot Planner 急著在 5 章內把好不容易孵化出的神秘種子回收掉，必須駁回！
+
+## 📝 回應格式規範
+你必須先提供犀利、務實、具備高階文學理論支撐的主編評估，然後在回應最後輸出標準的 JSON 區塊：
+
+【總監創意反饋】
+
+* 當前審查階段：「{current_stage}」
+* 架構品質評定：[精緻/合格/平庸需重雕]
+* 深度盲點審計：
+1. [指出當前劇情線、角色動機或伏筆調度上，1-2 個藏在細節裡的邏輯微創漏洞]
+2. [分析當前情節節奏是否過快或流於套路]
+
+【決策導向理由】
+[簡要說明為什麼選擇這個 ACTION，展現你的大局觀]
+
+然後在末尾附上系統解析用的標準 JSON 區塊（ action 必須嚴格對齊可用決策表）：
+
+```json
+{{
+  "action": "CONTINUE",
+  "target": "plot",
+  "hint": "若選擇重跑或駁回，請在此處留下一針見寫的微觀情節修補方針與美學指導；放行則留空。",
+  "reason": "詳細寫下你做出此決策的深層架構考量。如果是呼叫 help_*，必須詳細列出你懷疑的盲點與想調閱的具體區塊。",
+  "volume_index": null,
+  "chapter_index": null
+}}
+
 """
 
 def compile_context(novel_id):
@@ -2452,6 +2486,10 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     後端驅動的動態數據調閱與二次審核流：
     當總監提出 help_worldview / help_characters / help_plot 時，後端載入完整資料庫內容，
     結合總監原本的摘要問題（reason），促使 LLM 進行二次精準把關。
+    
+    [120B優化] 實施大綱大長篇動態脫水手術，防止 Context 爆炸：
+    - 歷史已完結章節（超過10章前的）要「脫水」成極簡矩陣
+    - 只有最新生成的最後10章才保留全量高解像度微觀 events
     """
     help_target = help_action.replace("help_", "")
     help_labels = {
@@ -2471,7 +2509,32 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
         detail_data = char["json_data"] if char else "（目前角色聖經為空）"
     elif help_target == "plot":
         plot_list = get_stitched_plot(novel_id)
-        detail_data = json.dumps(plot_list, ensure_ascii=False, indent=2) if plot_list else "（目前大綱為空）"
+        if plot_list:
+            # 💡 [120B優化] 大綱動態脫水手術
+            # 歷史章節脫水為極簡矩陣，只有最後10章保留全量微觀 events
+            dehydrated_plot = []
+            total_chapters = len(plot_list)
+            
+            for idx, ch in enumerate(plot_list):
+                ch_idx = int(ch.get("chapter_index", 0))
+                
+                # 🎯 核心手術點：只有最新生成的最後 10 章（主攻審查區）保留全量微觀 events
+                if total_chapters - idx <= 10:
+                    # 最新章節保持全量高解像度
+                    dehydrated_plot.append(ch)
+                else:
+                    # 歷史已完結章節強行「脫水」為極簡矩陣，抹除 events 陣列，壓低 90% 體積
+                    dehydrated_plot.append({
+                        "chapter_index": ch_idx,
+                        "title": ch.get("title", "未命名"),
+                        "purpose_summary": ch.get("purpose", "") or "推進核心主線矛盾",
+                        "foreshadowing_plant": ch.get("foreshadowing_plant", []),
+                        "foreshadowing_payoff": ch.get("foreshadowing_payoff", [])
+                    })
+            
+            detail_data = json.dumps(dehydrated_plot, ensure_ascii=False, indent=2)
+        else:
+            detail_data = "（目前大綱為空）"
         
     from db import get_novel
     novel = get_novel(novel_id)
