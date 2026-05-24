@@ -149,7 +149,7 @@ export async function executePipelineStage(stage, userPrompt) {
             endpoint,
             body,
             (delta) => {
-                // onThinking – not used here
+                window.updateAgentStreamOutput(stage, delta);
             },
             (delta) => {
                 // 檢查是否仍為當前寫作的章節，防止用戶切換後的串流內容寫入錯誤位置
@@ -157,11 +157,13 @@ export async function executePipelineStage(stage, userPrompt) {
                     targetTextarea.value += delta;
                     targetTextarea.scrollTop = targetTextarea.scrollHeight;
                 }
+                window.updateAgentStreamOutput(stage, delta);
             },
             (msg) => {
                 failed = true;
                 state.isPipelineRunning = false;
                 state.currentlyWritingChapterIndex = null;
+                window.updateAgentStreamOutput(stage, `\n[Error: ${msg}]`);
                 showToast(`${stage} Agent 執行失敗: ${msg}`);
                 updatePipelineStage(stage, 'error');
                 hideAgentProcessingIndicator(stage);
@@ -242,25 +244,36 @@ export async function writeAllChaptersSequentially(userPrompt) {
         state.activeChapterIndex = chapterIndex;
         state.currentlyWritingChapterIndex = chapterIndex; // 標記正在寫作此章節
         window.renderActiveTab();
+        
+        // Show processing indicator with terminal log for the writer stage
+        showAgentProcessingIndicator('writer', `Chapter Writer (第 ${chapterIndex} 章寫作中)`);
+        
         await new Promise((resolve) => {
             if (el.editorProse) el.editorProse.value = '';
             window.streamAPI(
                 '/api/agent/write-chapter',
                 { novel_id: state.currentNovelId, chapter_index: chapterIndex },
-                () => {},
+                (delta) => {
+                    window.updateAgentStreamOutput('writer', delta);
+                },
                 (delta) => {
                     // 檢查是否仍為當前寫作的章節，防止切換後的串流內容寫入錯誤位置
                     if (el.editorProse && state.currentlyWritingChapterIndex === chapterIndex) {
                         el.editorProse.value += delta;
                         el.editorProse.scrollTop = el.editorProse.scrollHeight;
                     }
+                    window.updateAgentStreamOutput('writer', delta);
                 },
                 (msg) => {
+                    window.updateAgentStreamOutput('writer', `\n[Error: ${msg}]`);
                     showToast(`第 ${chapterIndex} 章寫作失敗: ${msg}`);
                     state.currentlyWritingChapterIndex = null;
+                    hideAgentProcessingIndicator('writer');
+                    resolve();
                 },
                 async () => {
                     state.currentlyWritingChapterIndex = null;
+                    hideAgentProcessingIndicator('writer');
                     await window.loadNovelDetails(state.currentNovelId);
                     resolve();
                 }
@@ -275,6 +288,11 @@ export async function writeAllChaptersSequentially(userPrompt) {
                 await window.executeDirectorAction(chapterDecision, userPrompt);
                 return;
             }
+            if (chapterDecision.action === 'CONTINUE' && (chapterDecision.target === 'plot' || chapterDecision.target === '章節大綱')) {
+                showToast('📋 總監評估後指示：當前批次已完成，繼續生成下一階段章節大綱...');
+                await window.executeDirectorAction(chapterDecision, userPrompt);
+                return;
+            }
             if (chapterDecision.action === 'WAIT_USER') {
                 showToast('⏸️ 總監要求暫停，請確認後繼續');
                 state.isPipelineRunning = false;
@@ -282,6 +300,30 @@ export async function writeAllChaptersSequentially(userPrompt) {
             }
         }
     }
+    
+    // 檢查是否還有未規劃的篇卷 (滾動大綱規劃)
+    const volumes = state.currentNovelData?.volumes || [];
+    let hasUnplannedVolumes = false;
+    try {
+        hasUnplannedVolumes = volumes.some(v => {
+            if (!v.chapters_outline) return true;
+            const parsed = JSON.parse(v.chapters_outline);
+            return !Array.isArray(parsed) || parsed.length === 0;
+        });
+    } catch (err) {
+        console.error('Error checking unplanned volumes:', err);
+        hasUnplannedVolumes = volumes.some(v => !v.chapters_outline);
+    }
+
+    if (hasUnplannedVolumes && state.isPipelineRunning) {
+        updateDirectorMessage('📋 偵測到仍有未規劃大綱的篇卷，即將全自動啟動下一階段大綱規劃與伏筆對齊流程...');
+        showToast('📋 偵測到未完篇卷，即將開始規劃下一波章節大綱...');
+        updatePipelineStage('writer', 'done');
+        updatePipelineStage('plot', 'running');
+        await executePipelineStage('plot', userPrompt);
+        return;
+    }
+    
     // 全部章節寫作完成
     updatePipelineStage('writer', 'done');
     updateDirectorMessage('🎉 全書撰寫完畢！正在召開 AI 圓桌論壇...');

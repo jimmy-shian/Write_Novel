@@ -166,6 +166,44 @@ async function executeDirectorAction(decision, userPrompt) {
     updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
     switch (action) {
+        case 'LOCAL_ALIGN_VOLUME': {
+            const volIdx = decision.volume_index || 1;
+            showToast(`⚡ 總監指示執行第 ${volIdx} 卷大綱的 JIT 微創校準對齊...`);
+            updatePipelineStage('plot', 'running');
+            updateDirectorMessage(`⚡ 正在對齊第 ${volIdx} 卷大綱...`);
+            
+            const success = await window.alignVolume(volIdx);
+            
+            if (state.isPipelineRunning) {
+                if (success) {
+                    updateDirectorMessage('🔄 局部校準對齊成功，重新評估創作現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 局部對齊失敗，重新回退總監評估中...');
+                }
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+        
+        case 'INCREMENTAL_INSERT_PLOT': {
+            const insertIdx = decision.insert_after_index ?? 0;
+            const enhancedPrompt = hint || '在指定位置補足缺失伏筆';
+            showToast(`⚡ 總監指示在第 ${insertIdx + 1} 章後增量補設伏筆...`);
+            updatePipelineStage('plot', 'running');
+            updateDirectorMessage(`⚡ 正在增量插入第 ${insertIdx + 1} 章後的大綱...`);
+            
+            await executeIncrementalUpdate('plot_chapter', {
+                hint: enhancedPrompt,
+                insert_after_index: insertIdx
+            });
+            
+            if (state.isPipelineRunning) {
+                updateDirectorMessage('🔄 增量大綱插入完成，重新評估創作現狀中...');
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+
         case 'CONTINUE': {
             const target = decision.target || '';
             if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
@@ -2202,6 +2240,7 @@ async function executeIncrementalUpdate(target, params) {
         case 'foreshadowing_seeds':
             // 新增伏筆種子
             showToast("🌱 增量新增伏筆種子...");
+            showAgentProcessingIndicator('worldview', 'Story Architect (增量新增伏筆種子)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-architect',
@@ -2210,15 +2249,23 @@ async function executeIncrementalUpdate(target, params) {
                         target_section: 'foreshadowing_seeds',
                         user_hint: user_hint || params.hint || '新增一個伏筆'
                     },
-                    null,
+                    (delta) => {
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
                     (delta) => {
                         if (el.editorWorldview) {
                             el.editorWorldview.value += delta;
                         }
+                        window.updateAgentStreamOutput('worldview', delta);
                     },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('worldview');
+                    },
                     async () => {
                         showToast("伏筆種子新增完成");
+                        hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2228,6 +2275,7 @@ async function executeIncrementalUpdate(target, params) {
         case 'three_act_structure':
             // 更新三幕式結構
             showToast("📐 增量更新三幕式結構...");
+            showAgentProcessingIndicator('worldview', 'Story Architect (增量更新三幕式結構)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-architect',
@@ -2236,15 +2284,23 @@ async function executeIncrementalUpdate(target, params) {
                         target_section: 'three_act_structure',
                         user_hint: user_hint || params.hint || '更新三幕式結構'
                     },
-                    null,
+                    (delta) => {
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
                     (delta) => {
                         if (el.editorWorldview) {
                             el.editorWorldview.value += delta;
                         }
+                        window.updateAgentStreamOutput('worldview', delta);
                     },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('worldview');
+                    },
                     async () => {
                         showToast("三幕式結構更新完成");
+                        hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2254,6 +2310,7 @@ async function executeIncrementalUpdate(target, params) {
         case 'character':
             // 修改角色的特定欄位
             showToast("👤 增量更新角色欄位...");
+            showAgentProcessingIndicator('characters', 'Character Designer (增量更新角色欄位)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-character',
@@ -2263,15 +2320,23 @@ async function executeIncrementalUpdate(target, params) {
                         field_name: field_name,
                         user_hint: user_hint || params.hint || '修改角色'
                     },
-                    null,
+                    (delta) => {
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
                     (delta) => {
                         if (el.editorCharactersJson) {
                             el.editorCharactersJson.value += delta;
                         }
+                        window.updateAgentStreamOutput('characters', delta);
                     },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('characters');
+                    },
                     async () => {
                         showToast("角色更新完成");
+                        hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2281,6 +2346,7 @@ async function executeIncrementalUpdate(target, params) {
         case 'new_character':
             // 新增一個新角色
             showToast("➕ 新增角色...");
+            showAgentProcessingIndicator('characters', 'Character Designer (新增角色)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-character',
@@ -2290,15 +2356,23 @@ async function executeIncrementalUpdate(target, params) {
                         field_name: null,
                         user_hint: user_hint || params.hint || '新增一個新角色'
                     },
-                    null,
+                    (delta) => {
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
                     (delta) => {
                         if (el.editorCharactersJson) {
                             el.editorCharactersJson.value += delta;
                         }
+                        window.updateAgentStreamOutput('characters', delta);
                     },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('characters');
+                    },
                     async () => {
                         showToast("新角色新增完成");
+                        hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2308,6 +2382,7 @@ async function executeIncrementalUpdate(target, params) {
         case 'plot_chapter':
             // 在指定位置插入新章節大綱
             showToast("📝 增量插入新章節大綱...");
+            showAgentProcessingIndicator('plot', 'Plot Planner (增量插入章節大綱)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-plot',
@@ -2316,15 +2391,23 @@ async function executeIncrementalUpdate(target, params) {
                         insert_after_index: insert_after_index ?? 0,
                         user_hint: user_hint || params.hint || '插入新章節'
                     },
-                    null,
+                    (delta) => {
+                        window.updateAgentStreamOutput('plot', delta);
+                    },
                     (delta) => {
                         if (el.editorPlotJson) {
                             el.editorPlotJson.value += delta;
                         }
+                        window.updateAgentStreamOutput('plot', delta);
                     },
-                    (err) => showToast("Error: " + err),
+                    (err) => {
+                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('plot');
+                    },
                     async () => {
                         showToast("新章節插入完成");
+                        hideAgentProcessingIndicator('plot');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2346,15 +2429,26 @@ async function executeToolCall(tool, params) {
     switch (tool) {
         case 'story-architect':
             showToast("🏗️ 執行故事架構師（全量生成）...");
+            showAgentProcessingIndicator('worldview', 'Story Architect (全量生成)');
             return new Promise((resolve) => {
                 el.editorWorldview.value = '';
                 streamAPI(
                     '/api/agent/story-architect',
                     { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
-                    null,
-                    (delta) => { el.editorWorldview.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
+                    (delta) => {
+                        el.editorWorldview.value += delta;
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('worldview');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2363,15 +2457,26 @@ async function executeToolCall(tool, params) {
             
         case 'character-designer':
             showToast("👥 執行角色設計師（全量生成）...");
+            showAgentProcessingIndicator('characters', 'Character Designer (全量生成)');
             return new Promise((resolve) => {
                 el.editorCharactersJson.value = '';
                 streamAPI(
                     '/api/agent/character-designer',
                     { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
-                    null,
-                    (delta) => { el.editorCharactersJson.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
+                    (delta) => {
+                        el.editorCharactersJson.value += delta;
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('characters');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2380,15 +2485,26 @@ async function executeToolCall(tool, params) {
             
         case 'plot-planner':
             showToast("📋 執行劇情規劃師（全量生成）...");
+            showAgentProcessingIndicator('plot', 'Plot Planner (全量生成)');
             return new Promise((resolve) => {
                 el.editorPlotJson.value = '';
                 streamAPI(
                     '/api/agent/plot-planner',
                     { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
-                    null,
-                    (delta) => { el.editorPlotJson.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('plot', delta);
+                    },
+                    (delta) => {
+                        el.editorPlotJson.value += delta;
+                        window.updateAgentStreamOutput('plot', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('plot');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('plot');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2397,6 +2513,7 @@ async function executeToolCall(tool, params) {
             
         case 'write-chapter':
             showToast(`✍️ 執行章節寫手（第 ${chapter_index} 章）...`);
+            showAgentProcessingIndicator('writer', `Chapter Writer (第 ${chapter_index} 章全量生成)`);
             return new Promise((resolve) => {
                 state.currentlyWritingChapterIndex = chapter_index || 1;
                 state.writingBuffer = "";
@@ -2424,12 +2541,19 @@ async function executeToolCall(tool, params) {
                 streamAPI(
                     '/api/agent/write-chapter',
                     { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
-                    null,
-                    (delta) => { virtualTarget.value += delta; },
+                    (delta) => {
+                        window.updateAgentStreamOutput('writer', delta);
+                    },
+                    (delta) => {
+                        virtualTarget.value += delta;
+                        window.updateAgentStreamOutput('writer', delta);
+                    },
                     (err) => {
+                        window.updateAgentStreamOutput('writer', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
+                        hideAgentProcessingIndicator('writer');
                     },
                     async () => {
                         if (state.writingBuffer.trim().length > 0) {
@@ -2437,6 +2561,7 @@ async function executeToolCall(tool, params) {
                         }
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
+                        hideAgentProcessingIndicator('writer');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2459,16 +2584,27 @@ async function executeAutoRegenerate(target, params) {
         case 'worldview':
         case '世界觀':
             showToast("🔄 重新生成世界觀...");
+            showAgentProcessingIndicator('worldview', 'Story Architect (重新生成)');
             return new Promise((resolve) => {
                 el.editorWorldview.value = '';
                 const prompt = hint || "請重新設計世界觀";
                 streamAPI(
                     '/api/agent/story-architect',
                     { novel_id: state.currentNovelId, user_prompt: prompt },
-                    null,
-                    (delta) => { el.editorWorldview.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
+                    (delta) => {
+                        el.editorWorldview.value += delta;
+                        window.updateAgentStreamOutput('worldview', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('worldview');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2478,16 +2614,27 @@ async function executeAutoRegenerate(target, params) {
         case 'characters':
         case '角色':
             showToast("🔄 重新生成角色設計...");
+            showAgentProcessingIndicator('characters', 'Character Designer (重新生成)');
             return new Promise((resolve) => {
                 el.editorCharactersJson.value = '';
                 const prompt = hint || "請重新設計角色";
                 streamAPI(
                     '/api/agent/character-designer',
                     { novel_id: state.currentNovelId, user_prompt: prompt },
-                    null,
-                    (delta) => { el.editorCharactersJson.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
+                    (delta) => {
+                        el.editorCharactersJson.value += delta;
+                        window.updateAgentStreamOutput('characters', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('characters');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -2497,16 +2644,27 @@ async function executeAutoRegenerate(target, params) {
         case 'plot':
         case '章節大綱':
             showToast("🔄 重新生成章節大綱...");
+            showAgentProcessingIndicator('plot', 'Plot Planner (重新生成)');
             return new Promise((resolve) => {
                 el.editorPlotJson.value = '';
                 const prompt = hint || "請重新規劃章節大綱";
                 streamAPI(
                     '/api/agent/plot-planner',
                     { novel_id: state.currentNovelId, user_prompt: prompt },
-                    null,
-                    (delta) => { el.editorPlotJson.value += delta; },
-                    (err) => showToast("Error: " + err),
+                    (delta) => {
+                        window.updateAgentStreamOutput('plot', delta);
+                    },
+                    (delta) => {
+                        el.editorPlotJson.value += delta;
+                        window.updateAgentStreamOutput('plot', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('plot');
+                    },
                     async () => {
+                        hideAgentProcessingIndicator('plot');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -3115,7 +3273,7 @@ function runFullPipeline(userPrompt) {
                     if (director2.action === 'GO_BACK_TO_WORLDVIEW') {
                         // 總監指示回到世界觀重新設計
                         showToast("⚡ 總監指示：需要回頭修改世界觀設定");
-                        await handleGoBack('worldview');
+                        await handleGoBack('worldview', director2.hint, director2.volume_index, director2.chapter_index);
                         return;
                     }
                     
@@ -3553,6 +3711,67 @@ function setupEventListeners() {
             .catch(() => showToast('新增角色失敗'));
     });
     
+    // Dynamic Volume Chapter calculation helpers
+    window.getVolumeChapterRangeJS = function(volIdx) {
+        const volumes = state.currentNovelData?.volumes || [];
+        let startCh = 1;
+        // 確保按 volume_index 升序排序計算
+        const sortedVols = [...volumes].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
+        for (let i = 0; i < sortedVols.length; i++) {
+            const v = sortedVols[i];
+            const vIdx = parseInt(v.volume_index);
+            const count = parseInt(v.chapter_count) || 50;
+            const endCh = startCh + count - 1;
+            if (vIdx === volIdx) {
+                return { start: startCh, end: endCh, count: count };
+            }
+            startCh = endCh + 1;
+        }
+        // Fallback if not found or empty volumes
+        if (sortedVols.length > 0) {
+            const lastVol = sortedVols[sortedVols.length - 1];
+            const lastVolIdx = parseInt(lastVol.volume_index);
+            const lastRange = getVolumeChapterRangeJS(lastVolIdx);
+            const defaultCount = parseInt(lastVol.chapter_count) || 50;
+            const diff = volIdx - lastVolIdx;
+            const start = lastRange.end + (diff - 1) * defaultCount + 1;
+            return { start: start, end: start + defaultCount - 1, count: defaultCount };
+        }
+        return {
+            start: (volIdx - 1) * 50 + 1,
+            end: volIdx * 50,
+            count: 50
+        };
+    };
+
+    window.getChapterVolumeIndexJS = function(cIdx) {
+        const volumes = state.currentNovelData?.volumes || [];
+        let startCh = 1;
+        const sortedVols = [...volumes].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
+        for (let i = 0; i < sortedVols.length; i++) {
+            const v = sortedVols[i];
+            const count = parseInt(v.chapter_count) || 50;
+            const endCh = startCh + count - 1;
+            if (cIdx >= startCh && cIdx <= endCh) {
+                return parseInt(v.volume_index);
+            }
+            startCh = endCh + 1;
+        }
+        
+        // Fallback: 如果超出已規劃卷的最末章節，則往後延伸
+        if (sortedVols.length > 0) {
+            const lastVol = sortedVols[sortedVols.length - 1];
+            const lastVolIdx = parseInt(lastVol.volume_index);
+            const lastRange = getVolumeChapterRangeJS(lastVolIdx);
+            if (cIdx > lastRange.end) {
+                const defaultCount = parseInt(lastVol.chapter_count) || 50;
+                const diff = Math.floor((cIdx - lastRange.end - 1) / defaultCount) + 1;
+                return lastVolIdx + diff;
+            }
+        }
+        return Math.floor((cIdx - 1) / 50) + 1;
+    };
+
     // Add Chapter to specific Volume helper (Volume-aware chapter creation)
     window.addChapterToVolume = async function(volIdx) {
         if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
@@ -3560,25 +3779,28 @@ function setupEventListeners() {
         let plotData = state.currentNovelData?.plot || { chapters: [] };
         if (!plotData.chapters) plotData.chapters = [];
         
+        // 使用動態篇卷計算
+        const range = getVolumeChapterRangeJS(volIdx);
+        
         // Find all chapters belonging to volIdx
         const volChapters = plotData.chapters.filter(c => {
             const cIdx = parseInt(c.chapter_index);
-            return !isNaN(cIdx) && Math.floor((cIdx - 1) / 50) + 1 === volIdx;
+            return !isNaN(cIdx) && getChapterVolumeIndexJS(cIdx) === volIdx;
         });
         
         let nextIdx;
         if (volChapters.length > 0) {
             const maxChIdx = Math.max(...volChapters.map(c => parseInt(c.chapter_index) || 0));
             nextIdx = maxChIdx + 1;
-            if (nextIdx > volIdx * 50) {
-                showToast(`⚠️ 本卷 (VOL. ${volIdx}) 的章節數已達上限 (50章)，無法新增更多章節。`);
+            if (nextIdx > range.end) {
+                showToast(`⚠️ 本卷 (VOL. ${volIdx}) 的章節數已達上限 (${range.count}章)，無法新增更多章節。`);
                 return;
             }
         } else {
-            nextIdx = (volIdx - 1) * 50 + 1;
+            nextIdx = range.start;
         }
         
-        const chIdxInVol = ((nextIdx - 1) % 50) + 1;
+        const chIdxInVol = nextIdx - range.start + 1;
         const newChapter = {
             chapter_index: nextIdx,
             title: `第 ${volIdx} 卷 第 ${chIdxInVol} 章故事`,
@@ -3992,8 +4214,11 @@ async function reevaluateAfterRegression(modifiedStage) {
 /**
  * 處理回頭修改的指令
  * @param {string} targetStage - 要回頭修改的階段
+ * @param {string|null} hint - 總監的指示，若為空則會向總監詢問
+ * @param {number|null} volume_index - 與特定卷相關的索引，可選
+ * @param {number|null} chapter_index - 與特定章相關的索引，可選
  */
-async function handleGoBack(targetStage) {
+async function handleGoBack(targetStage, hint = null, volume_index = null, chapter_index = null) {
     const stageLabels = {
         'worldview': '世界觀設定',
         'characters': '角色設計',
@@ -4009,14 +4234,18 @@ async function handleGoBack(targetStage) {
     
     // 根據目標階段觸發相應的修改流程
     switch (targetStage) {
-        case 'worldview':
-            // 詢問總監需要修改什麼
-            const worldviewDecision = await runDirectorDecision('worldview_go_back');
-            if (worldviewDecision.hint) {
+        case 'worldview': {
+            let effectiveHint = hint;
+            if (!effectiveHint) {
+                const worldviewDecision = await runDirectorDecision('worldview_go_back');
+                effectiveHint = worldviewDecision.hint;
+            }
+            if (effectiveHint) {
+                showToast("🔮 正在對世界觀進行局部精細修改...");
                 // 根據總監提示修改世界觀
                 streamAPI(
                     '/api/agent/story-architect',
-                    { novel_id: state.currentNovelId, user_prompt: `請根據以下指示修改世界觀：\n\n${worldviewDecision.hint}\n\n現有世界觀：\n${state.currentNovelData.worldbuilding}` },
+                    { novel_id: state.currentNovelId, user_prompt: `請根據以下指示修改世界觀：\n\n${effectiveHint}\n\n現有世界觀：\n${state.currentNovelData.worldbuilding || ''}` },
                     () => {},
                     (delta) => {
                         if (el.editorWorldview) {
@@ -4034,20 +4263,39 @@ async function handleGoBack(targetStage) {
                 );
             }
             break;
+        }
             
-        case 'characters':
-            const charactersDecision = await runDirectorDecision('characters_go_back');
-            if (charactersDecision.hint) {
-                startStage2_Characters('characters', charactersDecision.hint);
+        case 'characters': {
+            let effectiveHint = hint;
+            if (!effectiveHint) {
+                const charactersDecision = await runDirectorDecision('characters_go_back');
+                effectiveHint = charactersDecision.hint;
+            }
+            if (effectiveHint) {
+                startStage2_Characters('characters', effectiveHint);
             }
             break;
+        }
             
-        case 'plot':
-            const plotDecision = await runDirectorDecision('plot_go_back');
-            if (plotDecision.hint) {
-                startStage3_Plot(true, plotDecision.hint);
+        case 'plot': {
+            let effectiveHint = hint;
+            if (!effectiveHint) {
+                const plotDecision = await runDirectorDecision('plot_go_back');
+                effectiveHint = plotDecision.hint;
+            }
+            if (effectiveHint) {
+                // 將 volume_index 和 chapter_index 轉化為更明確的引導文字
+                let finalHint = effectiveHint;
+                if (volume_index) {
+                    finalHint = `[第 ${volume_index} 卷] ` + finalHint;
+                }
+                if (chapter_index) {
+                    finalHint = `[第 ${chapter_index} 章] ` + finalHint;
+                }
+                startStage3_Plot(true, finalHint);
             }
             break;
+        }
             
         case 'writer':
             showToast("請手動編輯章節正文，完成後系統將重新評估");
@@ -4104,7 +4352,7 @@ function startStage3_Plot(regenerate = false, hint = null) {
                 
                 if (director3.action === 'GO_BACK_TO_CHARACTERS') {
                     showToast("⚡ 大綱變更需要調整角色...");
-                    await handleGoBack('characters');
+                    await handleGoBack('characters', director3.hint, director3.volume_index, director3.chapter_index);
                     return;
                 }
                 
@@ -4195,13 +4443,13 @@ function startStage4_Writer(regenerate = false) {
                 
                 if (director4.action === 'GO_BACK_TO_PLOT') {
                     showToast("⚡ 正文需要調整大綱...");
-                    await handleGoBack('plot');
+                    await handleGoBack('plot', director4.hint, director4.volume_index, director4.chapter_index);
                     return;
                 }
                 
                 if (director4.action === 'GO_BACK_TO_CHARACTERS') {
                     showToast("⚡ 正文需要調整角色...");
-                    await handleGoBack('characters');
+                    await handleGoBack('characters', director4.hint, director4.volume_index, director4.chapter_index);
                     return;
                 }
             }
@@ -4491,7 +4739,7 @@ window.resumePipelineWithDecision = resumePipelineWithDecision;
 window.alignVolume = async function(volIdx) {
     if (!state.currentNovelId) {
         showToast('請先選擇或建立一個小說專案');
-        return;
+        return false;
     }
     
     showToast(`🚀 開始為第 ${volIdx} 卷進行 JIT 世界觀對齊校準...`);
@@ -4511,27 +4759,31 @@ window.alignVolume = async function(volIdx) {
         }
     }
     
-    streamAPI(
-        `/api/novels/${state.currentNovelId}/volumes/${volIdx}/align`,
-        {},
-        null,
-        (content) => {
-            if (streamOutput) {
-                streamOutput.innerHTML += content;
-                streamOutput.scrollTop = streamOutput.scrollHeight;
+    return new Promise((resolve) => {
+        streamAPI(
+            `/api/novels/${state.currentNovelId}/volumes/${volIdx}/align`,
+            {},
+            null,
+            (content) => {
+                if (streamOutput) {
+                    streamOutput.innerHTML += content;
+                    streamOutput.scrollTop = streamOutput.scrollHeight;
+                }
+            },
+            (error) => {
+                showToast(`⚠️ 第 ${volIdx} 卷對齊失敗: ` + error);
+                if (indicator) indicator.classList.add('hidden');
+                resolve(false);
+            },
+            async () => {
+                showToast(`✓ 第 ${volIdx} 卷大綱對齊與規劃校準完成！`);
+                if (indicator) indicator.classList.add('hidden');
+                await loadNovelDetails(state.currentNovelId);
+                renderPlotTab();
+                resolve(true);
             }
-        },
-        (error) => {
-            showToast(`⚠️ 第 ${volIdx} 卷對齊失敗: ` + error);
-            if (indicator) indicator.classList.add('hidden');
-        },
-        async () => {
-            showToast(`✓ 第 ${volIdx} 卷大綱對齊與規劃校準完成！`);
-            if (indicator) indicator.classList.add('hidden');
-            await loadNovelDetails(state.currentNovelId);
-            renderPlotTab();
-        }
-    );
+        );
+    });
 };
 
 // ==========================================
@@ -4607,13 +4859,31 @@ window.openVolumeEditModal = function(volIdx, title, summary, factions) {
 };
 
 window.deleteVolume = async function(volIdx) {
-    if (!(await showCustomConfirm(`確定要刪除第 ${volIdx} 卷嗎？這將會從資料庫中移除這一卷，但會保留其底下的具體章節大綱。`))) {
+    let plotData = state.currentNovelData?.plot || { chapters: [] };
+    const chapters = plotData.chapters || [];
+    
+    const range = getVolumeChapterRangeJS(volIdx);
+    const startCh = range.start;
+    const endCh = range.end;
+    const volChCount = range.count;
+    
+    const volChapters = chapters.filter(c => {
+        const cIdx = parseInt(c.chapter_index);
+        return !isNaN(cIdx) && cIdx >= startCh && cIdx <= endCh;
+    });
+    
+    let confirmMsg = `確定要刪除第 ${volIdx} 卷嗎？`;
+    if (volChapters.length > 0) {
+        confirmMsg = `⚠️ 警告：第 ${volIdx} 卷內目前含有 ${volChapters.length} 個章節大綱（第 ${startCh} 章至第 ${endCh} 章）。\n\n確定要一併刪除這一卷及其底下的所有章節大綱與正文嗎？此操作無法復原。`;
+    }
+    
+    if (!(await showCustomConfirm(confirmMsg))) {
         return;
     }
 
     try {
         await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${volIdx}`, 'DELETE');
-        showToast(`第 ${volIdx} 卷已刪除`);
+        showToast(`第 ${volIdx} 卷及其章節已刪除`);
         await loadNovelDetails(state.currentNovelId);
         renderPlotTab();
     } catch (e) {
