@@ -206,7 +206,7 @@ STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事架構師（Story Archite
 ## 💡 層級化架構與篇卷規劃（極重要）
 為防止 1500 章的大綱超出提示詞控制極限、避免大語言模型「文字迷失」及前後崩塌，系統採用**分層架構**：
 1. **世界觀與核心命題（頂層）**：設定地理基調、力量層級、多個陣營、哲學主題。
-2. **篇卷層級（篇卷中介層）**：你**不要**直接規劃 1500 個具體章節。你的核心任務是將這 1500 章的宏偉故事劃分為 **10 到 30 個核心大篇卷（Volumes）**。每一卷承載約 50 章的情節，並清晰定義該卷的劇情概要、活躍陣營。
+2. **篇卷層級（篇卷中介層）**：你**不要**直接規劃 1500 個具體章節。你的核心任務是將這 1500 章的宏偉故事劃分為 **10 到 30 個核心大篇卷（Volumes）**。每一卷包含的章節數由你根據情節規模動態規劃（通常為 30 到 100 章，寫在 `chapter_count` 欄位中，確保所有篇卷的章節加總符合 1000-2000 章的預估規模），並清晰定義該卷的劇情概要、活躍陣營、時空坐標與法則。
 3. **微觀章節（底層）**：後續將由 Plot Planner 以 JIT 延遲對齊機制按卷逐次展開。
 
 ## 基礎設定膨脹規格（無上限設定）
@@ -244,8 +244,12 @@ STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事架構師（Story Archite
     {
       "volume_index": 1,
       "title": "篇卷一標題",
-      "summary": "本卷 50 章的核心情節概要與高潮點",
-      "factions": ["本卷活躍主要陣營1", "本卷活躍主要陣營2"]
+      "summary": "本卷的核心情節概要與高潮點",
+      "chapter_count": 50,
+      "factions": ["本卷活躍主要陣營1", "本卷活躍主要陣營2"],
+      "time_timeline": "篇卷內故事時間軸起迄 (例：天啟元年春 - 天啟元年夏)",
+      "sequence_context": "本卷在系列續作或主線情節中的定位 (例：揭開磁帶之謎的開篇階段)",
+      "applicable_rules": ["本卷適用的核心世界法則1", "本卷適用的核心世界法則2"]
     }
   ],
   "foreshadowing_seeds": [
@@ -720,10 +724,26 @@ def run_story_architect(novel_id, user_prompt):
     Runs the Story Architect to generate the novel structure.
     Streams back SSE and automatically saves to DB when done.
     """
-    messages = [
-        {"role": "system", "content": STORY_ARCHITECT_PROMPT},
-        {"role": "user", "content": f"請根據以下靈感構想，設計一部完整的小說架構：\n\n{user_prompt}"}
-    ]
+    is_revision = user_prompt and any(k in user_prompt for k in ["修改世界觀", "指示修改世界觀", "現有世界觀", "回退修改世界觀"])
+    
+    if is_revision:
+        revision_directive = """
+⚠️【重要注意：這是一項世界觀增量修正/退回修改任務】
+你目前正在對現有的世界觀進行局部精細修正與優化，而不是從頭隨意重新生成！
+請務必嚴格遵循以下「防崩塌修正」紅線條款：
+1. **無損保留未要求修改的全部大架構**：必須在回傳的 JSON 中，完整保留原本已經規劃好的「三幕式結構 (three_act_structure)」、「角色登場規劃策略 (progressive_character_plan)」、「篇卷列表 (volumes) 及其 chapter_count」以及大部分「伏筆種子 (foreshadowing_seeds)」，絕不能讓原本已有的完好設定流失或被隨意覆蓋！
+2. **微創手術式修正**：僅針對總監/用戶在指示中提出的具體問題、時間軸瑕疵或設定漏洞，進行局部的精確調整。
+3. **維持 JSON 標準格式**：回傳的 JSON 根結構必須完整無缺，特別是 volumes 陣列的 volume_index 從 1 開始必須連續、無遺失。
+"""
+        messages = [
+            {"role": "system", "content": STORY_ARCHITECT_PROMPT + "\n\n" + revision_directive},
+            {"role": "user", "content": f"請根據以下總監指示，對現有的世界觀設定進行精細的局部增量修改：\n\n{user_prompt}"}
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": STORY_ARCHITECT_PROMPT},
+            {"role": "user", "content": f"請根據以下靈感構想，設計一部完整的小說架構：\n\n{user_prompt}"}
+        ]
     
     def save_callback(nid, text):
         parsed = parse_json_safely(text)
@@ -771,10 +791,26 @@ def run_character_designer(novel_id, user_prompt=None):
         prompt_content += f"用戶對角色的特定要求：\n{user_prompt}\n\n"
     prompt_content += "請設計角色群像。嚴格以 JSON 格式輸出。"
     
-    messages = [
-        {"role": "system", "content": CHARACTER_DESIGNER_PROMPT},
-        {"role": "user", "content": prompt_content}
-    ]
+    is_revision = user_prompt and any(k in user_prompt for k in ["修改角色設定", "重新設計角色", "回退修改角色", "現有角色設定", "指示重新設計角色"])
+    
+    if is_revision:
+        revision_directive = """
+⚠️【重要注意：這是一項角色聖經增量修正/退回修改任務】
+你目前正在對已有的角色設定（Character Bible）進行局部精細修正或增量補充，而不是從頭隨意重新設計！
+請務必嚴格遵循以下「角色保護」紅線條款：
+1. **完整保留已有角色**：必須在回傳的 JSON 中，完整保留原本已經存在的所有角色資料（包括其姓名、地位、性格特質與人物弧線），除非總監/用戶明確要求修改某個角色的某項設定。
+2. **精準局部微調**：僅針對總監/用戶指定的特定角色或特定欄位（如性格、成長弧線、登場時序）進行修改，或者精準地往角色列表中新增一位新配角。
+3. **維持標準 JSON 格式**：回傳的格式必須為完整的 `{"characters": [...]}` 且包含所有已有的與新修改的角色。
+"""
+        messages = [
+            {"role": "system", "content": CHARACTER_DESIGNER_PROMPT + "\n\n" + revision_directive},
+            {"role": "user", "content": prompt_content}
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": CHARACTER_DESIGNER_PROMPT},
+            {"role": "user", "content": prompt_content}
+        ]
     
     def save_callback(nid, text):
         parsed = parse_json_safely(text)
@@ -795,7 +831,7 @@ def run_character_designer(novel_id, user_prompt=None):
             
     return run_agent_stream(novel_id, "character", messages, save_callback)
 
-def run_plot_planner(novel_id, user_prompt=None):
+def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     """
     重構優化版：滾動式 5 章大綱生成器 (Chunk Generator)
     每次生成約 5 個章節大綱，避免一次性生成過多資訊導致上下文超載與幻覺。
@@ -865,6 +901,49 @@ def run_plot_planner(novel_id, user_prompt=None):
             continue
         if _looks_like_placeholder_chapter(ch):
             repair_start_candidates.append(ch_idx)
+
+    # 1.5 檢查是否為大綱修正模式 (Revision Mode)
+    is_revision = False
+    extracted_start_chapter = None
+    
+    if planner_directive:
+        is_revision = True
+    elif user_prompt and any(k in user_prompt for k in ["請根據以下指示重新規劃", "重新規劃大綱", "修改大綱", "退回大綱"]):
+        is_revision = True
+        match = re.search(r'(?:重新規劃大綱|修改大綱|退回大綱)：?\s*\n*(.*?)\n*現有大綱：', user_prompt, re.DOTALL)
+        if match:
+            planner_directive = match.group(1).strip()
+        else:
+            planner_directive = user_prompt
+
+    if is_revision:
+        # 優先正則解析是否有指定 卷 或 章 的序號
+        vol_match = re.search(r'(?:第|volume\s*)\s*(\d+)\s*(?:卷|vol)', (planner_directive or "") + (user_prompt or ""), re.IGNORECASE)
+        ch_match = re.search(r'(?:第|chapter\s*)\s*(\d+)\s*(?:章|ch)', (planner_directive or "") + (user_prompt or ""), re.IGNORECASE)
+        
+        if ch_match:
+            try:
+                extracted_start_chapter = int(ch_match.group(1))
+            except ValueError:
+                pass
+        elif vol_match:
+            try:
+                vol_idx = int(vol_match.group(1))
+                # 依 volumes 表中真實的 chapter_count 動態計算起始章節
+                volumes = db.get_volumes(novel_id)
+                start_ch, _ = db.get_volume_chapter_range(volumes, vol_idx)
+                extracted_start_chapter = start_ch
+            except Exception:
+                pass
+                
+        if extracted_start_chapter is not None:
+            repair_start_candidates.append(extracted_start_chapter)
+        else:
+            # 預設回退至當前大綱最新一個生成批次 (5章大綱) 的起點
+            if existing_chapters:
+                repair_start_candidates.append(max(1, last_chapter_index - 4))
+            else:
+                repair_start_candidates.append(1)
 
     if repair_start_candidates:
         start_chapter = max(1, min(repair_start_candidates))
@@ -2074,7 +2153,7 @@ def verify_novel_integrity(novel_id, context):
         else:
             unused_factions.append(faction)
             
-    faction_usage_rate = (len(used_factions) / len(all_factions) * 100) if all_factions else 100.0
+    faction_usage_rate = (len(used_factions) / len(all_factions) * 100) if all_factions else 0.0
     faction_status = f"陣營/勢力設定使用率：{len(used_factions)}/{len(all_factions)} ({faction_usage_rate:.1f}%)"
     if unused_factions:
         faction_status += f" — ⚠️ 未在大綱中登場的勢力：{unused_factions}"
@@ -2292,10 +2371,10 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 | ACTION | 用途 | 必要欄位 |
 |--------|------|----------|
 | `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
-| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint`（具體要改進什麼） |
-| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容） |
+| `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint`（具體要改進什麼）, `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
 | `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
-| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改的大綱內容） |
+| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改的大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
 | `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
 | `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
 | `FINISH` | 全部任務已完成 | 無 |
@@ -2308,7 +2387,7 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 - `writer` 階段完成後：FINISH 或 GO_BACK 修正
 - 任何階段如果發現上游問題：使用 GO_BACK_TO_* 回退
 
-## 回應格式（嚴格守）
+## 回應格式（嚴格遵守）
 
 請用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
 
@@ -2329,7 +2408,9 @@ def run_director_decision(novel_id, current_stage, user_prompt):
   "action": "CONTINUE",
   "target": "characters",
   "hint": "",
-  "reason": "世界觀設定完整且邏輯一致"
+  "reason": "世界觀設定完整且邏輯一致",
+  "volume_index": null,
+  "chapter_index": null
 }}
 ```
 

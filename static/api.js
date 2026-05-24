@@ -41,58 +41,101 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onDone - 完成回呼（可選）
  */
 export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone) {
-    try {
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        
-        if (!response.ok) {
-            const errText = await response.text();
-            if (typeof onError === 'function') onError(`HTTP 錯誤 ${response.status}: ${errText}`);
-            if (typeof onDone === 'function') onDone();
-            return;
+    const MAX_RETRIES = 2;
+    let attempt = 0;
+
+    async function makeAttempt() {
+        attempt++;
+        const controller = new AbortController();
+        const signal = controller.signal;
+
+        let activityTimer = null;
+        const STALL_TIMEOUT = 60000; // 60 seconds stall timeout
+
+        function resetActivityTimer() {
+            if (activityTimer) clearTimeout(activityTimer);
+            activityTimer = setTimeout(() => {
+                console.warn(`[streamAPI] Stalled! No stream activity for ${STALL_TIMEOUT / 1000}s on ${endpoint}. Aborting attempt ${attempt}...`);
+                controller.abort();
+            }, STALL_TIMEOUT);
         }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-        
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
+
+        // Start initial timer
+        resetActivityTimer();
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: signal
+            });
             
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); 
+            resetActivityTimer(); // Got response headers, reset timer
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`HTTP 錯誤 ${response.status}: ${errText}`);
+            }
             
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || !trimmed.startsWith('data:')) continue;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
                 
-                try {
-                    const dataStr = trimmed.slice(5).trim();
-                    if (dataStr === '[DONE]') continue;
-                    const parsed = JSON.parse(dataStr);
+                resetActivityTimer(); // Got a stream chunk, reset timer
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); 
+                
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data:')) continue;
                     
-                    if (parsed.type === 'thinking') {
-                        if (typeof onThinking === 'function') onThinking(parsed.delta);
-                    } else if (parsed.type === 'content') {
-                        if (typeof onContent === 'function') onContent(parsed.delta);
-                    } else if (parsed.type === 'error') {
-                        if (typeof onError === 'function') onError(parsed.message);
+                    try {
+                        const dataStr = trimmed.slice(5).trim();
+                        if (dataStr === '[DONE]') continue;
+                        const parsed = JSON.parse(dataStr);
+                        
+                        if (parsed.type === 'thinking') {
+                            if (typeof onThinking === 'function') onThinking(parsed.delta);
+                        } else if (parsed.type === 'content') {
+                            if (typeof onContent === 'function') onContent(parsed.delta);
+                        } else if (parsed.type === 'error') {
+                            if (typeof onError === 'function') onError(parsed.message);
+                        }
+                    } catch (e) {
+                        // Ignore JSON parsing errors for partial chunks
                     }
-                } catch (e) {
-                    // Ignore JSON parsing errors for partial chunks
                 }
             }
+            
+            if (activityTimer) clearTimeout(activityTimer);
+
+            if (typeof onDone === 'function') onDone();
+        } catch (err) {
+            if (activityTimer) clearTimeout(activityTimer);
+
+            const isAborted = err.name === 'AbortError';
+            if ((isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || err.message.includes('HTTP 錯誤 5')) && attempt <= MAX_RETRIES) {
+                console.warn(`[streamAPI] Attempt ${attempt} failed or aborted (${err.message}). Retrying in 3 seconds...`);
+                // Wait 3 seconds before retrying
+                await new Promise(r => setTimeout(r, 3000));
+                return makeAttempt();
+            }
+
+            if (typeof onError === 'function') {
+                onError(isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`);
+            }
+            if (typeof onDone === 'function') onDone();
         }
-        if (typeof onDone === 'function') onDone();
-    } catch (err) {
-        if (typeof onError === 'function') onError(`網路連接錯誤: ${err.message}`);
-        if (typeof onDone === 'function') onDone();
     }
+
+    return makeAttempt();
 }
 
 // Expose globally for modules/scripts that rely on window.streamAPI

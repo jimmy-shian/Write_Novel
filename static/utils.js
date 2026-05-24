@@ -434,6 +434,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let target = null;
     let hint = '';
     let reason = '';
+    let volume_index = null;
+    let chapter_index = null;
+    let insert_after_index = null;
     
     // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } ```）
     const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
@@ -444,6 +447,16 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             target = jsonCmd.target || null;
             hint = jsonCmd.hint || jsonCmd.reason || '';
             reason = jsonCmd.reason || '';
+            
+            if (jsonCmd.volume_index !== undefined && jsonCmd.volume_index !== null) {
+                volume_index = parseInt(jsonCmd.volume_index);
+            }
+            if (jsonCmd.chapter_index !== undefined && jsonCmd.chapter_index !== null) {
+                chapter_index = parseInt(jsonCmd.chapter_index);
+            }
+            if (jsonCmd.insert_after_index !== undefined && jsonCmd.insert_after_index !== null) {
+                insert_after_index = parseInt(jsonCmd.insert_after_index);
+            }
         } catch (e) {
             console.warn('Failed to parse Director JSON command:', e);
         }
@@ -461,6 +474,16 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         if (hintMatch) hint = hintMatch[1].trim();
         const reasonMatch = responseText.match(/REASON:\s*([\s\S]*?)(?=```|【|$)/);
         if (reasonMatch) reason = reasonMatch[1].trim();
+        
+        // 嘗試從舊格式文字中正則匹配 volume_index / chapter_index / insert_after_index
+        const volMatch = responseText.match(/volume_index["\s:]+(\d+)/i) || responseText.match(/篇卷序號["\s:]+(\d+)/);
+        if (volMatch) volume_index = parseInt(volMatch[1]);
+        
+        const chMatch = responseText.match(/chapter_index["\s:]+(\d+)/i) || responseText.match(/章節序號["\s:]+(\d+)/);
+        if (chMatch) chapter_index = parseInt(chMatch[1]);
+        
+        const insMatch = responseText.match(/insert_after_index["\s:]+(\d+)/i) || responseText.match(/插入章節後["\s:]+(\d+)/);
+        if (insMatch) insert_after_index = parseInt(insMatch[1]);
     }
     
     // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
@@ -477,7 +500,7 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     }
     
     return { 
-        continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS',
+        continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS' || action === 'LOCAL_ALIGN_VOLUME' || action === 'INCREMENTAL_INSERT_PLOT',
         response: responseText,
         shouldPause: action === 'WAIT_USER',
         action: action,
@@ -485,6 +508,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         hint: hint,
         reason: reason,
         regenerate: action === 'AUTO_REGENERATE',
-        regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null
+        regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null,
+        volume_index: volume_index,
+        chapter_index: chapter_index,
+        insert_after_index: insert_after_index
     };
 }
