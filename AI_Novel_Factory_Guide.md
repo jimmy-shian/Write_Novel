@@ -105,7 +105,103 @@ DEFAULT_ENABLE_THINKING=1
 
 ---
 
-## 🚀 3. 啟動網站方式
+## 🎬 3. 小說創作完整流程
+
+本系統提供 **四階段漸進式大綱生成策略**，從靈感到正文寫作的自動化管線：
+
+### Stage 0：創意啟動
+
+在右側 **Copilot 總監側邊欄** 輸入您的創作想法或需求，系統會：
+1. 分析並理解您的創作方向
+2. 根據現有小說狀態評估下一步
+3. 給出創作決策建議
+
+### Stage 1：前期準備（Worldview → Characters）
+
+| 階段 | 負責 Agent | 輸出內容 |
+|------|------------|----------|
+| 世界觀生成 | Story Architect | 核心主題、衝突設定、力量體系、歷史脈絡 |
+| 角色設計 | Character Designer | 角色 Bible（JSON 格式）、性格/缺陷/動機/成長弧線 |
+
+### Stage 2：宏觀骨架生成（Volume Skeleton）
+
+自動遍歷所有卷生成章節骨架，包含：
+- **卷結構定義**：每卷的標題、摘要、勢力範圍、章節數量
+- **時間軸設定**：卷內的時間線與序列上下文
+- **適用法則**：本卷特有的世界觀規則
+
+### Stage 3：伏筆編織對齊（Foreshadowing Orchestration）
+
+全局伏筆編織整合：
+- 分析並對齊所有卷的伏筆播種
+- 確保伏筆與情節發展的一致性
+- 記錄伏筆鋪墊與回收節點
+
+### Stage 4：微觀大綱展開（Plot Expansion）
+
+滾動式生成詳細章節大綱：
+- 每批 5 章遞進生成
+- 包含標題、目的摘要、情節事件、微觀細節
+- 支援增量和修補式更新
+
+### Stage 5：正文寫作（Chapter Writing）
+
+根據大綱撰寫正文：
+- 支援深度思考模型（120B Nemotron）
+- 可視化思考過程展示
+- 自動保存版本歷史
+
+### Stage 6：精緻編輯（Editing）
+
+對已撰寫的正文進行微調：
+- 文字潤色
+- 風格統一
+- 動作/對話/氛圍強化
+
+### 總監決策循環
+
+Copilot Director 持續監控創作狀態，支援：
+- **CONTINUE**：自動推進下一階段
+- **LOCAL_ALIGN_VOLUME**：單卷 JIT 微創校準
+- **INCREMENTAL_INSERT_PLOT**：增量插入大綱
+- **GO_BACK_TO_***：回退修改世界觀/角色/大綱
+- **AUTO_REGENERATE**：自動重新生成
+
+### 流程圖
+
+```
+runPipeline(userPrompt)
+    │
+    ├─→ runDirectorDecision('init', userPrompt)
+    │       │
+    │       └─→ executeDirectorAction(decision, userPrompt)
+    │               │
+    │               ├─ CONTINUE(target='plot')
+    │               │       │
+    │               │       ├─ Stage 2: generateAllVolumeSkeletons()
+    │               │       │       └─→ 依序執行每卷的卷骨架生成
+    │               │       │
+    │               │       ├─ Stage 3: executePipelineStage('foreshadowing_orchestration')
+    │               │       │       └─→ 全局伏筆編織對齊
+    │               │       │
+    │               │       └─ Stage 4: executePipelineStage('plot')
+    │               │               └─→ 微觀大綱滾動展開
+    │               │
+    │               ├─ LOCAL_ALIGN_VOLUME → 單卷校準對齊
+    │               │
+    │               ├─ INCREMENTAL_INSERT_PLOT → 增量插入大綱
+    │               │
+    │               ├─ GO_BACK_TO_* → 回退修改
+    │               │
+    │               └─ AUTO_REGENERATE → 自動重新生成
+
+自動循環評估（成功/失敗後）:
+    └─ setTimeout(() => runPipeline(userPrompt), 2000)
+```
+
+---
+
+## 🚀 4. 啟動網站方式
 
 ### 步驟 1：安裝依賴套件
 
