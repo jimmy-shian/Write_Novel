@@ -2892,12 +2892,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
             { current_stage: currentStage, user_prompt: userPrompt },
             // onThinking
             (thinkingDelta) => {
-                // Safeguard: only show thinking section if it's not hidden
-                if (thinkingDetails && !thinkingDetails.classList.contains('hidden')) {
-                    thinkingDetails.open = true;
-                    thinkingPre.textContent += thinkingDelta;
-                }
-                // Always show thinking when we receive thinking content
+                // 確保只執行單次追加，徹底解決雙串流問題
                 if (thinkingDetails) {
                     thinkingDetails.classList.remove('hidden');
                     thinkingDetails.open = true;
@@ -5187,179 +5182,108 @@ function getAgentDetails(endpoint) {
     return { name: 'AI Agent', icon: '🤖' };
 }
 
-window.currentActiveStreamCardId = null;
-window.currentStreamCardCreated = false; // 標記是否已創建過卡片
+/**
+ * ==========================================
+ * 單一化核心終端重構
+ * 全面廢除動態卡片生成，改用原生靜態終端
+ * ==========================================
+ */
 
+/**
+ * 串流開始監聽器
+ * 徹底清洗並初始化原生單一終端視窗，不再建立任何動態卡片
+ */
 window.onStreamAPIStart = function(endpoint, body) {
     const container = document.getElementById('stream-content-area');
     if (!container) return;
     
-    // Hide empty placeholder
+    // 1. 隱藏預設的空狀態告示
     const emptyState = container.querySelector('.stream-empty-state');
-    if (emptyState) {
-        emptyState.style.display = 'none';
-    }
+    if (emptyState) emptyState.style.display = 'none';
     
     const details = getAgentDetails(endpoint);
     
-    // 如果已經有活躍卡片，只更新 header 的內容，不要創建新卡片
-    if (window.currentActiveStreamCardId) {
-        const existingCard = document.getElementById(window.currentActiveStreamCardId);
-        if (existingCard) {
-            // 更新 header 資訊（只更新 agent 名稱和狀態）
-            const headerInfo = existingCard.querySelector('.step-agent-info');
-            const statusBadge = existingCard.querySelector('.step-status-badge');
-            if (headerInfo) {
-                headerInfo.innerHTML = `
-                    <span class="step-agent-icon">${details.icon}</span>
-                    <span class="step-agent-name">${details.name}</span>
-                `;
-            }
-            if (statusBadge) {
-                statusBadge.textContent = '🔄 執行中...';
-                statusBadge.classList.remove('completed');
-            }
-            // Scroll to make sure the existing card is visible
-            window.smartScrollToBottom(container, true);
-            return;
-        }
+    // 2. 活化並控制原生的「當前 Agent 標籤」
+    const agentLabel = document.getElementById('stream-agent-label');
+    const agentLabelText = document.getElementById('stream-agent-label-text');
+    if (agentLabel && agentLabelText) {
+        agentLabel.style.display = 'flex'; // 顯示標籤欄
+        agentLabelText.textContent = `當前 Agent: ${details.icon} ${details.name} (🔄 執行中...)`;
     }
     
-    // 否則創建新的卡片（這是第一次或有舊卡片但已經結束）
-    const uniqueId = 'stream-card-' + Date.now();
-    window.currentActiveStreamCardId = uniqueId;
-    window.currentStreamCardCreated = true;
-    
-    const card = document.createElement('div');
-    card.className = 'stream-step-card';
-    card.id = uniqueId;
-    card.innerHTML = `
-        <div class="stream-step-header">
-            <div class="step-agent-info">
-                <span class="step-agent-icon">${details.icon}</span>
-                <span class="step-agent-name">${details.name}</span>
-            </div>
-            <div class="step-status-badge">🔄 執行中...</div>
-        </div>
-        <div class="step-body-container">
-            <div class="step-thinking-box hidden">
-                <div class="step-thinking-title">🧠 思考過程 (enable_thinking)</div>
-                <pre class="step-thinking-body"></pre>
-            </div>
-            <div class="step-content-box hidden">
-                <div class="step-content-title">📝 生成內容</div>
-                <pre class="step-content-body"></pre>
-            </div>
-        </div>
-    `;
-    
-    container.appendChild(card);
-    
-    // Keep only last 5 cards
-    const cards = container.querySelectorAll('.stream-step-card');
-    if (cards.length > 5) {
-        cards[0].remove();
+    // 3. 初始化原生的中央唯一控制終端，清空上一輪的殘留文字
+    const terminal = document.getElementById('stream-output-terminal');
+    if (terminal) {
+        terminal.classList.remove('hidden');
+        terminal.style.display = 'block';
+        terminal.textContent = ''; // 徹底清空，騰出空間給當前任務
     }
     
-    // Scroll container to bottom
-    window.smartScrollToBottom(container, true);
+    // 4. 初始化原生的單一思考視窗，預設隱藏
+    const thinkingStream = document.getElementById('ai-thinking-stream');
+    const thinkingText = document.getElementById('ai-thinking-text');
+    if (thinkingStream && thinkingText) {
+        thinkingStream.classList.add('hidden');
+        thinkingText.textContent = '';
+    }
 };
 
+/**
+ * 串流結束監聽器
+ * 僅將唯一顯示名稱的狀態更新為「已完成」
+ */
 window.onStreamAPIEnd = function(endpoint) {
-    if (window.currentActiveStreamCardId) {
-        const card = document.getElementById(window.currentActiveStreamCardId);
-        if (card) {
-            const badge = card.querySelector('.step-status-badge');
-            if (badge) {
-                badge.textContent = '✓ 已完成';
-                badge.classList.add('completed');
-            }
-        }
+    const details = getAgentDetails(endpoint);
+    const agentLabelText = document.getElementById('stream-agent-label-text');
+    if (agentLabelText) {
+        // 原地更改標題狀態
+        agentLabelText.textContent = `當前 Agent: ${details.icon} ${details.name} (✓ 已完成)`;
     }
-    window.currentActiveStreamCardId = null;
 };
 
 /**
  * 統一的串流輸出函數
- * 同時處理兩種輸出模式：
- * 1. stream-step-card 模式（動態卡片，用於一般 Agent）
- * 2. stream-output-<tabName> 模式（傳統終端模式，用於向後兼容）
+ * 全面重組即時數據分流器，將思考流、正文流精準塞入對應的原生唯一骨架之中
  * 
- * Header 只在第一次創建卡片時產生，之後只修改內容
- *
- * @param {string} tabName   - 目標分頁名稱，例如 'worldview'、'characters'、'plot'、'writer'、'director'
- * @param {string} delta     - 本次要輸出的文字片段
- * @param {string} [type]    - 'thinking' 或 'content'，預設為 'content'
+ * @param {string} tabName - 目標分頁名稱（僅用於日誌追蹤，不再用於建立新盒子）
+ * @param {string} delta - 本次要輸出的文字片段
+ * @param {string} type - 'thinking' 或 'content'，預設為 'content'
  */
 window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
-    // 1️⃣ 首先嘗試寫入動態卡片（stream-step-card 模式）
-    if (window.currentActiveStreamCardId) {
-        const activeCard = document.getElementById(window.currentActiveStreamCardId);
-        if (activeCard) {
-            if (type === 'thinking') {
-                const thinkingBox = activeCard.querySelector('.step-thinking-box');
-                const thinkingBody = activeCard.querySelector('.step-thinking-body');
-                if (thinkingBox && thinkingBody) {
-                    thinkingBox.classList.remove('hidden');
-                    thinkingBody.textContent += delta;
-                    window.smartScrollToBottom(thinkingBody, false);
-                }
+    if (type === 'thinking') {
+        // A. 如果是思考流，直接輸入至原生的 ai-thinking-text
+        const thinkingStream = document.getElementById('ai-thinking-stream');
+        const thinkingText = document.getElementById('ai-thinking-text');
+        if (thinkingStream && thinkingText) {
+            thinkingStream.classList.remove('hidden'); // 解除隱藏
+            thinkingText.textContent += delta;
+            thinkingText.scrollTop = thinkingText.scrollHeight; // 自動滾動
+        }
+    } else {
+        // B. 所有的生成內容、總監日誌、保底 fallback，通通強制塞入原生的「同一個終端視窗」
+        const terminal = document.getElementById('stream-output-terminal');
+        if (terminal) {
+            terminal.classList.remove('hidden');
+            terminal.style.display = 'block';
+            terminal.textContent += delta;
+            
+            // 調用全域智慧型滾動
+            if (typeof window.smartScrollToBottom === 'function') {
+                window.smartScrollToBottom(terminal, false);
             } else {
-                const contentBox = activeCard.querySelector('.step-content-box');
-                const contentBody = activeCard.querySelector('.step-content-body');
-                if (contentBox && contentBody) {
-                    contentBox.classList.remove('hidden');
-                    contentBody.textContent += delta;
-                    window.smartScrollToBottom(contentBody, false);
-                }
+                terminal.scrollTop = terminal.scrollHeight;
             }
-            // 如果是 Director 總監的串流，同時寫入對應的終端
-            if (tabName === 'director' || tabName === 'worldview') {
-                writeToLegacyTerminal(tabName, delta);
-            }
-            return;
         }
     }
-    
-    // 2️⃣ 如果沒有活躍卡片，直接寫入對應的終端元素
-    writeToLegacyTerminal(tabName, delta);
 };
 
 /**
- * 寫入傳統終端元素（向後兼容）
+ * 傳統日誌寫入器（已簡化）
+ * 直接複用優化後的 Master Window，不再嘗試建立任何新盒子
  */
 function writeToLegacyTerminal(tabName, delta) {
-    const targetId = `stream-output-${tabName}`;
-    let targetEl = document.getElementById(targetId);
-    
-    // 若尚未建立，於 body 結尾新增一個簡潔的容器
-    if (!targetEl) {
-        targetEl = document.createElement('div');
-        targetEl.id = targetId;
-        targetEl.className = 'agent-stream-output';
-        targetEl.style.cssText = `
-            width: 100%;
-            max-height: 250px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            padding: 8px;
-            margin-top: 4px;
-            background: rgba(0,0,0,0.02);
-            font-family: monospace;
-            font-size: 0.85rem;
-            white-space: pre-wrap;
-            word-break: break-word;
-        `;
-        // 插入至右側面板的最底部
-        const sidebar = document.querySelector('.right-sidebar') || document.body;
-        sidebar.appendChild(targetEl);
-    }
-    
-    // 直接追加文字（保留換行與原始格式）
-    targetEl.textContent += delta;
-    
-    // 確保自動捲動到底部
-    window.smartScrollToBottom(targetEl, false);
+    // 徹底封印任何依據 tabName 自創盒子的可能性，全數歸流至單一終端
+    window.updateAgentStreamOutput(tabName, delta, 'content');
 }
 
 window.enhanceWorldviewSectionWithAI = async function(field, title) {

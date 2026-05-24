@@ -76,25 +76,17 @@ export function showAgentProcessingIndicator(tabName, agentName) {
             term.classList.remove('active');
         });
         
-        // 取得當前步驟的串流終端區塊，若不存在則動態創建
-        let terminal = document.getElementById(`stream-output-${tabName}`);
-        if (!terminal) {
-            terminal = document.createElement('div');
-            terminal.id = `stream-output-${tabName}`;
-            terminal.className = 'agent-stream-output';
-            streamArea.appendChild(terminal);
+        // 【單一化終端重構】：不再動態創建 stream-output-${tabName} 盒子
+        // 全面改用原生的 #stream-output-terminal 統一終端
+        let terminal = document.getElementById('stream-output-terminal');
+        if (terminal) {
+            // 確保原生終端可見
+            terminal.classList.remove('hidden');
+            terminal.classList.add('active');
+            // 保存引用
+            lastStreamTerminal = terminal;
+            lastStreamContent = '';
         }
-        
-        // 清空當前終端內容，為新的生成做準備
-        terminal.textContent = '';
-        
-        // 顯示當前終端
-        terminal.classList.remove('hidden');
-        terminal.classList.add('active');
-        
-        // 保存引用
-        lastStreamTerminal = terminal;
-        lastStreamContent = '';
         
         // 串流開始時切換到串流頁籤 (僅在初始化時觸發 1 次)
         switchToStreamTab();
