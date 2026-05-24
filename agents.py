@@ -889,7 +889,8 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     for vol in db.get_volumes(novel_id):
         try:
             if int(vol.get("is_dirty", 0)) == 1:
-                repair_start_candidates.append(((int(vol.get("volume_index")) - 1) * 50) + 1)
+                start_ch, _ = db.get_volume_chapter_range(db.get_volumes(novel_id), int(vol.get("volume_index")))
+                repair_start_candidates.append(start_ch)
         except (TypeError, ValueError):
             pass
 
@@ -971,7 +972,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     
     # 💡 比例映射演算法 (Proportional Mapping Algorithm) -> 適用於 1000 - 2000 章大長篇
     volumes = db.get_volumes(novel_id)
-    total_chapters = len(volumes) * 50 if volumes else 1000  # 預設每卷 50 章，如果未規劃篇卷則保底 1000 章
+    total_chapters = db.get_total_chapter_count(volumes)
     progress_percentage = min(max((start_chapter - 1) / total_chapters, 0.0), 1.0)
     
     # 精簡並滾動展示多幕式結構
@@ -1071,7 +1072,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
 
 ## ⚠️ 核心生成權限與動態分配規則（極重要）
 1. **【絕對禁止模板化】**：絕對禁止在不同章節中重複使用相同的標題、事件描述或籠統語句（如「命運波折之章 (保底)」、「推進核心衝突」）。每一章必須是獨立、具體、且不可替代的情節。
-2. **【伏筆線動態調度】**：提供的「伏筆故事線池」是有限的。你【不需要】也不應該在每一章都塞入伏筆。請依據劇情節奏隨機且合理地決定是否在本章：
+2. **【伏筆線動態調度】**：提供的「伏筆故事線池」是有限的。這是一部高達 1500 章左右的大小說，伏筆應該在不同卷、章之間進行慢速的、合理的跨卷鋪陳與跨卷回收。你【不需要】也不應該在每一章都塞入伏筆，更【絕對禁止】在同一個 5 章大綱中急著把所有伏筆全部鋪設並立刻回收！請依據劇情節奏隨機且合理地決定是否在本章：
    - 鋪設（Planting）：從池中挑選種子，並在 `foreshadowing_plant` 中寫入具體如何鋪設（例：`"鋪設 [Seed-1]：主角無意中在廢墟發現刻有古神電路紋路的晶片"`）。
    - 回收（Payoff）：從池中挑選已有的舊伏筆，並在 `foreshadowing_payoff` 中寫入具體如何回收。
    - 若本章不適合處理伏筆，這兩欄必須回傳空陣列 `[]`。專注於編織具體的日常生活、調查、戰鬥或台詞對話。
@@ -1295,7 +1296,9 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
             worldview_json = db.parse_worldview_to_json(context.get("worldbuilding", ""))
             
             # 重新計算比例滑動視窗
-            progress_percentage = min(max((start_chapter - 1) / ((len(volumes) + 1) * 50), 0.0), 1.0)
+            volumes = db.get_volumes(novel_id)
+            total_chapters = db.get_total_chapter_count(volumes)
+            progress_percentage = min(max((start_chapter - 1) / total_chapters, 0.0), 1.0)
             
             # 精簡並滾動展示多幕式結構
             ta_list = worldview_json.get("three_act_structure", [])
@@ -2100,7 +2103,7 @@ def verify_novel_integrity(novel_id, context):
                     pass
                     
     max_chapter_idx = max(chapter_indices) if chapter_indices else 0
-    expected_vols_by_outline = (max_chapter_idx - 1) // 50 + 1 if max_chapter_idx > 0 else 0
+    expected_vols_by_outline = db.get_chapter_volume_index(vols, max_chapter_idx) if max_chapter_idx > 0 else 0
     
     # Gaps check
     gaps = []
@@ -2269,12 +2272,19 @@ def verify_novel_integrity(novel_id, context):
                 payoffs_map.setdefault(int(m), []).append(ch_idx)
                 
     dangling_plants = []
+    deep_foreshadowings = []
     baseless_payoffs = []
     out_of_order_seeds = []
     
+    total_chapters = db.get_total_chapter_count(vols)
+    is_all_chapters_completed = (max_chapter_idx >= total_chapters) if total_chapters > 0 else False
+    
     for s_id, p_chaps in plants_map.items():
         if s_id not in payoffs_map:
-            dangling_plants.append(f"[Seed-{s_id}] (埋設於第 {p_chaps} 章)")
+            if is_all_chapters_completed:
+                dangling_plants.append(f"[Seed-{s_id}] (埋設於第 {p_chaps} 章)")
+            else:
+                deep_foreshadowings.append(f"[Seed-{s_id}] (埋設於第 {p_chaps} 章，將於後續跨卷/跨章慢慢回收)")
         else:
             earliest_plant = min(p_chaps)
             earliest_payoff = min(payoffs_map[s_id])
@@ -2297,6 +2307,8 @@ def verify_novel_integrity(novel_id, context):
         foreshadowing_violations.append(f"  🔴【伏筆憑空回收 (Baseless Payoffs)】：{baseless_payoffs}")
     if out_of_order_seeds:
         foreshadowing_violations.append(f"  🔴【伏筆時序顛倒 (Out of Order)】：{out_of_order_seeds}")
+    if deep_foreshadowings:
+        foreshadowing_violations.append(f"  🟡【伏筆暫未收束（深遠鋪陳中，大長篇合理現象）】：{deep_foreshadowings}")
         
     fores_alignment_str = "章節伏筆時序與收束銜接度：完全符合時序且無遺漏" if not foreshadowing_violations else "\n".join(foreshadowing_violations)
     
@@ -2364,7 +2376,7 @@ def run_director_decision(novel_id, current_stage, user_prompt):
 2. **邏輯一致性**：檢查各模組之間的設定是否相互矛盾
 3. **進度合理性**：判斷是否應該繼續下一階段，還是應該返回修改
 4. **回溯判斷**：如果後續階段發現前面階段的問題，可以回退修正
-5. **伏筆與篇卷校驗**：若校驗報告中出現 `🔴【伏筆未回收】`、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】`、`🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！
+5. **伏筆與篇卷校驗**：若校驗報告中出現 `🔴【伏筆未回收】`（僅在全書完結大綱時會出現）、`🔴【伏筆憑空回收】`、`🔴【伏筆時序顛倒】`或 `🔴【卷數不足】` 等警告，代表大綱存在嚴重邏輯缺陷！你**必須**做出 `GO_BACK_TO_PLOT` 或 `AUTO_REGENERATE` target=`plot` 的決策，拒絕放行，並在 `hint` 中逐條列出這些邏輯缺陷促使規劃師進行精準對齊！但若報告中僅出現 `🟡【伏筆暫未收束（深遠鋪陳中）】`，代表這是 1500 章左右大長篇小說正常的跨章節、跨卷慢慢鋪陳與慢慢收尾之合理現象，**你絕對不應該為此擋下大綱或要求退回重寫**。請直接予以放行！
 
 ## 可用的 ACTION 指令（嚴格選擇一個）
 
