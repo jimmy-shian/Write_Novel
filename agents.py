@@ -64,7 +64,6 @@ def parse_json_safely(text, default=None):
             pass
         return default or {"error": "Failed to parse JSON", "raw_content": text}
 
-
 def _sse_content(delta: str):
     return "data: " + json.dumps({"type": "content", "delta": delta}, ensure_ascii=False) + "\n\n"
 
@@ -145,6 +144,55 @@ def _normalize_chapter_outlines(parsed, start_chapter, expected_count=5):
         ch.setdefault("emotional_tone", "緊張與沉思交錯")
         ch.setdefault("cliffhanger", "新的因果鉤子浮現")
     return normalized
+
+# --- NEW: VOLUME SKELETON PROMPT (Stage 2: 簡易章大綱生成器) ---
+VOLUME_SKELETON_PROMPT = """你是一位宏觀小說結構大師。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+你的任務是根據全書世界觀、核心衝突，以及「特定篇卷」的宏觀概要，為本卷拆解並建立一個連續的『簡易章節大綱骨架（Chapter Skeletons）』。
+你不需要規劃微觀的場景細節與對話，但必須為每一章確立一個具體的情節里程碑與前因後果鏈。
+
+## 輸出格式（嚴格遵守 JSON，包裹在 ```json ... ``` 中）
+{
+  "volume_index": 1,
+  "chapters_skeleton": [
+    {
+      "chapter_index": 1,
+      "brief_title": "精煉且富有文采的暫定章節標題",
+      "brief_summary": "本章核心情節里程碑宣言（50-100字，描述本章必須達成的敘事目的與前因後果）",
+      "allocated_tasks": {
+        "foreshadowing_plants": [],
+        "foreshadowing_payoffs": [],
+        "turning_points": []
+      }
+    }
+  ]
+}
+"""
+
+# --- NEW: FORESHADOWING ORCHESTRATOR PROMPT (Stage 3: 全局伏筆調度導演) ---
+FORESHADOWING_ORCHESTRATOR_PROMPT = """你是一位大長篇小說的伏筆編織大師與情節轉折對齊導演。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+你的任務是審查傳入的『全書簡易章節大綱骨架』與『全局伏筆種子池 / 關鍵轉折點池』。請將這些伏筆與轉折，精準、合理地分發部署到特定的章節預留位（allocated_tasks）中。
+
+## 🪓 伏筆編織紅線（極重要）：
+1. **跨章與跨卷調度（強烈推薦）**：同一個伏筆種子，其「埋設（PLANT）」與「回收（PAYOFF）」之間必須有足夠的戲劇跨度。禁止在相鄰的章節內迅速閉環！例如：在第 1 卷第 5 章埋下某神祕晶片的伏筆，必須在第 2 卷或第 3 卷的某章才進行回收引爆。
+2. **關聯性與補充擴增**：你可以根據情節需要，為主線伏筆擴充更為細緻的局部子伏筆（例如擴展情報販子的背叛線）。
+
+## 輸出格式（嚴格遵守 JSON，包裹在 ```json ... ``` 中）
+回傳與輸入結構一致、但已填充好 allocated_tasks 的 JSON 物件。
+{
+  "allocations": [
+    {
+      "chapter_index": 5,
+      "foreshadowing_plants": ["分配並細寫：如何在此處自然埋下 [Seed-1] 的線索描述"],
+      "foreshadowing_payoffs": [],
+      "turning_points": ["指派：在此處引發 [TurningPoint-2] 組織內部撕裂的轉折"]
+    }
+  ]
+}
+"""
 
 # --- PIPELINE VALIDATORS / FAIL-FAST HELPERS ---
 def _sse_error_done(message: str):
@@ -1770,7 +1818,16 @@ def run_copilot_chat(novel_id, user_message):
     
     # For copilot, we use the global LLM config and save the response to chat memory when done
     def save_callback(nid, text, thinking=""):
-        save_chat_message(nid, "assistant", text, thinking, message_type="chat")
+        import re
+        content = text
+        inline_thinking = ""
+        think_matches = re.findall(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
+        if think_matches:
+            inline_thinking = "\n".join(think_matches).strip()
+            content = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+        final_thinking = (thinking.strip() + "\n" + inline_thinking.strip()).strip()
+        
+        save_chat_message(nid, "assistant", content, final_thinking, message_type="chat")
         
     return run_agent_stream(novel_id, "global", messages, save_callback)
 
@@ -2494,7 +2551,16 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     ]
     
     def save_director_decision_callback(nid, text, thinking=""):
-        save_chat_message(nid, "assistant", text, thinking, message_type="director")
+        import re
+        content = text
+        inline_thinking = ""
+        think_matches = re.findall(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
+        if think_matches:
+            inline_thinking = "\n".join(think_matches).strip()
+            content = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+        final_thinking = (thinking.strip() + "\n" + inline_thinking.strip()).strip()
+        
+        save_chat_message(nid, "assistant", content, final_thinking, message_type="director")
         
     return run_agent_stream(novel_id, "copilot", messages, save_director_decision_callback)
 
@@ -2538,3 +2604,297 @@ def run_agent_stream(novel_id, agent_name, messages, save_callback=None):
                 "type": "error",
                 "message": f"Database save failed: {str(e)}"
             }, ensure_ascii=False) + "\n\n"
+
+
+# ==============================================================================
+# NEW STAGE 2: VOLUME SKELETON PLANNER (簡易章大綱生成器)
+# ==============================================================================
+def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
+    """
+    [新功能] 針對特定篇卷，一次性生成底層所有的簡易章節骨架大綱 (Stage 2)
+    這是四階段漸進式大綱生成策略的第二階段：
+    Stage 1 (Story Architect) -> Stage 2 (Volume Skeleton) -> Stage 3 (Foreshadowing) -> Stage 4 (Plot Expansion)
+    """
+    import db
+    
+    context = compile_context(novel_id)
+    
+    ok_wb, wb_errors = validate_worldview(context.get("worldbuilding", ""))
+    ok_char, char_errors = validate_characters(context.get("characters", ""))
+    
+    if not ok_wb:
+        for line in _sse_error_done("無法生成簡易章大綱：缺少世界觀設定。請先完成世界觀（worldview）再進行章綱規劃。"):
+            yield line
+        return
+    if not ok_char:
+        for line in _sse_error_done("無法生成簡易章大綱：缺少角色設定（Character Bible）。請先完成角色設計（characters）再進行章綱規劃。"):
+            yield line
+        return
+    
+    # 讀取當前卷的設定
+    from db import get_volumes
+    volumes = get_volumes(novel_id)
+    target_vol = None
+    for v in volumes:
+        if int(v.get("volume_index", 0)) == int(volume_index):
+            target_vol = v
+            break
+    
+    if not target_vol:
+        for line in _sse_error_done(f"無法找到第 {volume_index} 卷的設定。請先在世界觀設定中規劃篇卷結構。"):
+            yield line
+        return
+    
+    vol_title = target_vol.get("title", f"第 {volume_index} 卷")
+    vol_summary = target_vol.get("summary", "")
+    vol_chapter_count = int(target_vol.get("chapter_count", 50))
+    
+    yield "data: " + json.dumps({"type": "content", "delta": f"=== [簡易章大綱生成] ===\n正在為第 {volume_index} 卷《{vol_title}》生成簡易章節骨架...\n章節數量：{vol_chapter_count} 章\n\n"}, ensure_ascii=False) + "\n\n"
+    
+    # 計算本卷的章節範圍
+    start_ch, end_ch = db.get_volume_chapter_range(volumes, int(volume_index))
+    
+    # 構建世界觀上下文
+    worldview_json = db.parse_worldview_to_json(context.get("worldbuilding", ""))
+    
+    # 滑動視窗聚焦：根據卷的進度篩選相關的伏筆與轉折
+    total_vols = len(volumes)
+    vol_progress = (int(volume_index) - 1) / max(total_vols - 1, 1) if total_vols > 1 else 0.0
+    
+    seeds_list = worldview_json.get("foreshadowing_seeds", [])
+    turning_points = worldview_json.get("key_turning_points", [])
+    
+    focused_seeds = []
+    if isinstance(seeds_list, list) and seeds_list:
+        S = len(seeds_list)
+        for idx, seed in enumerate(seeds_list):
+            seed_pos = idx / S if S > 1 else 0.0
+            if abs(seed_pos - vol_progress) <= 0.3:
+                focused_seeds.append(f"[Seed-{idx + 1}] {seed}")
+        if not focused_seeds:
+            sorted_seeds = sorted(enumerate(seeds_list), key=lambda x: abs((x[0] / S if S > 1 else 0.0) - vol_progress))
+            focused_seeds = [f"[Seed-{x[0] + 1}] {x[1]}" for x in sorted_seeds[:6]]
+    
+    focused_turning_points = []
+    if isinstance(turning_points, list) and turning_points:
+        T = len(turning_points)
+        for idx, tp in enumerate(turning_points):
+            tp_pos = idx / T if T > 1 else 0.0
+            if abs(tp_pos - vol_progress) <= 0.3:
+                focused_turning_points.append(f"[TurningPoint-{idx + 1}] {tp}")
+        if not focused_turning_points:
+            sorted_tps = sorted(enumerate(turning_points), key=lambda x: abs((x[0] / T if T > 1 else 0.0) - vol_progress))
+            focused_turning_points = [f"[TurningPoint-{x[0] + 1}] {x[1]}" for x in sorted_tps[:6]]
+    
+    seeds_text = "\n".join(focused_seeds) if focused_seeds else "（尚無伏筆種子）"
+    turning_points_text = "\n".join(focused_turning_points) if focused_turning_points else "（尚無關鍵轉折點）"
+    
+    # 構建前卷銜接上下文（如果並非第一卷）
+    prev_volume_context = ""
+    if int(volume_index) > 1:
+        prev_vol_idx = int(volume_index) - 1
+        prev_vol = next((v for v in volumes if int(v.get("volume_index", 0)) == prev_vol_idx), None)
+        if prev_vol:
+            prev_vol_title = prev_vol.get("title", f"第 {prev_vol_idx} 卷")
+            prev_vol_summary = prev_vol.get("summary", "")
+            prev_volume_context = f"\n\n【前卷銜接參考 - 第 {prev_vol_idx} 卷《{prev_vol_title}》】\n{prev_vol_summary}\n本卷應承接前卷結尾的張力與懸念。"
+    
+    prompt_content = f"""⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+你是宏觀小說結構大師，專精於為大長篇小說建立輕量級的「章節骨骼里程碑」。
+
+## 任務
+請根據以下資訊，為第 {volume_index} 卷《{vol_title}》生成 {vol_chapter_count} 個章節的簡易骨架。
+
+## 卷設定
+- 卷標題：{vol_title}
+- 卷概要：{vol_summary}
+- 本卷章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {vol_chapter_count} 章）
+{prev_volume_context}
+
+## 世界觀設定
+主題：{worldview_json.get("theme", "未設定")}
+核心衝突：{worldview_json.get("main_conflict", "未設定")}
+世界觀背景：{worldview_json.get("worldview", "未設定")}
+
+## 全域伏筆與轉折池（已根據本卷進度篩選最相關的種子）
+{seeds_text}
+
+## 關鍵轉折點池
+{turning_points_text}
+
+## ⚠️ 重要約束
+1. 每章必須有一個清晰的「情節里程碑宣言」—— 這章必須達成什麼敘事目的？
+2. 絕對禁止模板化！每個章節標題和概要都必須是獨特的、具體的。
+3. `allocated_tasks` 欄位是預留給下一階段（伏筆編織導演）填充的，當前請保持空陣列。
+4. 為確保長線敘事張力，每 5-10 章應有一個中等轉折，每卷結尾應有一個強力的章末鉤子。
+
+## 輸出格式（嚴格遵守 JSON）
+```json
+{{
+  "volume_index": {volume_index},
+  "chapters_skeleton": [
+    {{
+      "chapter_index": {start_ch},
+      "brief_title": "精煉且富有文采的暫定章節標題",
+      "brief_summary": "本章核心情節里程碑宣言（50-100字，描述本章必須達成的敘事目的與前因後果）",
+      "allocated_tasks": {{
+        "foreshadowing_plants": [],
+        "foreshadowing_payoffs": [],
+        "turning_points": []
+      }}
+    }}
+  ]
+}}
+```
+"""
+    
+    messages = [
+        {"role": "system", "content": VOLUME_SKELETON_PROMPT},
+        {"role": "user", "content": prompt_content}
+    ]
+    
+    def save_callback(nid, text):
+        parsed = parse_json_safely(text)
+        if isinstance(parsed, dict) and "chapters_skeleton" in parsed:
+            from db import save_volume_skeletons
+            save_volume_skeletons(nid, volume_index, parsed["chapters_skeleton"])
+            yield "data: " + json.dumps({"type": "content", "delta": f"  ✅ 第 {volume_index} 卷的簡易章大綱已成功保存！\n"}, ensure_ascii=False) + "\n\n"
+        else:
+            print(f"[WARN] Volume skeleton parse failed: {parsed}")
+    
+    # 執行並收集輸出
+    skeleton_output = ""
+    for sse_line in run_agent_stream(novel_id, "plot", messages, save_callback):
+        yield sse_line
+        if sse_line.startswith("data:"):
+            try:
+                data_str = sse_line[5:].strip()
+                if data_str == "[DONE]":
+                    continue
+                data = json.loads(data_str)
+                if data.get("type") == "content":
+                    skeleton_output += data.get("delta", "")
+            except:
+                pass
+    
+    yield "data: " + json.dumps({"type": "content", "delta": f"\n=== [第 {volume_index} 卷簡易章大綱生成完成] ===\n"}, ensure_ascii=False) + "\n\n"
+    yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+
+
+def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
+    """
+    [新功能] 全局伏筆與轉折編織對齊階段 (Stage 3)
+    這是四階段漸進式大綱生成策略的第三階段。
+    總監 Agent 會審查所有卷的簡易章骨架，將全局伏筆與轉折合理分配到各章。
+    
+    核心約束：
+    - 同一伏筆的埋設(PLANT)與回收(PAYOFF)之間必須有足夠的戲劇跨度（跨章/跨卷）
+    - 禁止在相鄰章節內迅速閉環
+    """
+    import db
+    
+    context = compile_context(novel_id)
+    
+    # 獲取世界觀中的伏筆種子與轉折點
+    worldview_json = db.parse_worldview_to_json(context.get("worldbuilding", ""))
+    foreshadowing_seeds = worldview_json.get("foreshadowing_seeds", [])
+    key_turning_points = worldview_json.get("key_turning_points", [])
+    
+    if not foreshadowing_seeds and not key_turning_points:
+        for line in _sse_error_done("無法執行伏筆編織：世界觀中尚無伏筆種子或轉折點設定。請先在世界觀設定中添加伏筆與轉折點。"):
+            yield line
+        return
+    
+    # 獲取所有卷的簡易章骨架
+    from db import get_all_volume_skeletons
+    skeletons = get_all_volume_skeletons(novel_id)
+    
+    if not skeletons:
+        for line in _sse_error_done("無法執行伏筆編織：尚無簡易章大綱骨架。請先完成各卷的簡易章大綱生成（volume_skeleton）。"):
+            yield line
+        return
+    
+    yield "data: " + json.dumps({"type": "content", "delta": "=== [全局伏筆編織對齊] ===\n正在掃描全書簡易章骨架並進行伏筆全局調度...\n\n"}, ensure_ascii=False) + "\n\n"
+    
+    # 構建輸入資料
+    seeds_text = "\n".join([f"[Seed-{idx + 1}] {s}" for idx, s in enumerate(foreshadowing_seeds)])
+    turning_points_text = "\n".join([f"[TurningPoint-{idx + 1}] {t}" for idx, t in enumerate(key_turning_points)])
+    skeletons_text = json.dumps(skeletons, ensure_ascii=False, indent=2)
+    
+    prompt_content = f"""⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+你是大長篇小說的伏筆編織大師與情節轉折對齊導演。
+
+## 任務
+審查傳入的『全書簡易章節大綱骨架』與『全局伏筆種子池 / 關鍵轉折點池』。
+將這些伏筆與轉折，精準、合理地分發部署到特定的章節預留位（allocated_tasks）中。
+
+## 🪓 伏筆編織紅線（極重要！違反將導致長篇敘事崩塌）
+1. **跨章與跨卷調度（強烈推薦）**：同一個伏筆種子的「埋設（PLANT）」與「回收（PAYOFF）」之間必須有足夠的戲劇跨度！
+   - 嚴禁在相鄰章節（≤ 3 章）內埋設並立刻回收！
+   - 伏筆應在早期埋設，在數十章甚至數卷之後才回收
+   - 例如：在第 1 卷第 5 章埋下某神秘晶片的伏筆，必須在第 2 卷或第 3 卷的某章才進行回收引爆
+   
+2. **關聯性與補充擴增**：可根據情節需要，為主線伏筆擴充更為細緻的局部子伏筆
+
+3. **轉折點落地**：將抽象的關鍵轉折點具體化為具體的章節事件
+
+## 全局伏筆種子池
+{seeds_text or "（尚無伏筆種子）"}
+
+## 關鍵轉折點池
+{turning_points_text or "（尚無關鍵轉折點）"}
+
+## 全書簡易章節骨架
+{skeletons_text}
+
+## 分配策略建議
+- 對於 20-30 個伏筆種子，平均分配到各卷各章
+- 每個伏筆的埋設點與回收點之間應有至少 10-30 章的跨度
+- 轉折點應放在章節末尾，作為章末鉤子引爆
+- 保持敘事節奏的張力：埋設 → 干擾/升溫 → 回收/引爆
+
+## 輸出格式（嚴格遵守 JSON）
+```json
+{{
+  "allocations": [
+    {{
+      "chapter_index": 5,
+      "foreshadowing_plants": ["分配並細寫：如何在此處自然埋下 [Seed-1] 的線索描述"],
+      "foreshadowing_payoffs": [],
+      "turning_points": ["指派：在此處引發 [TurningPoint-2] 組織內部撕裂的轉折"]
+    }}
+  ]
+}}
+```
+"""
+    
+    messages = [
+        {"role": "system", "content": FORESHADOWING_ORCHESTRATOR_PROMPT},
+        {"role": "user", "content": prompt_content}
+    ]
+    
+    def save_callback(nid, text):
+        parsed = parse_json_safely(text)
+        if isinstance(parsed, dict) and "allocations" in parsed:
+            from db import save_foreshadowing_allocations
+            save_foreshadowing_allocations(nid, parsed["allocations"])
+    
+    # 執行並收集輸出
+    orchestrator_output = ""
+    for sse_line in run_agent_stream(novel_id, "copilot", messages, save_callback):
+        yield sse_line
+        if sse_line.startswith("data:"):
+            try:
+                data_str = sse_line[5:].strip()
+                if data_str == "[DONE]":
+                    continue
+                data = json.loads(data_str)
+                if data.get("type") == "content":
+                    orchestrator_output += data.get("delta", "")
+            except:
+                pass
+    
+    yield "data: " + json.dumps({"type": "content", "delta": "\n=== [全局伏筆編織對齊完成] ===\n伏筆與轉折已成功分配到各章節！\n"}, ensure_ascii=False) + "\n\n"
+    yield "data: " + json.dumps({"type": "done"}) + "\n\n"

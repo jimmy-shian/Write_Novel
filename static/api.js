@@ -44,6 +44,15 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
     const MAX_RETRIES = 2;
     let attempt = 0;
 
+    // Trigger start callback
+    if (typeof window.onStreamAPIStart === 'function') {
+        try {
+            window.onStreamAPIStart(endpoint, body);
+        } catch (e) {
+            console.error("Error in onStreamAPIStart callback:", e);
+        }
+    }
+
     async function makeAttempt() {
         attempt++;
         const controller = new AbortController();
@@ -89,8 +98,44 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 resetActivityTimer(); // Got a stream chunk, reset timer
 
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); 
+                
+                // 改進：更智能地處理 SSE 行分割
+                // 確保完整的 "data:" 行被正確識別
+                const lines = [];
+                let searchFrom = 0;
+                let dataIndex;
+                
+                while ((dataIndex = buffer.indexOf('data:', searchFrom)) !== -1) {
+                    // 找到 "data:" 的位置
+                    // 從這個位置開始查找行結束（\n，但雙換行 \n\n 是事件分隔符）
+                    let lineEnd = buffer.indexOf('\n', dataIndex);
+                    
+                    if (lineEnd === -1) {
+                        // 沒有換行，整個剩餘 buffer 構成不完整行
+                        break;
+                    }
+                    
+                    // 檢查這是否是一個完整的事件（可能包含 \n\n 作為結束標記）
+                    // SSE 事件之間用雙換行分隔
+                    let nextDataIndex = buffer.indexOf('data:', dataIndex + 5);
+                    
+                    // 如果下一個 "data:" 在當前行的換行之前，說明這是一個完整事件
+                    if (nextDataIndex !== -1 && nextDataIndex < lineEnd) {
+                        // 多個 data: 在同一行（不尋常但可能）
+                        lineEnd = nextDataIndex - 1;
+                    }
+                    
+                    const line = buffer.substring(dataIndex, lineEnd);
+                    lines.push(line);
+                    
+                    // 如果下一個 "data:" 在當前換行之後，需要找到實際的事件結束
+                    // 實際上，我們只需要確保我們取到了一個完整的 data: 行
+                    // 更新 searchFrom
+                    searchFrom = lineEnd + 1;
+                }
+                
+                // 剩餘的 buffer（不包含完整 data: 行的部分）
+                buffer = searchFrom > 0 ? buffer.substring(searchFrom) : buffer;
                 
                 for (const line of lines) {
                     const trimmed = line.trim();
@@ -109,12 +154,19 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                             if (typeof onError === 'function') onError(parsed.message);
                         }
                     } catch (e) {
-                        // Ignore JSON parsing errors for partial chunks
+                        // 忽略 JSON 解析錯誤（部分 chunk）
                     }
                 }
             }
             
             if (activityTimer) clearTimeout(activityTimer);
+
+            // Trigger end callback
+            if (typeof window.onStreamAPIEnd === 'function') {
+                try {
+                    window.onStreamAPIEnd(endpoint);
+                } catch (e) {}
+            }
 
             if (typeof onDone === 'function') onDone();
         } catch (err) {
@@ -126,6 +178,13 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 // Wait 3 seconds before retrying
                 await new Promise(r => setTimeout(r, 3000));
                 return makeAttempt();
+            }
+
+            // Trigger end callback on error
+            if (typeof window.onStreamAPIEnd === 'function') {
+                try {
+                    window.onStreamAPIEnd(endpoint);
+                } catch (e) {}
             }
 
             if (typeof onError === 'function') {
