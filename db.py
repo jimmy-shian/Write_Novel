@@ -307,6 +307,27 @@ def db_init():
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
     )
     """)
+    try:
+        cursor.execute("ALTER TABLE chat_memory ADD COLUMN thinking TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE chat_memory ADD COLUMN message_type TEXT DEFAULT 'chat'")
+    except sqlite3.OperationalError:
+        pass
+    
+    # 💡 Migrate historical director decisions to avoid token limit issues in existing databases
+    try:
+        cursor.execute("""
+            UPDATE chat_memory 
+            SET message_type = 'director' 
+            WHERE message_type = 'chat' 
+              AND (content LIKE '%【總監評估】%' 
+                   OR content LIKE '%【決策理由】%' 
+                   OR content LIKE '%[Plot Planner Rescue Attempt%')
+        """)
+    except Exception as e:
+        print(f"[DB MIGRATION] Failed to migrate historical chat memory: {e}")
     
     # 7. Agent configs table
     cursor.execute("""
@@ -885,22 +906,28 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None)
     return next_version
 
 # --- CHAT MEMORY ---
-def get_chat_memory(novel_id, limit=20):
+def get_chat_memory(novel_id, limit=20, message_type=None):
     conn = get_db_connection()
     cursor = conn.cursor()
-    rows = cursor.execute(
-        "SELECT role, content, timestamp FROM chat_memory WHERE novel_id = ? ORDER BY id DESC LIMIT ?",
-        (novel_id, limit)
-    ).fetchall()
+    if message_type:
+        rows = cursor.execute(
+            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? AND message_type = ? ORDER BY id DESC LIMIT ?",
+            (novel_id, message_type, limit)
+        ).fetchall()
+    else:
+        rows = cursor.execute(
+            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? ORDER BY id DESC LIMIT ?",
+            (novel_id, limit)
+        ).fetchall()
     conn.close()
     return [dict(r) for r in reversed(rows)]
 
-def save_chat_message(novel_id, role, content):
+def save_chat_message(novel_id, role, content, thinking=None, message_type='chat'):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO chat_memory (novel_id, role, content) VALUES (?, ?, ?)",
-        (novel_id, role, content)
+        "INSERT INTO chat_memory (novel_id, role, content, thinking, message_type) VALUES (?, ?, ?, ?, ?)",
+        (novel_id, role, content, thinking, message_type)
     )
     conn.commit()
     conn.close()
