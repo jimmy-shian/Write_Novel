@@ -2234,6 +2234,7 @@ textarea:focus {
 .agent-stream-output {
     width: 100%;
     max-height: 80%;
+    height: 100%;
     min-height: 120px;
     overflow-y: auto;
     background: #09090e;

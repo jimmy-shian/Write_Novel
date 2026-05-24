@@ -467,12 +467,12 @@
                         
                         <div class="form-group">
                             <label>API Key (NVIDIA / OpenAI / Custom)</label>
-                            <textarea id="setting-api-key" rows="2" style="resize: vertical;" placeholder="輸入 API 金鑰 (例如 nvapi-xxx 或 sk-xxx)"></textarea>
+                            <input type="text" id="setting-api-key" placeholder="輸入 API 金鑰 (例如 nvapi-xxx 或 sk-xxx)">
                         </div>
                         
                         <div class="form-group">
                             <label>API Base URL</label>
-                            <textarea id="setting-base-url" rows="2" style="resize: vertical;" placeholder="https://integrate.api.nvidia.com/v1"></textarea>
+                            <input type="text" id="setting-base-url" placeholder="https://integrate.api.nvidia.com/v1">
                         </div>
                         
                         <div class="form-group">
@@ -492,7 +492,7 @@
                         <div class="form-row-2">
                             <div class="form-group">
                                 <label>模型型號 (Model Name)</label>
-                                <textarea id="setting-model" rows="2" style="resize: vertical;" placeholder="qwen/qwen3.5-122b-a10b"></textarea>
+                                <input type="text" id="setting-model" placeholder="qwen/qwen3.5-122b-a10b">
                             </div>
                             <div class="form-group">
                                 <label>Max Tokens</label>
@@ -533,15 +533,15 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>小說書名</label>
-                    <textarea id="input-novel-title" rows="2" style="resize: vertical;" placeholder="例如：天衍九州：斬仙路"></textarea>
+                    <input type="text" id="input-novel-title" placeholder="例如：天衍九州：斬仙路">
                 </div>
                 <div class="form-group">
                     <label>題材類型</label>
-                    <textarea id="input-novel-genre" rows="2" style="resize: vertical;" placeholder="例如：仙俠 / 科幻 / 都市 / 玄幻"></textarea>
+                    <input type="text" id="input-novel-genre" placeholder="例如：仙俠 / 科幻 / 都市 / 玄幻">
                 </div>
                 <div class="form-group">
                     <label>風格基調</label>
-                    <textarea id="input-novel-style" rows="2" style="resize: vertical;" placeholder="例如：史詩宏大、偏硬科幻、黑暗殘酷、幽默詼諧"></textarea>
+                    <input type="text" id="input-novel-style" placeholder="例如：史詩宏大、偏硬科幻、黑暗殘酷、幽默詼諧">
                 </div>
                 <button id="btn-submit-create-novel" class="btn btn-primary btn-full mt-4">開始專案</button>
             </div>
