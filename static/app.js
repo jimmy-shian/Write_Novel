@@ -221,11 +221,44 @@ async function executeDirectorAction(decision, userPrompt) {
                 updateDirectorMessage('👥 開始生成角色設定...');
                 await executePipelineStage('characters', userPrompt);
             } else if (target === 'plot' || target === '章節大綱') {
+                // 🎯 Stage 2 四階段漸進式大綱生成策略
+                // Stage 2a: macro_skeleton (宏觀千章骨架) -> Stage 3: foreshadowing_align (伏筆編織對齊) -> Stage 4: plot_expansion (微觀大綱展開)
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('plot', 'running');
-                updateDirectorMessage('📋 開始生成章節大綱...');
+                
+                // 先檢查是否已進入 macro_skeleton 流程
+                if (!state.macroSkeletonCompleted) {
+                    updateDirectorMessage('🏗️ 開始 Stage 2：生成全書千章宏觀骨架...');
+                    showToast('🏗️ 開始 Stage 2：全書千章宏觀骨架生成...');
+                    
+                    // 🚀 自動遍歷所有卷生成簡易章節骨架
+                    await generateAllVolumeSkeletons(userPrompt);
+                    
+                    // Stage 3: 全局伏筆編織對齊
+                    updateDirectorMessage('🎭 開始 Stage 3：全局伏筆編織對齊...');
+                    showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
+                    await executePipelineStage('foreshadowing_orchestration', userPrompt);
+                    
+                    // 標記宏觀骨架流程已完成
+                    state.macroSkeletonCompleted = true;
+                }
+                
+                // Stage 4: 微觀大綱展開（進入 plot_expansion 後恢復原來的 5 章滾動生成模式）
+                updateDirectorMessage('📋 開始 Stage 4：微觀大綱詳細展開...');
+                showToast('📋 開始 Stage 4：微觀大綱詳細展開...');
                 await executePipelineStage('plot', userPrompt);
+            } else if (target === 'macro_skeleton' || target === '宏觀骨架') {
+                // 顯式進入宏觀骨架生成流程
+                updatePipelineStage('plot', 'running');
+                updateDirectorMessage('🏗️ 開始 Stage 2：生成全書千章宏觀骨架...');
+                showToast('🏗️ 開始 Stage 2：全書千章宏觀骨架生成...');
+                await generateAllVolumeSkeletons(userPrompt);
+            } else if (target === 'foreshadowing_align' || target === '伏筆對齊') {
+                // 進入伏筆編織對齊流程
+                updateDirectorMessage('🎭 開始 Stage 3：全局伏筆編織對齊...');
+                showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
+                await executePipelineStage('foreshadowing_orchestration', userPrompt);
             } else if (target === 'writer' || target === '正文寫作') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
@@ -5251,13 +5284,19 @@ window.onStreamAPIEnd = function(endpoint) {
  */
 window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
     if (type === 'thinking') {
-        // A. 如果是思考流，直接輸入至原生的 ai-thinking-text
+        // A. 如果是思考流，直接輸入至原生的 ai-thinking-text，使用智能滾動機制
         const thinkingStream = document.getElementById('ai-thinking-stream');
         const thinkingText = document.getElementById('ai-thinking-text');
         if (thinkingStream && thinkingText) {
             thinkingStream.classList.remove('hidden'); // 解除隱藏
             thinkingText.textContent += delta;
-            thinkingText.scrollTop = thinkingText.scrollHeight; // 自動滾動
+            
+            // 調用全域智慧型滾動（支援用戶回捲後不強行滾動）
+            if (typeof window.smartScrollToBottom === 'function') {
+                window.smartScrollToBottom(thinkingText, false);
+            } else {
+                thinkingText.scrollTop = thinkingText.scrollHeight;
+            }
         }
     } else {
         // B. 所有的生成內容、總監日誌、保底 fallback，通通強制塞入原生的「同一個終端視窗」
@@ -5581,6 +5620,190 @@ window.deleteVolume = async function(volIdx) {
         showToast('刪除失敗: ' + e);
     }
 };
+
+// ==========================================
+// Stage 2 & Stage 3: 自動化管線封裝函數
+// 實現「宏觀骨架期」的兩階段審查解耦
+// ==========================================
+
+/**
+ * 🚀 自動化全書宏觀骨架生成（Stage 2: Volume Skeleton Planner）
+ * 遍歷所有卷，全自動、不間斷地生成全書的「簡易章節骨架」。
+ * 此函數在管線中被調用，不阻塞 UI，進度即時反饋。
+ * 
+ * @param {string} userPrompt - 用戶的創作需求 prompt
+ * @returns {Promise<boolean>} - 是否全部成功
+ */
+async function generateAllVolumeSkeletons(userPrompt) {
+    if (!state.currentNovelId) {
+        showToast('請先選擇或建立一個小說專案');
+        return false;
+    }
+    
+    // 從當前載入的 novelData 中獲取卷列表
+    const volumes = state.currentNovelData?.volumes || [];
+    
+    if (volumes.length === 0) {
+        updateDirectorMessage('⚠️ 警告：系統中尚未規劃任何篇卷！正在從世界觀設定中自動檢測卷數...');
+        // 嘗試從 worldbuilding 中解析卷數
+        const wbContent = state.currentNovelData?.worldbuilding || '';
+        const defaultVolumes = 5; // 至少要有 5 卷
+        updateDirectorMessage(`📚 將基於世界觀設定自動生成 ${defaultVolumes} 卷的簡易章節骨架...`);
+        
+        // 為缺失的卷創建預設設定
+        for (let i = 1; i <= defaultVolumes; i++) {
+            try {
+                await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${i}`, 'POST', {
+                    title: `第 ${i} 卷`,
+                    summary: `本卷的全新大綱概要描述...`,
+                    factions: `全域勢力`
+                });
+            } catch (e) {
+                console.warn(`Volume ${i} creation failed:`, e);
+            }
+        }
+        
+        // 重新載入以獲取更新後的卷列表
+        await loadNovelDetails(state.currentNovelId);
+    }
+    
+    // 再次獲取卷列表
+    const finalVolumes = state.currentNovelData?.volumes || [];
+    const totalVolumes = finalVolumes.length;
+    
+    if (totalVolumes === 0) {
+        showToast('⚠️ 無法確定篇卷數量，請手動在「大綱」頁面新增篇卷');
+        return false;
+    }
+    
+    updateDirectorMessage(`📚 開始自動生成全書 ${totalVolumes} 卷的簡易章節骨架...`);
+    showToast(`🏗️ Stage 2 啟動：即將為 ${totalVolumes} 卷生成宏觀骨架...`);
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    // 依序遍歷所有卷（非並發，控制併發數量）
+    for (let volIdx = 1; volIdx <= totalVolumes; volIdx++) {
+        if (!state.isPipelineRunning) {
+            showToast('⏸️ 管線已被暫停');
+            break;
+        }
+        
+        updateDirectorMessage(`⏳ 正在全自動催生第 ${volIdx} / ${totalVolumes} 卷的簡易章節骨架...`);
+        window.updateAgentStreamOutput('plot', `\n--- [管線自動化] 開始生成第 ${volIdx} 卷簡易骨架 ---\n`);
+        
+        const volSkeletonResult = await window.runVolumeSkeletonPlannerDirect(volIdx);
+        
+        if (volSkeletonResult) {
+            successCount++;
+        } else {
+            failCount++;
+            window.updateAgentStreamOutput('plot', `\n  ⚠️ 第 ${volIdx} 卷骨架生成失敗或被跳過\n`);
+        }
+    }
+    
+    // 全部卷骨架生成完畢後的回饋
+    if (state.isPipelineRunning) {
+        updateDirectorMessage(`✅ Stage 2 完成：${successCount}/${totalVolumes} 卷骨架生成完畢${failCount > 0 ? `（${failCount} 卷失敗）` : ''}`);
+        showToast(`🏗️ Stage 2 完成：${successCount} 卷宏觀骨架已生成`);
+        
+        // 刷新數據以確保下一階段能看到最新的骨架數據
+        await loadNovelDetails(state.currentNovelId);
+    }
+    
+    return successCount > 0;
+}
+
+/**
+ * 📖 單卷骨架生成封裝函數（用於管線自動化）
+ * 直接調用後端的 run_volume_skeleton_planner，Promise 機制不阻塞。
+ * 
+ * @param {number} volumeIndex - 要生成骨架的卷索引（從 1 開始）
+ * @returns {Promise<boolean>} - 是否成功
+ */
+window.runVolumeSkeletonPlannerDirect = function(volumeIndex) {
+    return new Promise((resolve, reject) => {
+        // 標記當前正在處理的卷
+        state.activeVolumeIndex = volumeIndex;
+        
+        window.updateAgentStreamOutput('plot', `\n--- [管線自動化] 開始生成第 ${volumeIndex} 卷簡易骨架 ---\n`);
+        
+        streamAPI(
+            '/api/agent/volume-skeleton',
+            { 
+                novel_id: state.currentNovelId, 
+                volume_index: volumeIndex,
+                user_prompt: null // 可選，讓用戶傳入自訂提示
+            },
+            null, // onThinking - volume skeleton 通常不需要思考過程
+            (delta) => {
+                window.updateAgentStreamOutput('plot', delta);
+            },
+            (error) => {
+                console.error(`Volume ${volumeIndex} skeleton failed:`, error);
+                window.updateAgentStreamOutput('plot', `\n[Error: ${error}]\n`);
+                showToast(`⚠️ 第 ${volumeIndex} 卷骨架生成失敗: ${error}`);
+                resolve(false); // 容錯，允許繼續或由總監救援
+            },
+            async () => {
+                window.updateAgentStreamOutput('plot', `\n✓ 第 ${volumeIndex} 卷骨架保存完畢。\n`);
+                showToast(`✅ 第 ${volumeIndex} 卷骨架生成完畢`);
+                
+                // 刷新該卷的數據
+                await loadNovelDetails(state.currentNovelId);
+                
+                resolve(true);
+            }
+        );
+    });
+};
+
+/**
+ * 🌱 全局伏筆編織對齊封裝函數（Stage 3: Foreshadowing Orchestrator）
+ * 在完成 Stage 2 全書骨架生成後，自動調用全局伏筆調度導演，
+ * 將伏筆種子與轉折點精準部署到各章節的骨架中。
+ * 
+ * @returns {Promise<boolean>} - 是否成功
+ */
+window.runForeshadowingOrchestratorDirect = function() {
+    return new Promise((resolve, reject) => {
+        window.updateAgentStreamOutput('plot', `\n--- [管線自動化] 開始執行全局伏筆跨卷部署與導演對齊 ---\n`);
+        
+        updateDirectorMessage('🎭 全局伏筆調度導演啟動，正在編織跨卷長線張力網...');
+        
+        streamAPI(
+            '/api/agent/foreshadowing-orchestrate',
+            { 
+                novel_id: state.currentNovelId,
+                user_prompt: null // 可選
+            },
+            null, // onThinking
+            (delta) => {
+                window.updateAgentStreamOutput('plot', delta);
+            },
+            (error) => {
+                console.error('Foreshadowing orchestration failed:', error);
+                window.updateAgentStreamOutput('plot', `\n[Error: ${error}]\n`);
+                showToast(`⚠️ 全局伏筆編織失敗: ${error}`);
+                resolve(false); // 容錯
+            },
+            async () => {
+                window.updateAgentStreamOutput('plot', `\n✓ 全書伏筆長線網絡編織完畢。\n`);
+                showToast('🎭 全局伏筆編織完成！長線張力網已部署');
+                
+                // 刷新數據
+                await loadNovelDetails(state.currentNovelId);
+                
+                resolve(true);
+            }
+        );
+    });
+};
+
+// ==========================================
+// 暴露給全局的管線控制函數
+// ==========================================
+window.generateAllVolumeSkeletons = generateAllVolumeSkeletons;
 
 
 
