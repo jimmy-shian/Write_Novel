@@ -69,6 +69,132 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def sync_agent_configs_from_env(cursor):
+    """
+    Reads all agent configurations from .env file and inserts/updates them
+    directly into the agent_configs table.
+    This ensures that database re-runs/initialization will always sync and overwrite 
+    the DB settings with the values defined in .env.
+    """
+    agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
+    
+    # Mapping for Env keys
+    env_keys = {
+        "global": {
+            "api_key": "NVIDIA_API_KEY_GLOBAL",
+            "base_url": "BASE_URL_GLOBAL",
+            "model": "MODEL_GLOBAL",
+            "temperature": "TEMPERATURE_GLOBAL",
+            "top_p": "TOP_P_GLOBAL",
+            "max_tokens": "MAX_TOKENS_GLOBAL",
+            "enable_thinking": "ENABLE_THINKING_GLOBAL"
+        },
+        "architect": {
+            "api_key": "NVIDIA_API_KEY_ARCHITECT",
+            "base_url": "BASE_URL_ARCHITECT",
+            "model": "MODEL_ARCHITECT",
+            "temperature": "TEMPERATURE_ARCHITECT",
+            "top_p": "TOP_P_ARCHITECT",
+            "max_tokens": "MAX_TOKENS_ARCHITECT",
+            "enable_thinking": "ENABLE_THINKING_ARCHITECT"
+        },
+        "character": {
+            "api_key": "NVIDIA_API_KEY_CHARACTER",
+            "base_url": "BASE_URL_CHARACTER",
+            "model": "MODEL_CHARACTER",
+            "temperature": "TEMPERATURE_CHARACTER",
+            "top_p": "TOP_P_CHARACTER",
+            "max_tokens": "MAX_TOKENS_CHARACTER",
+            "enable_thinking": "ENABLE_THINKING_CHARACTER"
+        },
+        "plot": {
+            "api_key": "NVIDIA_API_KEY_PLOT",
+            "base_url": "BASE_URL_PLOT",
+            "model": "MODEL_PLOT",
+            "temperature": "TEMPERATURE_PLOT",
+            "top_p": "TOP_P_PLOT",
+            "max_tokens": "MAX_TOKENS_PLOT",
+            "enable_thinking": "ENABLE_THINKING_PLOT"
+        },
+        "writer": {
+            "api_key": "NVIDIA_API_KEY_WRITER",
+            "base_url": "BASE_URL_WRITER",
+            "model": "MODEL_WRITER",
+            "temperature": "TEMPERATURE_WRITER",
+            "top_p": "TOP_P_WRITER",
+            "max_tokens": "MAX_TOKENS_WRITER",
+            "enable_thinking": "ENABLE_THINKING_WRITER"
+        },
+        "editor": {
+            "api_key": "NVIDIA_API_KEY_EDITOR",
+            "base_url": "BASE_URL_EDITOR",
+            "model": "MODEL_EDITOR",
+            "temperature": "TEMPERATURE_EDITOR",
+            "top_p": "TOP_P_EDITOR",
+            "max_tokens": "MAX_TOKENS_EDITOR",
+            "enable_thinking": "ENABLE_THINKING_EDITOR"
+        },
+        "copilot": {
+            "api_key": "NVIDIA_API_KEY_COPILOT",
+            "base_url": "BASE_URL_COPILOT",
+            "model": "MODEL_COPILOT",
+            "temperature": "TEMPERATURE_COPILOT",
+            "top_p": "TOP_P_COPILOT",
+            "max_tokens": "MAX_TOKENS_COPILOT",
+            "enable_thinking": "ENABLE_THINKING_COPILOT"
+        }
+    }
+
+    # Fallbacks from global .env variables
+    default_base_url = os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    default_temp = float(os.getenv("DEFAULT_TEMPERATURE", 0.7))
+    default_top_p = float(os.getenv("DEFAULT_TOP_P", 0.95))
+    default_max_tokens = int(os.getenv("DEFAULT_MAX_TOKENS", 16384))
+    default_enable_thinking = int(os.getenv("DEFAULT_ENABLE_THINKING", 1))
+
+    for agent in agents:
+        keys = env_keys[agent]
+        
+        # Load from agent-specific env var, fallback to global defaults or global env var
+        api_key = os.getenv(keys["api_key"]) or os.getenv("NVIDIA_API_KEY_GLOBAL") or ""
+        base_url = os.getenv(keys["base_url"]) or os.getenv("BASE_URL_GLOBAL") or default_base_url
+        
+        # Model mapping with correct fallbacks
+        model = os.getenv(keys["model"])
+        if not model:
+            if agent == "character":
+                model = os.getenv("MODEL_STORY")
+            elif agent == "plot":
+                model = os.getenv("MODEL_CRITIC")
+            if not model:
+                model = os.getenv("MODEL_GLOBAL") or "google/gemma-3n-e4b-it"
+
+        # Float / Int parameters with robust fallbacks
+        def get_float_env(key, fallback):
+            val = os.getenv(key)
+            try:
+                return float(val) if val is not None else fallback
+            except ValueError:
+                return fallback
+
+        def get_int_env(key, fallback):
+            val = os.getenv(key)
+            try:
+                return int(val) if val is not None else fallback
+            except ValueError:
+                return fallback
+
+        temperature = get_float_env(keys["temperature"], get_float_env("TEMPERATURE_GLOBAL", default_temp))
+        top_p = get_float_env(keys["top_p"], get_float_env("TOP_P_GLOBAL", default_top_p))
+        max_tokens = get_int_env(keys["max_tokens"], get_int_env("MAX_TOKENS_GLOBAL", default_max_tokens))
+        enable_thinking = get_int_env(keys["enable_thinking"], get_int_env("ENABLE_THINKING_GLOBAL", default_enable_thinking))
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (agent, api_key, base_url, model, temperature, top_p, max_tokens, int(enable_thinking)))
+
+
 def db_init():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -206,6 +332,10 @@ def db_init():
         summary TEXT,
         factions TEXT,
         is_dirty INTEGER DEFAULT 0,
+        chapter_count INTEGER DEFAULT 50,
+        time_timeline TEXT,
+        sequence_context TEXT,
+        applicable_rules TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
     )
@@ -222,6 +352,39 @@ def db_init():
         cursor.execute("ALTER TABLE volumes ADD COLUMN chapters_outline TEXT")
     except sqlite3.OperationalError:
         pass
+        
+    # Ensure chapter_count exists in volumes table
+    try:
+        cursor.execute("ALTER TABLE volumes ADD COLUMN chapter_count INTEGER DEFAULT 50")
+    except sqlite3.OperationalError:
+        pass
+        
+    # Ensure time_timeline exists in volumes table
+    try:
+        cursor.execute("ALTER TABLE volumes ADD COLUMN time_timeline TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    # Ensure sequence_context exists in volumes table
+    try:
+        cursor.execute("ALTER TABLE volumes ADD COLUMN sequence_context TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    # Ensure applicable_rules exists in volumes table
+    try:
+        cursor.execute("ALTER TABLE volumes ADD COLUMN applicable_rules TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
+    # Migrate any default 10 values to 50 for legacy compatibility
+    try:
+        cursor.execute("UPDATE volumes SET chapter_count = 50 WHERE chapter_count = 10")
+    except sqlite3.OperationalError:
+        pass
+    
+    # Sync all configurations from .env on start
+    sync_agent_configs_from_env(cursor)
     
     # Clean up empty configurations to let .env configuration take priority
     cursor.execute("DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL")
@@ -284,9 +447,19 @@ def save_volumes(novel_id, volumes_list):
         if isinstance(factions, list) or isinstance(factions, dict):
             factions = json.dumps(factions, ensure_ascii=False)
         is_dirty = vol.get("is_dirty", 0)
+        chapter_count = vol.get("chapter_count", 50)
+        
+        # 新增的精密對接欄位
+        time_timeline = vol.get("time_timeline", "")
+        sequence_context = vol.get("sequence_context", "")
+        applicable_rules = vol.get("applicable_rules", "")
+        if isinstance(applicable_rules, list) or isinstance(applicable_rules, dict):
+            applicable_rules = json.dumps(applicable_rules, ensure_ascii=False)
+            
         cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty) VALUES (?, ?, ?, ?, ?, ?)",
-            (novel_id, volume_index, title, summary, factions, is_dirty)
+            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules)
         )
     conn.commit()
     conn.close()
@@ -303,8 +476,76 @@ def get_volumes(novel_id):
             d["parsed_factions"] = json.loads(d["factions"])
         except:
             d["parsed_factions"] = [d["factions"]] if d["factions"] else []
+            
+        # 解析適用法則 JSON
+        try:
+            if d.get("applicable_rules"):
+                d["parsed_applicable_rules"] = json.loads(d["applicable_rules"])
+            else:
+                d["parsed_applicable_rules"] = []
+        except:
+            d["parsed_applicable_rules"] = [d["applicable_rules"]] if d["applicable_rules"] else []
+            
         res.append(d)
     return res
+
+def get_volume_chapter_range(volumes, target_volume_index):
+    """
+    根據篇卷列表，動態計算特定篇卷的起始與結束章節序號 (1-indexed)。
+    每卷包含的章節數由 vol["chapter_count"] 決定（預設為 50 章）。
+    """
+    start_chapter = 1
+    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
+    for vol in sorted_vols:
+        vol_idx = int(vol.get("volume_index", 0))
+        vol_ch_count = int(vol.get("chapter_count") or 50)
+        end_chapter = start_chapter + vol_ch_count - 1
+        if vol_idx == target_volume_index:
+            return start_chapter, end_chapter
+        start_chapter = end_chapter + 1
+        
+    # Fallback: 如果 target_volume_index 超出 volumes 已有範圍，則從最後一卷向後推導
+    if sorted_vols:
+        last_vol = sorted_vols[-1]
+        last_vol_idx = int(last_vol.get("volume_index", 0))
+        last_start, last_end = get_volume_chapter_range(volumes, last_vol_idx)
+        diff = target_volume_index - last_vol_idx
+        default_count = int(last_vol.get("chapter_count") or 50)
+        start = last_end + (diff - 1) * default_count + 1
+        return start, start + default_count - 1
+        
+    return (target_volume_index - 1) * 50 + 1, target_volume_index * 50
+
+def get_chapter_volume_index(volumes, chapter_index):
+    """
+    根據章節序號，尋找所屬的篇卷 index。如果找不到，返回 fallback 估計值。
+    """
+    start_chapter = 1
+    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
+    for vol in sorted_vols:
+        vol_idx = int(vol.get("volume_index", 0))
+        vol_ch_count = int(vol.get("chapter_count") or 50)
+        end_chapter = start_chapter + vol_ch_count - 1
+        if start_chapter <= int(chapter_index) <= end_chapter:
+            return vol_idx
+        start_chapter = end_chapter + 1
+        
+    # Fallback: 如果超出已規劃卷的最末章節，則往後延伸
+    if sorted_vols:
+        last_vol = sorted_vols[-1]
+        last_vol_idx = int(last_vol.get("volume_index", 0))
+        _, last_end = get_volume_chapter_range(volumes, last_vol_idx)
+        if int(chapter_index) > last_end:
+            default_count = int(last_vol.get("chapter_count") or 50)
+            diff = (int(chapter_index) - last_end - 1) // default_count + 1
+            return last_vol_idx + diff
+            
+    return (int(chapter_index) - 1) // 50 + 1
+
+def get_total_chapter_count(volumes):
+    if not volumes:
+        return 1000
+    return sum(int(v.get("chapter_count") or 50) for v in volumes)
 
 def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn = get_db_connection()
@@ -331,10 +572,11 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     all_ch = plot["parsed_data"].get("chapters", []) if plot else []
     
     filtered_ch = []
+    vols = get_volumes(novel_id)
     for c in all_ch:
         ch_idx = c.get("chapter_index")
         if ch_idx is not None:
-            c_vol = (int(ch_idx) - 1) // 50 + 1
+            c_vol = get_chapter_volume_index(vols, int(ch_idx))
             if c_vol != int(volume_index):
                 filtered_ch.append(c)
         else:
@@ -396,8 +638,9 @@ def mark_downstream_dirty(novel_id, source_chapter_index):
     # 2. Mark latest plot_chapters (outlines) record as dirty
     cursor.execute("UPDATE plot_chapters SET is_dirty = 1 WHERE novel_id = ?", (novel_id,))
     
-    # 3. Mark downstream volumes as dirty (approx 50 chapters per volume)
-    source_volume = (source_chapter_index - 1) // 50 + 1
+    # 3. Mark downstream volumes as dirty
+    vols = get_volumes(novel_id)
+    source_volume = get_chapter_volume_index(vols, source_chapter_index)
     cursor.execute("UPDATE volumes SET is_dirty = 1 WHERE novel_id = ? AND volume_index > ?", (novel_id, source_volume))
     
     conn.commit()
@@ -554,15 +797,15 @@ def save_plot_chapters(novel_id, outline_json):
     if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
         chapters_list = parsed_dict["chapters"]
         if isinstance(chapters_list, list):
-            # Group chapters by volume_index: (chapter_index - 1) // 50 + 1
             vol_groups = {}
+            vols = get_volumes(novel_id)
             for ch in chapters_list:
                 try:
                     c_idx = int(ch.get("chapter_index", 0))
                 except:
                     c_idx = 0
                 if c_idx > 0:
-                    vol_idx = ((c_idx - 1) // 50) + 1
+                    vol_idx = get_chapter_volume_index(vols, c_idx)
                     if vol_idx not in vol_groups:
                         vol_groups[vol_idx] = []
                     vol_groups[vol_idx].append(ch)
@@ -584,10 +827,11 @@ def save_plot_chapters(novel_id, outline_json):
                     )
                 else:
                     # Dynamically create new volume card if it does not exist
+                    v_start, v_end = get_volume_chapter_range(vols, vol_idx)
                     cursor.execute(
                         "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
                         "VALUES (?, ?, ?, ?, ?, 0, ?)",
-                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {(vol_idx-1)*50 + 1} 章至第 {vol_idx*50} 章的大綱規劃。", "全域陣列", vol_chaps_str)
+                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", vol_chaps_str)
                     )
                     
     conn.commit()
@@ -1013,7 +1257,105 @@ def update_volume(novel_id, volume_index, title, summary, factions):
 def delete_volume(novel_id, volume_index):
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # 1. 取得所有篇卷，以便在刪除前計算章節範圍與章節數
+    rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+    vols = [dict(r) for r in rows]
+    
+    if not vols:
+        conn.close()
+        return
+        
+    start_ch, end_ch = get_volume_chapter_range(vols, volume_index)
+    ch_count = end_ch - start_ch + 1
+    
+    # 2. 從 volumes 表中刪除該卷
     cursor.execute("DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?", (novel_id, volume_index))
+    
+    # 3. 對剩餘的所有卷進行 volume_index 重排，確保 1-indexed 連續無縫，並同步平移及更新每個餘下卷內 chapters_outline 中的 chapter_index
+    remaining_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+    for idx, r in enumerate(remaining_rows):
+        new_vol_idx = idx + 1
+        old_vol_idx = r["volume_index"]
+        
+        # 解析並處理該卷對應的 chapters_outline
+        ch_outline_str = r["chapters_outline"]
+        updated_outline_str = ch_outline_str
+        if ch_outline_str:
+            try:
+                ch_list = json.loads(ch_outline_str)
+                if isinstance(ch_list, list):
+                    updated_chaps = []
+                    for c in ch_list:
+                        c_idx = int(c.get("chapter_index", 0))
+                        if start_ch <= c_idx <= end_ch:
+                            continue # 剔除已被刪除卷範圍內的章節
+                        elif c_idx > end_ch:
+                            c["chapter_index"] = c_idx - ch_count # 平移後續章節 index
+                        updated_chaps.append(c)
+                    updated_outline_str = json.dumps(updated_chaps, ensure_ascii=False)
+            except Exception as e:
+                print(f"[ERROR] Failed to update chapters_outline for vol {old_vol_idx}: {e}")
+                
+        cursor.execute(
+            "UPDATE volumes SET volume_index = ?, chapters_outline = ? WHERE id = ?",
+            (new_vol_idx, updated_outline_str, r["id"])
+        )
+            
+    # 4. 同步更新 worldbuilding 表中最先進世界觀 JSON 數據，防止幽靈卷殘留
+    wb_row = cursor.execute("SELECT * FROM worldbuilding WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchone()
+    if wb_row:
+        wb_data = dict(wb_row)
+        try:
+            current_json = json.loads(wb_data["content"])
+            if isinstance(current_json, dict) and "volumes" in current_json:
+                v_list = current_json["volumes"]
+                if isinstance(v_list, list):
+                    # 篩選掉被刪除的那一卷
+                    updated_v_list = [v for v in v_list if int(v.get("volume_index", 0)) != volume_index]
+                    # 重新編排 volume_index
+                    for idx, v in enumerate(updated_v_list):
+                        v["volume_index"] = idx + 1
+                    current_json["volumes"] = updated_v_list
+                    
+                    next_wb_version = int(wb_data.get("version", 0)) + 1
+                    cursor.execute(
+                        "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
+                        (novel_id, json.dumps(current_json, ensure_ascii=False, indent=2), next_wb_version)
+                    )
+        except Exception as e:
+            print(f"[ERROR] Failed to synchronize worldview JSON: {e}")
+
+    # 5. 刪除對應的已寫正文章節，並將其後所有章節的 chapter_index 向前平移以填補空洞
+    cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
+    cursor.execute("UPDATE chapters SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
+    
+    # 6. 自大綱（plot_chapters 表）中剔除該卷的章節，並將後續大綱章節的 chapter_index 同步向前平移
+    plot_rows = cursor.execute("SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchall()
+    if plot_rows:
+        latest = dict(plot_rows[0])
+        try:
+            parsed = json.loads(latest["outline_json"])
+            if isinstance(parsed, dict) and "chapters" in parsed:
+                chaps = parsed["chapters"]
+                updated_chaps = []
+                for c in chaps:
+                    c_idx = int(c.get("chapter_index", 0))
+                    if start_ch <= c_idx <= end_ch:
+                        continue # 剔除被刪卷的章節
+                    elif c_idx > end_ch:
+                        c["chapter_index"] = c_idx - ch_count # 平移後續章節
+                    updated_chaps.append(c)
+                parsed["chapters"] = updated_chaps
+                
+                next_version = int(latest.get("version", 0)) + 1
+                cursor.execute(
+                    "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+                    (novel_id, json.dumps(parsed, ensure_ascii=False), next_version)
+                )
+        except Exception as e:
+            print(f"[ERROR] Failed to update plot chapters: {e}")
+            
     conn.commit()
     conn.close()
 

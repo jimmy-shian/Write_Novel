@@ -1,3 +1,15 @@
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except:
+        pass
+
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -259,11 +271,15 @@ def api_agent_character_designer(novel_id: str = Body(...), user_prompt: Optiona
     )
 
 @app.post("/api/agent/plot-planner")
-def api_agent_plot_planner(novel_id: str = Body(...), user_prompt: Optional[str] = Body(None)):
+def api_agent_plot_planner(
+    novel_id: str = Body(...),
+    user_prompt: Optional[str] = Body(None),
+    planner_directive: Optional[str] = Body(None)
+):
     if not get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        run_plot_planner(novel_id, user_prompt),
+        run_plot_planner(novel_id, user_prompt, planner_directive),
         media_type="text/event-stream"
     )
 
@@ -726,7 +742,15 @@ def api_novel_retrospective(novel_id: str):
         for future in concurrent.futures.as_completed(futures):
             key = futures[future]
             try:
-                retrospectives[key] = future.result()
+                result = future.result()
+                retrospectives[key] = result
+                # 若為總監回答，則輸出到終端機
+                if key == "Co-pilot Director":
+                    print("\n" + "=" * 60, flush=True)
+                    print("🧠 Co-pilot Director 總監回答：", flush=True)
+                    print("=" * 60, flush=True)
+                    print(result, flush=True)
+                    print("=" * 60 + "\n", flush=True)
             except Exception as e:
                 retrospectives[key] = f"生成心得失敗：{str(e)}"
                 
