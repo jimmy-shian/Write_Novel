@@ -110,6 +110,53 @@ def get_config_for_agent(agent_name):
                 
     return config
 
+def normalize_messages(messages):
+    """
+    Normalizes the messages list to guarantee:
+    1. A single 'system' message at the very beginning (combining multiple if present).
+    2. Roles strictly alternate between 'user' and 'assistant'.
+    3. The first message after 'system' is always 'user'.
+    """
+    if not messages:
+        return []
+        
+    system_content = []
+    other_messages = []
+    
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content") or ""
+        if role == "system":
+            system_content.append(content)
+        else:
+            other_messages.append({"role": role, "content": content})
+            
+    normalized = []
+    if system_content:
+        normalized.append({"role": "system", "content": "\n".join(system_content)})
+        
+    if not other_messages:
+        return normalized
+        
+    # Merge consecutive messages of the same role
+    merged_others = []
+    for msg in other_messages:
+        if not merged_others:
+            merged_others.append(msg)
+        else:
+            last_msg = merged_others[-1]
+            if last_msg["role"] == msg["role"]:
+                last_msg["content"] = (last_msg["content"] + "\n\n" + msg["content"]).strip()
+            else:
+                merged_others.append(msg)
+                
+    # Ensure the first non-system message is 'user'
+    if merged_others and merged_others[0]["role"] == "assistant":
+        merged_others.insert(0, {"role": "user", "content": "請開始小說寫作、分析與指導："})
+        
+    normalized.extend(merged_others)
+    return normalized
+
 def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     """
     Calls the LLM API using standard streaming and yields custom SSE formatted chunks.
@@ -135,9 +182,12 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         "Accept": "text/event-stream"
     }
     
+    normalized_msgs = normalize_messages(messages)
+    print(f"[LLM PATCH] Normalized {len(messages)} messages to {len(normalized_msgs)} to guarantee alternating roles.")
+    
     payload = {
         "model": config["model"],
-        "messages": messages,
+        "messages": normalized_msgs,
         "max_tokens": int(config["max_tokens"]),
         "temperature": float(config["temperature"]),
         "top_p": float(config["top_p"]),
@@ -215,13 +265,6 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                             "type": "thinking",
                             "delta": reasoning
                         }, ensure_ascii=False) + "\n\n"
-                        # If content is empty, also yield as content so models that return 
-                        # response under reasoning_content don't lose their output tokens
-                        if not content:
-                            yield "data: " + json.dumps({
-                                "type": "content",
-                                "delta": reasoning
-                            }, ensure_ascii=False) + "\n\n"
                         continue
                         
                     if content:
