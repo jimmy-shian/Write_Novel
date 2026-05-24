@@ -1,35 +1,78 @@
-# 任務進度追蹤
+# 宏觀大綱生成策略重構任務清單
 
-## 問題：✍️ 分章寫作章節清單切換問題
+## 目標
+實作「四階段漸進式漏斗流」大綱生成策略，解決長篇小說大綱「骨質疏鬆、短線流水帳」的問題。
 
-### 問題描述
-1. 切換章節時沒有正確顯示該章節內容
-2. 串流的即時顯示會出現在文本框中（應該只在 AI 正在寫作該章節時顯示）
+## 四階段流程（已完成 ✅）
+1. 世界觀設定 → 2. 簡易章綱 (Volume Skeleton) → 3. 伏筆編織 (Foreshadowing Orchestration) → 4. 微觀細修 (Plot Expansion) → 5. 正文寫作
 
-### 分析
-從代碼分析發現兩個問題：
+---
 
-1. **pipeline.js 的 `writeAllChaptersSequentially` 函數**：
-   - 串流回呼沒有檢查當前是否仍是活躍章節
-   - 導致 AI 寫作舊章節時的串流內容被追加到當前選擇的新章節
+## 任務清單（全部完成 ✅）
 
-2. **pipeline.js 的 `executePipelineStage` 函數**：
-   - 同樣沒有對 `writer` 階段的串流進行章節活躍檢查
+### Phase 1: 後端 Prompt 與函數新增 (agents.py) ✅
+- [x] 1.1 新增 `VOLUME_SKELETON_PROMPT`（簡易章大綱生成器 Prompt）
+- [x] 1.2 新增 `FORESHADOWING_ORCHESTRATOR_PROMPT`（全局伏筆調度導演 Prompt）
+- [x] 1.3 新增 `run_volume_skeleton_planner` 函數
+- [x] 1.4 新增 `run_foreshadowing_orchestrator` 函數
+- [x] 1.5 修改 `run_plot_planner` 讓它從資料庫讀取已含伏筆任務的骨架進行細修
 
-### 修復完成
-- [x] 在 state.js 中新增 `currentlyWritingChapterIndex` 狀態追蹤
-- [x] 在 pipeline.js 的 `writeAllChaptersSequentially` 中修改串流回呼，檢查是否為當前活躍章節
-- [x] 在 pipeline.js 的 `executePipelineStage` 中為 writer 階段添加章節檢查
-- [x] 在 renderers.js 的 `selectWriterChapter` 中添加保護邏輯
+### Phase 2: 資料庫函數新增 (db.py) ✅
+- [x] 2.1 新增 `save_volume_skeletons` 函數
+- [x] 2.2 新增 `get_all_volume_skeletons` 函數
+- [x] 2.3 新增 `save_foreshadowing_allocations` 函數
 
-### 修改檔案
-1. **static/state.js** - 新增 `currentlyWritingChapterIndex` 狀態
-2. **static/pipeline.js** - 為所有 writer 階段串流添加章節檢查
-3. **static/renderers.js** - 在 `selectWriterChapter` 中增強邏輯
+### Phase 3: API 端點新增 (app.py) ✅
+- [x] 3.1 新增 `/api/agent/volume-skeleton` 端點
+- [x] 3.2 新增 `/api/agent/foreshadowing-orchestrate` 端點
 
-### 修復邏輯說明
-當用戶在 AI 寫作章節時切換到另一個章節：
-1. `currentlyWritingChapterIndex` 追蹤正在寫作的章節索引
-2. 串流回呼檢查 `state.currentlyWritingChapterIndex === chapterIndex` 才寫入
-3. 如果用戶切換到其他章節，舊的串流內容不會被寫入新的章節
-4. 當章節寫作完成或失敗時，清除 `currentlyWritingChapterIndex` 狀態
+### Phase 4: 前端管道邏輯更新 (pipeline_logic.js) ✅
+- [x] 4.1 修改 `resolveNextStageFromDecision` 加入 `volume_skeleton` 和 `foreshadowing_orchestration` 階段
+
+### Phase 5: 前端管道執行更新 (pipeline.js) ✅
+- [x] 5.1 在 `executePipelineStage` 中新增 `volume_skeleton` 案例處理
+- [x] 5.2 在 `executePipelineStage` 中新增 `foreshadowing_orchestration` 案例處理
+
+### Phase 6: 前端狀態更新 (state.js) ✅
+- [x] 6.1 在 `currentNovelData` 中新增 `volume_skeletons` 結構與 `activeVolumeIndex`
+
+### Phase 7: 前端執行路由更新 (app.js) ✅
+- [x] 7.1 修改 `executeDirectorAction` 加入新階段的路由處理
+- [x] 7.2 修改 `runPipeline` 加入新階段的初始化
+
+### Phase 8: 前端 UI 更新 (index.html) ✅
+- [x] 8.1 在進度條中新增 `volume_skeleton` 階段指示器 (🦴 簡易章綱)
+- [x] 8.2 在進度條中新增 `foreshadowing_orchestration` 階段指示器 (🕸️ 伏筆編織)
+
+---
+
+## 進度追蹤
+- 建立時間: 2026-05-25
+- 更新時間: 2026-05-25 02:28
+- 全部 Phase 完成 ✅
+
+## 核心變更摘要
+
+### 新增的 Prompt (agents.py)
+- `VOLUME_SKELETON_PROMPT`: 簡易章節骨架生成器，用於 Stage 2
+- `FORESHADOWING_ORCHESTRATOR_PROMPT`: 全局伏筆編織導演，用於 Stage 3
+
+### 新增的函數 (agents.py)
+- `run_volume_skeleton_planner()`: 為特定卷生成簡易章節骨架
+- `run_foreshadowing_orchestrator()`: 將全局伏筆分配到各章節
+
+### 新增的資料庫函數 (db.py)
+- `save_volume_skeletons()`: 保存卷的章節骨架
+- `get_all_volume_skeletons()`: 獲取所有卷的骨架
+- `save_foreshadowing_allocations()`: 保存伏筆分配結果
+
+### 新增的 API 端點 (app.py)
+- `POST /api/agent/volume-skeleton`: 生成簡易章節骨架
+- `POST /api/agent/foreshadowing-orchestrate`: 全局伏筆編織
+
+### 階段流程更新 (pipeline_logic.js)
+- 新增 `volume_skeleton` 和 `foreshadowing_orchestration` 階段
+
+### 進度條 UI 更新 (index.html)
+- 🦴 簡易章綱 (Volume Skeleton)
+- 🕸️ 伏筆編織 (Foreshadowing Orchestration)
