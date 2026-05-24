@@ -5,6 +5,33 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
+# 新增 opencc 套件，用於簡體轉繁體
+try:
+    from opencc import OpenCC
+    _s2t_converter = OpenCC('s2t')
+except Exception:
+    # 若套件未安裝或載入失敗，fallback 為 identity function
+    _s2t_converter = None
+
+def _to_traditional(text):
+    """將傳入的文字從簡體轉換為繁體。若非字串或轉換器不可用，直接回傳原值。"""
+    if isinstance(text, str) and _s2t_converter:
+        try:
+            return _s2t_converter.convert(text)
+        except Exception:
+            return text
+    return text
+
+def _convert_obj_to_traditional(obj):
+    """遞迴將物件內所有字串轉換為繁體（用於 dict/list 結構）。"""
+    if isinstance(obj, str):
+        return _to_traditional(obj)
+    if isinstance(obj, list):
+        return [_convert_obj_to_traditional(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _convert_obj_to_traditional(v) for k, v in obj.items()}
+    return obj
+
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
@@ -419,7 +446,7 @@ def create_novel(novel_id, title, genre, style):
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO novels (id, title, genre, style, pipeline_prompt) VALUES (?, ?, ?, ?, ?)",
-        (novel_id, title, genre, style, "")
+        (novel_id, _to_traditional(title), genre, style, "")
     )
     conn.commit()
     conn.close()
@@ -429,7 +456,7 @@ def update_novel_pipeline_prompt(novel_id, pipeline_prompt):
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE novels SET pipeline_prompt = ? WHERE id = ?",
-        (pipeline_prompt, novel_id)
+        (_to_traditional(pipeline_prompt), novel_id)
     )
     conn.commit()
     conn.close()
@@ -462,20 +489,24 @@ def save_volumes(novel_id, volumes_list):
     cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
     for idx, vol in enumerate(volumes_list):
         volume_index = vol.get("volume_index", idx + 1)
-        title = vol.get("title", f"第 {volume_index} 卷")
-        summary = vol.get("summary", "")
+        title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
+        summary = _to_traditional(vol.get("summary", ""))
         factions = vol.get("factions", "")
         if isinstance(factions, list) or isinstance(factions, dict):
-            factions = json.dumps(factions, ensure_ascii=False)
+            factions = json.dumps(_convert_obj_to_traditional(factions), ensure_ascii=False)
+        else:
+            factions = _to_traditional(factions)
         is_dirty = vol.get("is_dirty", 0)
         chapter_count = vol.get("chapter_count", 50)
         
         # 新增的精密對接欄位
-        time_timeline = vol.get("time_timeline", "")
-        sequence_context = vol.get("sequence_context", "")
+        time_timeline = _to_traditional(vol.get("time_timeline", ""))
+        sequence_context = _to_traditional(vol.get("sequence_context", ""))
         applicable_rules = vol.get("applicable_rules", "")
         if isinstance(applicable_rules, list) or isinstance(applicable_rules, dict):
-            applicable_rules = json.dumps(applicable_rules, ensure_ascii=False)
+            applicable_rules = json.dumps(_convert_obj_to_traditional(applicable_rules), ensure_ascii=False)
+        else:
+            applicable_rules = _to_traditional(applicable_rules)
             
         cursor.execute(
             "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
@@ -580,7 +611,7 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     cursor = conn.cursor()
     
     # 1. Update volumes table's chapters_outline column
-    chapters_json = json.dumps(node_chapters, ensure_ascii=False)
+    chapters_json = json.dumps(_convert_obj_to_traditional(node_chapters), ensure_ascii=False)
     cursor.execute(
         "UPDATE volumes SET chapters_outline = ?, is_dirty = 0 WHERE novel_id = ? AND volume_index = ?",
         (chapters_json, novel_id, volume_index)
@@ -636,8 +667,8 @@ def add_worldview_patch(novel_id, category, details, source_chapter_index):
         except:
             patches = []
     patches.append({
-        "category": category,
-        "details": details,
+        "category": _to_traditional(category),
+        "details": _to_traditional(details),
         "source_chapter": source_chapter_index,
         "created_at": datetime.now().isoformat()
     })
@@ -719,7 +750,7 @@ def save_worldbuilding(novel_id, content):
     
     cursor.execute(
         "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
-        (novel_id, content, next_version)
+        (novel_id, _to_traditional(content), next_version)
     )
     conn.commit()
     conn.close()
@@ -745,9 +776,11 @@ def get_latest_characters(novel_id):
 
 def save_characters(novel_id, json_data):
     if isinstance(json_data, dict) or isinstance(json_data, list):
+        # 先將字典/清單內的字串進行繁體轉換
+        json_data = _convert_obj_to_traditional(json_data)
         json_str = json.dumps(json_data, ensure_ascii=False)
     else:
-        json_str = json_data
+        json_str = _to_traditional(json_data)
         
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -790,10 +823,12 @@ def get_latest_plot_chapters(novel_id):
 
 def save_plot_chapters(novel_id, outline_json):
     if isinstance(outline_json, dict) or isinstance(outline_json, list):
+        # 轉換所有字串為繁體再序列化
+        outline_json = _convert_obj_to_traditional(outline_json)
         json_str = json.dumps(outline_json, ensure_ascii=False)
         parsed_dict = outline_json
     else:
-        json_str = outline_json
+        json_str = _to_traditional(outline_json)
         try:
             parsed_dict = json.loads(outline_json)
         except:
@@ -899,7 +934,8 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None)
     
     cursor.execute(
         "INSERT INTO chapters (novel_id, chapter_index, content, synopsis, thinking, version, is_dirty) VALUES (?, ?, ?, ?, ?, ?, 0)",
-        (novel_id, chapter_index, content, synopsis, thinking, next_version)
+        (novel_id, chapter_index, _to_traditional(content), _to_traditional(synopsis) if synopsis else None,
+         _to_traditional(thinking) if thinking else None, next_version)
     )
     conn.commit()
     conn.close()
@@ -927,7 +963,7 @@ def save_chat_message(novel_id, role, content, thinking=None, message_type='chat
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO chat_memory (novel_id, role, content, thinking, message_type) VALUES (?, ?, ?, ?, ?)",
-        (novel_id, role, content, thinking, message_type)
+        (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
     )
     conn.commit()
     conn.close()
@@ -1109,8 +1145,8 @@ def parse_worldview_to_json(content):
                 sep = "：" if "：" in clean_line else ":"
                 parts = clean_line.split(sep, 1)
                 title = parts[0].strip()
-                content = parts[1].strip()
-                parsed_ta.append({"title": title, "content": content})
+                content_text = parts[1].strip()
+                parsed_ta.append({"title": title, "content": content_text})
             else:
                 parsed_ta.append({"title": f"項目 #{len(parsed_ta) + 1}", "content": clean_line})
         if parsed_ta:
@@ -1128,8 +1164,8 @@ def parse_worldview_to_json(content):
                 sep = "：" if "：" in clean_line else ":"
                 parts = clean_line.split(sep, 1)
                 title = parts[0].strip()
-                content = parts[1].strip()
-                parsed_cp.append({"title": title, "content": content})
+                content_text = parts[1].strip()
+                parsed_cp.append({"title": title, "content": content_text})
             else:
                 parsed_cp.append({"title": f"階段 #{len(parsed_cp) + 1}", "content": clean_line})
         if parsed_cp:
@@ -1259,7 +1295,9 @@ def update_volume(novel_id, volume_index, title, summary, factions):
     conn = get_db_connection()
     cursor = conn.cursor()
     if isinstance(factions, list) or isinstance(factions, dict):
-        factions = json.dumps(factions, ensure_ascii=False)
+        factions = json.dumps(_convert_obj_to_traditional(factions), ensure_ascii=False)
+    else:
+        factions = _to_traditional(factions)
         
     # Check if volume already exists
     row = cursor.execute(
@@ -1270,13 +1308,13 @@ def update_volume(novel_id, volume_index, title, summary, factions):
     if row:
         cursor.execute(
             "UPDATE volumes SET title = ?, summary = ?, factions = ? WHERE novel_id = ? AND volume_index = ?",
-            (title, summary, factions, novel_id, volume_index)
+            (_to_traditional(title), _to_traditional(summary), factions, novel_id, volume_index)
         )
     else:
         cursor.execute(
             "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
             "VALUES (?, ?, ?, ?, ?, 0, '[]')",
-            (novel_id, volume_index, title, summary, factions)
+            (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
         )
     conn.commit()
     conn.close()
@@ -1348,7 +1386,7 @@ def delete_volume(novel_id, volume_index):
                     next_wb_version = int(wb_data.get("version", 0)) + 1
                     cursor.execute(
                         "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
-                        (novel_id, json.dumps(current_json, ensure_ascii=False, indent=2), next_wb_version)
+                        (novel_id, json.dumps(_convert_obj_to_traditional(current_json), ensure_ascii=False, indent=2), next_wb_version)
                     )
         except Exception as e:
             print(f"[ERROR] Failed to synchronize worldview JSON: {e}")
@@ -1378,7 +1416,7 @@ def delete_volume(novel_id, volume_index):
                 next_version = int(latest.get("version", 0)) + 1
                 cursor.execute(
                     "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-                    (novel_id, json.dumps(parsed, ensure_ascii=False), next_version)
+                    (novel_id, json.dumps(_convert_obj_to_traditional(parsed), ensure_ascii=False), next_version)
                 )
         except Exception as e:
             print(f"[ERROR] Failed to update plot chapters: {e}")
@@ -1413,3 +1451,163 @@ def get_stitched_plot(novel_id):
     return plot["parsed_data"] if plot else {"chapters": []}
 
 
+# ==============================================================================
+# NEW: 四階段大綱生成策略 - Stage 2 & Stage 3 資料庫函數
+# ==============================================================================
+
+def save_volume_skeletons(novel_id, volume_index, chapters_skeleton):
+    """
+    [新功能] 保存某卷的簡易章節骨架大綱到 volumes 表的 chapters_outline 欄位
+    這是 Stage 2 (Volume Skeleton) 的產出儲存點
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 將章節骨架轉為 JSON 並保存
+    skeleton_json = json.dumps(_convert_obj_to_traditional(chapters_skeleton), ensure_ascii=False, indent=2)
+    
+    # 更新 volumes 表中該卷的 chapters_outline
+    cursor.execute(
+        "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
+        (skeleton_json, novel_id, volume_index)
+    )
+    
+    # 如果該卷記錄不存在，則新增
+    if cursor.rowcount == 0:
+        from db import get_volumes, get_volume_chapter_range
+        volumes = get_volumes(novel_id)
+        start_ch, end_ch = get_volume_chapter_range(volumes, volume_index)
+        cursor.execute(
+            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?)",
+            (novel_id, volume_index, f"第 {volume_index} 卷", f"本卷包含第 {start_ch} 章至第 {end_ch} 章的簡易骨架大綱。", "全域陣列", skeleton_json)
+        )
+    
+    conn.commit()
+    conn.close()
+    print(f"[DB] Volume {volume_index} skeleton saved successfully")
+
+
+def get_all_volume_skeletons(novel_id):
+    """
+    [新功能] 獲取所有卷的簡易章節骨架（用於 Stage 3 全局伏筆編織）
+    """
+    volumes = get_volumes(novel_id)
+    all_skeletons = []
+    
+    for vol in volumes:
+        ch_outline_str = vol.get("chapters_outline")
+        if ch_outline_str:
+            try:
+                ch_list = json.loads(ch_outline_str)
+                if isinstance(ch_list, list) and len(ch_list) > 0:
+                    # 為每個章節附加 volume_index 資訊
+                    vol_idx = int(vol.get("volume_index", 0))
+                    vol_title = vol.get("title", f"第 {vol_idx} 卷")
+                    for ch in ch_list:
+                        ch["volume_index"] = vol_idx
+                        ch["volume_title"] = vol_title
+                    all_skeletons.extend(ch_list)
+            except Exception as e:
+                print(f"[WARN] Failed to parse skeleton for vol {vol.get('volume_index')}: {e}")
+    
+    # 按章節序號排序
+    all_skeletons.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
+    
+    return all_skeletons
+
+
+def save_foreshadowing_allocations(novel_id, allocations):
+    """
+    [新功能] 將全局伏筆編織導演分配好的 allocated_tasks 寫回到各章節的骨架中
+    這是 Stage 3 (Foreshadowing Orchestration) 的產出儲存點
+    """
+    if not allocations or not isinstance(allocations, list):
+        print("[WARN] No allocations to save")
+        return
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # 建立 chapter_index -> allocation 的映射
+        allocation_map = {}
+        for alloc in allocations:
+            ch_idx = alloc.get("chapter_index")
+            if ch_idx is not None:
+                allocation_map[int(ch_idx)] = alloc
+        
+        # 取得所有 volumes
+        cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,))
+        volume_rows = cursor.fetchall()
+        
+        for vol_row in volume_rows:
+            vol = dict(vol_row)
+            ch_outline_str = vol.get("chapters_outline")
+            if not ch_outline_str:
+                continue
+            
+            try:
+                ch_list = json.loads(ch_outline_str)
+                if not isinstance(ch_list, list):
+                    continue
+                    
+                modified = False
+                for ch in ch_list:
+                    ch_idx = int(ch.get("chapter_index", 0))
+                    if ch_idx in allocation_map:
+                        alloc = allocation_map[ch_idx]
+                        # 更新 allocated_tasks
+                        if "allocated_tasks" not in ch:
+                            ch["allocated_tasks"] = {}
+                        
+                        alloc_tasks = ch["allocated_tasks"]
+                        if "foreshadowing_plants" in alloc:
+                            existing_plants = alloc_tasks.get("foreshadowing_plants", [])
+                            if isinstance(existing_plants, list):
+                                for plant in alloc["foreshadowing_plants"]:
+                                    if plant not in existing_plants:
+                                        existing_plants.append(plant)
+                            else:
+                                alloc_tasks["foreshadowing_plants"] = alloc["foreshadowing_plants"]
+                        
+                        if "foreshadowing_payoffs" in alloc:
+                            existing_payoffs = alloc_tasks.get("foreshadowing_payoffs", [])
+                            if isinstance(existing_payoffs, list):
+                                for payoff in alloc["foreshadowing_payoffs"]:
+                                    if payoff not in existing_payoffs:
+                                        existing_payoffs.append(payoff)
+                            else:
+                                alloc_tasks["foreshadowing_payoffs"] = alloc["foreshadowing_payoffs"]
+                        
+                        if "turning_points" in alloc:
+                            existing_tps = alloc_tasks.get("turning_points", [])
+                            if isinstance(existing_tps, list):
+                                for tp in alloc["turning_points"]:
+                                    if tp not in existing_tps:
+                                        existing_tps.append(tp)
+                            else:
+                                alloc_tasks["turning_points"] = alloc["turning_points"]
+                        
+                        modified = True
+                
+                if modified:
+                    # 回寫到資料庫
+                    new_outline_json = json.dumps(_convert_obj_to_traditional(ch_list), ensure_ascii=False, indent=2)
+                    cursor.execute(
+                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                        (new_outline_json, vol_row["id"])
+                    )
+                    
+            except Exception as e:
+                print(f"[WARN] Failed to update allocations for vol {vol.get('volume_index')}: {e}")
+        
+        conn.commit()
+        print(f"[DB] Foreshadowing allocations saved successfully for {novel_id}")
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"[ERROR] Failed to save foreshadowing allocations: {e}")
+        raise
+    finally:
+        conn.close()

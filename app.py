@@ -58,7 +58,9 @@ from agents import (
     run_director_decision_help,
     set_director_auto_execute,
     set_director_user_prompt,
-    get_director_auto_execute
+    get_director_auto_execute,
+    run_volume_skeleton_planner,
+    run_foreshadowing_orchestrator
 )
 # 增量生成 Agent
 from agents_incremental import (
@@ -656,6 +658,48 @@ def api_incremental_plot(payload: IncrementalPlotRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
         run_incremental_plot_planner(novel_id, payload.insert_after_index, payload.user_hint),
+        media_type="text/event-stream"
+    )
+
+# ============================================================
+# 四階段大綱生成策略 - Stage 2 & Stage 3 API 端點
+# ============================================================
+class VolumeSkeletonRequest(BaseModel):
+    """生成特定卷的簡易章節骨架"""
+    novel_id: str
+    volume_index: int
+    user_prompt: Optional[str] = None
+
+@app.post("/api/agent/volume-skeleton")
+def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
+    """
+    [新功能] 四階段大綱生成 Stage 2：
+    為特定篇卷生成簡易章節骨架（Chapter Skeletons）。
+    """
+    novel_id = payload.novel_id
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_volume_skeleton_planner(novel_id, payload.volume_index, payload.user_prompt),
+        media_type="text/event-stream"
+    )
+
+class ForeshadowingOrchestrateRequest(BaseModel):
+    """全局伏筆編織對齊"""
+    novel_id: str
+    user_prompt: Optional[str] = None
+
+@app.post("/api/agent/foreshadowing-orchestrate")
+def api_agent_foreshadowing_orchestrate(payload: ForeshadowingOrchestrateRequest):
+    """
+    [新功能] 四階段大綱生成 Stage 3：
+    將全局伏筆種子與轉折點分配到各章節的骨架中。
+    """
+    novel_id = payload.novel_id
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_foreshadowing_orchestrator(novel_id, payload.user_prompt),
         media_type="text/event-stream"
     )
 
