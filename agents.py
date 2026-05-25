@@ -2870,12 +2870,12 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
         {"role": "user", "content": prompt_content}
     ]
     
+    # 💡 修正點：移除 save_callback 內部的 yield，改為純執行函式
     def save_callback(nid, text):
         parsed = parse_json_safely(text)
         if isinstance(parsed, dict) and "chapters_skeleton" in parsed:
             from db import save_volume_skeletons
             save_volume_skeletons(nid, volume_index, parsed["chapters_skeleton"])
-            yield "data: " + json.dumps({"type": "content", "delta": f"  ✅ 第 {volume_index} 卷的簡易章大綱已成功保存！\n"}, ensure_ascii=False) + "\n\n"
         else:
             print(f"[WARN] Volume skeleton parse failed: {parsed}")
     
@@ -2894,6 +2894,20 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
             except:
                 pass
     
+    # 💡【核心修復】：在串流完全結束後，進行 100% 完整全量數據的終點強制存檔！
+    # 防止串流中途修補導致的後半段骨架漏接問題
+    if skeleton_output:
+        parsed_final = parse_json_safely(skeleton_output)
+        if isinstance(parsed_final, dict) and "error" in parsed_final:
+            parsed_final = parse_json_safely(clean_json_text(skeleton_output))
+            
+        if isinstance(parsed_final, dict) and "chapters_skeleton" in parsed_final:
+            from db import save_volume_skeletons
+            save_volume_skeletons(novel_id, volume_index, parsed_final["chapters_skeleton"])
+            print(f"[GUARD SUCCESS] Volume {volume_index} {vol_chapter_count}-chapter full skeleton safely locked into DB.")
+            
+    # 💡 修正點：將成功訊息改在外層這裡發送，避免 callback 變成生成器
+    yield "data: " + json.dumps({"type": "content", "delta": f"  ✅ 第 {volume_index} 卷的簡易章大綱已成功保存到資料庫！\n"}, ensure_ascii=False) + "\n\n"
     yield "data: " + json.dumps({"type": "content", "delta": f"\n=== [第 {volume_index} 卷簡易章大綱生成完成] ===\n"}, ensure_ascii=False) + "\n\n"
     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 

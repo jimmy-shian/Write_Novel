@@ -637,6 +637,22 @@ export function renderPlotTab() {
                 </div>
             `;
 
+            // 💡【核心修復】：建立動態篇卷範圍累加器（完美對齊後端 db.get_volume_chapter_range 邏輯）
+            const sortedVols = [...volumes].sort((a, b) => parseInt(a.volume_index) - parseInt(b.volume_index));
+            const volRanges = {};
+            let currentGlobalStart = 1;
+
+            sortedVols.forEach(v => {
+                const vIdx = parseInt(v.volume_index);
+                const vCount = parseInt(v.chapter_count) || 50;
+                volRanges[vIdx] = {
+                    start: currentGlobalStart,
+                    end: currentGlobalStart + vCount - 1,
+                    count: vCount
+                };
+                currentGlobalStart += vCount;
+            });
+
             const timelineCardsHtml = volumes.map((vol) => {
                 const volIdx = vol.volume_index;
                 const isDirty = vol.is_dirty === 1;
@@ -647,50 +663,192 @@ export function renderPlotTab() {
                 const safeSummary = (vol.summary || '').replace(/`/g, '\\`').replace(/\$/g, '\\$');
                 const safeFactions = factionsVal.replace(/`/g, '\\`').replace(/\$/g, '\\$');
                 
-                // Filter chapters belonging to this volume (50 chapters per volume)
-                const volChapters = chapters.filter(c => {
+                // 💡 獲取當前卷的精確動態章節範圍
+                const myRange = volRanges[volIdx] || { start: (volIdx - 1) * 50 + 1, end: volIdx * 50, count: 50 };
+                const vStart = myRange.start;
+                const volChCount = myRange.count;
+                
+                // 1. 💡 使用動態範圍精確過濾高解像度微觀大綱章節
+                const volMicroChapters = chapters.filter(c => {
                     const cIdx = parseInt(c.chapter_index);
-                    return !isNaN(cIdx) && Math.floor((cIdx - 1) / 50) + 1 === volIdx;
+                    // 💡 改用範圍區間判定，不再盲目除以 50
+                    const isInVolumeRange = !isNaN(cIdx) && (cIdx >= myRange.start && cIdx <= myRange.end);
+                    if (!isInVolumeRange) return false;
+                    
+                    const hasMicroStructure = Array.isArray(c.events) && c.events.length > 0 ||
+                                              !!c.purpose || !!c.emotional_tone || !!c.cliffhanger;
+                    const hasTitleOrSummary = c.title && c.title.trim() !== '' && c.title !== '待設定標題';
+                    
+                    // 骨架數據通常有 brief_title，微觀大綱不應該有這個字段
+                    const isSkeleton = c.brief_title !== undefined && c.brief_title !== null;
+                    
+                    return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
                 });
 
-                // Calculate written progress inside this volume
-                const writtenChaptersCount = volChapters.filter(c => {
-                    const existing = state.currentNovelData?.chapters?.find(ec => parseInt(ec.chapter_index) === parseInt(c.chapter_index));
+                // 2. 💡 讀取後端在 Stage 2 寫入此卷的章節骨架（擴大容錯：同時支援 chapters_outline 和 chapters_skeleton 欄位）
+                let volSkeletonChapters = [];
+                const rawSkeletonData = vol.chapters_outline || vol.chapters_skeleton;
+                if (rawSkeletonData) {
+                    if (Array.isArray(rawSkeletonData)) {
+                        volSkeletonChapters = rawSkeletonData;
+                    } else if (typeof rawSkeletonData === 'string') {
+                        try { volSkeletonChapters = JSON.parse(rawSkeletonData); } catch (e) { volSkeletonChapters = []; }
+                    }
+                }
+                
+                // 💡 調試：觀察實際取到的資料結構
+                console.log(`[DEBUG] Vol ${volIdx} skeleton data:`, JSON.stringify(volSkeletonChapters).substring(0, 500));
+
+                // 3. 💡【核心修復點】：建立雙層 Map 緩衝區，進行逐章無縫融合
+                // 💡 終極防禦網：攔截 LLM 各種千奇百怪的章節索引命名
+                const skeletonMap = new Map();
+                volSkeletonChapters.forEach(ch => {
+                    // 💡 終極防禦網：攔截 LLM 各種千奇百怪的章節索引命名（chapter_index、chapter、index、id 等）
+                    const rawIdx = ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id;
+                    const idx = parseInt(rawIdx);
+                    
+                    if (!isNaN(idx)) {
+                        skeletonMap.set(idx, ch);
+                        // 調試：確認是否成功 Mapping 到正確的章節號
+                        console.log(`[DEBUG] Skeleton ch${idx} mapped! Title:`, ch.brief_title || ch.title);
+                    }
+                });
+
+                const microMap = new Map();
+                volMicroChapters.forEach(ch => {
+                    const idx = parseInt(ch.chapter_index);
+                    if (!isNaN(idx)) {
+                        microMap.set(idx, ch);
+                        console.log(`[DEBUG-MICRO] ch${idx} mapped! Title:`, ch.title);
+                    }
+                });
+                
+                // 💡 調試：顯示 microMap 的最終狀態
+                console.log(`[DEBUG] Vol ${volIdx} microMap size:`, microMap.size, '| skeletonMap size:', skeletonMap.size);
+
+                // 4. 動態收集本卷需要呈現的所有章節全局序號集合
+                //    優先收集骨架章節（Stage 2），再補足微觀大綱章節（Stage 4）
+                const chapterIdxSet = new Set();
+                
+                // 4.1 收集骨架章節（Stage 2 產出）
+                skeletonMap.forEach((_, idx) => chapterIdxSet.add(idx));
+                
+                // 4.2 收集微觀大綱章節（Stage 4 產出）
+                volMicroChapters.forEach(ch => chapterIdxSet.add(parseInt(ch.chapter_index)));
+                
+                // 4.3 💡 動態收集：根據精確的動態起點與章數填補格子
+                for (let i = 0; i < volChCount; i++) {
+                    chapterIdxSet.add(vStart + i);
+                }
+
+                // 將序號由小到大排序（例如 1 ~ 48）
+                const sortedIdxs = Array.from(chapterIdxSet).sort((a, b) => a - b);
+
+                // 5. 🚀 混合陣列組裝：有微觀用微觀，沒微觀用骨架，都沒用空白保底
+                const displayChapters = sortedIdxs.map(idx => {
+                    if (microMap.has(idx)) {
+                        return { ...microMap.get(idx), __renderMode: 'micro' };
+                    } else if (skeletonMap.has(idx)) {
+                        return { ...skeletonMap.get(idx), __renderMode: 'skeleton' };
+                    } else {
+                        return { chapter_index: idx, title: '待設定標題', summary: '待設定摘要', __renderMode: 'empty' };
+                    }
+                });
+
+                // 重新校準總規劃章節數與百分比
+                // 💡 修正點 1：總章數應該拿目前展示列表的長度（無論是微觀還是骨架），若皆無則拿該卷預設的 chapter_count
+                const totalChaptersCount = displayChapters.length || parseInt(vol.chapter_count) || 50;
+                const writtenChaptersCount = chapters.filter(c => {
+                    const cIdx = parseInt(c.chapter_index);
+                    if (Math.floor((cIdx - 1) / 50) + 1 !== volIdx) return false;
+                    const existing = state.currentNovelData?.chapters?.find(ec => parseInt(ec.chapter_index) === cIdx);
                     return !!(existing && existing.content && existing.content.trim());
                 }).length;
-                const totalChaptersCount = volChapters.length;
                 const progressPercent = totalChaptersCount > 0 ? Math.round((writtenChaptersCount / totalChaptersCount) * 100) : 0;
-                
+
                 const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : `<span class="dirty-badge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">✓ 已對齊</span>`;
                 const alignButton = isDirty ? `
                     <button class="btn btn-secondary btn-xs align-vol-btn" onclick="event.stopPropagation(); window.alignVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: transform 0.2s;">
                         ⚡ 延遲對齊
                     </button>` : '';
-                    
-                const chaptersHtml = volChapters.length === 0 ? `
+                
+                // 6. 進行 HTML 渲染對接
+                const chaptersHtml = displayChapters.length === 0 ? `
                     <div class="empty-placeholder" style="padding: 16px; font-size: 0.8rem; text-align: center; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; gap: 8px;">
                         <span>📭 此篇卷尚無章節大綱。${isDirty ? '請點擊「⚡ 延遲對齊」進行世界觀校準。' : ''}</span>
                         <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); window.addChapterToVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600;">➕ 新增本卷第一章</button>
-                    </div>` : volChapters.map((chapter) => {
-                    const globalIdx = chapters.indexOf(chapter);
-                    const chapterIndex = parseInt(chapter.chapter_index) || (globalIdx + 1);
-                    const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
+                    </div>` : displayChapters.map((chapter, chIdx) => {
+    
+                    const chapterIndex = parseInt(chapter.chapter_index);
+                    // 💡 基於全新的 __renderMode 屬性精確判定單個卡片外觀（需先宣告才能在 chIdxInVol 中使用）
+                    const isSkeletonChapter = chapter.__renderMode === 'skeleton' || chapter.__renderMode === 'empty';
+                    
+                    // 💡 修正全局索引查找，防止編輯按鈕點擊錯位 Bug
+                    const globalIdx = chapters.findIndex(c => parseInt(c.chapter_index) === chapterIndex);
+                    
+                    // 💡【核心修復】：對於骨架章節，正確計算卷內序號（使用動態範圍 vStart 計算）
+                    // 如果 chapterIndex 落在本卷範圍內，計算相對章號：chapterIndex - vStart + 1
+                    // 否則使用 displayChapters 陣列索引 + 1（fallback）
+                    let chIdxInVol;
+                    if (isSkeletonChapter) {
+                        if (chapterIndex >= vStart && chapterIndex < vStart + volChCount) {
+                            // chapterIndex 是正確的全局章節號，計算卷內相對編號
+                            chIdxInVol = chapterIndex - vStart + 1;
+                        } else {
+                            // chapterIndex 可能是 LLM 錯誤的局部索引，使用 displayChapters 陣列索引 + 1
+                            chIdxInVol = chIdx + 1;
+                        }
+                    } else {
+                        // 微觀模式保持原本邏輯
+                        chIdxInVol = (((chapterIndex - 1) % 50) + 1);
+                    }
                     
                     const emotionalToneText = getToneBadge(chapter.emotional_tone);
+                    
+                    if (isSkeletonChapter) {
+                        // 💡 修復：增加更多容錯邏輯，嘗試從多個可能的欄位取得標題/概要
+                        const skeletonTitle = chapter.brief_title || chapter.title || chapter.name || '待設定標題';
+                        const skeletonSummary = chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                        const allocatedTasks = chapter.allocated_tasks || {};
+                        const foreshadowPlants = allocatedTasks.foreshadowing_plants || [];
+                        const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || [];
+                        const turningPoints = allocatedTasks.turning_points || [];
+                        
+                        return `
+                        <div class="chapter-grid-item skeleton-chapter" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
+                            <div class="chapter-title-row" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🦴 第 ${chIdxInVol} 章</span>
+                                <h3 class="chapter-title" style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">${skeletonTitle}</h3>
+                            </div>
+                            ${skeletonSummary ? `<p style="font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
+                            
+                            ${(foreshadowPlants.length > 0 || foreshadowPayoffs.length > 0 || turningPoints.length > 0) ? `
+                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+                                ${foreshadowPlants.map(seed => `<span class="seed-pill" style="background: rgba(139, 92, 246, 0.12); color: #8b5cf6; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">🌱 ${seed}</span>`).join('')}
+                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">💥 回收</span>`).join('')}
+                                ${turningPoints.map(tp => `<span class="turning-pill" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">⚡ 轉折: ${tp}</span>`).join('')}
+                            </div>` : ''}
+                            
+                            <div class="chapter-actions" style="margin-top: 8px; text-align: right;">
+                                <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); if(${globalIdx} !== -1) { openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}]) } else { showToast('請先將此章節推進至 Stage 4 細化大綱後再行微觀編輯') }" style="opacity: 0.6; padding: 2px 6px;">✏️</button>
+                            </div>
+                        </div>`;
+                    }
+                    
+                    // 以下保持原本的高解像度微觀大綱卡片渲染 (Prose Mode) 不變
                     const purposeText = chapter.purpose ? `
                     <div class="chapter-grid-item">
                         <div class="chapter-grid-label">🎯 敘事目的</div>
                         <div class="chapter-grid-value" style="font-weight: 500; color: var(--text-primary);">${chapter.purpose}</div>
                     </div>` : '';
                     
-                    // Stepped Flowchart Events
                     let eventsHtml = '';
                     if (Array.isArray(chapter.events) && chapter.events.length > 0) {
                         const displayedEvents = chapter.events.slice(0, 4);
                         const remaining = chapter.events.length - 4;
                         eventsHtml = `
                         <div class="chapter-grid-item grid-col-span-2">
-                            <div class="chapter-grid-label">🎬 核心情節事件流 (Flowchart Events)</div>
+                            <div class="chapter-grid-label">🎬 核心情節事件流</div>
                             <div class="stepped-events" style="margin-top: 6px;">
                                 ${displayedEvents.map((e, eIdx) => {
                                     const eventText = typeof e === 'string' ? e : [e.action, e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
@@ -701,88 +859,63 @@ export function renderPlotTab() {
                                         </div>
                                     `;
                                 }).join('')}
-                                ${remaining > 0 ? `
-                                    <div style="font-size: 0.72rem; color: var(--text-muted); padding-left: 24px; font-style: italic;">
-                                        + 還有 ${remaining} 個事件...
-                                    </div>
-                                ` : ''}
+                                ${remaining > 0 ? `<div style="font-size: 0.72rem; color: var(--text-muted); padding-left: 24px; font-style: italic;">+ 還有 ${remaining} 個事件...</div>` : ''}
                             </div>
                         </div>`;
                     }
 
-                    // Foreshadowings
                     let foreshadowHtml = '';
                     if (Array.isArray(chapter.foreshadowing) && chapter.foreshadowing.length > 0) {
                         foreshadowHtml = `
                         <div class="chapter-grid-item grid-col-span-2">
-                            <div class="chapter-grid-label">🌱 伏筆線索種子 (Foreshadowing Seeds)</div>
+                            <div class="chapter-grid-label">🌱 伏筆線索種子</div>
                             <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
                                 ${chapter.foreshadowing.map(f => `<span class="badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600;">${f}</span>`).join('')}
                             </div>
                         </div>`;
                     }
-
-                    // Cliffhangers
-                    let cliffhangerHtml = '';
-                    if (chapter.cliffhanger && chapter.cliffhanger.trim()) {
-                        cliffhangerHtml = `
+                    
+                    // 💡 修復：優先使用微觀大綱欄位，若無則回退到骨架欄位
+                    const skeletonTitle = chapter.title || chapter.brief_title || chapter.name || '待設定標題';
+                    const skeletonSummary = chapter.summary || chapter.brief_summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                    const cliffhangerHtml = chapter.cliffhanger && chapter.cliffhanger.trim() ? `
                         <div class="chapter-grid-item grid-col-span-2" style="background: rgba(239, 68, 68, 0.03); border-color: rgba(239, 68, 68, 0.15); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 4px;">
                             <div class="chapter-grid-label" style="color: #ef4444;">⚠️ 本章懸念 (Cliffhanger)</div>
                             <div class="chapter-grid-value" style="color: var(--text-primary); font-style: italic; font-weight: 500; margin-top: 4px;">🔥 ${chapter.cliffhanger}</div>
-                        </div>`;
-                    }
+                        </div>` : '';
 
                     return `
                     <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
-                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
+                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
                             <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                 <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
-                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">
-                                        ✏️
-                                    </button>
-                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">
-                                        🗑️
-                                    </button>
+                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
+                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
                                 </div>
                             </div>
-                            
-                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">${chapter.title || '待設定標題'}</h3>
-                            
-                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${chapter.summary || '待設定摘要'}</div>
-                            
+                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
+                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${skeletonSummary}</div>
                             <div class="chapter-layout-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 8px;">
                                 ${purposeText}
-                                
                                 <div class="chapter-grid-item">
                                     <div class="chapter-grid-label">⏰ 時空座標</div>
                                     <div class="chapter-grid-value">${chapter.time_setting || '待設定'}</div>
                                 </div>
-                                
                                 <div class="chapter-grid-item">
                                     <div class="chapter-grid-label">📍 場景地點</div>
                                     <div class="chapter-grid-value">${chapter.scene || chapter.scene_setting || '待設定'}</div>
                                 </div>
-                                
-                                ${emotionalToneText ? `
-                                <div class="chapter-grid-item grid-col-span-2" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
-                                    <div class="chapter-grid-label" style="margin:0;">🎭 情緒基調</div>
-                                    <div>${emotionalToneText}</div>
-                                </div>` : ''}
-                                
+                                ${emotionalToneText ? `<div class="chapter-grid-item grid-col-span-2" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;"><div class="chapter-grid-label" style="margin:0;">🎭 情緒基調</div><div>${emotionalToneText}</div></div>` : ''}
                                 ${eventsHtml}
                                 ${foreshadowHtml}
                                 ${cliffhangerHtml}
                             </div>
                         </div>
-                        
                         <div class="timeline-insert-divider">
-                            <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapterIndex})" title="在此章後插入新章節大綱">
-                                ➕ 插入新章節大綱
-                            </button>
+                            <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapterIndex})" title="在此章後插入新章節大綱">➕ 插入新章節大綱</button>
                         </div>
-                    </div>
-                    `;
+                    </div>`;
                 }).join('');
 
                 const factionBadges = (factionsVal || '全域勢力')

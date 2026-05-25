@@ -248,6 +248,143 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     
     return run_agent_stream(novel_id, "character", messages, save_callback)
 
+
+# ============================================================
+# INCREMENTAL CHARACTER APPEND (精準增量追加新角色到 Bible 末尾)
+# ============================================================
+
+INCREMENTAL_CHARACTER_APPEND_PROMPT = """你是角色設計大師，專精於對現有角色聖經進行精準增量追加。
+⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
+
+## 核心原則
+1. **精準追加**：只往現有角色列表末尾追加新角色，不修改任何已存在的角色。
+2. **保持一致**：新增角色必須與現有世界觀設定保持邏輯一致。
+3. **格式標準**：輸出完整的角色 JSON 結構。
+
+## 輸出絕對限制（反格式污染）
+1. 你是一個精準的後端 API 數據節點。嚴禁包含任何如「好的，這是我為您新增的角色...」等寒暄、過渡、解釋性旁白。
+2. 你【只能且必須】回傳一個格式完全合法、可被 Python json.loads() 直接解析的標準 JSON 物件。
+3. 必須嚴格包裹在 ```json ... ``` 區塊中。
+
+## 現有世界觀（參考）
+{existing_worldbuilding}
+
+## 現有角色聖經（請勿修改，只追加新角色到末尾）
+{existing_characters}
+
+## 必須追加的新角色名單
+{new_characters}
+
+## 用戶要求的角色定位與背景
+{user_hint}
+"""
+
+def run_incremental_character_append(novel_id, new_character_names, user_hint=None):
+    """
+    精準增量追加新角色到角色聖經末尾
+    
+    Args:
+        novel_id: 小說 ID
+        new_character_names: 新角色名稱列表，例如 ["赵", "林浩", "張銘"]
+        user_hint: 用戶對角色的要求（如：身份、背景、定位等）
+    """
+    char = get_latest_characters(novel_id)
+    existing_chars = char["json_data"] if char else '{"characters": []}'
+    
+    wb = get_latest_worldbuilding(novel_id)
+    existing_wb = wb["content"] if wb else "尚無世界觀設定"
+    
+    # 獲取當前角色數量，用於定位新角色的插入位置
+    current_char_count = 0
+    if char and "parsed_data" in char:
+        current_char_count = len(char["parsed_data"].get("characters", []))
+    
+    prompt = INCREMENTAL_CHARACTER_APPEND_PROMPT.format(
+        existing_characters=existing_chars,
+        existing_worldbuilding=existing_wb,
+        new_characters=json.dumps(new_character_names, ensure_ascii=False),
+        user_hint=user_hint or "請根據世界觀和現有角色，為這些新角色設計合理的人設與背景。"
+    )
+    
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"""請為以下新角色設計完整的角色卡，並將它們追加到現有角色聖經的末尾。
+        
+新角色名稱列表：{json.dumps(new_character_names, ensure_ascii=False)}
+
+要求：
+1. 每個新角色都必須有完整的角色欄位（name, role, entry_phase, personality, speech_style, want, need, fatal_flaw, motivation, arc, relationships）
+2. 新角色的 name 欄位必須精確使用傳入的角色名稱
+3. 角色的 entry_phase 標註為"配角"或具體章節
+4. 請為每個角色設計合理的背景故事、性格特質與人際關係
+5. 只輸出包含新角色的 JSON 陣列，不要包含任何已存在的角色
+6. 必須嚴格包裹在 ```json ... ``` 區塊中
+
+輸出格式：
+```json
+{{"characters": [
+  {{"name": "角色名", "role": "配角", "entry_phase": "...", ...}}
+]}}
+```"""}
+    ]
+    
+    def save_callback(nid, text):
+        import json as json_mod
+        parsed = parse_json_safely(text)
+        
+        # 嚴格防禦：若 LLM 污染嚴重無法解析 JSON，直接報錯
+        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
+            try:
+                import sys
+                encoding = sys.stdout.encoding or "utf-8"
+                safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+                print(f"[ERROR] 增量追加角色失敗，模型未返回標準 JSON 數據。原始文字：\n{safe_text}")
+            except Exception:
+                pass
+            return
+        
+        # 提取新角色列表
+        new_chars_list = []
+        if isinstance(parsed, dict) and "characters" in parsed:
+            new_chars_list = parsed["characters"]
+        elif isinstance(parsed, list):
+            new_chars_list = parsed
+        
+        if not new_chars_list:
+            print("[WARNING] 未解析到新角色數據")
+            return
+        
+        # 讀取當前角色聖經
+        char_data = get_latest_characters(nid)
+        if char_data and "parsed_data" in char_data:
+            pd = char_data["parsed_data"]
+            if "characters" not in pd:
+                pd["characters"] = []
+            
+            # 追加新角色到末尾
+            for new_char in new_chars_list:
+                # 確保 name 欄位與請求的一致
+                char_name = new_char.get("name", "")
+                if char_name and char_name in new_character_names:
+                    pd["characters"].append(new_char)
+                    print(f"[SUCCESS] 成功追加新角色「{char_name}」到角色聖經末尾")
+                else:
+                    # 若 LLM 修改了角色名稱，仍予以追加但發出警告
+                    pd["characters"].append(new_char)
+                    print(f"[WARNING] 角色名稱不一致，但已追加：{char_name}")
+            
+            # 保存更新後的角色聖經
+            save_characters(nid, pd)
+            print(f"[SUCCESS] 角色聖經更新完畢，目前共 {len(pd['characters'])} 個角色")
+        else:
+            # 若無現有角色聖經，直接使用新角色創建
+            new_pd = {"characters": new_chars_list}
+            save_characters(nid, new_pd)
+            print(f"[SUCCESS] 創建新角色聖經，包含 {len(new_chars_list)} 個角色")
+    
+    return run_agent_stream(novel_id, "character", messages, save_callback)
+
+
 # ============================================================
 # INCREMENTAL PLOT (增量劇情大綱)
 # ============================================================
@@ -827,4 +964,3 @@ JSON 陣列格式：
             return
         
     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-

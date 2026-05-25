@@ -538,6 +538,13 @@ def get_volumes(novel_id):
         except:
             d["parsed_applicable_rules"] = [d["applicable_rules"]] if d["applicable_rules"] else []
             
+        # 解析章節大綱骨架 JSON
+        try:
+            if d.get("chapters_outline"):
+                d["chapters_outline"] = json.loads(d["chapters_outline"])
+        except:
+            d["chapters_outline"] = None
+            
         res.append(d)
     return res
 
@@ -607,24 +614,71 @@ def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn.close()
 
 def update_volume_outline(novel_id, volume_index, node_chapters):
+    """
+    [最終完美修正版] 將特定篇卷的高解像度微觀大綱更新至資料庫。
+    採用智慧增量合併，並採用直接 SQL 回寫主表，徹底防止 save_plot_chapters 引發反向抹除骨架的 Bug。
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Update volumes table's chapters_outline column
-    chapters_json = json.dumps(_convert_obj_to_traditional(node_chapters), ensure_ascii=False)
+    # 💡 1. 先讀取當前資料庫中該卷已存在的所有章節大綱/骨架
+    row = cursor.execute(
+        "SELECT chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?", 
+        (novel_id, volume_index)
+    ).fetchone()
+    
+    existing_chapters = []
+    if row and row["chapters_outline"]:
+        try:
+            parsed = json.loads(row["chapters_outline"])
+            if isinstance(parsed, list):
+                existing_chapters = parsed
+        except:
+            pass
+            
+    # 💡 2. 建立 chapter_index -> chapter_obj 的字典緩衝區
+    merged_map = {}
+    for ch in existing_chapters:
+        ch_idx = ch.get("chapter_index")
+        if ch_idx is not None:
+            merged_map[int(ch_idx)] = ch
+            
+    # 💡 3. 用新生成的高解像度微觀章節（例如第 10 章）精確覆蓋或插入緩衝區
+    for nc in node_chapters:
+        ch_idx = nc.get("chapter_index")
+        if ch_idx is not None:
+            merged_map[int(ch_idx)] = nc
+            
+    # 重新轉回列表並依章節序號由小到大排序
+    merged_chapters = list(merged_map.values())
+    merged_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)))
+    
+    # 💡 4. 將融合後完整的章節池同步回寫至 volumes 表
+    chapters_json = json.dumps(_convert_obj_to_traditional(merged_chapters), ensure_ascii=False)
     cursor.execute(
         "UPDATE volumes SET chapters_outline = ?, is_dirty = 0 WHERE novel_id = ? AND volume_index = ?",
         (chapters_json, novel_id, volume_index)
     )
-    conn.commit()
-    conn.close()
     
-    # 2. Stitch these chapters back into the master plot_chapters outline
-    plot = get_latest_plot_chapters(novel_id)
-    all_ch = plot["parsed_data"].get("chapters", []) if plot else []
+    # 💡 5. 同步將融合後的完整列表縫合回 master plot_chapters 大綱主表
+    # 直接在同一個連線中安全讀取主表最末版本，避免併發鎖定
+    plot_row = cursor.execute(
+        "SELECT outline_json FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1", 
+        (novel_id,)
+    ).fetchone()
+    
+    all_ch = []
+    if plot_row and plot_row["outline_json"]:
+        try:
+            p_parsed = json.loads(plot_row["outline_json"])
+            all_ch = p_parsed.get("chapters", []) if isinstance(p_parsed, dict) else (p_parsed if isinstance(p_parsed, list) else [])
+        except:
+            all_ch = []
     
     filtered_ch = []
-    vols = get_volumes(novel_id)
+    v_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+    vols = [dict(vr) for vr in v_rows]
+    
     for c in all_ch:
         ch_idx = c.get("chapter_index")
         if ch_idx is not None:
@@ -634,15 +688,23 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         else:
             filtered_ch.append(c)
             
-    # Append the new aligned chapters
-    for nc in node_chapters:
-        filtered_ch.append(nc)
+    # 將本次大融合後的完整章節列表推入全書主線大綱集合中
+    for mc in merged_chapters:
+        filtered_ch.append(mc)
         
-    # Sort them by chapter_index
+    # 全局升序排序
     filtered_ch.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
     
-    # Save back to plot_chapters
-    save_plot_chapters(novel_id, {"chapters": filtered_ch})
+    # 💡 6. 【核心修復】：改用純 SQL 寫入大綱主表新版本，絕不呼叫會觸發反向分卷更新的 save_plot_chapters 函式！
+    row_max = cursor.execute("SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?", (novel_id,)).fetchone()
+    next_v = (row_max["max_v"] or 0) + 1
+    cursor.execute(
+        "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+        (json.dumps({"chapters": filtered_ch}, ensure_ascii=False), novel_id, next_v)
+    )
+    
+    conn.commit()
+    conn.close()
 
 def get_worldview_patches(novel_id):
     conn = get_db_connection()
@@ -1430,15 +1492,12 @@ def get_stitched_plot(novel_id):
     has_chapters_in_volumes = False
     
     for vol in volumes:
-        ch_outline_str = vol.get("chapters_outline")
-        if ch_outline_str:
-            try:
-                ch_list = json.loads(ch_outline_str)
-                if isinstance(ch_list, list) and len(ch_list) > 0:
-                    stitched_chapters.extend(ch_list)
-                    has_chapters_in_volumes = True
-            except:
-                pass
+        # 💡 修正點：因為 get_volumes(novel_id) 內部已經對 chapters_outline 做過 json.loads 了
+        # 這裡直接拿出來就是 Python 列表（list），不需要、也不能再次 json.loads
+        ch_list = vol.get("chapters_outline")
+        if ch_list and isinstance(ch_list, list) and len(ch_list) > 0:
+            stitched_chapters.extend(ch_list)
+            has_chapters_in_volumes = True
                 
     if has_chapters_in_volumes:
         try:

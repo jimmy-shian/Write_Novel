@@ -66,7 +66,8 @@ from agents import (
 from agents_incremental import (
     run_incremental_architect,
     run_incremental_character_designer,
-    run_incremental_plot_planner
+    run_incremental_plot_planner,
+    run_incremental_character_append
 )
 from llm import get_config_for_agent, get_default_config
 from db import AGENT_DEFAULTS
@@ -658,6 +659,29 @@ def api_incremental_plot(payload: IncrementalPlotRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
         run_incremental_plot_planner(novel_id, payload.insert_after_index, payload.user_hint),
+        media_type="text/event-stream"
+    )
+
+# ============================================================
+# 增量追加角色 API 端點
+# ============================================================
+class IncrementalCharacterAppendRequest(BaseModel):
+    """精準增量追加新角色到角色聖經末尾"""
+    novel_id: str
+    new_character_names: list[str]  # 新角色名稱列表
+    user_hint: Optional[str] = None  # 用戶對角色的要求
+
+@app.post("/api/agent/incremental-character-append")
+def api_incremental_character_append(payload: IncrementalCharacterAppendRequest):
+    """
+    [反向縫合] 精準增量追加新角色到角色 Bible 設定末尾
+    不重新生成全部角色，只在現有角色聖經末尾追加新角色
+    """
+    novel_id = payload.novel_id
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_incremental_character_append(novel_id, payload.new_character_names, payload.user_hint),
         media_type="text/event-stream"
     )
 

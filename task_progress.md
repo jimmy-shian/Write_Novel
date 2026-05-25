@@ -46,29 +46,44 @@
 
 ---
 
+## 新增：增量追加角色功能 ✅
+
+### Phase 9: 增量追加角色功能 (agents_incremental.py) ✅
+- [x] 9.1 新增 `INCREMENTAL_CHARACTER_APPEND_PROMPT`（精準增量追加新角色 Prompt）
+- [x] 9.2 新增 `run_incremental_character_append` 函數
+- [x] 9.3 支援多個新角色名稱批量追加
+
+### Phase 10: 增量追加角色 API 端點 (app.py) ✅
+- [x] 10.1 新增 `IncrementalCharacterAppendRequest` 結構
+- [x] 10.2 新增 `/api/agent/incremental-character-append` 端點
+- [x] 10.3 在 import 中新增 `run_incremental_character_append`
+
+---
+
 ## 進度追蹤
 - 建立時間: 2026-05-25
-- 更新時間: 2026-05-25 02:28
+- 更新時間: 2026-05-25 06:54
 - 全部 Phase 完成 ✅
 
 ## 核心變更摘要
 
-### 新增的 Prompt (agents.py)
-- `VOLUME_SKELETON_PROMPT`: 簡易章節骨架生成器，用於 Stage 2
-- `FORESHADOWING_ORCHESTRATOR_PROMPT`: 全局伏筆編織導演，用於 Stage 3
+### 新增的 Prompt (agents_incremental.py)
+- `INCREMENTAL_CHARACTER_APPEND_PROMPT`: 精準增量追加新角色到角色聖經末尾
 
-### 新增的函數 (agents.py)
-- `run_volume_skeleton_planner()`: 為特定卷生成簡易章節骨架
-- `run_foreshadowing_orchestrator()`: 將全局伏筆分配到各章節
-
-### 新增的資料庫函數 (db.py)
-- `save_volume_skeletons()`: 保存卷的章節骨架
-- `get_all_volume_skeletons()`: 獲取所有卷的骨架
-- `save_foreshadowing_allocations()`: 保存伏筆分配結果
+### 新增的函數 (agents_incremental.py)
+- `run_incremental_character_append()`: 為新角色設計完整人設並追加到聖經末尾
 
 ### 新增的 API 端點 (app.py)
-- `POST /api/agent/volume-skeleton`: 生成簡易章節骨架
-- `POST /api/agent/foreshadowing-orchestrate`: 全局伏筆編織
+- `POST /api/agent/incremental-character-append`: 增量追加角色端點
+
+### 增量追加角色端點使用方式
+```json
+{
+  "novel_id": "小說ID",
+  "new_character_names": ["赵", "林浩", "張銘", "黑曜", "小梅", "凜風", "老張"],
+  "user_hint": "請根據世界觀為這些配角設計合理人設"
+}
+```
 
 ### 階段流程更新 (pipeline_logic.js)
 - 新增 `volume_skeleton` 和 `foreshadowing_orchestration` 階段

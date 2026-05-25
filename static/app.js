@@ -531,10 +531,89 @@ async function executePlotAgent() {
     );
 }
 
+/**
+ * 🚀 [新功能] 具備 10 次自動重試與對話框同步紀錄的高級 SSE 守護引擎
+ * @param {string} url - 後端 API 路徑
+ * @param {object} body - 請求參數
+ * @param {function} onThinking - 思考串流回呼
+ * @param {function} onContent - 內容串流回呼
+ * @param {function} onError - 錯誤回呼
+ * @param {function} onDone - 成功完成回呼
+ * @param {number} maxRetries - 最大重試次數（預設 10 次）
+ */
+window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10) {
+    let currentRetry = 0;
+    
+    // 透過閉包鎖定內部執行邏輯
+    function attemptExecute() {
+        currentRetry++;
+        
+        // 💡 【核心訴求 1】：強制將每一次重試紀錄輸出至對話框，不漏掉任何消息！
+        const endpointName = url.split('/').pop();
+        
+        // 核心調用原生的 streamAPI
+        streamAPI(
+            url,
+            body,
+            onThinking,
+            onContent,
+            (error) => {
+                // 進入錯誤攔截分支
+                console.warn(`[GUARD] Pipeline triggered error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
+                
+                if (currentRetry <= maxRetries) {
+                    // 強制將重試狀態寫入對話框
+                    appendChatMessage('system', 
+                        `⚠️ <b>[系統防禦中斷]</b> 管線在執行 <code>${endpointName}</code> 時發生異常中斷。<br>` +
+                        `❌ 錯誤回報: <i>${error}</i><br>` +
+                        `🔄 <b>正在自動嘗試第 ${currentRetry}/${maxRetries} 次重送指令...</b> (等待 ${currentRetry * 2} 秒)`
+                    );
+                    
+                    // 💡 退避延遲演算法：每次等待 2 秒，避開後端資料庫寫入衝突
+                    setTimeout(() => {
+                        attemptExecute();
+                    }, currentRetry * 2000);
+                } else {
+                    // 超過 10 次，徹底放棄，列印絕望紀錄
+                    appendChatMessage('system', 
+                        `🚨 <b>[管線徹底崩潰]</b> 已連續重試送指令達最大上限 ${maxRetries} 次，管線保護性中止。<br>` +
+                        `請檢查後端終端機環境或點擊「重新生成」！`
+                    );
+                    showToast(`🚨 管線重試次數已達上限 (${maxRetries}次)`);
+                    
+                    // 執行錯誤回呼
+                    if (typeof onError === 'function') {
+                        onError(`管線重試 ${maxRetries} 次後依然失敗`);
+                    }
+                    
+                    // 解鎖 UI 載入狀態
+                    try { hideAllAgentProcessingIndicators(); } catch(e) {}
+                }
+            },
+            () => {
+                // 💡 只有完全走完 SSE 流程，收到 [DONE] 訊號，才算 Absolute Done
+                if (currentRetry > 1) {
+                    // 如果是重試後成功，通知用戶
+                    appendChatMessage('system', 
+                        `✅ <b>[系統自動修復成功]</b> 管線在第 <b>${currentRetry}</b> 次嘗試後成功恢復運作！<br>` +
+                        `🚀 <code>${endpointName}</code> 已正常完成。`
+                    );
+                }
+                
+                if (typeof onDone === 'function') {
+                    onDone();
+                }
+            }
+        );
+    }
+    
+    // 啟動首輪嘗試
+    attemptExecute();
+};
+
 // ==========================================
 // API WRAPPERS & STREAMING CORE
 // ==========================================
-
 
 
 

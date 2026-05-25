@@ -167,7 +167,8 @@ export async function executePipelineStage(stage, userPrompt) {
         if (stage === 'writer') {
             state.writingBuffer = "";
         }
-        window.streamAPI(
+        // 🚀 使用具備 10 次自動重試與對話框同步紀錄的守護引擎
+        window.streamAPIWithRetry(
             endpoint,
             body,
             (delta) => {
@@ -315,7 +316,8 @@ export async function writeAllChaptersSequentially(userPrompt) {
         await new Promise((resolve) => {
             if (el.editorProse) el.editorProse.value = '';
             state.writingBuffer = "";
-            window.streamAPI(
+            // 🚀 使用具備 10 次自動重試的守護引擎撰寫章節
+            window.streamAPIWithRetry(
                 '/api/agent/write-chapter',
                 { novel_id: state.currentNovelId, chapter_index: chapterIndex },
                 (delta) => {
