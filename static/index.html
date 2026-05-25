@@ -278,10 +278,12 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <!-- 快捷時間軸導航列 (Step 1: 改為面板內絕對定位) -->
+                    <div id="plot-quick-timeline" style="position: absolute; right: 20px; top: 140px; width: 80px; max-height: 400px; overflow-y: auto; background: rgba(30, 30, 50, 0.95); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 8px 4px; z-index: 10; display: flex; flex-direction: column; gap: 2px;">
+                        <!-- 章節導航按鈕將由 renderers.js 動態生成 -->
+                    </div>
                 </section>
-                
-                <!-- 劇情大綱快捷時間軸跳轉容器 (Step 2) -->
-                <div id="plot-quick-timeline" style="position: fixed; right: 340px; top: 90px; width: 70px; max-height: 70vh; overflow-y: auto; z-index: 99; display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; background: rgba(0,0,0,0.05); padding: 6px; border-radius: 4px;"></div>
                 
                 <!-- 4. WRITER TAB -->
                 <section id="panel-writer" class="workpanel">

@@ -490,6 +490,9 @@ export function renderPlotTab() {
     
     // Expose scrollToVolume function globally
     window.scrollToVolume = function(volIdx) {
+        // Step 3: 記錄當前活躍的卷數
+        state.activeVolumeIdx = volIdx;
+        
         const volCard = document.getElementById(`volume-card-${volIdx}`);
         if (volCard) {
             // Smooth scroll to card
@@ -513,6 +516,9 @@ export function renderPlotTab() {
                 }
             });
         }
+        
+        // Step 3: 切換篇卷時重新渲染世界觀區塊以套用過濾
+        renderWorldviewSections();
     };
 
     // Expose collapse function
@@ -685,10 +691,9 @@ export function renderPlotTab() {
                     return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
                 });
 
-                // 2. 💡【Step 1 修復】以骨架（Skeleton）為全書總長度基底，逐章融合已生成的完整大綱（Outline）
-                const skel = Array.isArray(vol.chapters_skeleton) ? vol.chapters_skeleton : JSON.parse(vol.chapters_skeleton || '[]');
+                // 2. 💡【Step 1 修復】直接使用 chapters_outline 作為骨架渲染源
                 const outl = Array.isArray(vol.chapters_outline) ? vol.chapters_outline : JSON.parse(vol.chapters_outline || '[]');
-                const volSkeletonChapters = skel.map((s, i) => ({ ...s, ...(outl.find(o => o.chapter_index === s.chapter_index) || outl[i] || {}) }));
+                const volSkeletonChapters = outl;
                 
                 // 💡 調試：觀察實際取到的資料結構
                 console.log(`[DEBUG] Vol ${volIdx} skeleton data:`, JSON.stringify(volSkeletonChapters).substring(0, 500));
@@ -731,8 +736,8 @@ export function renderPlotTab() {
                 volMicroChapters.forEach(ch => chapterIdxSet.add(parseInt(ch.chapter_index)));
                 
                 // 4.3 💡【Step 3 修復】：只有當有實際大綱內容時才填補格子，否則保持乾淨空狀態
-                // 當 outl 和 skel 都為空時，不應該產生 50 個「待設定」的虛擬章節
-                if (outl.length > 0 || skel.length > 0) {
+                // 當 outl 為空時，不應該產生 50 個「待設定」的虛擬章節
+                if (outl.length > 0) {
                     for (let i = 0; i < volChCount; i++) {
                         chapterIdxSet.add(vStart + i);
                     }
@@ -883,7 +888,7 @@ export function renderPlotTab() {
 
                     return `
                     <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
-                        <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
+                        <div class="plot-chapter-item" data-index="${globalIdx}" data-chapter-index="${chapterIndex}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
                             <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                             <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
@@ -972,23 +977,27 @@ export function renderPlotTab() {
 
             el.plotTimeline.innerHTML = statsHtml + roadmapHtml + timelineCardsHtml;
 
-            // ===== Step 3: 動態生成快捷時間軸導航 =====
+            // ===== Step 4: 動態生成快捷時間軸導航 (僅顯示當前活躍卷) =====
             // 在渲染完大綱後，動態生成右側快捷時間軸的章節跳轉按鈕
             const tlNav = document.getElementById('plot-quick-timeline');
             if (tlNav) {
                 tlNav.innerHTML = ''; // 清空舊內容
                 
-                // 收集所有顯示的章節（無論是微觀還是骨架模式）
+                // 收集當前活躍卷的章節（而非全書章節）
                 const allDisplayChapters = [];
-                outl.forEach((ch, idx) => {
-                    if (ch && ch.chapter_index) {
-                        allDisplayChapters.push({
-                            index: parseInt(ch.chapter_index),
-                            title: ch.title || ch.brief_title || ch.name || `第 ${ch.chapter_index} 章`,
-                            mode: ch.__renderMode || 'unknown'
-                        });
-                    }
-                });
+                const activeVolNum = state.activeVolumeIdx || 1;
+                const currentVol = volumes.find(v => parseInt(v.volume_index) === activeVolNum) || volumes[0];
+                if (currentVol) {
+                    const volOutl = Array.isArray(currentVol.chapters_outline) ? currentVol.chapters_outline : JSON.parse(currentVol.chapters_outline || '[]');
+                    volOutl.forEach(ch => {
+                        if (ch && ch.chapter_index) {
+                            allDisplayChapters.push({
+                                index: parseInt(ch.chapter_index),
+                                title: ch.title || ch.chapter_title || ch.name || `第 ${ch.chapter_index} 章`
+                            });
+                        }
+                    });
+                }
                 
                 // 限制顯示數量，避免快捷時間軸過長（最多顯示100項）
                 const maxItems = 100;
@@ -1129,7 +1138,7 @@ export function renderWriterTab() {
                             <span class="chapter-list-status" style="font-size: 0.75rem; font-weight: 800;">${isWritten ? '✓' : '○'}</span>
                         </div>
                         <div class="chapter-list-title" style="font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
-                            ${chapter.title || '待設定標題'}
+                            ${chapter.title || chapter.chapter_title || chapter.brief_title || '待設定標題'}
                         </div>
                     </li>
                 `;
@@ -1186,7 +1195,7 @@ export function selectWriterChapter(chapterIndex) {
     
     // 更新標題和狀態
     if (el.activeChapterTitle) {
-        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章（全局第 ${chapterIndex} 章）：${plotChapter?.title || '待設定標題'}`;
+        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章（全局第 ${chapterIndex} 章）：${plotChapter?.title || plotChapter?.chapter_title || plotChapter?.brief_title || '待設定標題'}`;
     }
     
     // --- AI Thinking Process separated rendering ---
@@ -1257,10 +1266,11 @@ export function selectWriterChapter(chapterIndex) {
                     <p class="insp-val"><span class="insp-tone-badge" style="background: rgba(139,92,246,0.12); color:#8b5cf6; padding: 2px 8px; border-radius:12px; font-size:0.75rem; border:1px solid rgba(139,92,246,0.15); font-weight:600;">${plotChapter.emotional_tone}</span></p>
                 </div>` : '';
                 
-            const summaryHtml = plotChapter.summary ? `
+            const currentSummary = plotChapter.summary || plotChapter.chapter_summary || plotChapter.brief_summary || '';
+            const summaryHtml = currentSummary ? `
                 <div class="insp-item">
                     <span class="insp-label">📝 情節概要</span>
-                    <p class="insp-val summary-text" style="line-height:1.6; font-size:0.8rem; color:var(--text-secondary); background:rgba(0,0,0,0.015); border-left:3px solid var(--primary); padding:6px 12px; border-radius:0 6px 6px 0;">${plotChapter.summary}</p>
+                    <p class="insp-val summary-text" style="line-height:1.6; font-size:0.8rem; color:var(--text-secondary); background:rgba(0,0,0,0.015); border-left:3px solid var(--primary); padding:6px 12px; border-radius:0 6px 6px 0;">${currentSummary}</p>
                 </div>` : '';
                 
             let eventsHtml = '';

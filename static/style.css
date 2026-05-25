@@ -3989,3 +3989,22 @@ body.light-theme #ai-thinking-stream.thinking-stream-box {
 textarea {
     resize: vertical !important;
 }
+
+/* ==========================================
+   TIMELINE NAV ITEMS (Step 3)
+   ========================================== */
+/* 快捷時間軸項目樣式 */
+.timeline-nav-item {
+    padding: 4px 2px;
+    text-align: center;
+    color: var(--text-secondary);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.timeline-nav-item:hover {
+    color: var(--primary);
+    background: rgba(255,255,255,0.08);
+    font-weight: bold;
+}
