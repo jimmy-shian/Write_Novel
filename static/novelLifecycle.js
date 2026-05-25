@@ -168,3 +168,4 @@ export function renderNovelsList() {
         el.novelsList.appendChild(li);
     });
 }
+

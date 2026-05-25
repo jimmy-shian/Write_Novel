@@ -1374,8 +1374,7 @@ def update_volume(novel_id, volume_index, title, summary, factions):
         )
     else:
         cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
-            "VALUES (?, ?, ?, ?, ?, 0, '[]')",
+            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline, chapter_count) VALUES (?, ?, ?, ?, ?, 0, '[]', 0)",
             (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
         )
     conn.commit()
@@ -1616,6 +1615,11 @@ def save_foreshadowing_allocations(novel_id, allocations):
                     ch_idx = int(ch.get("chapter_index", 0))
                     if ch_idx in allocation_map:
                         alloc = allocation_map[ch_idx]
+                        
+                        # 💡【Step 6 修復】：確保原本的章節骨架基礎欄位不被覆蓋或遺漏
+                        ch["chapter_title"] = ch.get("chapter_title") or ch.get("title") or ch.get("name") or "待設定標題"
+                        ch["chapter_summary"] = ch.get("chapter_summary") or ch.get("summary") or ch.get("outline") or "待設定摘要"
+                        
                         # 更新 allocated_tasks
                         if "allocated_tasks" not in ch:
                             ch["allocated_tasks"] = {}

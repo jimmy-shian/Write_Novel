@@ -27,3 +27,5 @@
 {'id': 14, 'novel_id': '8f88c76c-2601-4ae7-a1b8-be00ea13f1c1', 'outline_json': '{"chapters": [{"chapter_index": 1, "title": "第 1 章故事", "events": ["發生了事件一", "發生了重要轉折"], "purpose": "推動故事主線", "foreshadowing": ["埋下一個線索"], "emotional_tone": "緊張"}, {"chapter_index": 2, "title": "第 2 章故...', 'version': 8, 'created_at': '2026-05-23 13:24:13', 'is_dirty': 0}
 
 === CHAPTERS ===
+
+

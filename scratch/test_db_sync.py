@@ -12,3 +12,5 @@ configs = db.get_agent_configs()
 print(f"Loaded {len(configs)} agent configurations from database:")
 for agent, cfg in configs.items():
     print(f"  {agent}: model={cfg['model']} | temp={cfg['temperature']} | base_url={cfg['base_url']}")
+
+

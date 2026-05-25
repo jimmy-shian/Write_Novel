@@ -81,7 +81,7 @@ export function renderWorldviewSections() {
     let strategyHtml = '';
     
     // 多幕式結構 (data-section 映射為 three-act 配合 app.js)
-    const threeActList = (js.three_act_structure && js.three_act_structure.length > 0) ? js.three_act_structure : [
+    const threeActList = (js.multi_act_structure && js.multi_act_structure.length > 0) ? js.multi_act_structure : [
         { title: "第一幕 (Setup)", content: "" },
         { title: "第二幕 (Confrontation)", content: "" },
         { title: "第三幕 (Resolution)", content: "" }
@@ -95,14 +95,14 @@ export function renderWorldviewSections() {
                 </div>
                 <div class="worldview-section-actions">
                     <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
-                    <button onclick="editWorldviewComplexList('three_act_structure', '多幕式結構', '幕次')" title="編輯">✏️</button>
+                    <button onclick="editWorldviewComplexList('multi_act_structure', '多幕式結構', '幕次')" title="編輯">✏️</button>
                 </div>
             </div>
             <div class="worldview-section-content" id="content-three-act">
                 ${threeActList.length > 0 ? `
                     <div class="worldview-sub-items-list" style="display: flex; flex-direction: column; gap: 8px;">
                         ${threeActList.map((item, idx) => `
-                            <div class="worldview-sub-item" onclick="editWorldviewComplexList('three_act_structure', '多幕式結構', '幕次')" style="cursor: pointer;">
+                            <div class="worldview-sub-item" onclick="editWorldviewComplexList('multi_act_structure', '多幕式結構', '幕次')" style="cursor: pointer;">
                                 <div class="worldview-sub-item-title">${item.title || `幕次 ${idx + 1}`}</div>
                                 <div class="worldview-sub-item-content">${renderMarkdown(item.content) || '<em style="color:var(--text-muted)">尚無內容</em>'}</div>
                             </div>
@@ -247,7 +247,7 @@ export function renderWorldviewSections() {
 export function getSubSectionCount(cardIndex) {
     const worldviewText = state.currentNovelData?.worldbuilding || '';
     const js = parseWorldviewJSON(worldviewText);
-    if (cardIndex === 0) return (js.three_act_structure || []).length;
+    if (cardIndex === 0) return (js.multi_act_structure || []).length;
     if (cardIndex === 1) return (js.progressive_character_plan || []).length;
     if (cardIndex === 2) return (js.key_turning_points || []).length;
     if (cardIndex === 3) return (js.foreshadowing_seeds || []).length;
@@ -685,16 +685,10 @@ export function renderPlotTab() {
                     return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
                 });
 
-                // 2. 💡 讀取後端在 Stage 2 寫入此卷的章節骨架（擴大容錯：同時支援 chapters_outline 和 chapters_skeleton 欄位）
-                let volSkeletonChapters = [];
-                const rawSkeletonData = vol.chapters_outline || vol.chapters_skeleton;
-                if (rawSkeletonData) {
-                    if (Array.isArray(rawSkeletonData)) {
-                        volSkeletonChapters = rawSkeletonData;
-                    } else if (typeof rawSkeletonData === 'string') {
-                        try { volSkeletonChapters = JSON.parse(rawSkeletonData); } catch (e) { volSkeletonChapters = []; }
-                    }
-                }
+                // 2. 💡【Step 1 修復】以骨架（Skeleton）為全書總長度基底，逐章融合已生成的完整大綱（Outline）
+                const skel = Array.isArray(vol.chapters_skeleton) ? vol.chapters_skeleton : JSON.parse(vol.chapters_skeleton || '[]');
+                const outl = Array.isArray(vol.chapters_outline) ? vol.chapters_outline : JSON.parse(vol.chapters_outline || '[]');
+                const volSkeletonChapters = skel.map((s, i) => ({ ...s, ...(outl.find(o => o.chapter_index === s.chapter_index) || outl[i] || {}) }));
                 
                 // 💡 調試：觀察實際取到的資料結構
                 console.log(`[DEBUG] Vol ${volIdx} skeleton data:`, JSON.stringify(volSkeletonChapters).substring(0, 500));
@@ -736,9 +730,12 @@ export function renderPlotTab() {
                 // 4.2 收集微觀大綱章節（Stage 4 產出）
                 volMicroChapters.forEach(ch => chapterIdxSet.add(parseInt(ch.chapter_index)));
                 
-                // 4.3 💡 動態收集：根據精確的動態起點與章數填補格子
-                for (let i = 0; i < volChCount; i++) {
-                    chapterIdxSet.add(vStart + i);
+                // 4.3 💡【Step 3 修復】：只有當有實際大綱內容時才填補格子，否則保持乾淨空狀態
+                // 當 outl 和 skel 都為空時，不應該產生 50 個「待設定」的虛擬章節
+                if (outl.length > 0 || skel.length > 0) {
+                    for (let i = 0; i < volChCount; i++) {
+                        chapterIdxSet.add(vStart + i);
+                    }
                 }
 
                 // 將序號由小到大排序（例如 1 ~ 48）
@@ -888,7 +885,7 @@ export function renderPlotTab() {
                     <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
                         <div class="plot-chapter-item" data-index="${globalIdx}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
                             <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章</span>
+                            <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
                                     <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
                                     <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
@@ -975,6 +972,77 @@ export function renderPlotTab() {
 
             el.plotTimeline.innerHTML = statsHtml + roadmapHtml + timelineCardsHtml;
 
+            // ===== Step 3: 動態生成快捷時間軸導航 =====
+            // 在渲染完大綱後，動態生成右側快捷時間軸的章節跳轉按鈕
+            const tlNav = document.getElementById('plot-quick-timeline');
+            if (tlNav) {
+                tlNav.innerHTML = ''; // 清空舊內容
+                
+                // 收集所有顯示的章節（無論是微觀還是骨架模式）
+                const allDisplayChapters = [];
+                outl.forEach((ch, idx) => {
+                    if (ch && ch.chapter_index) {
+                        allDisplayChapters.push({
+                            index: parseInt(ch.chapter_index),
+                            title: ch.title || ch.brief_title || ch.name || `第 ${ch.chapter_index} 章`,
+                            mode: ch.__renderMode || 'unknown'
+                        });
+                    }
+                });
+                
+                // 限制顯示數量，避免快捷時間軸過長（最多顯示100項）
+                const maxItems = 100;
+                const itemsToShow = allDisplayChapters.slice(0, maxItems);
+                
+                if (itemsToShow.length > 0) {
+                    itemsToShow.forEach((item, idx) => {
+                        const tlItem = document.createElement('div');
+                        tlItem.className = 'timeline-nav-item';
+                        tlItem.innerText = `Ch ${item.index}`;
+                        tlItem.title = item.title;
+                        tlItem.dataset.chapterIndex = item.index;
+                        
+                        // 點擊時平滑滾動到對應的章節卡片
+                        tlItem.onclick = () => {
+                            // 嘗試找到對應的章節元素
+                            const targetEl = document.querySelector(`[data-chapter-index="${item.index}"]`);
+                            if (targetEl) {
+                                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                // 添加視覺反饋
+                                targetEl.style.boxShadow = '0 0 0 3px var(--primary)';
+                                setTimeout(() => {
+                                    targetEl.style.boxShadow = '';
+                                }, 1500);
+                            } else {
+                                // Fallback: 如果找不到精確元素，嘗試在 volume card 中查找
+                                const volCards = document.querySelectorAll('.volume-card');
+                                volCards.forEach(volCard => {
+                                    const chEl = volCard.querySelector(`.chapter-grid-item, .plot-chapter-item`);
+                                    if (chEl) {
+                                        chEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    }
+                                });
+                            }
+                        };
+                        
+                        tlNav.appendChild(tlItem);
+                    });
+                    
+                    // 如果有更多章節，顯示提示
+                    if (allDisplayChapters.length > maxItems) {
+                        const moreIndicator = document.createElement('div');
+                        moreIndicator.className = 'timeline-nav-item';
+                        moreIndicator.style.fontSize = '0.65rem';
+                        moreIndicator.style.color = 'var(--text-muted)';
+                        moreIndicator.innerText = `+${allDisplayChapters.length - maxItems} 更多...`;
+                        moreIndicator.style.cursor = 'default';
+                        tlNav.appendChild(moreIndicator);
+                    }
+                } else {
+                    tlNav.innerHTML = '<div style="font-size: 0.7rem; color: var(--text-muted); text-align: center; padding: 8px;">尚無章節</div>';
+                }
+            }
+
             // Bind mouse drag-to-scroll for roadmap track
             const track = el.plotTimeline.querySelector('.roadmap-track');
             if (track) {
@@ -1032,15 +1100,32 @@ export function renderWriterTab() {
                 const isWritten = !!(existingChapter && existingChapter.content && existingChapter.content.trim());
                 const isActive = state.activeChapterIndex === chapterIndex;
                 
-                const volIdx = Math.floor((chapterIndex - 1) / 50) + 1;
-                const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
+                // 【Step 2 修復】使用動態範圍計算，不再使用固定 50 章/卷
+                const chapterIdx = parseInt(chapter.chapter_index) || (idx + 1);
+                let volIdx = 1;
+                let chIdxInVol = 1;
+                let globalChapterNum = chapterIdx; // 預設為全局章節號
+                
+                // 嘗試使用動態範圍計算
+                if (typeof window.getChapterVolumeIndexJS === 'function') {
+                    volIdx = window.getChapterVolumeIndexJS(chapterIdx);
+                }
+                if (typeof window.getVolumeChapterRangeJS === 'function') {
+                    const range = window.getVolumeChapterRangeJS(volIdx);
+                    chIdxInVol = chapterIdx - range.start + 1;
+                    globalChapterNum = chapterIdx;
+                } else {
+                    // Fallback to fixed 50 chapters per volume
+                    volIdx = Math.floor((chapterIdx - 1) / 50) + 1;
+                    chIdxInVol = ((chapterIdx - 1) % 50) + 1;
+                }
                 
                 return `
                     <li class="chapter-list-item ${isWritten ? 'written' : ''} ${isActive ? 'active' : ''}" 
-                        data-chapter-index="${chapterIndex}"
+                        data-chapter-index="${chapterIdx}"
                         style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; width: 100%; border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; margin-bottom: 4px; box-sizing: border-box;">
                         <div style="display: flex; justify-content: space-between; width: 100%; align-items: center; pointer-events: none;">
-                            <span class="chapter-list-number" style="font-size: 0.72rem; font-weight: 700; opacity: 0.85; letter-spacing: 0.02em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章</span>
+                            <span class="chapter-list-number" style="font-size: 0.72rem; font-weight: 700; opacity: 0.85; letter-spacing: 0.02em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章 (全局第 ${globalChapterNum} 章)</span>
                             <span class="chapter-list-status" style="font-size: 0.75rem; font-weight: 800;">${isWritten ? '✓' : '○'}</span>
                         </div>
                         <div class="chapter-list-title" style="font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
@@ -1086,12 +1171,22 @@ export function selectWriterChapter(chapterIndex) {
     const chapter = chapters.find(c => parseInt(c.chapter_index) === parseInt(chapterIndex));
     const plotChapter = plotChapters.find(c => parseInt(c.chapter_index || plotChapters.indexOf(c) + 1) === parseInt(chapterIndex));
     
-    const volIdx = Math.floor((chapterIndex - 1) / 50) + 1;
-    const chIdxInVol = ((chapterIndex - 1) % 50) + 1;
+    // 【Step 2 修復】使用動態範圍計算，不再使用固定 50 章/卷
+    let volIdx = Math.floor((chapterIndex - 1) / 50) + 1;
+    let chIdxInVol = ((chapterIndex - 1) % 50) + 1;
+    
+    // 嘗試使用動態範圍計算
+    if (typeof window.getChapterVolumeIndexJS === 'function') {
+        volIdx = window.getChapterVolumeIndexJS(chapterIndex);
+    }
+    if (typeof window.getVolumeChapterRangeJS === 'function') {
+        const range = window.getVolumeChapterRangeJS(volIdx);
+        chIdxInVol = chapterIndex - range.start + 1;
+    }
     
     // 更新標題和狀態
     if (el.activeChapterTitle) {
-        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章：${plotChapter?.title || '待設定標題'}`;
+        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章（全局第 ${chapterIndex} 章）：${plotChapter?.title || '待設定標題'}`;
     }
     
     // --- AI Thinking Process separated rendering ---
@@ -1441,3 +1536,4 @@ export function appendChatMessage(role, content) {
         el.chatMessagesContainer.scrollTop = el.chatMessagesContainer.scrollHeight;
     }
 }
+

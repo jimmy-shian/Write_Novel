@@ -446,3 +446,5 @@ export async function writeAllChaptersSequentially(userPrompt) {
     await window.loadNovelDetails(state.currentNovelId);
     window.selectWriterChapter(getChapterIndex(plotChapters[0], 1));
 }
+
+

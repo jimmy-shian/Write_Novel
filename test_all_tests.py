@@ -458,7 +458,7 @@ class TestIntegrityCheck:
                 "main_conflict": "燈火城邦與永夜荒原的對立",
                 "worldview": "一個被永夜籠罩的世界，人類只能依賴命燈散發出的微弱光芒建立城邦。",
                 "macro_outline": "主角林澤從一個普通荒原拾荒者，逐步發掘古神留下的電路晶片，點燃不朽命燈的故事。",
-                "three_act_structure": [
+                "multi_act_structure": [
                     {"title": "第一幕 (Setup)", "content": "林澤在荒原邊緣拾荒，意外點燃命燈碎片。"},
                     {"title": "第二幕 (Confrontation)", "content": "林澤加入守夜人，面對殘酷真相。"},
                     {"title": "第三幕 (Resolution)", "content": "林澤深入永夜核心，打破永夜封印。"}
@@ -722,7 +722,7 @@ class TestPipelineRebound:
   "worldview": "霓虹城是一個高科技低生活的賽博都市。",
   "theme": "人性的機械化與靈魂的救贖",
   "main_conflict": "人類、合成人與時間術能的權力網格爭奪戰",
-  "three_act_structure": [
+  "multi_act_structure": [
     { "title": "第一幕：起", "content": "主角林澤在校園實驗室意外觸發零點回聲" },
     { "title": "第二幕：承", "content": "結識夥伴，遭遇反派阻擊" },
     { "title": "第三幕：合", "content": "終極決戰，釋放時間核心" }
@@ -758,7 +758,7 @@ class TestPipelineRebound:
                         "theme": parsed.get("theme", ""),
                         "main_conflict": parsed.get("main_conflict", ""),
                         "worldview": parsed.get("worldview", ""),
-                        "three_act_structure": parsed.get("three_act_structure", []),
+                        "multi_act_structure": parsed.get("multi_act_structure", []),
                         "progressive_character_plan": parsed.get("progressive_character_plan", []),
                         "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []),
                         "key_turning_points": parsed.get("key_turning_points", []),
@@ -776,9 +776,9 @@ class TestPipelineRebound:
             assert wb_record is not None, "Worldbuilding record should exist!"
             
             wb_json = json.loads(wb_record["content"])
-            assert "three_act_structure" in wb_json, "Missing three_act_structure!"
+            assert "multi_act_structure" in wb_json, "Missing multi_act_structure!"
             assert "progressive_character_plan" in wb_json, "Missing progressive_character_plan!"
-            assert len(wb_json["three_act_structure"]) == 3, "Should have 3 acts"
+            assert len(wb_json["multi_act_structure"]) == 3, "Should have 3 acts"
             print("✓ Worldview structure persisted correctly!")
             
             # 驗證篇卷
@@ -1008,7 +1008,7 @@ class TestSimpleLogging:
                 "main_conflict": "對抗",
                 "worldview": "魔法世界",
                 "macro_outline": "主角冒險",
-                "three_act_structure": [{"title": "開始", "content": "遇到危機"}],
+                "multi_act_structure": [{"title": "開始", "content": "遇到危機"}],
                 "progressive_character_plan": [{"title": "成長", "content": "學習魔法"}],
                 "foreshadowing_seeds": ["伏筆1"],
                 "key_turning_points": ["轉折1"]
@@ -1245,3 +1245,4 @@ if __name__ == "__main__":
         
         success = run_all_tests(skip_tests if skip_tests else None)
         sys.exit(0 if success else 1)
+

@@ -1,4 +1,4 @@
-/* ==========================================
+﻿/* ==========================================
    CSS VARIABLES
    ========================================== */
 :root {
@@ -1709,7 +1709,7 @@ textarea:focus {
     border-color: var(--primary);
     color: var(--primary);
 }
-/* Director 回覆打字時閃爍效果 */
+/* Director ??????????*/
 .stream-typing {
     animation: cursor-blink 0.8s ease-in-out infinite;
     display: inline-block;
@@ -3989,8 +3989,3 @@ body.light-theme #ai-thinking-stream.thinking-stream-box {
 textarea {
     resize: vertical !important;
 }
-
-
-
-
-

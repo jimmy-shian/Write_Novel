@@ -145,3 +145,4 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
 **修復完成日期**：2025-05-25  
 **修復工程師**：Cline  
 **Bug 等級**：跨主後端級聯覆蓋（P0-Critical）
+

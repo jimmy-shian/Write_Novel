@@ -200,3 +200,4 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
 // Expose globally for modules/scripts that rely on window.streamAPI
 window.streamAPI = streamAPI;
 window.requestAPI = requestAPI;
+

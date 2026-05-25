@@ -12,12 +12,40 @@ function getPipelinePrompt({ inputPrompt, statePrompt, dbPrompt, fallbackPrompt 
 }
 
 /**
+ * 檢查是否存在有效的章節大綱
+ * @param {object} novelData - 小說資料物件
+ * @returns {boolean} 如果所有卷都有包含實質內容的完整大綱則返回 true
+ * 
+ * 【Step 3 修復】修改檢查條件，確保每個章節除了有名稱外，
+ * 必須含有實質的大綱核心內容（summary、content_flow 或 events），
+ * 否則判定大綱未完工，強制退回大綱規劃階段。
+ */
+function hasValidChapterOutlines(novelData) {
+  const volumes = novelData?.volumes || [];
+  if (volumes.length === 0) return false;
+  
+  // 遍歷所有卷，嚴格檢查章節大綱是否包含實質內容
+  return volumes.every(vol => {
+    const chs = Array.isArray(vol.chapters_outline) 
+      ? vol.chapters_outline 
+      : JSON.parse(vol.chapters_outline || '[]');
+    
+    // 必須有章節存在
+    if (!Array.isArray(chs) || chs.length === 0) return false;
+    
+    // 每個章節必須含有實質的大綱核心內容
+    return chs.every(ch => ch.summary || ch.content_flow || ch.events);
+  });
+}
+
+/**
  * 根據總監決策解析下一個階段
  * @param {object} decision - 總監決策物件，包含 action, target, hint 等屬性
  * @param {string} currentStage - 當前階段名稱：worldview, characters, plot, writer
+ * @param {object} novelData - 可選的小說資料，用於進行章大綱檢查
  * @returns {string|null} 下一個階段名稱，如果應該停止則返回 null
  */
-function resolveNextStageFromDecision(decision, currentStage) {
+function resolveNextStageFromDecision(decision, currentStage, novelData) {
   const action = decision?.action;
   
     switch (action) {
@@ -29,10 +57,15 @@ function resolveNextStageFromDecision(decision, currentStage) {
         case 'characters':
           return 'plot';
         case 'plot':
-          return 'volume_skeleton';  // 新增：Stage 2 簡易章綱
+          return 'volume_skeleton';  // Stage 2 簡易章綱
         case 'volume_skeleton':
-          return 'foreshadowing_orchestration';  // 新增：Stage 3 伏筆編織
+          return 'foreshadowing_orchestration';  // Stage 3 伏筆編織
         case 'foreshadowing_orchestration':
+          // 【Step 1 修復】在進入 writer 階段前，檢查是否所有卷都有章節大綱
+          if (novelData && !hasValidChapterOutlines(novelData)) {
+            console.warn('[Pipeline Guard] 章節大綱尚未完成，強制返回 volume_skeleton 階段');
+            return 'volume_skeleton';
+          }
           return 'writer';  // Stage 4 微觀細修完成後進入正文寫作
         case 'writer':
           return null; // 寫作階段完成
@@ -71,3 +104,4 @@ module.exports = {
   getPipelinePrompt,
   resolveNextStageFromDecision,
 };
+

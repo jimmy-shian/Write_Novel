@@ -40,3 +40,4 @@ for row in rows:
     print("-" * 80)
 
 conn.close()
+

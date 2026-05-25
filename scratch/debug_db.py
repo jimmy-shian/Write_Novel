@@ -39,3 +39,5 @@ with open("scratch/db_log.txt", "w", encoding="utf-8") as f:
 
 conn.close()
 print("Successfully wrote db log to scratch/db_log.txt")
+
+

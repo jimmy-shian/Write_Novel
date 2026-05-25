@@ -50,7 +50,7 @@ new_story_architect = '''STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事
   "theme": "核心主題與多維哲學命題矩陣",
   "main_conflict": "多陣營、多情節線並行的核心衝突張力網",
   "macro_outline": "整體故事大綱（多段連續完整弧線）",
-  "three_act_structure": [
+  "multi_act_structure": [
     {
       "title": "幕次名稱 (例如：第一幕 起/Setup 或 第一幕 鋪墊)",
       "content": "詳細解構：包含鋪墊事件、世界引入、導火索與跨越門檻"
@@ -356,12 +356,12 @@ print("agents.py saved successfully!")
 # ==========================================
 print("Patching agents_incremental.py dynamic lists...")
 
-inc_search = """        elif target_section == "three_act_structure":
-            act_data = parsed.get("three_act_structure", parsed)
+inc_search = """        elif target_section == "multi_act_structure":
+            act_data = parsed.get("multi_act_structure", parsed)
             if isinstance(act_data, dict):
                 for key in ["act1_setup", "act2_confrontation", "act3_resolution"]:
                     if key in act_data:
-                        current_json["three_act_structure"][key] = act_data[key]
+                        current_json["multi_act_structure"][key] = act_data[key]
                         
         elif target_section == "progressive_character_plan":
             plan_data = parsed.get("progressive_character_plan", parsed)
@@ -370,12 +370,12 @@ inc_search = """        elif target_section == "three_act_structure":
                     if key in plan_data:
                         current_json["progressive_character_plan"][key] = plan_data[key]"""
 
-inc_replace = """        elif target_section == "three_act_structure":
-            act_data = parsed.get("three_act_structure", parsed)
+inc_replace = """        elif target_section == "multi_act_structure":
+            act_data = parsed.get("multi_act_structure", parsed)
             if isinstance(act_data, list):
-                current_json["three_act_structure"] = act_data
+                current_json["multi_act_structure"] = act_data
             elif isinstance(act_data, dict):
-                current_json["three_act_structure"] = [
+                current_json["multi_act_structure"] = [
                     {"title": "第一幕 (Setup)", "content": act_data.get("act1_setup", act_data.get("act1", ""))},
                     {"title": "第二幕 (Confrontation)", "content": act_data.get("act2_confrontation", act_data.get("act2", ""))},
                     {"title": "第三幕 (Resolution)", "content": act_data.get("act3_resolution", act_data.get("act3", ""))}
@@ -414,3 +414,5 @@ if os.path.exists(os.path.join(workspace_dir, "patch.py")):
     os.remove(os.path.join(workspace_dir, "patch.py"))
 
 print("=== ALL PYTHON BACKEND & PROMPT PATCHES COMPLETED SUCCESSFULY ===")
+
+

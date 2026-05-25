@@ -86,3 +86,4 @@ export const el = {
     // General
     toast: document.getElementById('toast')
 };
+

@@ -169,3 +169,5 @@ export function switchToDirectorTab() {
         directorContent.classList.add('active');
     }
 }
+
+

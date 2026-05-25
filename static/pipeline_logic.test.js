@@ -152,3 +152,4 @@ test("resolveNextStageFromDecision: decision 無 action 返回 null", () => {
   const result = resolveNextStageFromDecision({}, 'worldview');
   assert.equal(result, null);
 });
+

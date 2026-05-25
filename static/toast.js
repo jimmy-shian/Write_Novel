@@ -7,3 +7,4 @@ export function showToast(message) {
         toastEl.classList.add('hidden');
     }, 2500);
 }
+

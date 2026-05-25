@@ -39,3 +39,5 @@ for c in chaps:
     print(f"  Chapter {c['chapter_index']}: len={len(c['content']) if c['content'] else 0} | is_dirty: {c['is_dirty']} | synopsis: {c['synopsis']}")
 
 conn.close()
+
+
