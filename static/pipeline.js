@@ -98,6 +98,19 @@ function isPlaceholderOutline(outline) {
     ].some(token => parts.includes(token.toLowerCase()));
 }
 
+function isShallowOutline(outline) {
+    if (!outline || typeof outline !== 'object') return true;
+    const summary = (outline.summary || outline.chapter_summary || outline.brief_summary || '').toString().trim();
+    const scene = (outline.scene || outline.chapter_scene || '').toString().trim();
+    const purpose = (outline.purpose || '').toString().trim();
+    const cliffhanger = (outline.cliffhanger || '').toString().trim();
+    const events = Array.isArray(outline.events) ? outline.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
+
+    const hasSummary = summary.length >= 20;
+    const hasExtraDetail = scene.length >= 20 || purpose.length >= 20 || cliffhanger.length >= 20 || events;
+    return !(hasSummary && hasExtraDetail);
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt) {
     return new Promise((resolve) => {
@@ -126,15 +139,14 @@ export async function executePipelineStage(stage, userPrompt) {
                 agentName = 'Plot Planner (章節劇情規劃師)';
                 break;
             case 'volume_skeleton':
-                // Stage 2: 為特定卷生成簡易章節骨架
                 endpoint = '/api/agent/volume-skeleton';
-                // 預設生成第 1 卷，用戶可以在 userPrompt 中指定其他卷
-                const skeletonVolumeIndex = state.activeVolumeIndex || 1;
-                body = { novel_id: state.currentNovelId, volume_index: skeletonVolumeIndex, user_prompt: userPrompt };
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
-                agentName = 'Volume Skeleton Planner (簡易章節骨架生成器)';
-                break;
+                agentName = 'Volume Skeleton Planner';
+                // void window.generateAllVolumeSkeletons(userPrompt);
+                // resolve();
+                window.generateAllVolumeSkeletons(userPrompt).then(() => resolve());
+                return;
             case 'foreshadowing_orchestration':
                 // Stage 3: 全局伏筆編織對齊
                 endpoint = '/api/agent/foreshadowing-orchestrate';
@@ -236,6 +248,9 @@ export async function executePipelineStage(stage, userPrompt) {
             },
             async () => {
                 state.currentlyWritingChapterIndex = null;
+                if (stage === 'writer' && state.writingBuffer?.trim()) {
+                    await window.saveProseDirect(state.activeChapterIndex || 1);
+                }
                 if (failed) return;
                 updatePipelineStage(stage, 'done');
                 hideAgentProcessingIndicator(stage);
@@ -261,7 +276,7 @@ export async function writeAllChaptersSequentially(userPrompt) {
         return;
     }
 
-    const invalidOutlines = plotChapters.filter(isPlaceholderOutline);
+    const invalidOutlines = plotChapters.filter(chapter => isPlaceholderOutline(chapter) || isShallowOutline(chapter));
     const dirtyVolumes = (state.currentNovelData?.volumes || [])
         .filter(v => Number(v.is_dirty || 0) === 1);
     if (invalidOutlines.length > 0 || dirtyVolumes.length > 0) {
@@ -371,6 +386,9 @@ export async function writeAllChaptersSequentially(userPrompt) {
                 },
                 async () => {
                     state.currentlyWritingChapterIndex = null;
+                    if (state.writingBuffer?.trim()) {
+                        await window.saveProseDirect(chapterIndex);
+                    }
                     hideAgentProcessingIndicator('writer');
                     await window.loadNovelDetails(state.currentNovelId);
                     resolve();
@@ -386,15 +404,22 @@ export async function writeAllChaptersSequentially(userPrompt) {
                 await window.executeDirectorAction(chapterDecision, userPrompt);
                 return;
             }
-            if (chapterDecision.action === 'CONTINUE' && (chapterDecision.target === 'plot' || chapterDecision.target === '章節大綱')) {
-                showToast('📋 總監評估後指示：當前批次已完成，繼續生成下一階段章節大綱...');
-                await window.executeDirectorAction(chapterDecision, userPrompt);
-                return;
-            }
             if (chapterDecision.action === 'WAIT_USER') {
                 showToast('⏸️ 總監要求暫停，請確認後繼續');
                 state.isPipelineRunning = false;
                 return;
+            }
+            if (chapterDecision.action === 'CONTINUE' || chapterDecision.continue || chapterDecision.action === 'WRITE_ALL_CHAPTERS') {
+                const nextTarget = (chapterDecision.target || '').toString().trim().toLowerCase();
+                if (nextTarget === 'plot' || nextTarget === 'plot_expansion' || nextTarget === '章節大綱' || nextTarget === 'volume_skeleton' || nextTarget === 'macro_skeleton' || nextTarget === 'foreshadowing_orchestration' || nextTarget === 'foreshadowing_align' || nextTarget === '伏筆對齊') {
+                    showToast('📋 總監評估後指示：進入下一階段流程...');
+                    await window.executeDirectorAction(chapterDecision, userPrompt);
+                    return;
+                }
+                // 如果總監只是說繼續寫作，則讓寫作流程繼續下一章
+                if (!nextTarget) {
+                    showToast('✅ 總監評估完成，繼續現有寫作流程');
+                }
             }
         }
     }
@@ -416,8 +441,8 @@ export async function writeAllChaptersSequentially(userPrompt) {
     if (hasUnplannedVolumes && state.isPipelineRunning) {
         updateDirectorMessage('📋 偵測到仍有未規劃大綱的篇卷，即將全自動啟動下一階段大綱規劃與伏筆對齊流程...');
         showToast('📋 偵測到未完篇卷，即將開始規劃下一波章節大綱...');
-        updatePipelineStage('writer', 'done');
-        updatePipelineStage('plot', 'running');
+        await window.generateAllVolumeSkeletons(userPrompt);
+        await executePipelineStage('foreshadowing_orchestration', userPrompt);
         await executePipelineStage('plot', userPrompt);
         return;
     }

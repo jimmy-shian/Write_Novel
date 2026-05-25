@@ -486,6 +486,31 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         if (insMatch) insert_after_index = parseInt(insMatch[1]);
     }
     
+    // 2.5) 額外解析：如果 AI 直接輸出原始 JSON 物件，嘗試從整體字串中解析第一個 JSON 對象
+    if (!action) {
+        const rawJsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (rawJsonMatch) {
+            try {
+                const rawJson = JSON.parse(rawJsonMatch[0]);
+                action = (rawJson.action || '').toUpperCase() || action;
+                target = rawJson.target || target;
+                hint = rawJson.hint || rawJson.reason || hint;
+                reason = rawJson.reason || reason;
+                if (rawJson.volume_index !== undefined && rawJson.volume_index !== null) {
+                    volume_index = parseInt(rawJson.volume_index);
+                }
+                if (rawJson.chapter_index !== undefined && rawJson.chapter_index !== null) {
+                    chapter_index = parseInt(rawJson.chapter_index);
+                }
+                if (rawJson.insert_after_index !== undefined && rawJson.insert_after_index !== null) {
+                    insert_after_index = parseInt(rawJson.insert_after_index);
+                }
+            } catch (e) {
+                // 无效 JSON，不处理
+            }
+        }
+    }
+    
     // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
     if (!action) {
         if (responseText.includes('WRITE_ALL_CHAPTERS') || responseText.includes('開始寫作所有章節')) {

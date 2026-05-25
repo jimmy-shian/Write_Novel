@@ -55,31 +55,13 @@ function resolveNextStageFromDecision(decision, currentStage, novelData) {
         case 'worldview':
           return 'characters';
         case 'characters':
+          return 'volume_skeleton';
+        case 'volume_skeleton':
+          return 'foreshadowing_orchestration';
+        case 'foreshadowing_orchestration':
           return 'plot';
         case 'plot':
-          return 'foreshadowing_orchestration';  // 【Step 1 修復】先進行全局伏筆編織
-        case 'foreshadowing_orchestration':
-          return 'volume_skeleton';  // 【Step 1 修復】伏筆編織完成後生成卷的簡易骨架
-        case 'volume_skeleton':
-          // 【Step 1 修復】在進入 writer 階段前，檢查是否所有卷都有章節大綱
-          if (novelData && !hasValidChapterOutlines(novelData)) {
-            // 【Step 5 修復】在大綱檢查失敗時，動態尋找第一個缺失大綱的 volume_index 並賦值給 decision
-            if (!decision.volume_index) {
-              const volumes = novelData?.volumes || [];
-              for (const vol of volumes) {
-                const chs = Array.isArray(vol.chapters_outline) 
-                  ? vol.chapters_outline 
-                  : JSON.parse(vol.chapters_outline || '[]');
-                if (!Array.isArray(chs) || chs.length === 0) {
-                  decision.volume_index = parseInt(vol.volume_index, 10);
-                  break;
-                }
-              }
-            }
-            console.warn('[Pipeline Guard] 章節大綱尚未完成，強制返回 volume_skeleton 階段');
-            return 'volume_skeleton';
-          }
-          return 'writer';  // Stage 4 微觀細修完成後進入正文寫作
+          return 'writer';
         case 'writer':
           return null; // 寫作階段完成
         default:

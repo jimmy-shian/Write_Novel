@@ -548,6 +548,15 @@ def get_volumes(novel_id):
         res.append(d)
     return res
 
+def _get_clean_chapter_count(vol):
+    if not vol:
+        return 50
+    try:
+        val = int(vol.get("chapter_count"))
+        return val if val > 0 else 50
+    except:
+        return 50
+
 def get_volume_chapter_range(volumes, target_volume_index):
     """
     根據篇卷列表，動態計算特定篇卷的起始與結束章節序號 (1-indexed)。
@@ -557,7 +566,7 @@ def get_volume_chapter_range(volumes, target_volume_index):
     sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
     for vol in sorted_vols:
         vol_idx = int(vol.get("volume_index", 0))
-        vol_ch_count = int(vol.get("chapter_count") or 50)
+        vol_ch_count = _get_clean_chapter_count(vol)
         end_chapter = start_chapter + vol_ch_count - 1
         if vol_idx == target_volume_index:
             return start_chapter, end_chapter
@@ -569,7 +578,7 @@ def get_volume_chapter_range(volumes, target_volume_index):
         last_vol_idx = int(last_vol.get("volume_index", 0))
         last_start, last_end = get_volume_chapter_range(volumes, last_vol_idx)
         diff = target_volume_index - last_vol_idx
-        default_count = int(last_vol.get("chapter_count") or 50)
+        default_count = _get_clean_chapter_count(last_vol)
         start = last_end + (diff - 1) * default_count + 1
         return start, start + default_count - 1
         
@@ -583,7 +592,7 @@ def get_chapter_volume_index(volumes, chapter_index):
     sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
     for vol in sorted_vols:
         vol_idx = int(vol.get("volume_index", 0))
-        vol_ch_count = int(vol.get("chapter_count") or 50)
+        vol_ch_count = _get_clean_chapter_count(vol)
         end_chapter = start_chapter + vol_ch_count - 1
         if start_chapter <= int(chapter_index) <= end_chapter:
             return vol_idx
@@ -595,7 +604,7 @@ def get_chapter_volume_index(volumes, chapter_index):
         last_vol_idx = int(last_vol.get("volume_index", 0))
         _, last_end = get_volume_chapter_range(volumes, last_vol_idx)
         if int(chapter_index) > last_end:
-            default_count = int(last_vol.get("chapter_count") or 50)
+            default_count = _get_clean_chapter_count(last_vol)
             diff = (int(chapter_index) - last_end - 1) // default_count + 1
             return last_vol_idx + diff
             
@@ -604,7 +613,7 @@ def get_chapter_volume_index(volumes, chapter_index):
 def get_total_chapter_count(volumes):
     if not volumes:
         return 1000
-    return sum(int(v.get("chapter_count") or 50) for v in volumes)
+    return sum(_get_clean_chapter_count(v) for v in volumes)
 
 def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn = get_db_connection()
@@ -700,7 +709,7 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     next_v = (row_max["max_v"] or 0) + 1
     cursor.execute(
         "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-        (json.dumps({"chapters": filtered_ch}, ensure_ascii=False), novel_id, next_v)
+        (novel_id, json.dumps({"chapters": filtered_ch}, ensure_ascii=False), next_v)
     )
     
     conn.commit()
@@ -1291,25 +1300,39 @@ def append_foreshadowing(novel_id, new_seed):
     return save_worldbuilding(novel_id, new_content)
 
 def insert_plot_chapter(novel_id, insert_after_index, new_chapter):
-    plot = get_latest_plot_chapters(novel_id)
-    if not plot:
-        return None
+    plot_data = get_stitched_plot(novel_id)
+    if not plot_data:
+        plot_data = {"chapters": []}
     
-    plot_data = plot["parsed_data"]
     if "chapters" not in plot_data:
         plot_data["chapters"] = []
     
     chapters = plot_data["chapters"]
     
-    if insert_after_index < 0 or insert_after_index >= len(chapters):
+    # 💡 核心修復：根據 chapter_index 尋找插入位置，而不是陣列索引！
+    # 支援 1-based 的 chapter_index。若 insert_after_index 為 0，代表插入到最前面。
+    insert_pos = -1
+    if insert_after_index <= 0:
+        insert_pos = 0
+    else:
+        for idx, ch in enumerate(chapters):
+            try:
+                if int(ch.get("chapter_index", 0)) == int(insert_after_index):
+                    insert_pos = idx + 1
+                    break
+            except:
+                pass
+                
+    if insert_pos == -1:
         new_chapter["chapter_index"] = len(chapters) + 1
         chapters.append(new_chapter)
     else:
-        insert_pos = insert_after_index + 1
         new_chapter["chapter_index"] = insert_pos + 1
         chapters.insert(insert_pos, new_chapter)
-        for i in range(insert_pos + 1, len(chapters)):
-            chapters[i]["chapter_index"] = i + 1
+        
+    # 重新對所有章節重新編排 chapter_index 確保連續
+    for idx, ch in enumerate(chapters):
+        ch["chapter_index"] = idx + 1
     
     return save_plot_chapters(novel_id, plot_data)
 
@@ -1374,7 +1397,7 @@ def update_volume(novel_id, volume_index, title, summary, factions):
         )
     else:
         cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline, chapter_count) VALUES (?, ?, ?, ?, ?, 0, '[]', 0)",
+            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline, chapter_count) VALUES (?, ?, ?, ?, ?, 0, '[]', 50)",
             (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
         )
     conn.commit()
@@ -1557,7 +1580,7 @@ def get_all_volume_skeletons(novel_id):
         ch_outline_str = vol.get("chapters_outline")
         if ch_outline_str:
             try:
-                ch_list = json.loads(ch_outline_str)
+                ch_list = ch_outline_str if isinstance(ch_outline_str, list) else json.loads(ch_outline_str or "[]")
                 if isinstance(ch_list, list) and len(ch_list) > 0:
                     # 為每個章節附加 volume_index 資訊
                     vol_idx = int(vol.get("volume_index", 0))

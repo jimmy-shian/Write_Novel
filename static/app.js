@@ -120,7 +120,8 @@ async function runPipeline(pipelinePrompt = '') {
         showToast('請先選擇或建立一個小說專案');
         return;
     }
-    
+    // 初始化並重置伏筆編織管線狀態
+    state.foreshadowingOrchestrated = false;
     state.isPipelineRunning = true;
     showPipelineProgress(true);
     updateDirectorMessage('🎬 總監開始評估創作狀態...');
@@ -210,7 +211,7 @@ async function executeDirectorAction(decision, userPrompt) {
         }
 
         case 'CONTINUE': {
-            const target = decision.target || '';
+            const target = (decision.target || '').toString().trim().toLowerCase();
             if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
                 updatePipelineStage('worldview', 'running');
                 updateDirectorMessage('🌍 開始生成世界觀設定...');
@@ -220,47 +221,32 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'running');
                 updateDirectorMessage('👥 開始生成角色設定...');
                 await executePipelineStage('characters', userPrompt);
-            } else if (target === 'plot' || target === '章節大綱') {
-                // 🎯 Stage 2 四階段漸進式大綱生成策略
-                // Stage 2a: macro_skeleton (宏觀千章骨架) -> Stage 3: foreshadowing_align (伏筆編織對齊) -> Stage 4: plot_expansion (微觀大綱展開)
+            } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('plot', 'running');
-                
-                // 先檢查是否已進入 macro_skeleton 流程
-                if (!state.macroSkeletonCompleted) {
-                    updateDirectorMessage('🏗️ 開始 Stage 2：生成全書千章宏觀骨架...');
-                    showToast('🏗️ 開始 Stage 2：全書千章宏觀骨架生成...');
-                    
-                    // 🚀 自動遍歷所有卷生成簡易章節骨架
-                    await generateAllVolumeSkeletons(userPrompt);
-                    
-                    // Stage 3: 全局伏筆編織對齊
-                    updateDirectorMessage('🎭 開始 Stage 3：全局伏筆編織對齊...');
-                    showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
-                    await executePipelineStage('foreshadowing_orchestration', userPrompt);
-                    
-                    // 標記宏觀骨架流程已完成
-                    state.macroSkeletonCompleted = true;
-                }
-                
-                // Stage 4: 微觀大綱展開（進入 plot_expansion 後恢復原來的 5 章滾動生成模式）
                 updateDirectorMessage('📋 開始 Stage 4：微觀大綱詳細展開...');
                 showToast('📋 開始 Stage 4：微觀大綱詳細展開...');
                 await executePipelineStage('plot', userPrompt);
-            } else if (target === 'macro_skeleton' || target === '宏觀骨架') {
-                // 顯式進入宏觀骨架生成流程
+            } else if (target === 'macro_skeleton' || target === 'volume_skeleton' || target === '宏觀骨架') {
                 updatePipelineStage('plot', 'running');
                 updateDirectorMessage('🏗️ 開始 Stage 2：生成全書千章宏觀骨架...');
                 showToast('🏗️ 開始 Stage 2：全書千章宏觀骨架生成...');
-                await generateAllVolumeSkeletons(userPrompt);
-            } else if (target === 'foreshadowing_align' || target === '伏筆對齊') {
-                // 進入伏筆編織對齊流程
+                const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
+                if (skeletonSuccess && state.isPipelineRunning) {
+                    updateDirectorMessage('🔍 Stage 2 完成，請總監評估下一步...');
+                    const nextDecision = await runDirectorDecision('volume_skeleton', userPrompt);
+                    await executeDirectorAction(nextDecision, userPrompt);
+                } else if (!skeletonSuccess) {
+                    updateDirectorMessage('⚠️ Stage 2 生成失敗，已停止管線。');
+                    state.isPipelineRunning = false;
+                    showPipelineProgress(false);
+                }
+            } else if (target === 'foreshadowing_orchestration' || target === 'foreshadowing_align' || target === '伏筆對齊') {
                 updateDirectorMessage('🎭 開始 Stage 3：全局伏筆編織對齊...');
                 showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
                 await executePipelineStage('foreshadowing_orchestration', userPrompt);
             } else if (target === 'writer' || target === '正文寫作') {
-                // 【Step 1 修復】在進入 writer 階段前，檢查章節大綱是否完成
                 const volumes = state.currentNovelData?.volumes || [];
                 const hasValidOutlines = volumes.every(vol => {
                     const outline = vol.chapters_outline;
@@ -275,16 +261,15 @@ async function executeDirectorAction(decision, userPrompt) {
                     }
                     return Array.isArray(outline) && outline.length > 0;
                 });
-                
-                if (!hasValidOutlines && volumes.length > 0) {
-                    updateDirectorMessage('⚠️ 偵測到章節大綱尚未完成，強制返回 volume_skeleton 階段...');
-                    showToast('⚠️ 章節大綱尚未完成，需先生成章大綱才能進入寫作階段');
-                    updatePipelineStage('plot', 'running');
-                    // 生成所有卷的骨架
-                    await generateAllVolumeSkeletons(userPrompt);
+                const hasPlot = state.currentNovelData?.plot && Array.isArray(state.currentNovelData.plot.chapters) && state.currentNovelData.plot.chapters.length > 0;
+
+                if ((!hasValidOutlines && volumes.length > 0) || !hasPlot || !state.foreshadowingOrchestrated) {
+                    updateDirectorMessage('⚠️ 偵測到仍需補完伏筆與精細章節大綱，先回到前期準備階段...');
+                    showToast('⚠️ 已強制補完伏筆對齊或詳細章節大綱，避免直接進入寫作');
+                    await executeNextMissingStage(userPrompt);
                     return;
                 }
-                
+
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('plot', 'done');
@@ -292,7 +277,6 @@ async function executeDirectorAction(decision, userPrompt) {
                 updateDirectorMessage('✍️ 開始撰寫正文...');
                 await executePipelineStage('writer', userPrompt);
             } else {
-                // 無明確 target，根據當前狀態自動決定
                 await executeNextMissingStage(userPrompt);
             }
             break;
@@ -424,11 +408,29 @@ async function executeDirectorAction(decision, userPrompt) {
 /**
  * 智能填補缺失階段（回退邏輯）
  * 當 Director 未返回明確 ACTION 時，根據當前狀態自動推進
+ * 
+ * 【Step 4 修復】重新編排後備邏輯的檢查與觸發路徑
+ * 完整順序：世界觀 -> 角色 -> 全部卷骨架 -> 伏筆編織 -> 詳細章節大綱 -> 正文寫作
  */
+function isDetailedPlotOutline(chapter) {
+    if (!chapter || typeof chapter !== 'object') return false;
+    const summary = (chapter.summary || chapter.chapter_summary || chapter.brief_summary || '').toString().trim();
+    const scene = (chapter.scene || chapter.chapter_scene || '').toString().trim();
+    const purpose = (chapter.purpose || '').toString().trim();
+    const cliffhanger = (chapter.cliffhanger || '').toString().trim();
+    const events = Array.isArray(chapter.events) ? chapter.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
+
+    const hasSummary = summary.length >= 20;
+    const hasExtraDetail = scene.length >= 20 || purpose.length >= 20 || cliffhanger.length >= 20 || events;
+    return hasSummary && hasExtraDetail;
+}
+
 async function executeNextMissingStage(userPrompt) {
     const hasWorldview = state.currentNovelData?.worldbuilding && state.currentNovelData.worldbuilding.trim().length > 50;
     const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
-    const hasPlot = state.currentNovelData?.plot && state.currentNovelData.plot.chapters?.length > 0;
+    const volumes = state.currentNovelData?.volumes || [];
+    const hasSkeletons = volumes.length > 0 && volumes.every(v => v.chapters_outline);
+    const hasPlot = state.currentNovelData?.plot && Array.isArray(state.currentNovelData.plot.chapters) && state.currentNovelData.plot.chapters.length > 0 && state.currentNovelData.plot.chapters.every(isDetailedPlotOutline);
     
     if (!hasWorldview) {
         updatePipelineStage('worldview', 'running');
@@ -439,11 +441,23 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('characters', 'running');
         updateDirectorMessage('👥 開始生成角色設定...');
         await executePipelineStage('characters', userPrompt);
+    } else if (!hasSkeletons) {
+        // 【Step 4 修復】檢查骨架是否完成，而非直接進入 plot
+        updatePipelineStage('worldview', 'done');
+        updatePipelineStage('characters', 'done');
+        updatePipelineStage('plot', 'running');
+        updateDirectorMessage('🏗️ 開始生成全書卷骨架...');
+        await executePipelineStage('volume_skeleton', userPrompt);
+    } else if (!state.foreshadowingOrchestrated) {
+        state.foreshadowingOrchestrated = true;
+        updatePipelineStage('plot', 'running');
+        updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
+        await executePipelineStage('foreshadowing_orchestration', userPrompt);
     } else if (!hasPlot) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
         updatePipelineStage('plot', 'running');
-        updateDirectorMessage('📋 開始生成章節大綱...');
+        updateDirectorMessage('📋 開始生成詳細章節大綱...');
         await executePipelineStage('plot', userPrompt);
     } else {
         // 所有前期準備完成，開始寫作
@@ -2288,14 +2302,18 @@ async function savePlotOutlineDirect() {
 async function saveProseDirect(chapterIndex = null) {
     if (!state.currentNovelId) return;
     
+    if (chapterIndex && typeof chapterIndex === 'object' && ('type' in chapterIndex || 'currentTarget' in chapterIndex)) {
+        chapterIndex = null;
+    }
     // Determine target chapter index: prioritize the passed index, then activeChapterIndex
     const targetIdx = chapterIndex !== null ? parseInt(chapterIndex) : state.activeChapterIndex;
-    if (!targetIdx) return;
+    if (!Number.isFinite(targetIdx) || targetIdx <= 0) return;
     
     // Determine content: if saving the chapter that is currently writing, prioritize writingBuffer
     let content = el.editorProse.value;
     const isWriting = state.currentlyWritingChapterIndex === targetIdx;
-    if (isWriting && state.writingBuffer !== undefined && state.writingBuffer !== null) {
+    // if (isWriting && state.writingBuffer !== undefined && state.writingBuffer !== null) {
+    if (state.currentlyWritingChapterIndex === targetIdx && state.writingBuffer) {
         content = state.writingBuffer;
     } else if (chapterIndex !== null) {
         // If we are saving a specific chapter that is NOT the active one (meaning user switched away),
@@ -2989,6 +3007,24 @@ async function resumePipelineWithDecision(activeTab, parsed, choice) {
     }
 }
 
+function cacheDirectorDecisionMessage(content, thinking) {
+    if (!state.currentNovelData) return;
+    const message = {
+        role: 'assistant',
+        content: (content || '').trim(),
+        thinking: (thinking || '').trim(),
+        timestamp: new Date().toISOString()
+    };
+    if (!Array.isArray(state.currentNovelData.chat_memory)) {
+        state.currentNovelData.chat_memory = [];
+    }
+    if (!Array.isArray(state.currentNovelData.chat_messages)) {
+        state.currentNovelData.chat_messages = [];
+    }
+    state.currentNovelData.chat_memory.push(message);
+    state.currentNovelData.chat_messages.push(message);
+}
+
 async function runDirectorDecision(currentStage, providedUserPrompt = null) {
     // 總監開始決策時，自動跳轉至總監頁籤 (僅在初始化時觸發 1 次)
     switchToDirectorTab();
@@ -3024,16 +3060,21 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
             || '';
         
         let responseText = "";
+        let thinkingText = ""; // 新增此行
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision',
             { current_stage: currentStage, user_prompt: userPrompt },
             // onThinking
             (thinkingDelta) => {
+                thinkingText += thinkingDelta; // 新增此行
                 // 確保只執行單次追加，徹底解決雙串流問題
                 if (thinkingDetails) {
                     thinkingDetails.classList.remove('hidden');
                     thinkingDetails.open = true;
                     thinkingPre.textContent += thinkingDelta;
+                }
+                if (streamTarget && !responseText.trim()) {
+                    streamTarget.innerHTML = renderMarkdown(thinkingText);
                 }
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
             },
@@ -3054,6 +3095,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                 streamTarget.classList.add('streaming-done');
             },
             async () => {
+                if (!responseText.trim()) responseText = thinkingText; // 新增此行保底
                 // 回覆完成，停止閃爍效果
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
@@ -3061,6 +3103,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                 // 添加 director-response 樣式
                 directorResponseContainer.classList.add('director-response');
                 
+                cacheDirectorDecisionMessage(responseText, thinkingText);
                 const decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
                 
@@ -3159,11 +3202,13 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
         const thinkingPre = directorResponseContainer.querySelector('.thinking-pre');
         
         let responseText = "";
+        let thinkingText = "";
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision/help',
             { current_stage: currentStage, help_action: helpAction, help_reason: helpReason },
             // onThinking
             (thinkingDelta) => {
+                thinkingText += thinkingDelta;
                 thinkingDetails.classList.remove('hidden');
                 thinkingDetails.open = true;
                 thinkingPre.textContent += thinkingDelta;
@@ -3183,10 +3228,12 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
                 streamTarget.classList.add('streaming-done');
             },
             async () => {
+                if (!responseText.trim()) responseText = thinkingText; // 新增此行保底
                 // 回覆完成，停止閃爍效果
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
                 
+                cacheDirectorDecisionMessage(responseText, thinkingText);
                 const decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
                 
@@ -3796,9 +3843,12 @@ function runFullPipeline(userPrompt) {
                         state.isPipelineRunning = false;
                         return;
                     }
+                    // 補齊骨架與伏筆的生命週期
+                    await window.generateAllVolumeSkeletons(userPrompt);
+                    await executePipelineStage('foreshadowing_orchestration', userPrompt);
+                    startStage3_Plot();
                     
                     // 繼續大綱階段
-                    startStage3_Plot();
                 }
             }
         );
@@ -4238,8 +4288,8 @@ function setupEventListeners() {
     el.btnPlotSave.addEventListener('click', savePlotOutlineDirect);
     el.editorPlotJson.addEventListener('blur', savePlotOutlineDirect);
     
-    el.btnProseSave.addEventListener('click', saveProseDirect);
-    el.editorProse.addEventListener('blur', saveProseDirect);
+    el.btnProseSave.addEventListener('click', () => saveProseDirect());
+    el.editorProse.addEventListener('blur', () => saveProseDirect());
     
     // 5. Add Manual placeholders - WORK DIRECTLY WITH STATE, NOT TEXTAREA
     el.btnCharacterAdd.addEventListener('click', () => {
@@ -5488,6 +5538,7 @@ window.toggleSectionExpand = toggleSectionExpand;
 window.closeSeedModal = closeSeedModal;
 window.closeCustomDialog = closeCustomDialog;
 window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallback
+window.saveProseDirect = saveProseDirect;
 
 // Direct aliases for worldview complex rendering
 window.editWorldviewComplexList = openWorldviewComplexListEditModal;

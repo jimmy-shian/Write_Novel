@@ -519,6 +519,11 @@ export function renderPlotTab() {
         
         // Step 3: 切換篇卷時重新渲染世界觀區塊以套用過濾
         renderWorldviewSections();
+        
+        // 💡 核心修復：切換卷時主動刷新快捷時間軸，確保顯示當前活躍卷的章節
+        if (typeof window.renderQuickTimelineNav === 'function') {
+            window.renderQuickTimelineNav();
+        }
     };
 
     // Expose collapse function
@@ -540,6 +545,21 @@ export function renderPlotTab() {
                     chaptersList.style.setProperty('display', 'flex', 'important');
                     if (toggleBtn) toggleBtn.innerText = '收合';
                     state.expandedVolumes.add(volIdx);
+                    
+                    // 💡 同步更新當前活躍卷，並重繪右側快捷導航條
+                    state.activeVolumeIdx = volIdx;
+                    if (typeof window.renderQuickTimelineNav === 'function') {
+                        window.renderQuickTimelineNav();
+                    }
+                    
+                    // 同步高亮對應的 roadmap 節點
+                    document.querySelectorAll('.roadmap-node').forEach((node) => {
+                        if (parseInt(node.getAttribute('data-volume-index')) === volIdx) {
+                            node.classList.add('active');
+                        } else {
+                            node.classList.remove('active');
+                        }
+                    });
                 }
             }
         }
@@ -817,7 +837,7 @@ export function renderPlotTab() {
                         const turningPoints = allocatedTasks.turning_points || [];
                         
                         return `
-                        <div class="chapter-grid-item skeleton-chapter" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
+                        <div class="chapter-grid-item skeleton-chapter" data-chapter-index="${chapterIndex}" data-index="${globalIdx}" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
                             <div class="chapter-title-row" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
                                 <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🦴 第 ${chIdxInVol} 章</span>
                                 <h3 class="chapter-title" style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">${skeletonTitle}</h3>
@@ -827,7 +847,7 @@ export function renderPlotTab() {
                             ${(foreshadowPlants.length > 0 || foreshadowPayoffs.length > 0 || turningPoints.length > 0) ? `
                             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
                                 ${foreshadowPlants.map(seed => `<span class="seed-pill" style="background: rgba(139, 92, 246, 0.12); color: #8b5cf6; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">🌱 ${seed}</span>`).join('')}
-                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">💥 回收</span>`).join('')}
+                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">💥 回收: ${pay}</span>`).join('')}
                                 ${turningPoints.map(tp => `<span class="turning-pill" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">⚡ 轉折: ${tp}</span>`).join('')}
                             </div>` : ''}
                             
@@ -979,78 +999,151 @@ export function renderPlotTab() {
 
             // ===== Step 4: 動態生成快捷時間軸導航 (僅顯示當前活躍卷) =====
             // 在渲染完大綱後，動態生成右側快捷時間軸的章節跳轉按鈕
-            const tlNav = document.getElementById('plot-quick-timeline');
-            if (tlNav) {
-                tlNav.innerHTML = ''; // 清空舊內容
-                
-                // 收集當前活躍卷的章節（而非全書章節）
-                const allDisplayChapters = [];
-                const activeVolNum = state.activeVolumeIdx || 1;
-                const currentVol = volumes.find(v => parseInt(v.volume_index) === activeVolNum) || volumes[0];
-                if (currentVol) {
-                    const volOutl = Array.isArray(currentVol.chapters_outline) ? currentVol.chapters_outline : JSON.parse(currentVol.chapters_outline || '[]');
-                    volOutl.forEach(ch => {
-                        if (ch && ch.chapter_index) {
-                            allDisplayChapters.push({
-                                index: parseInt(ch.chapter_index),
-                                title: ch.title || ch.chapter_title || ch.name || `第 ${ch.chapter_index} 章`
-                            });
-                        }
-                    });
-                }
-                
-                // 限制顯示數量，避免快捷時間軸過長（最多顯示100項）
-                const maxItems = 100;
-                const itemsToShow = allDisplayChapters.slice(0, maxItems);
-                
-                if (itemsToShow.length > 0) {
-                    itemsToShow.forEach((item, idx) => {
-                        const tlItem = document.createElement('div');
-                        tlItem.className = 'timeline-nav-item';
-                        tlItem.innerText = `Ch ${item.index}`;
-                        tlItem.title = item.title;
-                        tlItem.dataset.chapterIndex = item.index;
-                        
-                        // 點擊時平滑滾動到對應的章節卡片
-                        tlItem.onclick = () => {
-                            // 嘗試找到對應的章節元素
-                            const targetEl = document.querySelector(`[data-chapter-index="${item.index}"]`);
-                            if (targetEl) {
-                                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                // 添加視覺反饋
-                                targetEl.style.boxShadow = '0 0 0 3px var(--primary)';
-                                setTimeout(() => {
-                                    targetEl.style.boxShadow = '';
-                                }, 1500);
-                            } else {
-                                // Fallback: 如果找不到精確元素，嘗試在 volume card 中查找
-                                const volCards = document.querySelectorAll('.volume-card');
-                                volCards.forEach(volCard => {
-                                    const chEl = volCard.querySelector(`.chapter-grid-item, .plot-chapter-item`);
-                                    if (chEl) {
-                                        chEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                    }
-                                });
-                            }
+            window.renderQuickTimelineNav = function() {
+                const tlNav = document.getElementById('plot-quick-timeline');
+                if (tlNav) {
+                    tlNav.innerHTML = ''; // 清空舊內容
+                    
+                    // 💡 動態讀取最新的全局數據，避免閉包變數鎖定 (Closure locking)
+                    const volumes = state.currentNovelData?.volumes || [];
+                    const chapters = state.currentNovelData?.plot?.chapters || [];
+                    
+                    // 💡 動態生成篇卷範圍累加器（完美對齊卡片渲染邏輯）
+                    const sortedVols = [...volumes].sort((a, b) => parseInt(a.volume_index) - parseInt(b.volume_index));
+                    const volRanges = {};
+                    let currentGlobalStart = 1;
+
+                    sortedVols.forEach(v => {
+                        const vIdx = parseInt(v.volume_index);
+                        const vCount = parseInt(v.chapter_count) || 50;
+                        volRanges[vIdx] = {
+                            start: currentGlobalStart,
+                            end: currentGlobalStart + vCount - 1,
+                            count: vCount
                         };
-                        
-                        tlNav.appendChild(tlItem);
+                        currentGlobalStart += vCount;
                     });
                     
-                    // 如果有更多章節，顯示提示
-                    if (allDisplayChapters.length > maxItems) {
-                        const moreIndicator = document.createElement('div');
-                        moreIndicator.className = 'timeline-nav-item';
-                        moreIndicator.style.fontSize = '0.65rem';
-                        moreIndicator.style.color = 'var(--text-muted)';
-                        moreIndicator.innerText = `+${allDisplayChapters.length - maxItems} 更多...`;
-                        moreIndicator.style.cursor = 'default';
-                        tlNav.appendChild(moreIndicator);
+                    // 收集當前活躍卷的章節（而非全書章節）
+                    const allDisplayChapters = [];
+                    const activeVolNum = state.activeVolumeIdx || 1;
+                    const currentVol = volumes.find(v => parseInt(v.volume_index) === activeVolNum) || volumes[0];
+                    if (currentVol) {
+                        const outl = Array.isArray(currentVol.chapters_outline) ? currentVol.chapters_outline : JSON.parse(currentVol.chapters_outline || '[]');
+                        const volSkeletonChapters = outl;
+                        
+                        // 獲取當前卷的精確動態章節範圍
+                        const myRange = volRanges[activeVolNum] || { start: (activeVolNum - 1) * 50 + 1, end: activeVolNum * 50, count: 50 };
+                        const vStart = myRange.start;
+                        const volChCount = myRange.count;
+                        
+                        const volMicroChapters = chapters.filter(c => {
+                            const cIdx = parseInt(c.chapter_index);
+                            const isInVolumeRange = !isNaN(cIdx) && (cIdx >= myRange.start && cIdx <= myRange.end);
+                            if (!isInVolumeRange) return false;
+                            
+                            const hasMicroStructure = Array.isArray(c.events) && c.events.length > 0 ||
+                                                      !!c.purpose || !!c.emotional_tone || !!c.cliffhanger;
+                            const hasTitleOrSummary = c.title && c.title.trim() !== '' && c.title !== '待設定標題';
+                            
+                            const isSkeleton = c.brief_title !== undefined && c.brief_title !== null;
+                            return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
+                        });
+                        
+                        const skeletonMap = new Map();
+                        volSkeletonChapters.forEach(ch => {
+                            const rawIdx = ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id;
+                            const idx = parseInt(rawIdx);
+                            if (!isNaN(idx)) {
+                                skeletonMap.set(idx, ch);
+                            }
+                        });
+
+                        const microMap = new Map();
+                        volMicroChapters.forEach(ch => {
+                            const idx = parseInt(ch.chapter_index);
+                            if (!isNaN(idx)) {
+                                microMap.set(idx, ch);
+                            }
+                        });
+                        
+                        const chapterIdxSet = new Set();
+                        skeletonMap.forEach((_, idx) => chapterIdxSet.add(idx));
+                        volMicroChapters.forEach(ch => chapterIdxSet.add(parseInt(ch.chapter_index)));
+                        
+                        if (outl.length > 0) {
+                            for (let i = 0; i < volChCount; i++) {
+                                chapterIdxSet.add(vStart + i);
+                            }
+                        }
+                        
+                        const sortedIdxs = Array.from(chapterIdxSet).sort((a, b) => a - b);
+                        const displayChapters = sortedIdxs.map(idx => {
+                            if (microMap.has(idx)) {
+                                return { ...microMap.get(idx), __renderMode: 'micro' };
+                            } else if (skeletonMap.has(idx)) {
+                                return { ...skeletonMap.get(idx), __renderMode: 'skeleton' };
+                            } else {
+                                return { chapter_index: idx, title: '待設定標題', summary: '待設定摘要', __renderMode: 'empty' };
+                            }
+                        });
+                        
+                        displayChapters.forEach((ch, idx) => {
+                            const chIdx = parseInt(ch.chapter_index);
+                            if (ch && chIdx) {
+                                // 💡【骨架章節支持】：支持 brief_title 等
+                                allDisplayChapters.push({
+                                    index: chIdx,
+                                    title: ch.title || ch.brief_title || ch.chapter_title || ch.name || `第 ${chIdx} 章`
+                                });
+                            }
+                        });
                     }
-                } else {
-                    tlNav.innerHTML = '<div style="font-size: 0.7rem; color: var(--text-muted); text-align: center; padding: 8px;">尚無章節</div>';
+                    
+                    // 限制顯示數量，避免快捷時間軸過長（最多顯示100項）
+                    const maxItems = 100;
+                    const itemsToShow = allDisplayChapters.slice(0, maxItems);
+                    
+                    if (itemsToShow.length > 0) {
+                        itemsToShow.forEach((item, idx) => {
+                            const tlItem = document.createElement('div');
+                            tlItem.className = 'timeline-nav-item';
+                            tlItem.innerText = `Ch ${item.index}`;
+                            tlItem.title = item.title;
+                            tlItem.dataset.chapterIndex = item.index;
+                            
+                            // 點擊時平滑滾動到對應的章節卡片
+                            tlItem.onclick = () => {
+                                const targetEl = document.querySelector(`[data-chapter-index="${item.index}"]`);
+                                if (targetEl) {
+                                    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    targetEl.style.boxShadow = '0 0 0 3px var(--primary)';
+                                    setTimeout(() => {
+                                        targetEl.style.boxShadow = '';
+                                    }, 1500);
+                                }
+                            };
+                            
+                            tlNav.appendChild(tlItem);
+                        });
+                        
+                        if (allDisplayChapters.length > maxItems) {
+                            const moreIndicator = document.createElement('div');
+                            moreIndicator.className = 'timeline-nav-item';
+                            moreIndicator.style.fontSize = '0.65rem';
+                            moreIndicator.style.color = 'var(--text-muted)';
+                            moreIndicator.innerText = `+${allDisplayChapters.length - maxItems} 更多...`;
+                            moreIndicator.style.cursor = 'default';
+                            tlNav.appendChild(moreIndicator);
+                        }
+                    } else {
+                        tlNav.innerHTML = '<div style="font-size: 0.7rem; color: var(--text-muted); text-align: center; padding: 8px;">尚無章節</div>';
+                    }
                 }
-            }
+            };
+
+            // 💡 渲染完後主動執行一次以生成導航列表
+            window.renderQuickTimelineNav();
 
             // Bind mouse drag-to-scroll for roadmap track
             const track = el.plotTimeline.querySelector('.roadmap-track');
@@ -1392,9 +1485,20 @@ export function renderChatMessages() {
             let formattedTime = "";
             if (dateStr) {
                 try {
-                    const d = new Date(dateStr);
-                    formattedTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-                } catch(e) {}
+                    // 1. 將時間字串轉為 ISO 格式並補上 Z，確保 JavaScript 將其視為 UTC 時間
+                    // 2. 使用 toLocaleTimeString 自動轉換為瀏覽器所在的本地時區 (台灣)
+                    const d = new Date(dateStr.replace(' ', 'T') + 'Z'); 
+                    
+                    if (!isNaN(d.getTime())) {
+                        formattedTime = d.toLocaleTimeString([], { 
+                            hour: '2-digit', 
+                            minute: '2-digit', 
+                            hour12: false 
+                        });
+                    }
+                } catch(e) {
+                    console.error("時間格式化錯誤:", e);
+                }
             }
             
             const isLatest = idx === messages.length - 1;

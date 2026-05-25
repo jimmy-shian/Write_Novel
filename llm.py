@@ -185,6 +185,8 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     normalized_msgs = normalize_messages(messages)
     print(f"[LLM PATCH] Normalized {len(messages)} messages to {len(normalized_msgs)} to guarantee alternating roles.")
     
+    if "gpt-oss" in config["model"] and normalized_msgs and normalized_msgs[0]["role"] == "system":
+        normalized_msgs[0]["content"] = "Reasoning: high\n" + normalized_msgs[0]["content"]
     payload = {
         "model": config["model"],
         "messages": normalized_msgs,
@@ -192,9 +194,11 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         "temperature": float(config["temperature"]),
         "top_p": float(config["top_p"]),
         "stream": True,
-        # 【Step 3 修復】利用大模型 API 原生支援的結構化輸出參數，從底層硬性限制並強制模型必須回傳合法的 JSON 物件
-        "response_format": {"type": "json_object"}
     }
+    
+    # 【Step 2 修復】避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
+    if agent_name in ["architect", "character", "plot"] and "gpt-oss" not in config["model"]:
+        payload["response_format"] = {"type": "json_object"}
     
     if config["enable_thinking"]:
         payload["chat_template_kwargs"] = {"enable_thinking": True}
@@ -218,7 +222,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
             headers=headers,
             json=payload,
             stream=True,
-            timeout=60
+            timeout=300
         )
         
         if response.status_code != 200:

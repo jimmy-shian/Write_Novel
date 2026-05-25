@@ -59,7 +59,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const STALL_TIMEOUT = 60000; // 60 seconds stall timeout
+        const STALL_TIMEOUT = 120000; // 120 seconds stall timeout (thinking models may take >60s to start)
 
         function resetActivityTimer() {
             if (activityTimer) clearTimeout(activityTimer);
