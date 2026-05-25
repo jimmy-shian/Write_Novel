@@ -1331,7 +1331,7 @@ function renderWorldviewSections() {
     coreHtml += `</div>`;
     
     // ========== 結構規劃區（並排） ==========
-    const threeActItems = js.three_act_structure || [];
+    const threeActItems = js.multi_act_structure || [];
     const threeActRenderer = (item, idx) => `
         <div class="structure-item">
             <div class="structure-item-title">${item.title || `項目 #${idx + 1}`}</div>
@@ -1365,7 +1365,7 @@ function renderWorldviewSections() {
     `;
     
     let strategyHtml = `<div class="worldview-strategy-container all-mode">`;
-    strategyHtml += makeSectionCard('three-act', '📐', '三幕式結構', 'three_act_structure', threeActItems, threeActRenderer, "openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕')");
+    strategyHtml += makeSectionCard('three-act', '📐', '多幕式結構', 'multi_act_structure', threeActItems, threeActRenderer, "openWorldviewComplexListEditModal('multi_act_structure', '多幕式結構', '第一幕')");
     strategyHtml += makeSectionCard('character-waves', '👥', '角色漸進規劃策略', 'progressive_character_plan', charPlanItems, charPlanRenderer, "openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波')");
     strategyHtml += makeSectionCard('turning-points', '🔄', '關鍵轉折點', 'key_turning_points', turningPointsItems, turningPointsRenderer, "openWorldviewListEditModal('key_turning_points', '關鍵轉折點')");
     strategyHtml += makeSectionCard('seeds', '🌱', '伏筆種子', 'foreshadowing_seeds', seedsItems, seedsRenderer, "openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子')");
@@ -1401,7 +1401,7 @@ async function deleteWorldviewSection(sectionId, title) {
     else if (sectionId === 'main_conflict') js.main_conflict = '';
     else if (sectionId === 'worldview') js.worldview = '';
     else if (sectionId === 'macro_outline') js.macro_outline = '';
-    else if (sectionId === 'three-act') js.three_act_structure = [];
+    else if (sectionId === 'three-act') js.multi_act_structure = [];
     else if (sectionId === 'character-waves') js.progressive_character_plan = [];
     else if (sectionId === 'turning-points') js.key_turning_points = [];
     else if (sectionId === 'seeds') js.foreshadowing_seeds = [];
@@ -1415,7 +1415,7 @@ function addWorldviewSection(sectionType) {
     else if (sectionType === 'core-conflict') openWorldviewTextSectionEditModal('main_conflict', '核心衝突');
     else if (sectionType === 'world-setting') openWorldviewTextSectionEditModal('worldview', '世界觀設定');
     else if (sectionType === 'overall-outline') openWorldviewTextSectionEditModal('macro_outline', '整體故事大綱');
-    else if (sectionType === 'three-act') openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕');
+    else if (sectionType === 'three-act') openWorldviewComplexListEditModal('multi_act_structure', '多幕式結構', '第一幕');
     else if (sectionType === 'character-waves') openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波');
     else if (sectionType === 'turning-points') openWorldviewListEditModal('key_turning_points', '關鍵轉折點');
     else if (sectionType === 'seeds') openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子');
@@ -1505,13 +1505,13 @@ function parseWorldSetting(text) {
 }
 
 /**
- * 解析世界觀文本中的【三幕式結構】
+ * 解析世界觀文本中的【多幕式結構】
  * @param {string} text - 世界觀文本
- * @returns {string|null} 三幕式結構內容
+ * @returns {string|null} 多幕式結構內容
  */
 function parseThreeActStructure(text) {
     if (!text) return null;
-    const match = text.match(/【三幕式結構】\s*([\s\S]*?)(?=\n【|$)/i);
+    const match = text.match(/【多幕式結構】\s*([\s\S]*?)(?=\n【|$)/i);
     return match ? match[1].trim() : null;
 }
 
@@ -1777,7 +1777,7 @@ function closeSeedModal() {
 
 // ==========================================
 // STRATEGY CARD VIEW TOGGLE (策略卡片視圖切換)
-// 三幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
+// 多幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
 // ==========================================
 
 /**
@@ -3306,16 +3306,16 @@ async function executeIncrementalUpdate(target, params) {
                 );
             });
             
-        case 'three_act_structure':
-            // 更新三幕式結構
-            showToast("📐 增量更新三幕式結構...");
+        case 'multi_act_structure':
+            // 更新多幕式結構
+            showToast("📐 增量更新多幕式結構...");
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-architect',
                     { 
                         novel_id: state.currentNovelId, 
-                        target_section: 'three_act_structure',
-                        user_hint: user_hint || params.hint || '更新三幕式結構'
+                        target_section: 'multi_act_structure',
+                        user_hint: user_hint || params.hint || '更新多幕式結構'
                     },
                     null,
                     (delta) => {
@@ -3325,7 +3325,7 @@ async function executeIncrementalUpdate(target, params) {
                     },
                     (err) => showToast("Error: " + err),
                     async () => {
-                        showToast("三幕式結構更新完成");
+                        showToast("多幕式結構更新完成");
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
                     }
@@ -5259,3 +5259,5 @@ window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallb
 window.setStrategyCardView = setStrategyCardView;
 window.jumpToStrategyCard = jumpToStrategyCard;
 window.applySingleCardView = applySingleCardView;
+
+

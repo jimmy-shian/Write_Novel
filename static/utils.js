@@ -13,7 +13,7 @@ export function parseWorldviewJSON(text) {
         main_conflict: "",
         worldview: "",
         macro_outline: "",
-        three_act_structure: [
+        multi_act_structure: [
             { title: "第一幕 (Setup)", content: "" },
             { title: "第二幕 (Confrontation)", content: "" },
             { title: "第三幕 (Resolution)", content: "" }
@@ -36,9 +36,9 @@ export function parseWorldviewJSON(text) {
         try {
             const parsed = JSON.parse(textStripped);
             
-            // Normalize three_act_structure
+            // Normalize multi_act_structure
             let normalized_ta = [];
-            const ta = parsed.three_act_structure;
+            const ta = parsed.multi_act_structure;
             if (Array.isArray(ta)) {
                 normalized_ta = ta.map((item, idx) => {
                     if (typeof item === 'object' && item !== null) {
@@ -91,7 +91,7 @@ export function parseWorldviewJSON(text) {
                 main_conflict: parsed.main_conflict || "",
                 worldview: parsed.worldview || "",
                 macro_outline: parsed.macro_outline || "",
-                three_act_structure: normalized_ta,
+                multi_act_structure: normalized_ta,
                 progressive_character_plan: normalized_cp,
                 foreshadowing_seeds: Array.isArray(parsed.foreshadowing_seeds) ? parsed.foreshadowing_seeds : [],
                 key_turning_points: Array.isArray(parsed.key_turning_points) ? parsed.key_turning_points : []
@@ -108,7 +108,7 @@ export function parseWorldviewJSON(text) {
         "【核心衝突】",
         "【世界觀設定】",
         "【整體故事大綱】",
-        "【三幕式結構】",
+        "【多幕式結構】",
         "【角色漸進規劃策略】",
         "【伏筆種子】",
         "【關鍵轉折點】"
@@ -135,8 +135,8 @@ export function parseWorldviewJSON(text) {
     if (sections["【世界觀設定】"]) result.worldview = sections["【世界觀設定】"];
     if (sections["【整體故事大綱】"]) result.macro_outline = sections["【整體故事大綱】"];
 
-    if (sections["【三幕式結構】"]) {
-        const lines = sections["【三幕式結構】"].split("\n");
+    if (sections["【多幕式結構】"]) {
+        const lines = sections["【多幕式結構】"].split("\n");
         const parsedItems = [];
         lines.forEach(line => {
             const l = line.trim();
@@ -153,7 +153,7 @@ export function parseWorldviewJSON(text) {
             }
         });
         if (parsedItems.length > 0) {
-            result.three_act_structure = parsedItems;
+            result.multi_act_structure = parsedItems;
         }
     }
 
@@ -514,3 +514,4 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         insert_after_index: insert_after_index
     };
 }
+

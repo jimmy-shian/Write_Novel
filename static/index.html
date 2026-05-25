@@ -175,7 +175,7 @@
                                 <span style="font-weight: 600; font-size: 1.05rem; display: flex; align-items: center; gap: 6px; color: var(--text-primary);">🌍 【全景世界觀設定】</span>
                                 <div class="strategy-card-view-toggle" style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="prev" onclick="setStrategyCardView('<')" style="padding: 4px 8px; font-size: 0.75rem;">‹</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: 0.75rem;">📐 三幕式</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: 0.75rem;">📐 多幕式</button>
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="character-waves" onclick="jumpToStrategyCard(1)" style="padding: 4px 8px; font-size: 0.75rem;">👥 角色</button>
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="turning-points" onclick="jumpToStrategyCard(2)" style="padding: 4px 8px; font-size: 0.75rem;">🔄 轉折</button>
                                     <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="seeds" onclick="jumpToStrategyCard(3)" style="padding: 4px 8px; font-size: 0.75rem;">🌱 伏筆</button>
@@ -279,6 +279,9 @@
                         </div>
                     </div>
                 </section>
+                
+                <!-- 劇情大綱快捷時間軸跳轉容器 (Step 2) -->
+                <div id="plot-quick-timeline"></div>
                 
                 <!-- 4. WRITER TAB -->
                 <section id="panel-writer" class="workpanel">
@@ -620,3 +623,5 @@
     <script type="module" src="app.js"></script>
 </body>
 </html>
+
+

@@ -260,6 +260,31 @@ async function executeDirectorAction(decision, userPrompt) {
                 showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
                 await executePipelineStage('foreshadowing_orchestration', userPrompt);
             } else if (target === 'writer' || target === '正文寫作') {
+                // 【Step 1 修復】在進入 writer 階段前，檢查章節大綱是否完成
+                const volumes = state.currentNovelData?.volumes || [];
+                const hasValidOutlines = volumes.every(vol => {
+                    const outline = vol.chapters_outline;
+                    if (!outline) return false;
+                    if (typeof outline === 'string') {
+                        try {
+                            const parsed = JSON.parse(outline);
+                            return Array.isArray(parsed) && parsed.length > 0;
+                        } catch (e) {
+                            return false;
+                        }
+                    }
+                    return Array.isArray(outline) && outline.length > 0;
+                });
+                
+                if (!hasValidOutlines && volumes.length > 0) {
+                    updateDirectorMessage('⚠️ 偵測到章節大綱尚未完成，強制返回 volume_skeleton 階段...');
+                    showToast('⚠️ 章節大綱尚未完成，需先生成章大綱才能進入寫作階段');
+                    updatePipelineStage('plot', 'running');
+                    // 生成所有卷的骨架
+                    await generateAllVolumeSkeletons(userPrompt);
+                    return;
+                }
+                
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('plot', 'done');
@@ -945,7 +970,7 @@ async function deleteWorldviewSection(sectionId, title) {
     else if (sectionId === 'main_conflict') js.main_conflict = '';
     else if (sectionId === 'worldview') js.worldview = '';
     else if (sectionId === 'macro_outline') js.macro_outline = '';
-    else if (sectionId === 'three-act') js.three_act_structure = [];
+    else if (sectionId === 'three-act') js.multi_act_structure = [];
     else if (sectionId === 'character-waves') js.progressive_character_plan = [];
     else if (sectionId === 'turning-points') js.key_turning_points = [];
     else if (sectionId === 'seeds') js.foreshadowing_seeds = [];
@@ -959,7 +984,7 @@ function addWorldviewSection(sectionType) {
     else if (sectionType === 'core-conflict') openWorldviewTextSectionEditModal('main_conflict', '核心衝突');
     else if (sectionType === 'world-setting') openWorldviewTextSectionEditModal('worldview', '世界觀設定');
     else if (sectionType === 'overall-outline') openWorldviewTextSectionEditModal('macro_outline', '整體故事大綱');
-    else if (sectionType === 'three-act') openWorldviewComplexListEditModal('three_act_structure', '三幕式結構', '第一幕');
+    else if (sectionType === 'three-act') openWorldviewComplexListEditModal('multi_act_structure', '多幕式結構', '第一幕');
     else if (sectionType === 'character-waves') openWorldviewComplexListEditModal('progressive_character_plan', '角色漸進規劃策略', '第一波');
     else if (sectionType === 'turning-points') openWorldviewListEditModal('key_turning_points', '關鍵轉折點');
     else if (sectionType === 'seeds') openWorldviewListEditModal('foreshadowing_seeds', '伏筆種子');
@@ -1042,13 +1067,13 @@ function parseWorldSetting(text) {
 }
 
 /**
- * 解析世界觀文本中的【三幕式結構】
+ * 解析世界觀文本中的【多幕式結構】
  * @param {string} text - 世界觀文本
- * @returns {string|null} 三幕式結構內容
+ * @returns {string|null} 多幕式結構內容
  */
 function parseThreeActStructure(text) {
     if (!text) return null;
-    const match = text.match(/【三幕式結構】\s*([\s\S]*?)(?=\n【|$)/i);
+    const match = text.match(/【多幕式結構】\s*([\s\S]*?)(?=\n【|$)/i);
     return match ? match[1].trim() : null;
 }
 
@@ -1314,7 +1339,7 @@ function closeSeedModal() {
 
 // ==========================================
 // STRATEGY CARD VIEW TOGGLE (策略卡片視圖切換)
-// 三幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
+// 多幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
 // ==========================================
 
 /**
@@ -2421,17 +2446,17 @@ async function executeIncrementalUpdate(target, params) {
                 );
             });
             
-        case 'three_act_structure':
-            // 更新三幕式結構
-            showToast("📐 增量更新三幕式結構...");
-            showAgentProcessingIndicator('worldview', 'Story Architect (增量更新三幕式結構)');
+        case 'multi_act_structure':
+            // 更新多幕式結構
+            showToast("📐 增量更新多幕式結構...");
+            showAgentProcessingIndicator('worldview', 'Story Architect (增量更新多幕式結構)');
             return new Promise((resolve) => {
                 streamAPI(
                     '/api/agent/incremental-architect',
                     { 
                         novel_id: state.currentNovelId, 
-                        target_section: 'three_act_structure',
-                        user_hint: user_hint || params.hint || '更新三幕式結構'
+                        target_section: 'multi_act_structure',
+                        user_hint: user_hint || params.hint || '更新多幕式結構'
                     },
                     (delta) => {
                         window.updateAgentStreamOutput('worldview', delta);
@@ -2448,7 +2473,7 @@ async function executeIncrementalUpdate(target, params) {
                         hideAgentProcessingIndicator('worldview');
                     },
                     async () => {
-                        showToast("三幕式結構更新完成");
+                        showToast("多幕式結構更新完成");
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -5883,6 +5908,8 @@ window.runForeshadowingOrchestratorDirect = function() {
 // 暴露給全局的管線控制函數
 // ==========================================
 window.generateAllVolumeSkeletons = generateAllVolumeSkeletons;
+
+
 
 
 

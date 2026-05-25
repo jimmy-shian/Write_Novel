@@ -450,8 +450,8 @@ def api_export_novel(novel_id: str, format: str = "txt"):
                     content += f"### 🌍 世界觀設定\n{js.get('worldview', '')}\n\n"
                     content += f"### 📋 整體故事大綱\n{js.get('macro_outline', '')}\n\n"
                     
-                    three_act = js.get("three_act_structure", [])
-                    content += f"### 🎬 三幕式結構\n"
+                    three_act = js.get("multi_act_structure", [])
+                    content += f"### 🎬 多幕式結構\n"
                     if isinstance(three_act, list):
                         for item in three_act:
                             content += f"- **{item.get('title', '')}**: {item.get('content', '')}\n"
@@ -613,7 +613,7 @@ def api_update_character_field(novel_id: str, payload: CharacterFieldUpdate):
 class IncrementalArchitectRequest(BaseModel):
     """增量生成世界觀（局部上下文）"""
     novel_id: str
-    target_section: str  # 要生成的部分，如 "foreshadowing_seeds", "three_act_structure"
+    target_section: str  # 要生成的部分，如 "foreshadowing_seeds", "multi_act_structure"
     user_hint: str       # 用戶的提示
 
 class IncrementalCharacterRequest(BaseModel):
@@ -791,7 +791,7 @@ def api_novel_retrospective(novel_id: str):
     }
     
     agents_to_call = {
-        "Story Architect": ("architect", "你作為 1️⃣ Story Architect (故事結構架構師)，請針對本次創作的世界觀底層設定、勢力結構與三幕式起承轉合，提出深刻的心得說明與注意事項。列出 3-5 條未來的世界觀設定避坑金律，以避免前後設定衝突或空泛。"),
+        "Story Architect": ("architect", "你作為 1️⃣ Story Architect (故事結構架構師)，請針對本次創作的世界觀底層設定、勢力結構與多幕式起承轉合，提出深刻的心得說明與注意事項。列出 3-5 條未來的世界觀設定避坑金律，以避免前後設定衝突或空泛。"),
         "Character Designer": ("character", "你作為 2️⃣ Character Designer (角色設計大師)，請針對本次角色卡 Bible 的動機 (Want/Need) 與成長弧線設計，提出心得說明與注意事項。列出 3-5 條人物設定避坑金律，以確保角色靈魂豐滿且不扁平模板化。"),
         "Plot Planner": ("plot", "你作為 3️⃣ Plot Planner (章節劇情規劃師)，請針對本次 5 章滾動式大綱規劃，以及大長篇在素材耗盡時如何啟動『創意膨脹與自我修復』以避免硬編碼保底的實踐，提出大綱規劃心得。列出 3-5 條章節情節避坑金律。"),
         "Chapter Writer": ("writer", "你作為 4️⃣ Chapter Writer (小說正文寫作作家)，請針對本次正文 Prose 散文創作、對話與情緒渲染、以及如何順暢攔截與吸收『設定補丁』，提出心得。列出 3-5 條正文散文創作金律。"),
@@ -900,4 +900,6 @@ def serve_index():
 
 # Mount other static files
 app.mount("/", StaticFiles(directory=static_dir), name="static")
+
+
 

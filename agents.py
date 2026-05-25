@@ -265,7 +265,7 @@ STORY_ARCHITECT_PROMPT = """你是一位頂尖的故事架構師（Story Archite
   "theme": "核心主題與哲學命題",
   "main_conflict": "核心衝突與陣營張力網",
   "macro_outline": "整體故事大綱描述（300-500字）",
-  "three_act_structure": [
+  "multi_act_structure": [
     { "title": "第一幕 (Setup)", "content": "詳細描述本幕情節任務" },
     { "title": "第二幕 (Confrontation)", "content": "詳細描述對抗情節任務" },
     { "title": "第三幕 (Resolution)", "content": "詳細描述核心收束任務" }
@@ -548,7 +548,7 @@ def run_story_architect(novel_id, user_prompt):
 ⚠️【重要注意：這是一項世界觀增量修正/退回修改任務】
 你目前正在對現有的世界觀進行局部精細修正與優化，而不是從頭隨意重新生成！
 請務必嚴格遵循以下「防崩塌修正」紅線條款：
-1. **無損保留未要求修改的全部大架構**：必須在回傳的 JSON 中，完整保留原本已經規劃好的「三幕式結構 (three_act_structure)」、「角色登場規劃策略 (progressive_character_plan)」、「篇卷列表 (volumes) 及其 chapter_count」以及大部分「伏筆種子 (foreshadowing_seeds)」，絕不能讓原本已有的完好設定流失或被隨意覆蓋！
+1. **無損保留未要求修改的全部大架構**：必須在回傳的 JSON 中，完整保留原本已經規劃好的「多幕式結構 (multi_act_structure)」、「角色登場規劃策略 (progressive_character_plan)」、「篇卷列表 (volumes) 及其 chapter_count」以及大部分「伏筆種子 (foreshadowing_seeds)」，絕不能讓原本已有的完好設定流失或被隨意覆蓋！
 2. **微創手術式修正**：僅針對總監/用戶在指示中提出的具體問題、時間軸瑕疵或設定漏洞，進行局部的精確調整。
 3. **維持 JSON 標準格式**：回傳的 JSON 根結構必須完整無缺，特別是 volumes 陣列的 volume_index 從 1 開始必須連續、無遺失。
 """
@@ -569,7 +569,7 @@ def run_story_architect(novel_id, user_prompt):
                 "theme": parsed.get("theme", ""),
                 "main_conflict": parsed.get("main_conflict", ""),
                 "worldview": parsed.get("worldview", ""),
-                "three_act_structure": parsed.get("three_act_structure", parsed.get("multi_act_structure", [])),
+                "multi_act_structure": parsed.get("multi_act_structure", parsed.get("multi_act_structure", [])),
                 "progressive_character_plan": parsed.get("progressive_character_plan", []),
                 "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []),
                 "key_turning_points": parsed.get("key_turning_points", []),
@@ -793,7 +793,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     progress_percentage = min(max((start_chapter - 1) / total_chapters, 0.0), 1.0)
     
     # 精簡並滾動展示多幕式結構
-    ta_list = worldview_json.get("three_act_structure", [])
+    ta_list = worldview_json.get("multi_act_structure", [])
     active_act_index = min(int(progress_percentage * len(ta_list)), len(ta_list) - 1) if ta_list else 0
     ta_text = ""
     for idx, act in enumerate(ta_list):
@@ -1118,7 +1118,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
             progress_percentage = min(max((start_chapter - 1) / total_chapters, 0.0), 1.0)
             
             # 精簡並滾動展示多幕式結構
-            ta_list = worldview_json.get("three_act_structure", [])
+            ta_list = worldview_json.get("multi_act_structure", [])
             active_act_index = min(int(progress_percentage * len(ta_list)), len(ta_list) - 1) if ta_list else 0
             ta_text = ""
             for idx, act in enumerate(ta_list):
@@ -1906,7 +1906,7 @@ def verify_novel_integrity(novel_id, context, current_stage=None):
     if is_early_stage:
         validation_report_str = """【底層結構完整性與情節邏輯校驗報告（當前階段不適用）】
 1. 📂 設定結構完整性：
-   - 多幕式結構 (three_act_structure) 是否有合法內容：[世界觀/角色設計階段，待完成後校驗]
+   - 多幕式結構 (multi_act_structure) 是否有合法內容：[世界觀/角色設計階段，待完成後校驗]
    - 角色漸進登場規劃策略 (progressive_character_plan) 是否有合法內容：[世界觀/角色設計階段，待完成後校驗]
    
 2. 📊 卷數與章節數量檢驗 (數量問題)：
@@ -1973,7 +1973,7 @@ def verify_novel_integrity(novel_id, context, current_stage=None):
     if not isinstance(wb_json, dict):
         wb_json = {}
         
-    three_act = wb_json.get("three_act_structure", [])
+    three_act = wb_json.get("multi_act_structure", [])
     has_three_act = False
     if isinstance(three_act, list):
         has_three_act = any(isinstance(item, dict) and item.get("content", "").strip() != "" for item in three_act)
@@ -2226,7 +2226,7 @@ def verify_novel_integrity(novel_id, context, current_stage=None):
     # Compile Everything Into Report
     validation_report_str = f"""【底層結構完整性與情節邏輯校驗報告（硬性指標）】
 1. 📂 設定結構完整性：
-   - 多幕式結構 (three_act_structure) 是否有合法內容：{ "是" if has_three_act else "否 (異常！此欄位目前為空，前端無法渲染)" }
+   - 多幕式結構 (multi_act_structure) 是否有合法內容：{ "是" if has_three_act else "否 (異常！此欄位目前為空，前端無法渲染)" }
    - 角色漸進登場規劃策略 (progressive_character_plan) 是否有合法內容：{ "是" if has_progressive_plan else "否 (異常！此欄位目前為空，前端無法渲染)" }
    
 2. 📊 卷數與章節數量檢驗 (數量問題)：
@@ -2274,7 +2274,7 @@ def pre_check_next_agent(novel_id, current_stage):
         if has_wb and has_char:
             suggested_agent = "大綱規劃規劃師 (Plot Planner Agent)"
             status_summary = "世界觀與角色聖經皆已存在於資料庫中。"
-            suggestion = "🚨 【當前重點】：請重新閱讀完整世界觀，深度查看是否有正確且精細完成各設定細項（如三幕式結構、角色漸進登場策略等）。若無誤請 CONTINUE 進度到 plot；若有缺陷，必須立刻呼叫 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 進行細項修改！"
+            suggestion = "🚨 【當前重點】：請重新閱讀完整世界觀，深度查看是否有正確且精細完成各設定細項（如多幕式結構、角色漸進登場策略等）。若無誤請 CONTINUE 進度到 plot；若有缺陷，必須立刻呼叫 GO_BACK_TO_WORLDVIEW 或 GO_BACK_TO_CHARACTERS 進行細項修改！"
         else:
             suggested_agent = "世界觀架構師 (Story Architect Agent)"
             status_summary = "世界觀目前為空白。"
@@ -2410,13 +2410,13 @@ def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False)
         stage_focus = """
 ## 💡 當前審核重點：【世界觀設定與底層架構】
 1. 評估世界觀核心設定、魔法系統/法則、世界衝突是否豐富合理。
-2. 檢查三幕式結構是否規劃妥善。
+2. 檢查多幕式結構是否規劃妥善。
 3. **動態數據調閱**：為了防範 Context 膨脹，我們對下游的大綱與正文做了精簡隱藏。若你發現需要審查世界觀的所有子項細節以決定是否放行，**你必須發出 `help_worldview` 行動指令**，後端將會為你動態加載並回傳完整世界觀說明重新做決策！
 """
         if has_wb_and_char_at_init:
             stage_focus += """
 🔥【創意總監緊急指令 - 強調當前事項重點】：
-當前系統中「世界觀設定」與「角色聖經」均已存在！請你深度並重新閱讀完整世界觀設定，查看是否有正確且精細地完成各個世界觀設定細項（如三幕式起承轉合、關鍵轉折、伏筆種子等）。
+當前系統中「世界觀設定」與「角色聖經」均已存在！請你深度並重新閱讀完整世界觀設定，查看是否有正確且精細地完成各個世界觀設定細項（如多幕式起承轉合、關鍵轉折、伏筆種子等）。
 - 如果發現任何設定細項存在邏輯不符、漏洞或需要拋光，你必須立刻決策 `GO_BACK_TO_WORLDVIEW` 或 `GO_BACK_TO_CHARACTERS`（並在 `hint` 中詳細指明需要規劃師修改的細項描述），呼叫細項修改流程！
 - 如果你審查後確認完全無誤、無任何邏輯疏漏，才可以決策 `CONTINUE` 進度到大綱（`plot`）正常流程。請嚴格執行此項評估，拒絕含糊！
 """
@@ -3028,3 +3028,5 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
     
     yield "data: " + json.dumps({"type": "content", "delta": "\n=== [全局伏筆編織對齊完成] ===\n伏筆與轉折已成功分配到各章節！\n"}, ensure_ascii=False) + "\n\n"
     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+
+

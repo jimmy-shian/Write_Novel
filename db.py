@@ -1062,7 +1062,7 @@ def parse_worldview_to_json(content):
         "main_conflict": "",
         "worldview": "",
         "macro_outline": "",
-        "three_act_structure": [
+        "multi_act_structure": [
             {"title": "第一幕 (Setup)", "content": ""},
             {"title": "第二幕 (Confrontation)", "content": ""},
             {"title": "第三幕 (Resolution)", "content": ""}
@@ -1084,7 +1084,7 @@ def parse_worldview_to_json(content):
         try:
             parsed = json.loads(content_stripped)
             
-            ta = parsed.get("three_act_structure", [])
+            ta = parsed.get("multi_act_structure", [])
             normalized_ta = []
             if isinstance(ta, list):
                 for idx, item in enumerate(ta):
@@ -1105,7 +1105,7 @@ def parse_worldview_to_json(content):
                     {"title": "第三幕 (Resolution)", "content": ta.get("act3_resolution", ta.get("act3", ""))}
                 ]
             else:
-                normalized_ta = default_structure["three_act_structure"]
+                normalized_ta = default_structure["multi_act_structure"]
 
             cp = parsed.get("progressive_character_plan", [])
             normalized_cp = []
@@ -1135,7 +1135,7 @@ def parse_worldview_to_json(content):
                 "main_conflict": parsed.get("main_conflict", ""),
                 "worldview": parsed.get("worldview", ""),
                 "macro_outline": parsed.get("macro_outline", ""),
-                "three_act_structure": normalized_ta,
+                "multi_act_structure": normalized_ta,
                 "progressive_character_plan": normalized_cp,
                 "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []) if isinstance(parsed.get("foreshadowing_seeds"), list) else [],
                 "key_turning_points": parsed.get("key_turning_points", []) if isinstance(parsed.get("key_turning_points"), list) else []
@@ -1148,7 +1148,7 @@ def parse_worldview_to_json(content):
         "main_conflict": "",
         "worldview": "",
         "macro_outline": "",
-        "three_act_structure": [
+        "multi_act_structure": [
             {"title": "第一幕 (Setup)", "content": ""},
             {"title": "第二幕 (Confrontation)", "content": ""},
             {"title": "第三幕 (Resolution)", "content": ""}
@@ -1167,7 +1167,7 @@ def parse_worldview_to_json(content):
         "【核心衝突】",
         "【世界觀設定】",
         "【整體故事大綱】",
-        "【三幕式結構】",
+        "【多幕式結構】",
         "【角色漸進規劃策略】",
         "【伏筆種子】",
         "【關鍵轉折點】"
@@ -1195,8 +1195,8 @@ def parse_worldview_to_json(content):
     if "【整體故事大綱】" in sections:
         result["macro_outline"] = sections["【整體故事大綱】"]
         
-    if "【三幕式結構】" in sections:
-        three_act_text = sections["【三幕式結構】"]
+    if "【多幕式結構】" in sections:
+        three_act_text = sections["【多幕式結構】"]
         parsed_ta = []
         for line in three_act_text.split("\n"):
             line = line.strip()
@@ -1212,7 +1212,7 @@ def parse_worldview_to_json(content):
             else:
                 parsed_ta.append({"title": f"項目 #{len(parsed_ta) + 1}", "content": clean_line})
         if parsed_ta:
-            result["three_act_structure"] = parsed_ta
+            result["multi_act_structure"] = parsed_ta
 
     if "【角色漸進規劃策略】" in sections:
         prog_text = sections["【角色漸進規劃策略】"]
@@ -1670,3 +1670,5 @@ def save_foreshadowing_allocations(novel_id, allocations):
         raise
     finally:
         conn.close()
+
+
