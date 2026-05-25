@@ -191,7 +191,9 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         "max_tokens": int(config["max_tokens"]),
         "temperature": float(config["temperature"]),
         "top_p": float(config["top_p"]),
-        "stream": True
+        "stream": True,
+        # 【Step 3 修復】利用大模型 API 原生支援的結構化輸出參數，從底層硬性限制並強制模型必須回傳合法的 JSON 物件
+        "response_format": {"type": "json_object"}
     }
     
     if config["enable_thinking"]:
