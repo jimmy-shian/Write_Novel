@@ -160,6 +160,73 @@ async function runPipeline(pipelinePrompt = '') {
 
 
 /**
+ * 調用編輯姬精修特定章節正文
+ * @param {number} targetChapterIndex - 章節編號
+ * @param {string} editInstructions - 總監或用戶提出的精修指示
+ */
+async function executeChapterProseEditFlow(targetChapterIndex, editInstructions) {
+    updatePipelineStage('writer', 'running');
+    updateDirectorMessage(`⚡ 正在調用編輯姬優化精修第 ${targetChapterIndex} 章正文...`);
+    showToast(`⚡ 正在精修第 ${targetChapterIndex} 章正文...`);
+    
+    return new Promise((resolve) => {
+        state.currentlyWritingChapterIndex = targetChapterIndex;
+        state.writingBuffer = "";
+        
+        const virtualTarget = {
+            get value() { return state.writingBuffer; },
+            set value(val) {
+                state.writingBuffer = val;
+                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
+                    let proseVal = val;
+                    let thinkingVal = "";
+                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                    let splitIndex = -1;
+                    for (const sw of specialWords) {
+                        const idx = val.indexOf(sw);
+                        if (idx !== -1) {
+                            splitIndex = idx;
+                            thinkingVal = val.substring(0, idx).trim();
+                            proseVal = val.substring(idx + sw.length).trim();
+                            break;
+                        }
+                    }
+                    if (splitIndex === -1) {
+                        thinkingVal = val;
+                        proseVal = "";
+                    }
+                    if (el.editorProse) {
+                        el.editorProse.value = proseVal;
+                    }
+                }
+            },
+            get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
+            set scrollTop(val) {
+                if (el.editorProse) el.editorProse.scrollTop = val;
+            },
+            get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
+        };
+
+        startAgentStream(
+            '/api/agent/edit-chapter',
+            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex, edit_instructions: editInstructions },
+            virtualTarget,
+            async () => {
+                showToast(`第 ${targetChapterIndex} 章正文精細編輯完畢`);
+                if (state.writingBuffer.trim().length > 0) {
+                    await saveProseDirect(targetChapterIndex);
+                }
+                state.currentlyWritingChapterIndex = null;
+                state.writingBuffer = "";
+                await loadNovelDetails(state.currentNovelId);
+                resolve(true);
+            },
+            { tabName: 'writer', agentName: 'Editor Agent' }
+        );
+    });
+}
+
+/**
  * 執行總監決策結果 — 核心路由引擎
  * 根據 runDirectorDecision 返回的解析結果，調度對應的 Agent 操作
  * @param {object} decision - runDirectorDecision 返回的決策物件
@@ -377,6 +444,103 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
         
+        case 'GO_BACK_TO_SKELETON_EXPANSION': {
+            showToast('⚡ 總監指示退回骨架增生階段重新補齊骨架...');
+            updatePipelineStage('plot', 'running');
+            updateDirectorMessage('⚡ 正在退回骨架增生，重新生成簡易章節骨架...');
+            appendChatMessage('system', '🔄 **[骨架自癒]** 總監檢測到章節缺漏/不連續，已退回至骨架增生階段重跑骨架。');
+            
+            const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
+            if (state.isPipelineRunning) {
+                if (skeletonSuccess) {
+                    updateDirectorMessage('🔄 骨架重新生成完畢，重新評估現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 骨架生成失敗，停止管線。');
+                    state.isPipelineRunning = false;
+                }
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+
+        case 'ADD_BRIDGE_CONTENT': {
+            const problematicChapterIndex = parseInt(decision.chapter_index) || 1;
+            const insertAfter = problematicChapterIndex - 1;
+            showToast(`⚡ 總監指示執行【第一級修補】：在第 ${insertAfter} 章後新增橋接大綱與正文...`);
+            updateDirectorMessage(`⚡ 正在增量在第 ${insertAfter} 章後插入橋接大綱骨架...`);
+            appendChatMessage('system', `🩹 **[修補階梯 L1]** 檢測到寫作連貫性有偏差，在第 ${insertAfter} 章後增量新增橋接章節以自然銜接。`);
+
+            // 1. 擴增大綱骨架：增量插入
+            const outlineSuccess = await executeIncrementalUpdate('plot_chapter', {
+                hint: `新增一個橋接章節大綱，起承轉合以完美銜接前文與後續情節（特別是銜接第 ${problematicChapterIndex + 1} 章的事件），確保故事連貫。`,
+                insert_after_index: insertAfter
+            });
+            
+            if (outlineSuccess) {
+                updateDirectorMessage(`⚡ 橋接章節大綱生成成功！正在撰寫第 ${problematicChapterIndex} 章 (新橋接章) 之完整正文...`);
+                // 2. 撰寫該橋接章之正文
+                const writeSuccess = await executeToolCall('write-chapter', { chapter_index: problematicChapterIndex });
+                
+                if (writeSuccess && state.isPipelineRunning) {
+                    updateDirectorMessage(`🔄 橋接正文撰寫完成！即刻啟動 AI 總監對新章節（第 ${problematicChapterIndex} 章）的寫作連貫性二次深度校驗...`);
+                    // 3. 重跑管線以進行內容驗證
+                    setTimeout(() => runPipeline(userPrompt), 2000);
+                }
+            } else {
+                updateDirectorMessage('⚠️ 增量橋接大綱插入失敗。');
+                state.isPipelineRunning = false;
+            }
+            break;
+        }
+
+        case 'MODIFY_CURRENT_CHAPTER': {
+            const targetChapterIndex = parseInt(decision.chapter_index) || 1;
+            const instructions = hint || decision.reason || "請優化微調本章情節，補足邏輯跳躍與前後文連貫性。";
+            showToast(`⚡ 總監指示執行【第二級修補】：調用編輯姬精修第 ${targetChapterIndex} 章正文...`);
+            appendChatMessage('system', `🩹 **[修補階梯 L2]** 總監指示調用編輯姬對第 ${targetChapterIndex} 章正文正篇進行局部微調與情節潤色。`);
+            
+            const editSuccess = await executeChapterProseEditFlow(targetChapterIndex, instructions);
+            if (editSuccess && state.isPipelineRunning) {
+                updateDirectorMessage(`🔄 第 ${targetChapterIndex} 章精修潤色完成，即刻重啟連貫性深度校驗...`);
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+
+        case 'GO_BACK_TO_PREVIOUS_STEP': {
+            const targetChapterIndex = parseInt(decision.chapter_index) || 1;
+            showToast(`⚡ 總監指示執行【第三級修補】：刪除第 ${targetChapterIndex} 章前後 +-3 章大綱與已寫正文，回退大綱重編...`);
+            updateDirectorMessage(`⚡ 正在執行微創自癒協議：刪除第 ${targetChapterIndex} 章前後 +-3 章大綱與正文，平移索引中...`);
+            appendChatMessage('system', `🩹 **[修補階梯 L3]** 多次修補仍不連貫。執行微創自癒協議：徹底刪除第 ${targetChapterIndex} 章前後 +-3 章之大綱與正文，平移後續章節，回退大綱重新擴編。`);
+            
+            try {
+                const res = await fetch(`/api/novels/${state.currentNovelId}/chapters/heal-rollback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_chapter_index: targetChapterIndex })
+                });
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    showToast(`✅ 自癒平移成功！受損區間 [第 ${data.start_del} 章, 第 ${data.end_del} 章] 已清空平移`);
+                    updateDirectorMessage('🔄 局部自癒完成，重啟大綱規劃流程進行增量擴充大綱及正文...');
+                    await loadNovelDetails(state.currentNovelId);
+                    
+                    if (state.isPipelineRunning) {
+                        setTimeout(() => runPipeline(userPrompt), 2000);
+                    }
+                } else {
+                    updateDirectorMessage('⚠️ 自癒退回失敗，停止管線。');
+                    state.isPipelineRunning = false;
+                }
+            } catch (err) {
+                console.error("Heal-rollback failed:", err);
+                updateDirectorMessage(`⚠️ 自癒連線出錯: ${err}`);
+                state.isPipelineRunning = false;
+            }
+            break;
+        }
+
         case 'help_worldview':
         case 'help_characters':
         case 'help_plot': {
@@ -586,6 +750,7 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
     // 透過閉包鎖定內部執行邏輯
     function attemptExecute() {
         currentRetry++;
+        let hasError = false;
         
         // 💡 【核心訴求 1】：強制將每一次重試紀錄輸出至對話框，不漏掉任何消息！
         const endpointName = url.split('/').pop();
@@ -597,15 +762,16 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
             onThinking,
             onContent,
             (error) => {
+                hasError = true;
                 // 進入錯誤攔截分支
                 console.warn(`[GUARD] Pipeline triggered error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
                 
                 if (currentRetry <= maxRetries) {
                     // 強制將重試狀態寫入對話框
                     appendChatMessage('system', 
-                        `⚠️ <b>[系統防禦中斷]</b> 管線在執行 <code>${endpointName}</code> 時發生異常中斷。<br>` +
-                        `❌ 錯誤回報: <i>${error}</i><br>` +
-                        `🔄 <b>正在自動嘗試第 ${currentRetry}/${maxRetries} 次重送指令...</b> (等待 ${currentRetry * 2} 秒)`
+                        `⚠️ **[系統防禦中斷]** 管線在執行 \`${endpointName}\` 時發生異常中斷。\n` +
+                        `❌ 錯誤回報: *${error}*\n` +
+                        `🔄 **正在自動嘗試第 ${currentRetry}/${maxRetries} 次重送指令...** (等待 ${currentRetry * 2} 秒)`
                     );
                     
                     // 💡 退避延遲演算法：每次等待 2 秒，避開後端資料庫寫入衝突
@@ -615,7 +781,7 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                 } else {
                     // 超過 10 次，徹底放棄，列印絕望紀錄
                     appendChatMessage('system', 
-                        `🚨 <b>[管線徹底崩潰]</b> 已連續重試送指令達最大上限 ${maxRetries} 次，管線保護性中止。<br>` +
+                        `🚨 **[管線徹底崩潰]** 已連續重試送指令達最大上限 ${maxRetries} 次，管線保護性中止。\n` +
                         `請檢查後端終端機環境或點擊「重新生成」！`
                     );
                     showToast(`🚨 管線重試次數已達上限 (${maxRetries}次)`);
@@ -630,12 +796,13 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                 }
             },
             () => {
+                if (hasError) return;
                 // 💡 只有完全走完 SSE 流程，收到 [DONE] 訊號，才算 Absolute Done
                 if (currentRetry > 1) {
                     // 如果是重試後成功，通知用戶
                     appendChatMessage('system', 
-                        `✅ <b>[系統自動修復成功]</b> 管線在第 <b>${currentRetry}</b> 次嘗試後成功恢復運作！<br>` +
-                        `🚀 <code>${endpointName}</code> 已正常完成。`
+                        `✅ **[系統自動修復成功]** 管線在第 **${currentRetry}** 次嘗試後成功恢復運作！\n` +
+                        `🚀 \`${endpointName}\` 已正常完成。`
                     );
                 }
                 

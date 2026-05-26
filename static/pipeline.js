@@ -395,32 +395,20 @@ export async function writeAllChaptersSequentially(userPrompt) {
                 }
             );
         });
-        // 每 3 章或最後一章時，請求總監評估
-        if ((position % 3 === 0) || position === totalChapters) {
-            updateDirectorMessage(`🎬 總監正在評估第 ${chapterIndex} 章...`);
-            const chapterDecision = await window.runDirectorDecision('writer');
-            if (['GO_BACK_TO_WORLDVIEW', 'GO_BACK_TO_CHARACTERS', 'GO_BACK_TO_PLOT'].includes(chapterDecision.action)) {
-                showToast(`⚡ 總監在第 ${chapterIndex} 章後指示回退修改...`);
-                await window.executeDirectorAction(chapterDecision, userPrompt);
-                return;
-            }
-            if (chapterDecision.action === 'WAIT_USER') {
-                showToast('⏸️ 總監要求暫停，請確認後繼續');
-                state.isPipelineRunning = false;
-                return;
-            }
-            if (chapterDecision.action === 'CONTINUE' || chapterDecision.continue || chapterDecision.action === 'WRITE_ALL_CHAPTERS') {
-                const nextTarget = (chapterDecision.target || '').toString().trim().toLowerCase();
-                if (nextTarget === 'plot' || nextTarget === 'plot_expansion' || nextTarget === '章節大綱' || nextTarget === 'volume_skeleton' || nextTarget === 'macro_skeleton' || nextTarget === 'foreshadowing_orchestration' || nextTarget === 'foreshadowing_align' || nextTarget === '伏筆對齊') {
-                    showToast('📋 總監評估後指示：進入下一階段流程...');
-                    await window.executeDirectorAction(chapterDecision, userPrompt);
-                    return;
-                }
-                // 如果總監只是說繼續寫作，則讓寫作流程繼續下一章
-                if (!nextTarget) {
-                    showToast('✅ 總監評估完成，繼續現有寫作流程');
-                }
-            }
+        // 🎬 逐章校驗：每寫完一章，即刻啟動 AI 總監連貫性校驗與決策
+        updateDirectorMessage(`🎬 總監正在對第 ${chapterIndex} 章正文進行寫作連貫性校驗與決策...`);
+        const chapterDecision = await window.runDirectorDecision('writer');
+        
+        // 判斷是否為修補、回退或暫停等非常規動作，如果是則立刻退出寫作迴圈，由 executeDirectorAction 進行修補
+        const normalActions = ['CONTINUE', 'WRITE_ALL_CHAPTERS'];
+        const nextTarget = (chapterDecision.target || '').toString().trim().toLowerCase();
+        
+        if (!normalActions.includes(chapterDecision.action) || nextTarget) {
+            showToast(`⚠️ 總監在第 ${chapterIndex} 章後下達非連續指令 [${chapterDecision.action}]，啟動修補/回退管線...`);
+            await window.executeDirectorAction(chapterDecision, userPrompt);
+            return; // 立即 return 退出 batch 寫作迴圈，防止連帶錯誤！
+        } else {
+            showToast(`✅ 第 ${chapterIndex} 章連貫性校驗放行，繼續下一章寫作。`);
         }
     }
     
