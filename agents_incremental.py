@@ -78,73 +78,18 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     ]
     
     def save_callback(nid, text):
-        import json
-        wb = get_latest_worldbuilding(nid)
-        existing_content = wb["content"] if wb else ""
-        
-        current_json = parse_worldview_to_json(existing_content)
-        parsed = parse_json_safely(text)
-        
-        # 💡 嚴格防禦：若 LLM 污染嚴重無法解析 JSON，直接報錯不進行髒數據縫合
-        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
-            try:
-                import sys
-                encoding = sys.stdout.encoding or "utf-8"
-                safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-                print(f"[ERROR] 增量生成失敗，模型未返回標準 JSON 數據。原始文字：\n{safe_text}")
-            except Exception:
-                pass
-            return
-            
-        # 直接進行結構化 JSON 的精準 Key 縫合
-        if target_section in ["foreshadowing_seeds", "key_turning_points"]:
-            # 支援 LLM 直接回傳純陣列，或是包在 Key 裡面的物件
-            new_items = parsed if isinstance(parsed, list) else parsed.get(target_section, [])
-            if isinstance(new_items, list) and len(new_items) > 0:
-                # 💡 如果原本沒有這個欄位，初始化它
-                if target_section not in current_json or not isinstance(current_json[target_section], list):
-                    current_json[target_section] = []
-                
-                # 💡 無上限追加新種子/新轉折，保留所有舊有設定
-                current_json[target_section].extend([x for x in new_items if isinstance(x, str)])
-                print(f"[SUCCESS] 成功增量追加 {len(new_items)} 個新設定到 {target_section}！目前總數：{len(current_json[target_section])}")
-                
-        elif target_section == "multi_act_structure":
-            act_data = parsed.get("multi_act_structure", parsed)
-            if isinstance(act_data, list):
-                current_json["multi_act_structure"] = act_data
-            elif isinstance(act_data, dict):
-                current_json["multi_act_structure"] = [
-                    {"title": "第一幕 (Setup)", "content": act_data.get("act1_setup", act_data.get("act1", ""))},
-                    {"title": "第二幕 (Confrontation)", "content": act_data.get("act2_confrontation", act_data.get("act2", ""))},
-                    {"title": "第三幕 (Resolution)", "content": act_data.get("act3_resolution", act_data.get("act3", ""))}
-                ]
-                        
-        elif target_section == "progressive_character_plan":
-            plan_data = parsed.get("progressive_character_plan", parsed)
-            if isinstance(plan_data, list):
-                current_json["progressive_character_plan"] = plan_data
-            elif isinstance(plan_data, dict):
-                current_json["progressive_character_plan"] = [
-                    {"title": "第一波開篇 (Wave 1)", "content": plan_data.get("wave_1_opening", "")},
-                    {"title": "第二波發展 (Wave 2)", "content": plan_data.get("wave_2_development", "")},
-                    {"title": "第三波高潮 (Wave 3)", "content": plan_data.get("wave_3_climax", "")}
-                ]
-        elif target_section == "volumes":
-            volumes_data = parsed.get("volumes", parsed) if isinstance(parsed, dict) else parsed
-            if isinstance(volumes_data, list) and len(volumes_data) > 0:
-                current_json["volumes"] = volumes_data
-                print(f"[SUCCESS] 成功增量更新篇卷大綱與時間軸配置！共 {len(volumes_data)} 卷。")
-                
-                # 同步到資料庫的 volumes 表以維持一致性
-                from db import save_volumes
-                save_volumes(nid, volumes_data)
+        from incremental_patch_engine import validate_and_merge_incremental_patch
+        success, version, error_msg = validate_and_merge_incremental_patch(
+            novel_id=nid,
+            target_section=target_section,
+            action="PATCH",
+            payload=text
+        )
+        if not success:
+            print(f"[ERROR] 增量架構設計合併失敗：{error_msg}")
         else:
-            # 通用欄位直接覆寫
-            val = parsed.get(target_section, text.strip()) if isinstance(parsed, dict) else text.strip()
-            current_json[target_section] = val
-            
-        save_worldbuilding(nid, json.dumps(current_json, ensure_ascii=False, indent=2))
+            print(f"[SUCCESS] 成功增量更新世界觀中的 {target_section}！(新版本 {version})")
+
     
     return run_agent_stream(novel_id, "architect", messages, save_callback)
 
@@ -208,43 +153,29 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     ]
     
     def save_callback(nid, text):
-        parsed = parse_json_safely(text)
-        # 💡 嚴格防禦：若 LLM 污染嚴重無法解析 JSON，直接報錯
-        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
-            try:
-                import sys
-                encoding = sys.stdout.encoding or "utf-8"
-                safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-                print(f"[ERROR] 增量角色設計失敗，模型未返回標準 JSON 數據。原始文字：\n{safe_text}")
-            except Exception:
-                pass
-            return
+        from incremental_patch_engine import validate_and_merge_incremental_patch
+        extra_params = {}
+        if target_char_index is not None:
+            extra_params["char_index"] = target_char_index
+            if field_name:
+                extra_params["field_name"] = field_name
+        
+        action = "PATCH"
+        if target_char_index is None:
+            action = "APPEND"
             
-        if isinstance(parsed, dict) and "characters" in parsed and parsed["characters"]:
-            if target_char_index is not None and field_name:
-                # 增量更新特定欄位
-                new_value = parsed["characters"][0].get(field_name)
-                if new_value is not None:
-                    update_character_single_field(nid, target_char_index, field_name, new_value)
-            elif target_char_index is not None:
-                # 替換整個角色
-                char_data = get_latest_characters(nid)
-                if char_data and "parsed_data" in char_data:
-                    pd = char_data["parsed_data"]
-                    if "characters" in pd and target_char_index < len(pd["characters"]):
-                        pd["characters"][target_char_index] = parsed["characters"][0]
-                        save_characters(nid, pd)
-            else:
-                # 新增角色
-                char_data = get_latest_characters(nid)
-                if char_data and "parsed_data" in char_data:
-                    pd = char_data["parsed_data"]
-                    if "characters" not in pd:
-                        pd["characters"] = []
-                    pd["characters"].append(parsed["characters"][0])
-                    save_characters(nid, pd)
-                else:
-                    save_characters(nid, parsed)
+        success, version, error_msg = validate_and_merge_incremental_patch(
+            novel_id=nid,
+            target_section="characters",
+            action=action,
+            payload=text,
+            extra_params=extra_params
+        )
+        if not success:
+            print(f"[ERROR] 增量角色設計合併失敗：{error_msg}")
+        else:
+            print(f"[SUCCESS] 成功增量更新角色設定！(新版本 {version})")
+
     
     return run_agent_stream(novel_id, "character", messages, save_callback)
 
@@ -329,58 +260,59 @@ def run_incremental_character_append(novel_id, new_character_names, user_hint=No
     ]
     
     def save_callback(nid, text):
-        import json as json_mod
-        parsed = parse_json_safely(text)
+        from incremental_patch_engine import (
+            parse_incremental_response,
+            validate_incremental_payload,
+            merge_incremental_payload,
+            post_merge_validation
+        )
         
-        # 嚴格防禦：若 LLM 污染嚴重無法解析 JSON，直接報錯
-        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
-            try:
-                import sys
-                encoding = sys.stdout.encoding or "utf-8"
-                safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-                print(f"[ERROR] 增量追加角色失敗，模型未返回標準 JSON 數據。原始文字：\n{safe_text}")
-            except Exception:
-                pass
+        parsed = parse_incremental_response(text)
+        if parsed is None:
+            print("[ERROR] 增量追加角色失敗，無法解析 JSON 數據")
             return
-        
-        # 提取新角色列表
-        new_chars_list = []
-        if isinstance(parsed, dict) and "characters" in parsed:
-            new_chars_list = parsed["characters"]
-        elif isinstance(parsed, list):
-            new_chars_list = parsed
-        
-        if not new_chars_list:
-            print("[WARNING] 未解析到新角色數據")
+            
+        # 1. Validate payload structure
+        is_valid_payload, err_msg = validate_incremental_payload("characters", parsed, "APPEND")
+        if not is_valid_payload:
+            print(f"[ERROR] 增量追加角色 payload 驗證失敗：{err_msg}")
             return
-        
-        # 讀取當前角色聖經
+            
+        # 2. Extract new chars list for logging name mismatch warnings
+        new_chars_list = parsed if isinstance(parsed, list) else parsed.get("characters", [])
+        if isinstance(new_chars_list, dict):
+            new_chars_list = [new_chars_list]
+            
+        for new_char in new_chars_list:
+            char_name = new_char.get("name", "")
+            if char_name not in new_character_names:
+                print(f"[WARNING] 角色名稱不一致，但已追加：{char_name}")
+            else:
+                print(f"[SUCCESS] 成功追加新角色「{char_name}」到角色聖經末尾")
+                
+        # 3. Read original characters
         char_data = get_latest_characters(nid)
-        if char_data and "parsed_data" in char_data:
-            pd = char_data["parsed_data"]
-            if "characters" not in pd:
-                pd["characters"] = []
+        original_data = char_data["parsed_data"] if (char_data and "parsed_data" in char_data) else {"characters": []}
+        
+        # 4. Merge
+        merged_data = merge_incremental_payload(nid, "characters", "APPEND", parsed)
+        if merged_data is None:
+            print("[ERROR] 增量追加角色合併失敗")
+            return
             
-            # 追加新角色到末尾
-            for new_char in new_chars_list:
-                # 確保 name 欄位與請求的一致
-                char_name = new_char.get("name", "")
-                if char_name and char_name in new_character_names:
-                    pd["characters"].append(new_char)
-                    print(f"[SUCCESS] 成功追加新角色「{char_name}」到角色聖經末尾")
-                else:
-                    # 若 LLM 修改了角色名稱，仍予以追加但發出警告
-                    pd["characters"].append(new_char)
-                    print(f"[WARNING] 角色名稱不一致，但已追加：{char_name}")
+        # 5. Post-merge validation
+        is_valid_merge, errors = post_merge_validation(merged_data, "characters", original_data)
+        if not is_valid_merge:
+            print(f"[ERROR] 增量追加角色合併後驗證失敗：{', '.join(errors)}")
+            return
             
-            # 保存更新後的角色聖經
-            save_characters(nid, pd)
-            print(f"[SUCCESS] 角色聖經更新完畢，目前共 {len(pd['characters'])} 個角色")
-        else:
-            # 若無現有角色聖經，直接使用新角色創建
-            new_pd = {"characters": new_chars_list}
-            save_characters(nid, new_pd)
-            print(f"[SUCCESS] 創建新角色聖經，包含 {len(new_chars_list)} 個角色")
+        # 6. Save characters
+        try:
+            version = save_characters(nid, merged_data)
+            print(f"[SUCCESS] 角色聖經更新完畢，目前共 {len(merged_data['characters'])} 個角色 (新版本 {version})")
+        except Exception as e:
+            print(f"[ERROR] 寫入資料庫失敗：{e}")
+
     
     return run_agent_stream(novel_id, "character", messages, save_callback)
 
@@ -451,37 +383,19 @@ def run_incremental_plot_planner(novel_id, insert_after_index, user_hint):
     ]
     
     def save_callback(nid, text):
-        parsed = parse_json_safely(text)
-        # 💡 嚴格防禦：若 LLM 污染嚴重無法解析 JSON，直接報錯
-        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
-            try:
-                import sys
-                encoding = sys.stdout.encoding or "utf-8"
-                safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-                print(f"[ERROR] 增量大綱生成失敗，模型未返回標準 JSON 數據。原始文字：\n{safe_text}")
-            except Exception:
-                pass
-            return
-            
-        # 提取章節列表或單一章節
-        chapters_to_insert = []
-        if isinstance(parsed, list):
-            chapters_to_insert = parsed
-        elif isinstance(parsed, dict):
-            if "chapters" in parsed and isinstance(parsed["chapters"], list):
-                chapters_to_insert = parsed["chapters"]
-            elif "chapter" in parsed and isinstance(parsed["chapter"], dict):
-                chapters_to_insert = [parsed["chapter"]]
-            else:
-                # 把 dict 本身當成單個章節
-                chapters_to_insert = [parsed]
-                
-        # 依序插入各章節，動態調整插入位置
-        current_insert_after = insert_after_index
-        for ch in chapters_to_insert:
-            if isinstance(ch, dict):
-                insert_plot_chapter(nid, current_insert_after, ch)
-                current_insert_after += 1
+        from incremental_patch_engine import validate_and_merge_incremental_patch
+        success, version, error_msg = validate_and_merge_incremental_patch(
+            novel_id=nid,
+            target_section="plot",
+            action="INSERT",
+            payload=text,
+            extra_params={"insert_after_index": insert_after_index}
+        )
+        if not success:
+            print(f"[ERROR] 增量大綱合併失敗：{error_msg}")
+        else:
+            print(f"[SUCCESS] 成功增量插入新章節！(新版本 {version})")
+
     
     return run_agent_stream(novel_id, "plot", messages, save_callback)
 
@@ -546,28 +460,19 @@ def run_volume_alignment(novel_id, volume_index):
     ]
     
     def save_callback(nid, text):
-        parsed = parse_json_safely(text)
-        if parsed is None or (isinstance(parsed, dict) and "error" in parsed):
-            return
-            
-        aligned_ch_list = parsed if isinstance(parsed, list) else parsed.get("chapters", [])
-        if isinstance(aligned_ch_list, list) and len(aligned_ch_list) > 0:
-            # 重新加載確保 JIT 更新安全
-            latest_plot = get_latest_plot_chapters(nid)
-            all_ch = latest_plot["parsed_data"].get("chapters", []) if latest_plot else []
-            
-            # 將對齊後的章節縫合回總大綱
-            for new_ch in aligned_ch_list:
-                ch_idx = new_ch.get("chapter_index")
-                if ch_idx:
-                    all_ch = [c for c in all_ch if int(c.get("chapter_index", 0)) != int(ch_idx)]
-                    all_ch.append(new_ch)
-                    
-            all_ch.sort(key=lambda x: int(x.get("chapter_index", 0)))
-            save_plot_chapters(nid, {"chapters": all_ch})
-            
-            # 消除該卷的過期狀態！
+        from incremental_patch_engine import validate_and_merge_incremental_patch
+        success, version, error_msg = validate_and_merge_incremental_patch(
+            novel_id=nid,
+            target_section="plot",
+            action="PATCH",
+            payload=text
+        )
+        if not success:
+            print(f"[ERROR] 篇卷對齊大綱合併失敗：{error_msg}")
+        else:
+            print(f"[SUCCESS] 篇卷對齊大綱合併成功！(新版本 {version})")
             update_volume_dirty(nid, int(volume_index), 0)
+
             
     return run_agent_stream(novel_id, "plot", messages, save_callback)
 
@@ -651,6 +556,11 @@ def clean_json_text(text):
     Extracts the content between the first '{' or '[' and the last '}' or ']'.
     """
     import re
+    if isinstance(text, str):
+        # 0. Repair missing/malformed quotes (e.g., "brief_title": 心靈的震盪", or "missing": "unclosed,)
+        text = re.sub(r':\s*([^"\s\{\[\d\-][^"\n,]*)"(?=\s*[,\}])', r': "\1"', text)
+        text = re.sub(r':\s*"([^"\n,]+)(?=\s*[,\}])', r': "\1"', text)
+        
     text = text.strip()
     
     # 1. 優先尋找 Markdown 代碼區塊
@@ -846,12 +756,20 @@ JSON 陣列格式：
         for idx, ch in enumerate(node_chapters):
             ch["chapter_index"] = start_chapter + idx
             
-        db.update_volume_outline(novel_id, volume_index, node_chapters)
-        yield "data: " + json.dumps({
-            "type": "content", 
-            "delta": f"\n\n✓ 第 {volume_index} 卷對齊與規劃完成！已成功儲存 {len(node_chapters)} 章大綱。\n"
-        }, ensure_ascii=False) + "\n\n"
-    else:
+        from incremental_patch_engine import validate_incremental_payload
+        is_valid_payload, err_msg = validate_incremental_payload("plot", {"chapters": node_chapters}, "PATCH")
+        if is_valid_payload:
+            db.update_volume_outline(novel_id, volume_index, node_chapters)
+            yield "data: " + json.dumps({
+                "type": "content", 
+                "delta": f"\n\n✓ 第 {volume_index} 卷對齊與規劃完成！已成功儲存 {len(node_chapters)} 章大綱。\n"
+            }, ensure_ascii=False) + "\n\n"
+        else:
+            yield _sse_error(f"第 {volume_index} 卷大綱校準驗證失敗：{err_msg}；啟動救援機制。\n")
+            node_chapters = None
+    
+    if not node_chapters:
+
         yield _sse_content(f"\n\n⚠️ 第 {volume_index} 卷 JIT 對齊失敗；停止保底佔位，改請總監救援診斷並重新操作。\n")
 
         rescue_prompt = f"""你是 AI Novel Factory 的首席創意總監與流程救援官。
@@ -956,12 +874,20 @@ JSON 陣列格式：
             node_chapters = _normalize_chapter_outlines(parsed_retry, start_chapter, expected_count=volume_ch_count)
 
         if node_chapters:
-            db.update_volume_outline(novel_id, volume_index, node_chapters)
-            yield _sse_content(f"\n\n✓ 總監救援成功：第 {volume_index} 卷已重新生成並保存 {len(node_chapters)} 章合法大綱。\n")
+            from incremental_patch_engine import validate_incremental_payload
+            is_valid_payload, err_msg = validate_incremental_payload("plot", {"chapters": node_chapters}, "PATCH")
+            if is_valid_payload:
+                db.update_volume_outline(novel_id, volume_index, node_chapters)
+                yield _sse_content(f"\n\n✓ 總監救援成功：第 {volume_index} 卷已重新生成並保存 {len(node_chapters)} 章合法大綱。\n")
+            else:
+                yield _sse_error(f"第 {volume_index} 卷總監救援產出大綱驗證失敗：{err_msg}")
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
         else:
             yield _sse_error(f"第 {volume_index} 卷總監救援仍未產出合法大綱；已停止保存，避免寫入保底佔位。")
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
+
         
     yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
