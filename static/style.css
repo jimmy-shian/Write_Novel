@@ -3648,6 +3648,10 @@ body.dark-theme .chapter-grid-item {
     transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
+.modal-small {
+    max-width: 480px !important;
+}
+
 body.dark-theme .modal-card {
     background: rgba(22, 22, 33, 0.85) !important;
     border-color: rgba(255, 255, 255, 0.08) !important;
