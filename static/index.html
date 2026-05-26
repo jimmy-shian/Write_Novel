@@ -18,14 +18,14 @@
         <aside id="sidebar-left">
             <div class="sidebar-header">
                 <div class="brand-logo">
-                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg viewBox="0 0 24 24" width="50" height="50" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
                     </svg>
                     <span>Novel Factory</span>
                 </div>
                 <button id="btn-new-novel" class="btn btn-primary btn-sm">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                     </svg>
@@ -75,7 +75,7 @@
                         
                         <!-- 一鍵啟動按鈕 -->
                         <button id="btn-pipeline-execute" class="btn btn-primary btn-sm" style="display: flex; align-items: center; gap: 6px;">
-                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
                             </svg>
                             <span>🚀 一鍵生成全書</span>
@@ -148,7 +148,7 @@
                         </div>
                         <div class="button-group">
                             <button id="btn-architect-generate" class="btn btn-secondary btn-sm">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
                                 </svg>
                                 <span>AI 自動規劃世界觀</span>
@@ -172,15 +172,15 @@
                         </div>
                         <div class="editor-sidebar-seeds" style="flex: 1;">
                             <div class="sidebar-label" style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
-                                <span style="font-weight: 600; font-size: 1.05rem; display: flex; align-items: center; gap: 6px; color: var(--text-primary);">🌍 【全景世界觀設定】</span>
+                                <span style="font-weight: 600; font-size: var(--font-sm); display: flex; align-items: center; gap: 6px; color: var(--text-primary);">🌍 【全景世界觀設定】</span>
                                 <div class="strategy-card-view-toggle" style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="prev" onclick="setStrategyCardView('<')" style="padding: 4px 8px; font-size: 0.75rem;">‹</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: 0.75rem;">📐 多幕式</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="character-waves" onclick="jumpToStrategyCard(1)" style="padding: 4px 8px; font-size: 0.75rem;">👥 角色</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="turning-points" onclick="jumpToStrategyCard(2)" style="padding: 4px 8px; font-size: 0.75rem;">🔄 轉折</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="seeds" onclick="jumpToStrategyCard(3)" style="padding: 4px 8px; font-size: 0.75rem;">🌱 伏筆</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn active" data-view="all" onclick="setStrategyCardView('all')" style="padding: 4px 10px; font-size: 0.75rem;">全部</button>
-                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="next" onclick="setStrategyCardView('>')" style="padding: 4px 8px; font-size: 0.75rem;">›</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="prev" onclick="setStrategyCardView('<')" style="padding: 4px 8px; font-size: var(--font-2xs);">‹</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="three-act" onclick="jumpToStrategyCard(0)" style="padding: 4px 8px; font-size: var(--font-2xs);">📐 多幕式</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="character-waves" onclick="jumpToStrategyCard(1)" style="padding: 4px 8px; font-size: var(--font-2xs);">👥 角色</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="turning-points" onclick="jumpToStrategyCard(2)" style="padding: 4px 8px; font-size: var(--font-2xs);">🔄 轉折</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="seeds" onclick="jumpToStrategyCard(3)" style="padding: 4px 8px; font-size: var(--font-2xs);">🌱 伏筆</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn active" data-view="all" onclick="setStrategyCardView('all')" style="padding: 4px 10px; font-size: var(--font-2xs);">全部</button>
+                                    <button class="btn btn-ghost btn-xs view-toggle-btn" data-view="next" onclick="setStrategyCardView('>')" style="padding: 4px 8px; font-size: var(--font-2xs);">›</button>
                                 </div>
                             </div>
                             <div id="worldview-sections-container" class="worldview-sections strategy-cards-container" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;">
@@ -200,7 +200,7 @@
                         </div>
                         <div class="button-group">
                             <button id="btn-character-generate" class="btn btn-secondary btn-sm">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                                     <circle cx="9" cy="7" r="4"></circle>
                                     <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
@@ -245,7 +245,7 @@
                         </div>
                         <div class="button-group">
                             <button id="btn-plot-generate" class="btn btn-secondary btn-sm">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                                     <line x1="9" y1="3" x2="9" y2="21"></line>
                                 </svg>
@@ -314,14 +314,14 @@
                                 </div>
                                 <div class="button-group">
                                     <button id="btn-write-chapter" class="btn btn-primary btn-sm" disabled>
-                                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                        <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                             <path d="M12 20h9"></path>
                                             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                                         </svg>
                                         <span>AI 撰寫本章正文</span>
                                     </button>
                                     <button id="btn-edit-chapter" class="btn btn-secondary btn-sm" disabled>
-                                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                                        <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                                         </svg>
@@ -358,13 +358,13 @@
             <!-- 頁籤列 -->
             <nav class="sidebar-tabs">
                 <button class="sidebar-tab active" data-tab="director" id="tab-director">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
                     總監
                 </button>
                 <button class="sidebar-tab" data-tab="stream" id="tab-stream">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="4 17 10 11 4 5"></polyline>
                         <line x1="12" y1="19" x2="20" y2="19"></line>
                     </svg>
@@ -427,7 +427,7 @@
                     </div>
                     
                     <!-- 靜態串流終端區塊，統一顯示 -->
-                    <div id="stream-agent-label" style="padding: 6px 12px; background: rgba(255, 255, 255, 0.05); font-size: 0.8rem; border-radius: 4px; margin-bottom: 8px; color: var(--text-secondary); display: none; align-items: center; gap: 8px; font-weight: 500; border: 1px solid rgba(255,255,255,0.05);">
+                    <div id="stream-agent-label" style="padding: 6px 12px; background: rgba(255, 255, 255, 0.05); font-size: var(--font-2xs); border-radius: 4px; margin-bottom: 8px; color: var(--text-secondary); display: none; align-items: center; gap: 8px; font-weight: 500; border: 1px solid rgba(255,255,255,0.05);">
                         <span class="pulse-indicator" style="width: 6px; height: 6px;"></span>
                         <span id="stream-agent-label-text">當前 Agent: None</span>
                     </div>
@@ -594,15 +594,15 @@
     <div id="modal-custom-dialog" class="modal-overlay">
         <div class="modal-card modal-small" style="max-width: 480px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 22, 33, 0.85); backdrop-filter: blur(16px); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); border-radius: 16px;">
             <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
-                <h2 id="custom-dialog-title" style="font-size: 1.15rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">提示</h2>
-                <button class="btn-close-modal" onclick="closeCustomDialog()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 4px; transition: color 0.2s;">✕</button>
+                <h2 id="custom-dialog-title" style="font-size: var(--font-base); font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">提示</h2>
+                <button class="btn-close-modal" onclick="closeCustomDialog()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-xs); padding: 4px; transition: color 0.2s;">✕</button>
             </div>
-            <div class="modal-body" style="padding: 20px 0 0 0;">
-                <p id="custom-dialog-message" style="margin-bottom: 16px; font-size: 0.95rem; line-height: 1.6; color: rgba(255, 255, 255, 0.7); white-space: pre-wrap;"></p>
+            <div class="modal-body" style="padding: 20px;">
+                <p id="custom-dialog-message" style="margin-bottom: 16px; font-size: var(--font-2xs); line-height: 1.6; color: rgb(75, 75, 75); white-space: pre-wrap;"></p>
                 
                 <!-- Input field container for prompt type -->
                 <div id="custom-dialog-input-container" class="form-group" style="display: none; margin-bottom: 16px;">
-                    <textarea id="custom-dialog-textarea" rows="4" style="width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(12, 12, 18, 0.7); color: #fff; padding: 12px; font-size: 0.9rem; resize: vertical; outline: none; transition: border-color 0.2s;" placeholder="請輸入內容..."></textarea>
+                    <textarea id="custom-dialog-textarea" rows="4" style="width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(12, 12, 18, 0.7); color: #fff; padding: 12px; font-size: var(--font-2xs); resize: vertical; outline: none; transition: border-color 0.2s;" placeholder="請輸入內容..."></textarea>
                 </div>
                 
                 <!-- Options buttons container for multiple-choice style -->

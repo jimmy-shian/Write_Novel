@@ -227,11 +227,11 @@ export function showCustomConfirm(message) {
             <div id="modal-confirm" class="modal-overlay">
                 <div class="modal-card modal-small" style="max-width: 420px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 22, 33, 0.85); backdrop-filter: blur(16px); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); border-radius: 16px;">
                     <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
-                        <h2 style="font-size: 1.15rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">⚠️ 確認操作</h2>
-                        <button class="btn-close-modal" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 4px; transition: color 0.2s;">✕</button>
+                        <h2 style="font-size: var(--font-base); font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">⚠️ 確認操作</h2>
+                        <button class="btn-close-modal" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-xs); padding: 4px; transition: color 0.2s;">✕</button>
                     </div>
-                    <div class="modal-body" style="padding: 20px 0 0 0;">
-                        <p id="confirm-message" style="margin-bottom: 16px; font-size: 0.95rem; line-height: 1.6; color: rgba(255, 255, 255, 0.7); white-space: pre-wrap;"></p>
+                    <div class="modal-body" style="padding: 20px;">
+                        <p id="confirm-message" style="margin-bottom: 16px; font-size: var(--font-2xs); line-height: 1.6; color: rgba(255, 255, 255, 0.7); white-space: pre-wrap;"></p>
                         <div style="display: flex; gap: 12px; margin-top: 24px;">
                             <button id="btn-confirm-cancel" class="btn btn-ghost" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">取消</button>
                             <button id="btn-confirm-ok" class="btn btn-primary" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">確認</button>

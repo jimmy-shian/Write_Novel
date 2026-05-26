@@ -588,7 +588,7 @@ export function renderPlotTab() {
             color = '#3b82f6';
             borderColor = 'rgba(59, 130, 246, 0.2)';
         }
-        return `<span class="chapter-tone-badge" style="background: ${bgColor}; color: ${color}; border: 1px solid ${borderColor}; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600;">🎭 ${tone}</span>`;
+        return `<span class="chapter-tone-badge" style="background: ${bgColor}; color: ${color}; border: 1px solid ${borderColor}; padding: 2px 8px; border-radius: 12px; font-size: var(--font-2xs); font-weight: 600;">🎭 ${tone}</span>`;
     }
 
     // 渲染時間線
@@ -644,7 +644,7 @@ export function renderPlotTab() {
                 <div class="volume-roadmap-container" style="flex-shrink: 0;">
                     <div class="roadmap-title">
                         <span>🗺️ 篇卷導航圖 (Volume Roadmap Track)</span>
-                        <span style="font-size: 0.68rem; color: var(--text-muted); font-weight: normal; text-transform: none;">可按住滑鼠左右拖曳或點擊定位</span>
+                        <span style="font-size: var(--font-2xs); color: var(--text-muted); font-weight: normal; text-transform: none;">可按住滑鼠左右拖曳或點擊定位</span>
                     </div>
                     <div class="roadmap-track">
                         ${volumes.map((vol) => {
@@ -788,17 +788,17 @@ export function renderPlotTab() {
                 }).length;
                 const progressPercent = totalChaptersCount > 0 ? Math.round((writtenChaptersCount / totalChaptersCount) * 100) : 0;
 
-                const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : `<span class="dirty-badge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; margin-left: 8px;">✓ 已對齊</span>`;
+                const dirtyBadge = isDirty ? `<span class="dirty-badge" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 700; margin-left: 8px;">⚠️ 待對齊世界觀</span>` : `<span class="dirty-badge" style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 700; margin-left: 8px;">✓ 已對齊</span>`;
                 const alignButton = isDirty ? `
-                    <button class="btn btn-secondary btn-xs align-vol-btn" onclick="event.stopPropagation(); window.alignVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: transform 0.2s;">
+                    <button class="btn btn-secondary btn-xs align-vol-btn" onclick="event.stopPropagation(); window.alignVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: var(--font-2xs); font-weight: 600; transition: transform 0.2s;">
                         ⚡ 延遲對齊
                     </button>` : '';
                 
                 // 6. 進行 HTML 渲染對接
                 const chaptersHtml = displayChapters.length === 0 ? `
-                    <div class="empty-placeholder" style="padding: 16px; font-size: 0.8rem; text-align: center; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                    <div class="empty-placeholder" style="padding: 16px; font-size: var(--font-2xs); text-align: center; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; gap: 8px;">
                         <span>📭 此篇卷尚無章節大綱。${isDirty ? '請點擊「⚡ 延遲對齊」進行世界觀校準。' : ''}</span>
-                        <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); window.addChapterToVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.75rem; font-weight: 600;">➕ 新增本卷第一章</button>
+                        <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); window.addChapterToVolume(${volIdx})" style="background: var(--primary); color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: var(--font-2xs); font-weight: 600;">➕ 新增本卷第一章</button>
                     </div>` : displayChapters.map((chapter, chIdx) => {
     
                     const chapterIndex = parseInt(chapter.chapter_index);
@@ -839,16 +839,16 @@ export function renderPlotTab() {
                         return `
                         <div class="chapter-grid-item skeleton-chapter" data-chapter-index="${chapterIndex}" data-index="${globalIdx}" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
                             <div class="chapter-title-row" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                                <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;">🦴 第 ${chIdxInVol} 章</span>
-                                <h3 class="chapter-title" style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">${skeletonTitle}</h3>
+                                <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 700;">🦴 第 ${chIdxInVol} 章</span>
+                                <h3 class="chapter-title" style="margin: 0; font-size: var(--font-2xs); font-weight: 600; color: var(--text-primary);">${skeletonTitle}</h3>
                             </div>
-                            ${skeletonSummary ? `<p style="font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
+                            ${skeletonSummary ? `<p style="font-size: var(--font-2xs); color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
                             
                             ${(foreshadowPlants.length > 0 || foreshadowPayoffs.length > 0 || turningPoints.length > 0) ? `
                             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
-                                ${foreshadowPlants.map(seed => `<span class="seed-pill" style="background: rgba(139, 92, 246, 0.12); color: #8b5cf6; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">🌱 ${seed}</span>`).join('')}
-                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">💥 回收: ${pay}</span>`).join('')}
-                                ${turningPoints.map(tp => `<span class="turning-pill" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem;">⚡ 轉折: ${tp}</span>`).join('')}
+                                ${foreshadowPlants.map(seed => `<span class="seed-pill" style="background: rgba(139, 92, 246, 0.12); color: #8b5cf6; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">🌱 ${seed}</span>`).join('')}
+                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">💥 回收: ${pay}</span>`).join('')}
+                                ${turningPoints.map(tp => `<span class="turning-pill" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">⚡ 轉折: ${tp}</span>`).join('')}
                             </div>` : ''}
                             
                             <div class="chapter-actions" style="margin-top: 8px; text-align: right;">
@@ -875,13 +875,13 @@ export function renderPlotTab() {
                                 ${displayedEvents.map((e, eIdx) => {
                                     const eventText = typeof e === 'string' ? e : [e.action, e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
                                     return `
-                                        <div class="stepped-event-item" style="padding-left: 24px; position: relative; margin-bottom: 6px; font-size: 0.78rem; line-height: 1.5; color: var(--text-secondary);">
-                                            <span style="position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 800;">${eIdx + 1}</span>
+                                        <div class="stepped-event-item" style="padding-left: 24px; position: relative; margin-bottom: 6px; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary);">
+                                            <span style="position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: var(--font-2xs); font-weight: 800;">${eIdx + 1}</span>
                                             <span style="font-weight: 500; color: var(--text-primary);">${eventText}</span>
                                         </div>
                                     `;
                                 }).join('')}
-                                ${remaining > 0 ? `<div style="font-size: 0.72rem; color: var(--text-muted); padding-left: 24px; font-style: italic;">+ 還有 ${remaining} 個事件...</div>` : ''}
+                                ${remaining > 0 ? `<div style="font-size: var(--font-2xs); color: var(--text-muted); padding-left: 24px; font-style: italic;">+ 還有 ${remaining} 個事件...</div>` : ''}
                             </div>
                         </div>`;
                     }
@@ -892,7 +892,7 @@ export function renderPlotTab() {
                         <div class="chapter-grid-item grid-col-span-2">
                             <div class="chapter-grid-label">🌱 伏筆線索種子</div>
                             <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
-                                ${chapter.foreshadowing.map(f => `<span class="badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600;">${f}</span>`).join('')}
+                                ${chapter.foreshadowing.map(f => `<span class="badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 600;">${f}</span>`).join('')}
                             </div>
                         </div>`;
                     }
@@ -910,14 +910,14 @@ export function renderPlotTab() {
                     <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
                         <div class="plot-chapter-item" data-index="${globalIdx}" data-chapter-index="${chapterIndex}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
                             <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
+                            <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: var(--font-2xs); text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
                                     <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
                                     <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
                                 </div>
                             </div>
-                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
-                            <div class="chapter-summary" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${skeletonSummary}</div>
+                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: var(--font-sm); font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
+                            <div class="chapter-summary" style="font-size: var(--font-2xs); line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${skeletonSummary}</div>
                             <div class="chapter-layout-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 8px;">
                                 ${purposeText}
                                 <div class="chapter-grid-item">
@@ -944,7 +944,7 @@ export function renderPlotTab() {
                     .split(/[,,，、\n]+/)
                     .map(f => f.trim())
                     .filter(Boolean)
-                    .map(f => `<span class="badge" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">${f}</span>`)
+                    .map(f => `<span class="badge" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.15); padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 600;">${f}</span>`)
                     .join(' ');
 
                 return `
@@ -953,25 +953,25 @@ export function renderPlotTab() {
                     
                     <div class="volume-header" onclick="event.stopPropagation(); window.toggleVolumeExpand(${volIdx})" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 12px; cursor: pointer;">
                         <div class="volume-title-section" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                            <span class="volume-index-badge" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2); padding: 2px 10px; border-radius: 6px; font-size: 0.78rem; font-weight: 800;">VOL. ${volIdx}</span>
-                            <h3 class="volume-title" style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">${vol.title}</h3>
+                            <span class="volume-index-badge" style="background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.2); padding: 2px 10px; border-radius: 6px; font-size: var(--font-2xs); font-weight: 800;">VOL. ${volIdx}</span>
+                            <h3 class="volume-title" style="margin: 0; font-size: var(--font-base); font-weight: 700; color: var(--text-primary);">${vol.title}</h3>
                             ${dirtyBadge}
                         </div>
                         <div class="volume-actions-section" onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 12px;">
                             ${alignButton}
-                            <button class="char-action-btn edit-btn" onclick="window.openVolumeEditModal(${volIdx}, \`${safeTitle}\`, \`${safeSummary}\`, \`${safeFactions}\`)" title="編輯篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 1.05rem; transition: transform 0.2s;">
+                            <button class="char-action-btn edit-btn" onclick="window.openVolumeEditModal(${volIdx}, \`${safeTitle}\`, \`${safeSummary}\`, \`${safeFactions}\`)" title="編輯篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: var(--font-sm); transition: transform 0.2s;">
                                 ✏️
                             </button>
-                            <button class="char-action-btn delete-btn" onclick="window.deleteVolume(${volIdx})" title="刪除篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 1.05rem; transition: transform 0.2s;">
+                            <button class="char-action-btn delete-btn" onclick="window.deleteVolume(${volIdx})" title="刪除篇卷" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: var(--font-sm); transition: transform 0.2s;">
                                 🗑️
                             </button>
-                            <button class="btn btn-ghost btn-xs expand-toggle-btn" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border-color);">${isVolExpanded ? '收合' : '展開'}</button>
+                            <button class="btn btn-ghost btn-xs expand-toggle-btn" style="font-size: var(--font-2xs); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border-color);">${isVolExpanded ? '收合' : '展開'}</button>
                         </div>
                     </div>
 
                     <!-- Mini Progress indicator -->
                     <div class="volume-progress-container" style="display: flex; flex-direction: column; gap: 4px; margin: 2px 0;">
-                        <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">
+                        <div style="display: flex; justify-content: space-between; font-size: var(--font-2xs); color: var(--text-muted); font-weight: 600;">
                             <span>✍️ 正文寫作進度</span>
                             <span>${writtenChaptersCount} / ${totalChaptersCount} 章 (${progressPercent}%)</span>
                         </div>
@@ -980,7 +980,7 @@ export function renderPlotTab() {
                         </div>
                     </div>
                     
-                    <div class="volume-summary-box" style="font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.12); padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px;">
+                    <div class="volume-summary-box" style="font-size: var(--font-2xs); line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.12); padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px;">
                         <div><strong>📌 核心情節概要：</strong>${vol.summary || '尚無概要設定。'}</div>
                         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                             <strong>🛡️ 登場勢力陣營：</strong>
@@ -1137,7 +1137,7 @@ export function renderPlotTab() {
                             tlNav.appendChild(moreIndicator);
                         }
                     } else {
-                        tlNav.innerHTML = '<div style="font-size: 0.7rem; color: var(--text-muted); text-align: center; padding: 8px;">尚無章節</div>';
+                        tlNav.innerHTML = '<div style="font-size: var(--font-2xs); color: var(--text-muted); text-align: center; padding: 8px;">尚無章節</div>';
                     }
                 }
             };
@@ -1227,10 +1227,10 @@ export function renderWriterTab() {
                         data-chapter-index="${chapterIdx}"
                         style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; width: 100%; border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; margin-bottom: 4px; box-sizing: border-box;">
                         <div style="display: flex; justify-content: space-between; width: 100%; align-items: center; pointer-events: none;">
-                            <span class="chapter-list-number" style="font-size: 0.72rem; font-weight: 700; opacity: 0.85; letter-spacing: 0.02em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章 (全局第 ${globalChapterNum} 章)</span>
-                            <span class="chapter-list-status" style="font-size: 0.75rem; font-weight: 800;">${isWritten ? '✓' : '○'}</span>
+                            <span class="chapter-list-number" style="font-size: var(--font-2xs); font-weight: 700; opacity: 0.85; letter-spacing: 0.02em;">第 ${volIdx} 卷 第 ${chIdxInVol} 章 (全局第 ${globalChapterNum} 章)</span>
+                            <span class="chapter-list-status" style="font-size: var(--font-2xs); font-weight: 800;">${isWritten ? '✓' : '○'}</span>
                         </div>
-                        <div class="chapter-list-title" style="font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
+                        <div class="chapter-list-title" style="font-size: var(--font-2xs); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
                             ${chapter.title || chapter.chapter_title || chapter.brief_title || '待設定標題'}
                         </div>
                     </li>
@@ -1378,7 +1378,7 @@ export function selectWriterChapter(chapterIndex) {
                 eventsHtml = `
                 <div class="insp-item">
                     <span class="insp-label">📌 核心事件線</span>
-                    <ul class="insp-events-list" style="padding-left: 18px; margin: 4px 0; font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary);">
+                    <ul class="insp-events-list" style="padding-left: 18px; margin: 4px 0; font-size: var(--font-2xs); line-height: 1.6; color: var(--text-secondary);">
                         ${plotChapter.events.map(e => `<li>${formatEventItem(e)}</li>`).join('')}
                     </ul>
                 </div>`;
@@ -1529,10 +1529,10 @@ export function renderChatMessages() {
                     if (msg.thinking && msg.thinking.trim()) {
                         thinkingHtml = `
                             <details class="thinking-details" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
-                                <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                                <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
                                     <span>🧠 AI 思考過程 (點擊展開/收合)</span>
                                 </summary>
-                                <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
+                                <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
                             </details>
                         `;
                     }
@@ -1584,10 +1584,10 @@ export function renderChatMessages() {
             if (msg.thinking && msg.thinking.trim()) {
                 thinkingHtml = `
                     <details class="thinking-details" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
-                        <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                        <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
                             <span>🧠 AI 思考過程 (點擊展開/收合)</span>
                         </summary>
-                        <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
+                        <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
                     </details>
                 `;
             }

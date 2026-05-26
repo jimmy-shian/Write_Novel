@@ -886,7 +886,7 @@ function openWorldviewTextSectionEditModal(field, title) {
                 <div class="modal-body">
                     <div class="form-group">
                         <label id="wv-text-edit-label">設定內容</label>
-                        <textarea id="wv-text-edit-content" rows="10" placeholder="請輸入設定內容..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+                        <textarea id="wv-text-edit-content" rows="10" placeholder="請輸入設定內容..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs); font-family: inherit; resize: vertical;"></textarea>
                     </div>
                     <button id="btn-wv-text-edit-submit" class="btn btn-primary btn-full mt-4">儲存設定</button>
                 </div>
@@ -955,7 +955,7 @@ function openWorldviewComplexListEditModal(field, title, defaultItemTitle = '') 
     function renderItems() {
         container.innerHTML = '';
         if (list.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
+            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: var(--font-2xs); padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
             return;
         }
 
@@ -965,19 +965,19 @@ function openWorldviewComplexListEditModal(field, title, defaultItemTitle = '') 
             card.style = 'border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.02); padding: 12px; display: flex; flex-direction: column; gap: 8px; position: relative;';
             card.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">項目 #${index + 1}</span>
+                    <span style="font-size: var(--font-2xs); color: var(--text-muted); font-weight: 600;">項目 #${index + 1}</span>
                     <div style="display: flex; gap: 6px; align-items: center;">
-                        <button class="btn btn-ghost btn-xs insert-item-btn" data-index="${index}" style="color: var(--primary); font-size: 0.75rem; border: none; background: none; cursor: pointer; padding: 2px 6px;">➕ 在此後插入</button>
-                        <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer; padding: 0 4px;">✕</button>
+                        <button class="btn btn-ghost btn-xs insert-item-btn" data-index="${index}" style="color: var(--primary); font-size: var(--font-2xs); border: none; background: none; cursor: pointer; padding: 2px 6px;">➕ 在此後插入</button>
+                        <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: var(--font-2xs); border: none; background: none; cursor: pointer; padding: 0 4px;">✕</button>
                     </div>
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
-                    <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">標題名稱</label>
-                    <input type="text" class="wv-complex-item-title-input" data-index="${index}" value="${(item.title || '').replace(/"/g, '&quot;')}" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入標題 (例如：第一幕 (Setup) / 階段 1)...">
+                    <label style="font-size: var(--font-2xs); color: var(--text-muted); margin-bottom: 4px; display: block;">標題名稱</label>
+                    <input type="text" class="wv-complex-item-title-input" data-index="${index}" value="${(item.title || '').replace(/"/g, '&quot;')}" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="輸入標題 (例如：第一幕 (Setup) / 階段 1)...">
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
-                    <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">詳細內容</label>
-                    <textarea class="wv-complex-item-content-input" data-index="${index}" rows="3" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;" placeholder="輸入內容描述...">${item.content || ''}</textarea>
+                    <label style="font-size: var(--font-2xs); color: var(--text-muted); margin-bottom: 4px; display: block;">詳細內容</label>
+                    <textarea class="wv-complex-item-content-input" data-index="${index}" rows="3" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs); font-family: inherit; resize: vertical;" placeholder="輸入內容描述...">${item.content || ''}</textarea>
                 </div>
             `;
             container.appendChild(card);
@@ -1078,7 +1078,7 @@ function openWorldviewListEditModal(field, title) {
     function renderItems() {
         container.innerHTML = '';
         if (list.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
+            container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: var(--font-2xs); padding: 12px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm);">目前尚無項目</div>';
             return;
         }
 
@@ -1086,9 +1086,9 @@ function openWorldviewListEditModal(field, title) {
             const div = document.createElement('div');
             div.style = 'display: flex; gap: 8px; align-items: center;';
             div.innerHTML = `
-                <span style="font-size: 0.8rem; color: var(--text-muted); min-width: 24px;">#${index + 1}</span>
-                <input type="text" class="wv-list-item-input" data-index="${index}" value="${item.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="請輸入項目內容...">
-                <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: 1rem; border: none; background: none; cursor: pointer;">✕</button>
+                <span style="font-size: var(--font-2xs); color: var(--text-muted); min-width: 24px;">#${index + 1}</span>
+                <input type="text" class="wv-list-item-input" data-index="${index}" value="${item.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="請輸入項目內容...">
+                <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: var(--font-2xs); border: none; background: none; cursor: pointer;">✕</button>
             `;
             container.appendChild(div);
 
@@ -3206,10 +3206,10 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
             </div>
             <div class="msg-content">
                 <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
-                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                    <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
                         <span>🧠 AI 思考過程 (點擊展開/收合)</span>
                     </summary>
-                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
                 </details>
                 <div class="msg-text-markdown stream-typing"></div>
             </div>
@@ -3353,10 +3353,10 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
             </div>
             <div class="msg-content">
                 <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
-                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                    <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
                         <span>🧠 AI 思考過程 (點擊展開/收合)</span>
                     </summary>
-                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
                 </details>
                 <div class="msg-text-markdown stream-typing"></div>
             </div>
@@ -4818,10 +4818,10 @@ function setupEventListeners() {
             </div>
             <div class="msg-content">
                 <details class="thinking-details hidden" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
-                    <summary style="cursor: pointer; font-size: 0.78rem; padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                    <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
                         <span>🧠 AI 思考過程 (點擊展開/收合)</span>
                     </summary>
-                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
+                    <pre class="thinking-pre" style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;"></pre>
                 </details>
                 <div class="msg-text-markdown stream-typing"></div>
             </div>
@@ -5853,16 +5853,16 @@ window.openVolumeEditModal = function(volIdx, title, summary, factions) {
                 </div>
                 <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
                     <div class="form-group">
-                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">篇卷標題</label>
-                        <input id="vol-edit-title" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入篇卷標題...">
+                        <label style="font-size: var(--font-2xs); color: var(--text-muted); margin-bottom: 4px; display: block;">篇卷標題</label>
+                        <input id="vol-edit-title" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="輸入篇卷標題...">
                     </div>
                     <div class="form-group">
-                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">核心情節概要</label>
-                        <textarea id="vol-edit-summary" rows="5" placeholder="請輸入本卷的核心情節概要與高潮點..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+                        <label style="font-size: var(--font-2xs); color: var(--text-muted); margin-bottom: 4px; display: block;">核心情節概要</label>
+                        <textarea id="vol-edit-summary" rows="5" placeholder="請輸入本卷的核心情節概要與高潮點..." style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs); font-family: inherit; resize: vertical;"></textarea>
                     </div>
                     <div class="form-group">
-                        <label style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; display: block;">登場勢力陣營</label>
-                        <input id="vol-edit-factions" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: 0.85rem;" placeholder="輸入登場勢力陣營，如：守夜人, 荒原反抗軍...">
+                        <label style="font-size: var(--font-2xs); color: var(--text-muted); margin-bottom: 4px; display: block;">登場勢力陣營</label>
+                        <input id="vol-edit-factions" type="text" style="width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="輸入登場勢力陣營，如：守夜人, 荒原反抗軍...">
                     </div>
                     <button id="btn-vol-edit-submit" class="btn btn-primary btn-full mt-4">儲存篇卷變更</button>
                 </div>
