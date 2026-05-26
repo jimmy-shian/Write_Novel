@@ -12,8 +12,8 @@
     --text-primary: #1a1a2e;
     --text-secondary: #5a5a72;
     --text-muted: #9090a5;
-    --primary: #0071e3;
-    --primary-hover: #0077ED;
+    --primary: #715076;
+    --primary-hover: #69b5b5;
     --primary-glow: rgba(0, 113, 227, 0.25);
     --success: #34c759;
     --status-written: #34c759;
@@ -27,19 +27,19 @@
     --radius-lg: 16px;
     
     /* Font Size Scale (base: 18px) */
-    --font-2xs: 0.6rem;   /* 10.8px */
-    --font-xs: 0.65rem;   /* 11.7px */
-    --font-sm: 0.75rem;   /* 13.5px */
-    --font-sm-plus: 0.78rem; /* 14px - for 0.7rem usage */
-    --font-base: 0.85rem; /* 15.3px */
-    --font-md: 0.9rem;    /* 16.2px */
-    --font-lg: 1rem;      /* 18px */
-    --font-lg-plus: 1.05rem; /* 18.9px - for 1.05rem usage */
-    --font-xl: 1.1rem;    /* 19.8px */
-    --font-2xl: 1.25rem;  /* 22.5px */
-    --font-3xl: 1.5rem;   /* 27px */
-    --font-3xl-plus: 1.6rem; /* 28.8px - for 1.6rem usage */
-    --font-4xl: 1.75rem;  /* 31.5px */
+    --font-2xs: 0.8rem;    /* 14.4px */
+    --font-xs: 0.9rem;     /* 16.2px */
+    --font-sm: 1rem;       /* 18px */
+    --font-sm-plus: 1.05rem; /* 18.9px */
+    --font-base: 1.1rem;   /* 19.8px */
+    --font-md: 1.18rem;    /* 21.24px */
+    --font-lg: 1.25rem;    /* 22.5px */
+    --font-lg-plus: 1.32rem; /* 23.76px */
+    --font-xl: 1.4rem;     /* 25.2px */
+    --font-2xl: 1.5rem;    /* 27px */
+    --font-3xl: 1.65rem;   /* 29.7px */
+    --font-3xl-plus: 1.72rem; /* 30.96px */
+    --font-4xl: 1.8rem;    /* 32.4px */
 }
 
 /* Dark Theme */
@@ -485,7 +485,6 @@ aside {
 #workspace-nav {
     display: flex;
     gap: 4px;
-    margin-top: 20px;
 }
 
 .nav-tab {
@@ -584,7 +583,7 @@ aside {
     justify-content: flex-start;
     align-items: center;
     width: 100%;
-    max-width: 1200px;
+    /* max-width: 1200px; */
     margin: 0 auto;
     height: 100%;
     min-height: 0;
@@ -617,6 +616,7 @@ aside {
 /* Foreshadowing Seeds Visual Sidebar */
 .editor-sidebar-seeds {
     display: flex;
+    width: 90%;
     flex-direction: column;
     background: var(--surface);
     border: 1px solid var(--border-color);
@@ -3630,46 +3630,61 @@ body.dark-theme .chapter-grid-item {
 
 /* Premium Glassmorphic Overlay Override for Modals */
 .modal-overlay {
-    background: rgba(10, 15, 30, 0.7) !important;
+    background: rgba(10, 15, 30, 0.5) !important;
     backdrop-filter: blur(16px) saturate(140%) !important;
 }
 
 .modal-card {
-    background: rgb(194, 194, 194) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
     backdrop-filter: blur(24px) !important;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.15) !important;
     transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 body.dark-theme .modal-card {
-    background: rgba(15, 23, 42, 0.85) !important;
-    border-color: rgba(255, 255, 255, 0.05) !important;
+    background: rgba(22, 22, 33, 0.85) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5) !important;
 }
 
 .modal-header h2 {
-    background: linear-gradient(135deg, #60a5fa, #c084fc);
+    background: linear-gradient(135deg, #715076, #8e2de2);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     font-weight: 800 !important;
+}
+
+body.dark-theme .modal-header h2 {
+    background: linear-gradient(135deg, #60a5fa, #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 /* Styled modal inputs */
 .modal-body .form-group input,
 .modal-body .form-group textarea,
 .modal-body .form-group select {
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(0, 0, 0, 0.12) !important;
     border-radius: var(--radius-sm) !important;
-    background: rgba(0, 0, 0, 0.2) !important;
+    background: rgba(255, 255, 255, 0.9) !important;
     color: var(--text-primary) !important;
     transition: all 0.2s ease !important;
+}
+
+body.dark-theme .modal-body .form-group input,
+body.dark-theme .modal-body .form-group textarea,
+body.dark-theme .modal-body .form-group select {
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: rgba(0, 0, 0, 0.25) !important;
+    color: var(--text-primary) !important;
 }
 
 .modal-body .form-group input:focus,
 .modal-body .form-group textarea:focus,
 .modal-body .form-group select:focus {
     border-color: var(--primary) !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2) !important;
+    box-shadow: 0 0 0 3px rgba(113, 80, 118, 0.2) !important;
 }
 
 /* Rotating arrow indicator for expand */
@@ -3762,7 +3777,7 @@ body.light-theme .sidebar-tab.active {
     display: flex !important;
     flex-direction: column;
     flex: 1;
-    overflow: hidden;
+    overflow: auto;
     animation: premiumTabFadeIn 0.38s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
