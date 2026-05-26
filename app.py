@@ -127,6 +127,9 @@ class AgentConfigSave(BaseModel):
     max_tokens: int
     enable_thinking: bool
 
+class HealRollbackPayload(BaseModel):
+    target_chapter_index: int
+
 # --- NOVELS ROUTES ---
 @app.get("/api/novels")
 def api_list_novels():
@@ -598,6 +601,18 @@ def api_insert_plot_chapter(novel_id: str, payload: PlotChapterInsert):
     if version:
         return {"status": "success", "version": version}
     raise HTTPException(status_code=400, detail="Failed to insert chapter outline")
+
+@app.post("/api/novels/{novel_id}/chapters/heal-rollback")
+def api_heal_rollback(novel_id: str, payload: HealRollbackPayload):
+    """[微創自癒協議] 刪除指定章節前後 +-3 章節的大綱與已寫正文，並進行索引平移"""
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    from db import delete_and_shift_surrounding_chapters
+    try:
+        start_del, end_del = delete_and_shift_surrounding_chapters(novel_id, payload.target_chapter_index)
+        return {"status": "success", "start_del": start_del, "end_del": end_del}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.patch("/api/novels/{novel_id}/characters/field")
 def api_update_character_field(novel_id: str, payload: CharacterFieldUpdate):
