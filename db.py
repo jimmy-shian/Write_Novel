@@ -892,7 +892,7 @@ def get_latest_plot_chapters(novel_id):
         return data
     return None
 
-def save_plot_chapters(novel_id, outline_json):
+def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
     if isinstance(outline_json, dict) or isinstance(outline_json, list):
         # 轉換所有字串為繁體再序列化
         outline_json = _convert_obj_to_traditional(outline_json)
@@ -921,8 +921,9 @@ def save_plot_chapters(novel_id, outline_json):
     )
     
     # 2. Automatically sync and distribute chapters outlines to individual volumes in the volumes table
-    if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
-        chapters_list = parsed_dict["chapters"]
+    if not skip_volume_sync:
+        if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
+            chapters_list = parsed_dict["chapters"]
         if isinstance(chapters_list, list):
             vol_groups = {}
             vols = get_volumes(novel_id)
@@ -1088,6 +1089,10 @@ def parse_worldview_to_json(content):
     if not content:
         return default_structure
     
+    if isinstance(content, str):
+        if "\n\n【全域" in content:
+            content = content.split("\n\n【全域")[0]
+            
     content_stripped = content.strip()
     if content_stripped.startswith("{") and content_stripped.endswith("}"):
         try:
@@ -1139,7 +1144,8 @@ def parse_worldview_to_json(content):
             else:
                 normalized_cp = default_structure["progressive_character_plan"]
 
-            return {
+            result_obj = parsed.copy()
+            result_obj.update({
                 "theme": parsed.get("theme", ""),
                 "main_conflict": parsed.get("main_conflict", ""),
                 "worldview": parsed.get("worldview", ""),
@@ -1148,7 +1154,9 @@ def parse_worldview_to_json(content):
                 "progressive_character_plan": normalized_cp,
                 "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []) if isinstance(parsed.get("foreshadowing_seeds"), list) else [],
                 "key_turning_points": parsed.get("key_turning_points", []) if isinstance(parsed.get("key_turning_points"), list) else []
-            }
+            })
+            return result_obj
+
         except Exception as e:
             print(f"[WARN] parse_worldview_to_json JSON load failed: {e}. Falling back to text parser.")
             
@@ -1299,7 +1307,7 @@ def append_foreshadowing(novel_id, new_seed):
     
     return save_worldbuilding(novel_id, new_content)
 
-def insert_plot_chapter(novel_id, insert_after_index, new_chapter):
+def insert_plot_chapter(novel_id, insert_after_index, new_chapter, skip_volume_sync=False):
     plot_data = get_stitched_plot(novel_id)
     if not plot_data:
         plot_data = {"chapters": []}
@@ -1333,10 +1341,28 @@ def insert_plot_chapter(novel_id, insert_after_index, new_chapter):
     # 重新對所有章節重新編排 chapter_index 確保連續
     for idx, ch in enumerate(chapters):
         ch["chapter_index"] = idx + 1
+
+    # 💡 核心優化：同步將 `chapters` 表（已寫正文）大於等於插入位置的章節索引向後平移 1，避免正文與大綱對接錯位！
+    if insert_pos != -1:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE chapters SET chapter_index = chapter_index + 1 WHERE novel_id = ? AND chapter_index >= ?",
+            (novel_id, insert_pos + 1)
+        )
+        conn.commit()
+        conn.close()
     
-    return save_plot_chapters(novel_id, plot_data)
+    return save_plot_chapters(novel_id, plot_data, skip_volume_sync=skip_volume_sync)
+
+
+ALLOWED_CHARACTER_FIELDS = {"name", "identity", "personality", "appearance", "background", "arc", "relationships"}
 
 def update_character_field(novel_id, char_index, field_name, new_value):
+    if field_name not in ALLOWED_CHARACTER_FIELDS:
+        print(f"[ERROR] Field '{field_name}' is not in character fields whitelist")
+        return None
+        
     char_data = get_latest_characters(novel_id)
     if not char_data or "parsed_data" not in char_data:
         return None
@@ -1348,6 +1374,7 @@ def update_character_field(novel_id, char_index, field_name, new_value):
     parsed["characters"][char_index][field_name] = new_value
     
     return save_characters(novel_id, parsed)
+
 
 def update_character_single_field(novel_id, char_index, field_name, new_value):
     result = update_character_field(novel_id, char_index, field_name, new_value)
@@ -1697,5 +1724,103 @@ def save_foreshadowing_allocations(novel_id, allocations):
         raise
     finally:
         conn.close()
+
+
+def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
+    """
+    [微創自癒協議] 刪除指定章節前後 +-3 章節（即 N-3 至 N+3）的大綱與已寫正文，
+    並將後續所有章節的 chapter_index 向前平移，最後將所屬篇卷標記為 dirty 以觸發重新生成與對齊。
+    """
+    import re
+    from datetime import datetime
+    N = int(target_chapter_index)
+    start_del = max(1, N - 3)
+    end_del = N + 3
+    del_count = end_del - start_del + 1
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. 刪除 `chapters` 表（已寫正文）範圍內的章節
+    cursor.execute(
+        "DELETE FROM chapters WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?",
+        (novel_id, start_del, end_del)
+    )
+    
+    # 2. 將 `chapters` 表後續已寫正文的索引向前平移 `del_count`
+    cursor.execute(
+        "UPDATE chapters SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?",
+        (del_count, novel_id, end_del)
+    )
+    
+    # 3. 從 `plot_chapters` 主表中刪除範圍內大綱，並對後續大綱做向前平移
+    plot_row = cursor.execute(
+        "SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1",
+        (novel_id,)
+    ).fetchone()
+    
+    if plot_row and plot_row["outline_json"]:
+        try:
+            parsed = json.loads(plot_row["outline_json"])
+            chaps = parsed.get("chapters", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+            updated_chaps = []
+            for c in chaps:
+                c_idx = int(c.get("chapter_index", 0))
+                if start_del <= c_idx <= end_del:
+                    continue  # 剔除範圍內大綱
+                elif c_idx > end_del:
+                    c["chapter_index"] = c_idx - del_count  # 向前平移
+                updated_chaps.append(c)
+                
+            parsed_final = {"chapters": updated_chaps} if isinstance(parsed, dict) else updated_chaps
+            next_version = (plot_row["version"] or 0) + 1
+            cursor.execute(
+                "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 1)",
+                (novel_id, json.dumps(parsed_final, ensure_ascii=False), next_version)
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to update plot chapters in delete_and_shift_surrounding_chapters: {e}")
+            
+    # 4. 對各卷的 `chapters_outline` 及 `chapters_skeleton` 進行同樣的平移與剔除
+    v_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+    vols = [dict(vr) for vr in v_rows]
+    
+    for r in vols:
+        vol_idx = r["volume_index"]
+        ch_outline_str = r["chapters_outline"]
+        updated_outline_str = ch_outline_str
+        
+        # 標記被影響卷為 dirty (is_dirty = 1)
+        # 凡是包含刪除範圍或在其之後的卷都標記為 dirty
+        is_vol_dirty = 0
+        v_start, v_end = get_volume_chapter_range(vols, vol_idx)
+        if v_end >= start_del:
+            is_vol_dirty = 1
+            
+        if ch_outline_str:
+            try:
+                ch_list = json.loads(ch_outline_str)
+                if isinstance(ch_list, list):
+                    updated_chaps = []
+                    for c in ch_list:
+                        c_idx = int(c.get("chapter_index", 0))
+                        if start_del <= c_idx <= end_del:
+                            continue
+                        elif c_idx > end_del:
+                            c["chapter_index"] = c_idx - del_count
+                        updated_chaps.append(c)
+                    updated_outline_str = json.dumps(updated_chaps, ensure_ascii=False)
+            except Exception as e:
+                print(f"[ERROR] Failed to update chapters_outline in delete_and_shift_surrounding_chapters: {e}")
+                
+        cursor.execute(
+            "UPDATE volumes SET chapters_outline = ?, is_dirty = ? WHERE id = ?",
+            (updated_outline_str, is_vol_dirty, r["id"])
+        )
+        
+    conn.commit()
+    conn.close()
+    print(f"[HEALING SUCCESS] Deleted and shifted chapter range [{start_del}, {end_del}] for novel {novel_id}.")
+    return start_del, end_del
 
 
