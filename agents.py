@@ -32,6 +32,11 @@ def clean_json_text(text):
         
     text = text.strip()
     
+    # 0.5. If the text looks like a braceless key-value block, wrap it with {}
+    if text and not text.startswith("{") and not text.startswith("["):
+        if re.match(r'^\s*"\w+"\s*:', text) or re.match(r'^\s*\'\w+\'\s*:', text):
+            text = "{" + text + "}"
+    
     # 1. 優先尋找 Markdown 代碼區塊
     # 我們從後往前找代碼區塊，因為 JSON 通常是最後輸出
     code_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
@@ -39,6 +44,10 @@ def clean_json_text(text):
         # 尋找非空且以 { 或 [ 開頭的代碼區塊
         for block in reversed(code_blocks):
             block_stripped = block.strip()
+            # If the code block is braceless, wrap it with {}
+            if block_stripped and not block_stripped.startswith("{") and not block_stripped.startswith("["):
+                if re.match(r'^\s*"\w+"\s*:', block_stripped) or re.match(r'^\s*\'\w+\'\s*:', block_stripped):
+                    block_stripped = "{" + block_stripped + "}"
             if block_stripped.startswith("{") or block_stripped.startswith("["):
                 return block_stripped
                 
@@ -48,7 +57,7 @@ def clean_json_text(text):
     if all_braces:
         all_braces.sort(key=len, reverse=True)
         return all_braces[0].strip()
-
+ 
     # 3. 容錯：若文字以 JSON 的 key-value 開頭但缺少最外層 { (截斷情況)
     # 嘗試尋找第一個 { 以後的所有內容，並嘗試補全結尾括號
     first_brace = text.find('{')
@@ -476,7 +485,7 @@ CHAPTER_WRITER_PROMPT = """你是一位獲獎無數的頂尖職業小說家（Ch
 1. **大綱執行**：嚴格按照大綱設定的時間、場景、伏筆與角色順序展開寫作，不得隨意偏離。
 2. **Show, Don't Tell**：拒絕平鋪直敘。將事件展開為細緻的環境渲染、肢體動作、台詞潛台詞及心理描寫。
 3. **無痕伏筆**：伏筆必須自然融入敘事，回收伏筆時營造驚喜與合理性.
-4. **角色一致**：登場角色的台詞、語氣與行為必須符合其人設。
+4. **角色一致（🔥至高紅線）**：登場角色的台詞、語氣、動作、神態與行為必須**嚴格且 100% 符合其『角色聖經』人設**（特別是其核心性格特徵、講話風格、外在目標 want、與致命缺陷 fatal_flaw）。寫作時必須隨時核對傳入的『角色聖經』設定，嚴厲禁止前後描寫不一致或人設崩塌！
 5. **次要角色授權**：可根據需要自行創作次要路人角色（例：(老張-客棧老闆，貪財但心軟)）以輔助情節，其行為須符合世界觀。
 6. **寫作風格**：請嚴格採用指定文風：{writing_style}
 
@@ -825,8 +834,7 @@ def run_character_designer(novel_id, user_prompt=None):
 
 def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     """
-    重構優化版：滾動式 5 章大綱生成器 (Chunk Generator)
-    每次生成約 5 個章節大綱，避免一次性生成過多資訊導致上下文超載與幻覺。
+    重構優化版：滾動式大綱生成器 (Chunk Generator)
     """
     import json
     import re
@@ -934,7 +942,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
         else:
             # 預設回退至當前大綱最新一個生成批次 (5章大綱) 的起點
             if existing_chapters:
-                repair_start_candidates.append(max(1, last_chapter_index - 4))
+                repair_start_candidates.append(max(1, last_chapter_index - 1))
             else:
                 repair_start_candidates.append(1)
 
@@ -947,8 +955,9 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
         last_chapter_index = start_chapter - 1
     else:
         start_chapter = last_chapter_index + 1
-    # 【Step 1 修復】將單次生成章節數從 5 減少為 4，降低 Token 長度避免小模型上下文超載或超時而無法正確輸出完整的 JSON 結束標籤
-    end_chapter = start_chapter + 3 # 每次生成剛好 4 章
+    # 🌟 每次生成剛好 2 章以防止超載或超時而無法正確輸出完整的 JSON 結束標籤
+    end_chapter = start_chapter + 1
+    expected_count = end_chapter - start_chapter + 1
     
     yield "data: " + json.dumps({"type": "content", "delta": f"=== [滾動式大綱生成] ===\n目前已規劃 {last_chapter_index} 章。正在規劃接下來的第 {start_chapter} 章至第 {end_chapter} 章大綱...\n\n"}, ensure_ascii=False) + "\n\n"
 
@@ -1071,7 +1080,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
 
 {prev_chapters_context or "這是整部小說的前 5 章，為開篇大綱。"}
 
-現在，請繼續為這部小說精細規劃**接下來的 4 個章節大綱**（項目數量必須精確為 4 個，章節序號必須是第 {start_chapter} 章至第 {end_chapter} 章）：
+現在，請繼續為這部小說精細規劃**接下來的 {expected_count} 個章節大綱**（項目數量必須精確為 {expected_count} 個，章節序號必須是第 {start_chapter} 章至第 {end_chapter} 章）：
 
 ## ⚠️ 核心生成權限與動態分配規則（極重要）
 1. **【絕對禁止模板化】**：絕對禁止在不同章節中重複使用相同的標題、事件描述或籠統語句（如「命運波折之章 (保底)」、「推進核心衝突」）。每一章必須是獨立、具體、且不可替代的情節。
@@ -1081,6 +1090,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
    - 若本章不適合處理伏筆，這兩欄必須回傳空陣列 `[]`。專注於編織具體的日常生活、調查、戰鬥或台詞對話。
 3. **【事件具體落地】**：每一個章節大綱必須是可被執行的寫作藍圖。`events` 陣列中的每一個場景都必須具體描述「誰、在哪裡、做了什麼、面臨什麼新考驗（至少包含一個具體的對話或衝突動作點）」。
 4. **【自主配角生成】**：允許並鼓勵你在具體場景中自由創造符合霓虹城世界觀的工具人/路人（如：特定情報販子、路邊小販、打手），並在首次出現時用括號標註：(姓名-身份簡述)。
+5. **【故事大綱聚焦過渡】**：大綱只需提供基本的情節進展、場景過渡與衝突方向（即「一般合適即可」），不需刻意進行極度流暢的文學渲染或細節描寫。所有的細節豐富度、情感流暢度與文采流動，都將完全交由下游的【Chapter Writer (正文寫作)】來演繹和修飾。你只需專注於為故事搭建好合理的因果脈絡與轉折。
 
 請裝飾在 ```json ... ``` 區塊中輸出，格式如下：
 ```json
@@ -1131,7 +1141,68 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     if isinstance(parsed_node, dict) and "error" in parsed_node:
         parsed_node = parse_json_safely(clean_json_text(expanded_output))
 
-    node_chapters = _normalize_chapter_outlines(parsed_node, start_chapter)
+    node_chapters = _normalize_chapter_outlines(parsed_node, start_chapter, expected_count=expected_count)
+
+    # 4.5 【總監 JSON 修復】：若解析失敗但原始輸出非空，先請 LLM 修復格式再試一次
+    if not node_chapters and expanded_output.strip():
+        yield _sse_content("  🔧 大綱 JSON 解析失敗，正在呼叫總監進行格式修復...\n")
+        _repair_prompt = f"""你是一位 JSON 格式修復專家。
+以下是一段嘗試生成小說章節大綱的 LLM 輸出，但因為 JSON 格式錯誤而解析失敗。
+
+【原始失敗輸出（可能截斷或格式破損）】
+{expanded_output}
+
+你的任務：
+1. 分析上面的內容，提取出已存在的章節資料（哪怕只有部分）。
+2. 輸出一個完全合法的 JSON，包含至少 {expected_count} 個章節（第 {start_chapter} 章至第 {end_chapter} 章）。
+3. 若原始資料不足，根據上下文補全缺失的章節。
+
+嚴格輸出 ```json ... ``` 包裹的合法 JSON，格式如下：
+```json
+{{
+  "chapters": [
+    {{
+      "chapter_index": {start_chapter},
+      "title": "章節標題",
+      "time_setting": "故事內時間座標",
+      "time_span": "距前章時間跨度",
+      "events": [{{"scene": "場景", "action": "動作", "consequence": "後果"}}],
+      "purpose": "敘事目的",
+      "foreshadowing_plant": [],
+      "foreshadowing_payoff": [],
+      "characters_active": [],
+      "characters_introduced": [],
+      "scene": "主要場景",
+      "emotional_tone": "情緒基調",
+      "cliffhanger": "懸念鉤子"
+    }}
+  ]
+}}
+```
+"""
+        _repair_messages = [
+            {"role": "system", "content": "你是一位專業的 JSON 格式修復工程師。你只輸出嚴格合法的 JSON，不輸出任何說明文字。"},
+            {"role": "user", "content": _repair_prompt}
+        ]
+        _repair_output = ""
+        for _sse_line in call_llm_stream("copilot", _repair_messages):
+            if _sse_line.startswith("data:"):
+                try:
+                    _d = _sse_line[5:].strip()
+                    if _d != "[DONE]":
+                        _obj = json.loads(_d)
+                        if _obj.get("type") == "content":
+                            _repair_output += _obj.get("delta", "")
+                except:
+                    pass
+        if _repair_output.strip():
+            _repair_parsed = parse_json_safely(_repair_output)
+            if isinstance(_repair_parsed, dict) and "error" in _repair_parsed:
+                _repair_parsed = parse_json_safely(clean_json_text(_repair_output))
+            _repaired_chapters = _normalize_chapter_outlines(_repair_parsed, start_chapter, expected_count=expected_count)
+            if _repaired_chapters:
+                node_chapters = _repaired_chapters
+                yield _sse_content(f"  ✅ 總監 JSON 修復成功，已恢復 {len(node_chapters)} 章大綱。\n")
 
     if not node_chapters:
         yield "data: " + json.dumps({"type": "content", "delta": f"\n  ⚠️ 檢測到章節素材耗盡或大綱解析失敗！正在啟動「創意膨脹與自我修復循環 (Creative Swelling Loop)」...\n"}, ensure_ascii=False) + "\n\n"
@@ -1150,14 +1221,13 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
             yield "data: " + json.dumps({"type": "content", "delta": f"  📚 當前章節大綱已超出原有篇卷規劃（共 {len(volumes)} 卷），即將自動增量擴增新一卷大綱...\n"}, ensure_ascii=False) + "\n\n"
         else:
             yield "data: " + json.dumps({"type": "content", "delta": f"  📚 當前篇卷規劃充足，將專注於世界觀底層擴張...\n"}, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "content", "delta": f"  🌍 正在為您擴充世界觀：催生新的地下勢力、神秘法則、以及對立衝突線...\n"}, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "content", "delta": f"  👥 正在增量人物卡：為新勢力注入全新的主要人物與配角設定...\n"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "content", "delta": f"  👥 正在增量人物卡：為故事線注入全新的主要人物與配角設定...\n"}, ensure_ascii=False) + "\n\n"
         
         # 2. 建構創意膨脹 LLM Prompt
         volume_instruction = ""
         volume_json_fragment = ""
         if need_expand_volume:
-            volume_instruction = f"4. 規劃第 {volume_index} 卷的卷設定 (標題、核心概要、登場陣營)，因為目前的章節已超出原有篇卷。"
+            volume_instruction = f"2. 規劃第 {volume_index} 卷的卷設定 (標題、核心概要、登場陣營)，因為目前的章節已超出原有篇卷。"
             volume_json_fragment = f''',
   "new_volume": {{
     "title": "第 {volume_index} 卷標題",
@@ -1165,17 +1235,16 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     "factions": ["陣營名稱1", "陣營名稱2"]
   }}'''
         swell_prompt = f"""你是一位小說「設定膨脹與自我對齊大師」。
-目前我們正在規劃第 {start_chapter} 章之後的大綱，但發現素材（組織、角色、卷規劃）已經耗盡，大綱規劃師出現幻覺。
-你需要為這部小說進行【增量創意膨脹】，主動產生新的勢力組織、新角色、新伏筆，以及必要的篇卷大綱。
+目前我們正在規劃第 {start_chapter} 章之後的大綱，但發現角色素材已經耗盡，大綱規劃師出現幻覺。
+你需要為這部小說進行【增量創意膨脹】，主動產生 1-2 個新角色，以及必要的篇卷大綱。
+
+【極重要硬限制規則】
+請僅設計全新的角色（與可能的新篇卷），絕對不要生成或設計任何新勢力、新伏筆種子或新轉折點，因為世界觀、勢力、伏筆和轉折已由系統演算法自動在其他階段編織與調度！
 
 【現有世界觀設定】
 主題：{worldview_json.get("theme", "")}
 核心衝突：{worldview_json.get("main_conflict", "")}
 世界觀背景：{worldview_json.get("worldview", "")}
-
-【現有組織/勢力與伏筆】
-伏筆種子：{json.dumps(worldview_json.get("foreshadowing_seeds", []), ensure_ascii=False)}
-關鍵轉折：{json.dumps(worldview_json.get("key_turning_points", []), ensure_ascii=False)}
 
 【現有角色】
 {json.dumps([c.get("name") for c in char_list], ensure_ascii=False)}
@@ -1184,36 +1253,23 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
 {json.dumps([v.get("title") for v in volumes], ensure_ascii=False)}
 
 請嚴格以 JSON 格式進行以下增量膨脹：
-1. 設計 1 個全新的勢力/組織 (Faction) 及其核心陰謀/動機。
-2. 設計 1-2 個全新的角色 (與新勢力相關，包含姓名、身份、動機、性格特質)。
-3. 設計 2-3 個全新的伏筆種子與關鍵轉折點。
+1. 設計 1-2 個全新的角色 (與當前背景相關，包含姓名、身份、動機、性格特質，能為後續章節注入新冲突與活力)。
 {volume_instruction}
 
 嚴格輸出 ```json ... ``` 包裹的合法 JSON 物件，格式如下：
 {{
-  "new_faction": {{
-    "name": "新勢力名稱",
-    "description": "勢力描述與核心動機"
-  }},
   "new_characters": [
     {{
       "name": "姓名 (中文/英文)",
-      "role": "身份",
+      "role": "主角 / 配角 / 反派",
       "personality": ["性格1", "性格2"],
       "speech_style": "說話風格",
-      "want": "欲求",
+      "want": "外在目標",
       "need": "內在需求",
       "fatal_flaw": "致命缺陷",
-      "motivation": "動機",
+      "motivation": "驅動行為的核心動機",
       "arc": "人物成長軌跡"
     }}
-  ],
-  "new_seeds": [
-    "伏筆種子1",
-    "伏筆種子2"
-  ],
-  "new_turning_points": [
-    "轉折點1"
   ]{volume_json_fragment}
 }}
 """
@@ -1241,25 +1297,6 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
             parsed_swell = parse_json_safely(clean_json_text(swell_text))
             
         if isinstance(parsed_swell, dict) and "error" not in parsed_swell:
-            new_faction = parsed_swell.get("new_faction")
-            new_seeds = parsed_swell.get("new_seeds", [])
-            new_tps = parsed_swell.get("new_turning_points", [])
-            
-            # 縫合勢力與伏筆到世界觀
-            if new_faction:
-                worldview_json["worldview"] += f"\n\n[增量擴展勢力] {new_faction.get('name')}：{new_faction.get('description')}"
-                yield "data: " + json.dumps({"type": "content", "delta": f"  ✅ 成功孵化新勢力：【{new_faction.get('name')}】\n"}, ensure_ascii=False) + "\n\n"
-            if isinstance(new_seeds, list) and new_seeds:
-                worldview_json["foreshadowing_seeds"].extend(new_seeds)
-                yield "data: " + json.dumps({"type": "content", "delta": f"  🌱 新埋設 {len(new_seeds)} 個伏筆種子到故事線中。\n"}, ensure_ascii=False) + "\n\n"
-            if isinstance(new_tps, list) and new_tps:
-                worldview_json["key_turning_points"].extend(new_tps)
-                
-            from incremental_patch_engine import safe_worldbuilding_save
-            success, version, error_msg = safe_worldbuilding_save(novel_id, worldview_json, source="creative_swelling")
-            if not success:
-                yield "data: " + json.dumps({"type": "content", "delta": f"  ⚠️ 世界觀合併安全防護已攔截寫入：{error_msg}\n"}, ensure_ascii=False) + "\n\n"
-            
             # 縫合新角色到角色 Bible
             new_chars = parsed_swell.get("new_characters", [])
             if isinstance(new_chars, list) and new_chars:
@@ -1407,7 +1444,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
 
 {prev_chapters_context or "這是整部小說的前 5 章，為開篇大綱。"}
 
-現在，請繼續為這部小說精細規劃**接下來的 4 個章節大綱**（項目數量必須精確為 4 個，章節序號必須是第 {start_chapter} 章至第 {end_chapter} 章）：
+現在，請繼續為這部小說精細規劃**接下來的 {expected_count} 個章節大綱**（項目數量必須精確為 {expected_count} 個，章節序號必須是第 {start_chapter} 章至第 {end_chapter} 章）：
 
 ## ⚠️ 核心生成權限與動態分配規則（極重要）
 1. **【絕對禁止模板化】**：絕對禁止在不同章節中重複使用相同的標題、事件描述或籠統語句（如「命運波折之章 (保底)」、「推進核心衝突」）。每一章必須是獨立、具體、且不可替代的情節。
@@ -1417,6 +1454,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
    - 若本章不適合處理伏筆，這兩欄必須回傳空陣列 `[]`。專注於編織具體的日常生活、調查、戰鬥或台詞對話。
 3. **【事件具體落地】**：每一個章節大綱必須是可被執行的寫作藍圖。`events` 陣列中的每一個場景都必須具體描述「誰、在哪裡、做了什麼、面臨什麼新考驗（至少包含一個具體的對話或衝突動作點）」。
 4. **【自主配角生成】**：允許並鼓勵你在具體場景中自由創造符合霓虹城世界觀的工具人/路人，並在首次出現時用括號標註：(姓名-身份簡述)。
+5. **【故事大綱聚焦過渡】**：大綱只需提供基本的情節進展、場景過渡與衝突方向（即「一般合適即可」），不需刻意進行極度流暢的文學渲染或細節描寫。所有的細節豐富度、情感流暢度與文采流動，都將完全交由下游的【Chapter Writer (正文寫作)】來演繹和修飾。你只需專注於為故事搭建好合理的因果脈絡與轉折。
 
 請裝飾在 ```json ... ``` 區塊中輸出，格式如下：
 ```json
@@ -1432,7 +1470,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
       ],
       "purpose": "本章敘事目的",
       "foreshadowing_plant": ["具體埋設的伏筆內容，如使用池中種子請註明 Seed ID"],
-      "foreshadowing_payoff": ["具體回收 of 舊伏筆內容，如使用池中種子請註明 Seed ID"],
+      "foreshadowing_payoff": ["具體回收的舊伏筆內容，如使用池中種子請註明 Seed ID"],
       "characters_active": ["活躍主要或次要角色"],
       "characters_introduced": ["本章新登場的主要或次要角色"],
       "scene": "主要場景名稱",
@@ -1465,8 +1503,41 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
             if isinstance(parsed_node, dict) and "error" in parsed_node:
                 parsed_node = parse_json_safely(clean_json_text(expanded_output))
                 
-            node_chapters = _normalize_chapter_outlines(parsed_node, start_chapter)
-                
+            node_chapters = _normalize_chapter_outlines(parsed_node, start_chapter, expected_count=expected_count)
+
+            # 【總監 JSON 修復 - 膨脹後重試】
+            if not node_chapters and expanded_output.strip():
+                yield _sse_content("  🔧 膨脹後重試 JSON 解析失敗，呼叫總監修復格式...\n")
+                _r2_prompt = f"""你是 JSON 格式修復專家。以下是解析失敗的章節大綱輸出，請提取並修復成合法 JSON：
+
+【失敗輸出】
+{expanded_output[:4000]}
+
+輸出包含第 {start_chapter} 至第 {end_chapter} 章的合法 JSON（```json ... ```）。"""
+                _r2_msgs = [
+                    {"role": "system", "content": "你只輸出嚴格合法 JSON，不輸出任何說明。"},
+                    {"role": "user", "content": _r2_prompt}
+                ]
+                _r2_out = ""
+                for _sl in call_llm_stream("copilot", _r2_msgs):
+                    if _sl.startswith("data:"):
+                        try:
+                            _dd = _sl[5:].strip()
+                            if _dd != "[DONE]":
+                                _oo = json.loads(_dd)
+                                if _oo.get("type") == "content":
+                                    _r2_out += _oo.get("delta", "")
+                        except:
+                            pass
+                if _r2_out.strip():
+                    _r2p = parse_json_safely(_r2_out)
+                    if isinstance(_r2p, dict) and "error" in _r2p:
+                        _r2p = parse_json_safely(clean_json_text(_r2_out))
+                    _r2c = _normalize_chapter_outlines(_r2p, start_chapter, expected_count=expected_count)
+                    if _r2c:
+                        node_chapters = _r2c
+                        yield _sse_content(f"  ✅ 膨脹後 JSON 修復成功，已恢復 {len(node_chapters)} 章。\n")
+
         # Director rescue loop: the last line of defense must not save placeholder outlines.
         if not node_chapters:
             yield _sse_content("  ⚠️ 膨脹後重試仍未取得合法大綱。停止保底佔位，改向 AI 總監請求救援診斷與再操作方案...\n")
@@ -1665,7 +1736,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
                         db.save_volumes(novel_id, v_list)
                         yield _sse_content(f"  📘 已依總監方案新增第 {volume_index} 卷：《{rescue_volume.get('title', f'第 {volume_index} 卷')}》。\n")
 
-                node_chapters = _normalize_chapter_outlines(parsed_rescue, start_chapter)
+                node_chapters = _normalize_chapter_outlines(parsed_rescue, start_chapter, expected_count=expected_count)
                 if node_chapters:
                     yield _sse_content("  ✅ 總監已直接給出合法救援大綱，將接管保存流程。\n")
                     break
@@ -1678,7 +1749,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
                 rescue_context = compile_context(novel_id)
                 rescue_retry_prompt = f"""⚠️ 重要：請使用 zh-TW 繁體中文輸出所有內容。
 
-你正在執行總監救援指令。前兩次大綱生成已失敗，這次必須根據總監診斷產出精確 5 章合法 JSON 大綱。
+你正在執行總監救援指令。前兩次大綱生成已失敗，這次必須根據總監診斷產出精確 {expected_count} 章合法 JSON 大綱。
 
 【總監診斷與再操作指令】
 {planner_directive}
@@ -1737,12 +1808,12 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
                 parsed_retry = parse_json_safely(retry_output)
                 if isinstance(parsed_retry, dict) and "error" in parsed_retry:
                     parsed_retry = parse_json_safely(clean_json_text(retry_output))
-                node_chapters = _normalize_chapter_outlines(parsed_retry, start_chapter)
+                node_chapters = _normalize_chapter_outlines(parsed_retry, start_chapter, expected_count=expected_count)
                 if node_chapters:
                     yield _sse_content("  ✅ 總監救援後 Plot Planner 已恢復，成功生成合法大綱。\n")
                     break
 
-                rescue_failure_report = "總監補丁與 retry 指令已執行，但 Plot Planner 仍未輸出精確 5 個合法章節。下一輪請總監改用 DIRECT_OUTLINE 親自產出。"
+                rescue_failure_report = f"總監補丁與 retry 指令已執行，但 Plot Planner 仍未輸出精確 {expected_count} 個合法章節。下一輪請總監改用 DIRECT_OUTLINE 親自產出。"
 
         if not node_chapters:
             yield _sse_error("總監救援仍未產出合法大綱；已停止保存，避免寫入保底佔位章。請檢查總監輸出或稍後重跑一鍵流程。")
@@ -2389,20 +2460,9 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
 核心衝突：{worldview_json.get("main_conflict", "未設定")}
 世界觀背景：{worldview_json.get("worldview", "未設定")}
 
-## 全域伏筆與轉折池（已根據本卷進度篩選最相關的種子）
-{seeds_text}
-
-## 關鍵轉折點池
-{turning_points_text}
-
 ## ⚠️ 重要約束 (Stage 2 有機伏筆編織大綱生成)
 1. 每章必須有一個清晰的「情節里程碑宣言」—— 這章必須達成什麼敘事目的？
 2. 絕對禁止模板化！每個章節標題和概要都必須是獨特的、具體的。
-3. 【有機伏筆編織融入】：你必須從一開始就帶著伏筆寫大綱骨架！我們已篩選出本卷專屬的『全域伏筆與轉折池』。
-   請在編寫章節的里程碑概要(brief_summary)時，將篩選出的 [Seed-X] 或 [TurningPoint-Y] 有機自然地作為情節背景、道具或衝突織入其中。
-   並在對應章節 object 的 `allocated_tasks` 欄位中填寫該伏筆或轉折的完整字串作為 tag 儲存！
-   例如：若第 5 章埋下了 `[Seed-1] 魔法晶片的祕密`，請直接在該章節 object 的 `allocated_tasks.foreshadowing_plants` 中寫入 `["[Seed-1] 魔法晶片的祕密"]`，並在 `brief_summary` 內寫出主角在此處自然拾獲神祕晶片的故事細節。
-4. 為確保長線敘事張力，每 5-10 章應有一個中等轉折，每卷結尾應有一個強力的章末鉤子。
 
 ## 輸出格式（嚴格遵守 JSON）
 ```json

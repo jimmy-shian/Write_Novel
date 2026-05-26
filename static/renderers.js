@@ -526,6 +526,25 @@ export function renderPlotTab() {
         }
     };
 
+    // 點擊 volume-card 任意位置時，設定為當前活躍卷並刷新時間軸
+    window.activateVolumeNav = function(volIdx) {
+        state.activeVolumeIdx = volIdx;
+        
+        // 更新 roadmap 節點高亮
+        document.querySelectorAll('.roadmap-node').forEach((node) => {
+            if (parseInt(node.getAttribute('data-volume-index')) === volIdx) {
+                node.classList.add('active');
+            } else {
+                node.classList.remove('active');
+            }
+        });
+        
+        // 重繪右側快捷時間軸（顯示當前活躍卷的章節）
+        if (typeof window.renderQuickTimelineNav === 'function') {
+            window.renderQuickTimelineNav();
+        }
+    };
+
     // Expose collapse function
     window.toggleVolumeExpand = function(volIdx) {
         const volCard = document.getElementById(`volume-card-${volIdx}`);
@@ -948,7 +967,7 @@ export function renderPlotTab() {
                     .join(' ');
 
                 return `
-                <div class="volume-card ${isVolExpanded ? 'expanded' : ''}" id="volume-card-${volIdx}" style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: all 0.25s; position: relative; overflow: hidden; box-shadow: var(--shadow-sm); flex-shrink: 0;">
+                <div class="volume-card ${isVolExpanded ? 'expanded' : ''}" id="volume-card-${volIdx}" onclick="event.stopPropagation(); window.activateVolumeNav(${volIdx})" style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: all 0.25s; position: relative; overflow: hidden; box-shadow: var(--shadow-sm); flex-shrink: 0; cursor: pointer;">
                     <div style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--primary), #8b5cf6); pointer-events: none;"></div>
                     
                     <div class="volume-header" onclick="event.stopPropagation(); window.toggleVolumeExpand(${volIdx})" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 12px; cursor: pointer;">

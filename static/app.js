@@ -3090,6 +3090,12 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
         (delta) => {
             el.aiThinkingText.textContent += delta;
             window.updateAgentStreamOutput(tabName, delta, 'thinking');
+            // 智慧型滾動 ai-thinking-text（支援用戶回捲後不強行滾動）
+            if (typeof window.smartScrollToBottom === 'function') {
+                window.smartScrollToBottom(el.aiThinkingText, false);
+            } else {
+                el.aiThinkingText.scrollTop = el.aiThinkingText.scrollHeight;
+            }
         },
         // onContent
         (delta) => {

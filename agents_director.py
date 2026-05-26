@@ -843,6 +843,7 @@ def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False)
 ## 重要提醒
 - ⚠️ 重要：所有輸出內容（包含評估回應）必須使用 zh-TW 繁體中文
 - 🚨 審查規則放行紅線：只有當出現「【紅色致命阻斷級】」缺陷時，才可以使用 `AUTO_REGENERATE` 或 `GO_BACK_*` 動作駁回；如果報告中只包含「🟡 跨卷/長線伏筆暫未收束」或「世界觀登場率不為 100%」（因為當前是局部增量生成），這是正常現象，你「必須」做出 `CONTINUE` 或 `WRITE_ALL_CHAPTERS` 的決策予以放行！嚴禁因為跨卷伏筆或局部設定使用率而惡意阻斷開發管線。
+- 🟢 【plot/plot_review 階段強制放行規則】：當 current_stage 為 `plot` 或 `plot_review` 時，除非大綱出現未登記的新角色需要 `GO_BACK_TO_CHARACTERS`，否則你**必須**直接輸出 `CONTINUE`，target=`plot`，不得以任何理由阻斷。此為最高優先的強制覆蓋規則。
 """
 
     if current_stage in ["init", "worldview", "worldview_review", "worldview_go_back"]:
@@ -870,8 +871,8 @@ def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False)
         stage_focus = """
 ## 💡 當前審核重點：【全書千章宏觀大綱骨架與伏筆部署】
 1. **規模校驗**：檢查小說是否已經完整拆解出 10-30 卷、數百到上千章的簡易骨架（標題與里程碑宣言）。
-2. **素材厚度審計**：若發現大綱情節開始陷入重複、枯竭，說明上游世界觀與角色不夠用。你必須下達決策引導系統進行【增量創意膨脹（Creative Swelling）】，催生新勢力與人物！
-3. **伏筆紅線**：嚴禁優質伏筆種子在 5 章內迅速閉環。每個伏筆的埋設與回收之間必須有足夠的戲劇跨度（跨卷張力）。
+2. **素材厚度審計**：若發現大綱情節開始陷入重複、枯竭，說明上游世界觀與角色不夠用。你必須下達決策引導系統進行【增量創意膨脹（Creative Swelling）】，為故事注入全新人物角色！
+3. **伏筆紅線**：每個伏筆的埋設與回收之間必須有足夠的戲劇跨度（跨卷張力）。
 
 ## 🎯 你的核心決策導向：
 - 若全書骨架規模已足夠且長線佈局合理 ➔ 決策 `CONTINUE` 進入 `plot`（微觀大綱詳細展開階段）。
@@ -879,12 +880,24 @@ def get_simplified_director_prompt(current_stage, has_wb_and_char_at_init=False)
 """
     elif current_stage in ["plot", "plot_review", "plot_go_back"]:
         stage_focus = """
-## 💡 當前審核重點：【篇卷規劃、章節大綱與情節邏輯】
-1. 這是品質把關的最核心關卡！請依據下方的「校驗報告」判斷大綱邏輯。
-2. **伏筆時序與大綱硬性紅線（局部審核）**：
-   - 審核時要注意這是不是**局部卷/增量生成**。若是局部生成（如只生成了第 2 卷，其餘各卷尚未生成），全域的伏筆登場率不為 100% 或跨卷伏筆暫時未回收屬於**正常現象**！
-   - 只有當大綱存在「【紅色致命阻斷級】」標記（如連續章節序號斷裂、佔位空殼章節、時序顛倒或全域完結大綱伏筆遺忘）時，才可以使用 `AUTO_REGENERATE` 或 `GO_BACK_TO_PLOT` 退回；否則，你「必須」做出 `WRITE_ALL_CHAPTERS` 或 `CONTINUE` 決策放行！
-3. **動態數據調閱**：為了防止大綱 Context 膨脹，我們只提供了基本校驗報告。若你發現自己需要調閱完整的劇情大綱細部 JSON 數據來查核情節，**你必須發出 `help_plot` 行動指令**，後端會為你動態加載並回傳完整大綱數據重新決策！
+## 💡 當前審核重點：【大綱角色登記自動觸發】
+
+> 🔒 **此階段你只有兩個允許的動作：`GO_BACK_TO_CHARACTERS` 或 `CONTINUE`（必選其一）。禁止使用任何其他 ACTION。**
+
+### 決策流程（嚴格照做，不得繞過）：
+
+**步驟 1 - 掃描新角色**：瀏覽大綱中 `characters_introduced` 欄位，檢查是否有任何角色名字**尚未出現在當前角色聖經（Character Bible）中**。
+
+**步驟 2A - 若發現未登記新角色**：
+- 立即決策 `GO_BACK_TO_CHARACTERS`
+- 在 `hint` 中填寫：「大綱中出現新角色：[角色名稱]，請為其生成完整設定卡」
+- 不需要做任何其他評估，直接執行
+
+**步驟 2B - 若沒有未登記新角色（或大綱沒有角色介紹）**：
+- 立即決策 `CONTINUE`，target 設為 `plot`
+- 不需要做任何其他評估，直接放行
+
+> ⚠️ 嚴格禁止：在此階段使用 `AUTO_REGENERATE`、`GO_BACK_TO_WORLDVIEW`、`GO_BACK_TO_PLOT`、`WAIT_USER`、`help_*` 等任何其他動作。大綱品質不在此審核範圍內。
 """
     elif current_stage in ["writer", "writer_review"]:
         stage_focus = """

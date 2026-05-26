@@ -2254,6 +2254,7 @@ textarea:focus {
     box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.6);
     white-space: pre-wrap;
     word-break: break-all;
+    scrollbar-width: auto;
 }
 
 .agent-processing-indicator.has-terminal {
@@ -4032,4 +4033,49 @@ textarea {
     color: var(--primary);
     background: rgba(255,255,255,0.08);
     font-weight: bold;
+}
+
+/* ==========================================
+   PLOT QUICK TIMELINE SCROLLBAR (美化捲軸)
+   ========================================== */
+#plot-quick-timeline {
+    /* 使用 CSS 變數增強質感 */
+    --tl-bg: rgba(30, 30, 50, 0.95);
+    --tl-border: rgba(113, 80, 118, 0.3);
+    --tl-scrollbar-thumb: rgba(113, 80, 118, 0.5);
+    --tl-scrollbar-thumb-hover: rgba(113, 80, 118, 0.8);
+    --tl-scrollbar-track: rgba(255, 255, 255, 0.03);
+}
+
+/* WebKit 內核瀏覽器滾動條美化 */
+#plot-quick-timeline::-webkit-scrollbar {
+    width: 5px;
+}
+
+#plot-quick-timeline::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+}
+
+#plot-quick-timeline::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(113, 80, 118, 0.6), rgba(139, 92, 246, 0.4));
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+#plot-quick-timeline::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(113, 80, 118, 0.9), rgba(139, 92, 246, 0.7));
+}
+
+#plot-quick-timeline::-webkit-scrollbar-thumb:active {
+    background: linear-gradient(180deg, rgba(113, 80, 118, 1), rgba(139, 92, 246, 0.9));
+}
+
+#plot-quick-timeline::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* Firefox 滾動條美化 */
+#plot-quick-timeline {
+    scrollbar-color: rgba(113, 80, 118, 0.5) rgba(0, 0, 0, 0.15);
 }

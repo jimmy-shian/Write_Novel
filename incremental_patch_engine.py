@@ -20,11 +20,20 @@ def clean_json_text(text):
         
     text = text.strip()
     
+    # 0.5. If the text looks like a braceless key-value block, wrap it with {}
+    if text and not text.startswith("{") and not text.startswith("["):
+        if re.match(r'^\s*"\w+"\s*:', text) or re.match(r'^\s*\'\w+\'\s*:', text):
+            text = "{" + text + "}"
+    
     # 1. Look for markdown code blocks
     code_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if code_blocks:
         for block in reversed(code_blocks):
             block_stripped = block.strip()
+            # If the code block is braceless, wrap it with {}
+            if block_stripped and not block_stripped.startswith("{") and not block_stripped.startswith("["):
+                if re.match(r'^\s*"\w+"\s*:', block_stripped) or re.match(r'^\s*\'\w+\'\s*:', block_stripped):
+                    block_stripped = "{" + block_stripped + "}"
             if block_stripped.startswith("{") or block_stripped.startswith("["):
                 return block_stripped
                 
