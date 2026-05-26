@@ -96,6 +96,11 @@ TEST_CONFIGS = {
         "name": "簡單日誌測試 (Simple Logging)",
         "description": "手動呼叫 retrospective 並觀察終端機輸出",
         "requires_mocks": False
+    },
+    "patch": {
+        "name": "增量更新與安全防護測試 (Incremental Patch)",
+        "description": "測試世界觀、角色、大綱、篇卷的增量更新與安全防護機制",
+        "requires_mocks": False
     }
 }
 
@@ -667,6 +672,100 @@ class TestIntegrityCheck:
             assert "🔴" not in init_report, "測試失敗：早期報告不應包含紅色警報標記！"
             print("[SUCCESS] 測試情境三通過！早期設定階段報告處理正確。")
             
+            # ----------------------------------------------------
+            # 測試情境四：Scope-Aware 局部篇卷審核測試 (指定 Volume 1)
+            # ----------------------------------------------------
+            print("\n[SCENARIO 4] 測試情境四：Scope-Aware 局部篇卷審核模式 (指定 scope_volume_index=1)")
+            # 構造一個在全域模式下會因為「跨卷伏筆」或「未使用設定」而被擋下的情節大綱，但當前僅局部審查第 1 卷
+            local_chapters = [
+                {
+                    "chapter_index": 1,
+                    "title": "黑石吊墜的秘密",
+                    "events": [{"scene": "荒原", "action": "林澤在荒原拾荒", "consequence": "發現吊墜"}],
+                    "purpose": "引入設定",
+                    # 埋設了 Seed-3，但在此卷內(Chapter 1-5)沒有任何回收，僅計劃在未來的第 2 卷回收
+                    "foreshadowing_plant": ["Seed-3: 黑石吊墜發藍光"],
+                    "foreshadowing_payoff": [],
+                    "scene": "荒原",
+                    "cliffhanger": "留下懸念"
+                },
+                {
+                    "chapter_index": 2,
+                    "title": "廢墟中的晶片",
+                    "events": [],
+                    "purpose": "覺醒",
+                    "foreshadowing_plant": [],
+                    "foreshadowing_payoff": [],
+                    "scene": "廢墟",
+                    "cliffhanger": "覺醒"
+                }
+            ]
+            
+            context_local = {
+                "worldbuilding": json.dumps(worldview_data, ensure_ascii=False),
+                "characters": "[]",
+                "plot": json.dumps({"chapters": local_chapters}, ensure_ascii=False),
+                "written_chapters": "[]"
+            }
+            
+            # 指定局部卷審查模式
+            local_report = verify_novel_integrity(
+                novel_id=novel_id, 
+                context=context_local, 
+                current_stage="plot_review", 
+                scope_volume_index=1
+            )
+            print("局部審查報告 (Volume 1):")
+            print(local_report)
+            
+            # 驗證局部模式下：
+            # 1. 雖然 Seed-3 在局部章節中沒回收，但不能報警 🔴 伏筆未回收，而是列為 🟡 跨卷長線鋪陳
+            assert "🔴【伏筆未回收" not in local_report, "測試失敗：局部模式下不應將跨卷伏筆列為致命 🔴 Dangling Plants！"
+            assert "🟡【跨卷/長線伏筆暫未收束" in local_report, "測試失敗：局部模式下跨卷伏筆應列為 🟡 警告/資訊！"
+            # 2. 局部模式下雖然世界觀陣營等未使用，但不應觸發任何全域 🔴 警報
+            assert "🔴" not in local_report, "測試失敗：局部模式下無致命阻斷級問題時，不應包含任何紅色 🔴 阻斷標記！"
+            print("[SUCCESS] 測試情境四通過！Scope-Aware 局部校驗順暢放行跨卷伏筆與未使用勢力設定。")
+            
+            # ----------------------------------------------------
+            # 測試情境五：高品質外部內容過濾與佔位符篩選測試 (Junk/Placeholder Filter)
+            # ----------------------------------------------------
+            print("\n[SCENARIO 5] 測試情境五：高品質外部內容與佔位符過濾攔截測試")
+            from incremental_patch_engine import filter_and_sanitize_content
+            
+            # 5.1 測試含有 "TODO" 或 "暫無" 等低品質佔位符
+            bad_data_todo = {
+                "chapters": [
+                    {"chapter_index": 1, "title": "TODO: 第一章主角出發", "events": []}
+                ]
+            }
+            ok, err = filter_and_sanitize_content("plot", bad_data_todo)
+            assert not ok, "測試失敗：應成功攔截含有 'TODO' 的低品質內容！"
+            print(f"✓ 成功攔截 TODO 佔位符: {err}")
+            
+            # 5.2 測試含有大綱模板套用廢話 "推動大綱情節發展"
+            bad_data_boilerplate = {
+                "chapters": [
+                    {"chapter_index": 1, "title": "第一章", "summary": "推動大綱情節發展"}
+                ]
+            }
+            ok, err = filter_and_sanitize_content("plot", bad_data_boilerplate)
+            assert not ok, "測試失敗：應成功攔截含有大綱模板廢話的內容！"
+            print(f"✓ 成功攔截模板廢話: {err}")
+            
+            # 5.3 測試大綱情節語意退化：連續三章標題重覆
+            bad_data_repeat = {
+                "chapters": [
+                    {"chapter_index": 1, "title": "新的旅程", "events": []},
+                    {"chapter_index": 2, "title": "新的旅程", "events": []},
+                    {"chapter_index": 3, "title": "新的旅程", "events": []}
+                ]
+            }
+            ok, err = filter_and_sanitize_content("plot", bad_data_repeat)
+            assert not ok, "測試失敗：應成功攔截連續三章標題重覆的語意退化內容！"
+            print(f"✓ 成功攔截情節語意退化: {err}")
+            
+            print("[SUCCESS] 測試情境五通過！高品質過濾攔截層防禦穩固。")
+            
             print("\n✅ 【測試 4】完整性校驗測試全部通過！")
             return True
             
@@ -924,20 +1023,29 @@ class TestRetrospectiveLogging:
             sys.stdout = captured_output
             
             try:
-                # Mock ThreadPoolExecutor
-                with patch('app.concurrent.futures.ThreadPoolExecutor') as MockExecutor:
+                # 建立 mock futures 映射與列表
+                futures_map = {create_mock_future(key): key for key in agent_responses.keys()}
+                mock_futures = list(futures_map.keys())
+                
+                # Mock concurrent.futures 模組內部的類與函式
+                with patch('concurrent.futures.ThreadPoolExecutor') as MockExecutor, \
+                     patch('concurrent.futures.as_completed') as MockAsCompleted:
+                     
                     mock_executor = MagicMock()
                     MockExecutor.return_value = mock_executor
+                    mock_executor.__enter__.return_value = mock_executor
+                    mock_executor.__exit__.return_value = False
                     
-                    mock_executor.__enter__ = MagicMock(return_value=mock_executor)
-                    mock_executor.__exit__ = MagicMock(return_value=False)
-                    
-                    def mock_submit(func, agent_key, config):
-                        return create_mock_future(agent_key)
-                    mock_executor.submit = mock_submit
-                    
-                    futures = [create_mock_future(key) for key in agent_responses.keys()]
-                    mock_executor.as_completed.return_value = futures
+                    def mock_submit(func, *args, **kwargs):
+                        # args[0] 是 agent_responses 內部的 key (如 "Story Architect")
+                        agent_key = args[0]
+                        for fut, k in futures_map.items():
+                            if k == agent_key:
+                                return fut
+                        return mock_futures[0]
+                        
+                    mock_executor.submit.side_effect = mock_submit
+                    MockAsCompleted.return_value = mock_futures
                     
                     # 執行 API
                     result = api_novel_retrospective(test_novel_id)
@@ -1046,6 +1154,270 @@ class TestSimpleLogging:
             db.delete_novel(test_novel_id)
 
 
+# --------------------------------------------------------------------------
+# 測試 8: 增量更新 Patch / No-op 保護體系測試 (Incremental Patch)
+# --------------------------------------------------------------------------
+
+class TestIncrementalPatchSystem:
+    """增量更新 Patch / No-op 保護體系測試"""
+    
+    @staticmethod
+    def run():
+        print("\n" + "=" * 60)
+        print("【測試 8】增量更新 Patch / No-op 保護體系測試")
+        print("=" * 60)
+        
+        db.db_init()
+        test_novel_id = "test-incremental-patch-999"
+        
+        try:
+            # 清理舊數據
+            conn = db.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM novels WHERE id = ?", (test_novel_id,))
+            cursor.execute("DELETE FROM worldbuilding WHERE novel_id = ?", (test_novel_id,))
+            cursor.execute("DELETE FROM characters WHERE novel_id = ?", (test_novel_id,))
+            cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (test_novel_id,))
+            cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (test_novel_id,))
+            conn.commit()
+            conn.close()
+            
+            # 建立測試小說
+            db.create_novel(test_novel_id, "測試修護小說", "科幻", "極簡風格")
+            print("✓ Created test novel in SQLite.")
+            
+            # 1. 建立初始世界觀
+            worldview_data = {
+                "theme": "初始主題",
+                "main_conflict": "初始衝突",
+                "worldview": "初始世界觀",
+                "macro_outline": "初始大綱",
+                "multi_act_structure": [
+                    {"title": "第一幕 (Setup)", "content": "第一幕內容"}
+                ],
+                "progressive_character_plan": [
+                    {"title": "第一波開篇", "content": "第一波內容"}
+                ],
+                "foreshadowing_seeds": ["Seed-1"],
+                "key_turning_points": ["TP-1"],
+                "volumes": [
+                    {"volume_index": 1, "title": "第一卷", "summary": "第一卷概要", "factions": ["A"]}
+                ]
+            }
+            db.save_worldbuilding(test_novel_id, json.dumps(worldview_data, ensure_ascii=False, indent=2))
+            db.save_volumes(test_novel_id, worldview_data["volumes"])
+            
+            # 2. 建立初始角色
+            char_data = {
+                "characters": [
+                    {"name": "主角林澤", "role": "主角", "personality": ["堅韌"], "want": "求生", "need": "自省", "arc": "成長"}
+                ]
+            }
+            db.save_characters(test_novel_id, char_data)
+            
+            # 3. 建立初始大綱
+            plot_data = {
+                "chapters": [
+                    {"chapter_index": 1, "title": "第一章", "events": []}
+                ]
+            }
+            db.save_plot_chapters(test_novel_id, plot_data)
+            
+            from incremental_patch_engine import (
+                validate_and_merge_incremental_patch,
+                safe_worldbuilding_save,
+                post_merge_validation
+            )
+            
+            # ----------------------------------------------------
+            # 測試 8.1：世界觀 patch 無效 JSON -> 確認 NO-OP，原世界觀不變
+            # ----------------------------------------------------
+            print("\n--- 8.1 測試世界觀 patch 無效 JSON ---")
+            success, version, err = validate_and_merge_incremental_patch(
+                novel_id=test_novel_id,
+                target_section="worldbuilding",
+                action="PATCH",
+                payload="{invalid-json-text"
+            )
+            assert not success, "Should fail on invalid JSON!"
+            print("✓ Invalid JSON patch successfully rejected.")
+            
+            # ----------------------------------------------------
+            # 測試 8.2：世界觀 patch key 消失 -> 確認原有 key 被保留（不丟失 volumes 等）
+            # ----------------------------------------------------
+            print("\n--- 8.2 測試世界觀 patch 導致關鍵 key 消失 ---")
+            patch_data = {
+                "theme": "修改後的主題"
+                # 沒有 volumes, multi_act_structure 等 key
+            }
+            # 利用 safe_worldbuilding_save 保存局部修改
+            success, version, err = safe_worldbuilding_save(test_novel_id, patch_data, source="test")
+            assert success, f"Should succeed: {err}"
+            
+            # 讀取現有，確認其他 key 均完好無損
+            wb_now = db.get_latest_worldbuilding(test_novel_id)
+            wb_json = json.loads(wb_now["content"])
+            assert wb_json["theme"] == "修改後的主題", "Theme should be updated!"
+            assert "volumes" in wb_json and len(wb_json["volumes"]) == 1, "volumes key should be preserved!"
+            assert len(wb_json["multi_act_structure"]) == 1, "multi_act_structure should be preserved!"
+            print("✓ Keys successfully preserved on partial worldbuilding save.")
+            
+            # ----------------------------------------------------
+            # 測試 8.3：character 更新非白名單欄位 -> 確認被攔截不予儲存
+            # ----------------------------------------------------
+            print("\n--- 8.3 測試更新非白名單角色欄位 ---")
+            # 在 SQLite 中嘗試直接更新非白名單欄位
+            res = db.update_character_single_field(test_novel_id, 0, "non_existent_unwhitelisted_field", "some value")
+            assert res is None or res.get("status") == "error", "Should reject non-whitelisted character fields!"
+            print("✓ Non-whitelisted character field successfully rejected.")
+            
+            # ----------------------------------------------------
+            # 測試 8.4：character append 名稱不符 -> 仍追加但發出 warning
+            # ----------------------------------------------------
+            print("\n--- 8.4 測試角色 append 名稱不符 ---")
+            payload_append = {
+                "characters": [
+                    {"name": "配角A", "role": "配角", "entry_phase": "第一章", "personality": []}
+                ]
+            }
+            success, version, err = validate_and_merge_incremental_patch(
+                novel_id=test_novel_id,
+                target_section="characters",
+                action="APPEND",
+                payload=payload_append
+            )
+            assert success, f"Should append successfully: {err}"
+            char_now = db.get_latest_characters(test_novel_id)
+            assert len(char_now["parsed_data"]["characters"]) == 2, "Characters list should have 2 elements now!"
+            assert char_now["parsed_data"]["characters"][1]["name"] == "配角A", "Character 配角A should be appended!"
+            print("✓ Character append with name mismatch successfully merged.")
+            
+            # ----------------------------------------------------
+            # 測試 8.5：plot insert 返回錯誤結構 -> 確認驗證拒絕 (NO-OP)
+            # ----------------------------------------------------
+            print("\n--- 8.5 測試大綱插入非法章節 ---")
+            payload_plot_bad = {
+                "chapters": [
+                    {"chapter_index": 2} # 缺失 title 欄位
+                ]
+            }
+            success, version, err = validate_and_merge_incremental_patch(
+                novel_id=test_novel_id,
+                target_section="plot",
+                action="INSERT",
+                payload=payload_plot_bad,
+                extra_params={"insert_after_index": 1}
+            )
+            assert not success, "Should reject insert payload with missing title!"
+            print("✓ Bad plot insert payload successfully rejected.")
+            
+            # ----------------------------------------------------
+            # 測試 8.6：volumes patch 斷裂 index -> 驗證失敗退回
+            # ----------------------------------------------------
+            print("\n--- 8.6 測試 volumes patch 斷裂 index ---")
+            payload_vols_bad = {
+                "volumes": [
+                    {"volume_index": 3, "title": "第三卷", "summary": "斷裂"}
+                ]
+            }
+            success, version, err = validate_and_merge_incremental_patch(
+                novel_id=test_novel_id,
+                target_section="volumes",
+                action="PATCH",
+                payload=payload_vols_bad
+            )
+            assert not success, "Should reject disconnected volumes index!"
+            print("✓ Disconnected volumes index successfully rejected.")
+            
+            # ----------------------------------------------------
+            # 測試 8.7：character append 後列表長度不縮短 -> 原角色保留
+            # ----------------------------------------------------
+            print("\n--- 8.7 測試角色 append 後列表長度不縮短 ---")
+            payload_shrink = {
+                "characters": [] # 試圖用空列表覆寫
+            }
+            success, version, err = validate_and_merge_incremental_patch(
+                novel_id=test_novel_id,
+                target_section="characters",
+                action="PATCH",
+                payload=payload_shrink
+            )
+            assert not success, "Should reject characters shrink patch!"
+            print("✓ Character shrink patch successfully rejected.")
+            
+            # ----------------------------------------------------
+            # 測試 8.8：creative swelling / rescue 長度安全檢測
+            # ----------------------------------------------------
+            print("\n--- 8.8 測試 Creative Swelling / Rescue 長度安全檢測 ---")
+            is_valid, errors = post_merge_validation({"characters": []}, "characters", char_now["parsed_data"])
+            assert not is_valid, "post_merge_validation should fail when character list is shrunk!"
+            print("✓ Creative swelling/rescue shrink protection successfully verified.")
+            # ----------------------------------------------------
+            # 測試 8.9：世界觀精確修補與空值合併防禦 (Smart Merge)
+            # ----------------------------------------------------
+            print("\n--- 8.9 測試世界觀精確修補與空值合併防禦 (Smart Merge) ---")
+            
+            # 先給原世界觀填充一些資料
+            initial_wb = {
+                "theme": "原初的主題",
+                "main_conflict": "原初的衝突",
+                "worldview": "原初的世界觀",
+                "multi_act_structure": [
+                    {"title": "第一幕 (Setup)", "content": "原初 Setup 內容"}
+                ],
+                "foreshadowing_seeds": ["伏筆A"],
+                "volumes": [
+                    {"volume_index": 1, "title": "第一卷", "chapter_count": 30}
+                ]
+            }
+            success, version, err = safe_worldbuilding_save(test_novel_id, initial_wb, source="test_8.9_init")
+            assert success, f"Failed to initialize worldbuilding: {err}"
+            
+            # 模擬一個帶有空值和占位符的修補 patch_data
+            patch_data = {
+                "theme": "",  # 空字串不應覆蓋
+                "main_conflict": " 尚無內容 ",  # 占位符不應覆蓋
+                "worldview": "更新後的世界觀設定",  # 有效新內容應覆蓋
+                "multi_act_structure": [
+                    {"title": "第一幕 (Setup)", "content": ""}  # 空內容不應覆蓋
+                ],
+                "foreshadowing_seeds": ["伏筆B"],  # 伏筆應聯集合併而非覆蓋
+                "volumes": [
+                    {"volume_index": 1, "title": "第一卷更新標題"}  # chapter_count 30 應保留不變
+                ]
+            }
+            success, version, err = safe_worldbuilding_save(test_novel_id, patch_data, source="test_8.9_patch")
+            assert success, f"Failed to save worldbuilding patch: {err}"
+            
+            # 讀取，驗證安全合併
+            wb_after = db.get_latest_worldbuilding(test_novel_id)
+            wb_json = json.loads(wb_after["content"])
+            assert wb_json["theme"] == "原初的主題", f"Theme should be preserved! Got: {wb_json['theme']}"
+            assert wb_json["main_conflict"] == "原初的衝突", f"Conflict should be preserved! Got: {wb_json['main_conflict']}"
+            assert wb_json["worldview"] == "更新後的世界觀設定", f"Worldview should be updated! Got: {wb_json['worldview']}"
+            assert wb_json["multi_act_structure"][0]["content"] == "原初 Setup 內容", "Act content should be preserved!"
+            assert "伏筆A" in wb_json["foreshadowing_seeds"] and "伏筆B" in wb_json["foreshadowing_seeds"], "Seeds should be merged!"
+            assert wb_json["volumes"][0]["chapter_count"] == 30, "Volume chapter count should be preserved!"
+            assert wb_json["volumes"][0]["title"] == "第一卷更新標題", "Volume title should be updated!"
+            
+            # 測試帶有 roadmap_str 後綴的 string 能否成功解析
+            corrupted_content = json.dumps(wb_json, ensure_ascii=False) + "\n\n【全域伏筆分佈與情節演進矩陣】:\n  - [Seed-1] 測試...\n\n【全域關鍵轉折點分佈矩陣】:\n  (無關鍵轉折點)\n"
+            parsed_wb = db.parse_worldview_to_json(corrupted_content)
+            assert parsed_wb["theme"] == "原初的主題", "Should successfully parse and strip roadmaps!"
+            print("✓ Smart Merge and suffix parsing protections successfully verified.")
+            
+            print("\n✅ 【測試 8】增量更新與安全防護測試全部通過！")
+            return True
+            
+        except Exception as e:
+            print(f"\n❌ 測試失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        finally:
+            db.delete_novel(test_novel_id)
+
+
 # ============================================================================
 # 主執行函數
 # ============================================================================
@@ -1124,6 +1496,13 @@ def run_all_tests(skip_tests=None):
     else:
         results["simple"] = None
         print("\n[跳過] 簡單日誌測試 (--skip-simple)")
+        
+    # 測試 8: 增量更新與安全防護測試
+    if "patch" not in skip_tests:
+        results["patch"] = TestIncrementalPatchSystem.run()
+    else:
+        results["patch"] = None
+        print("\n[跳過] 增量更新與安全防護測試 (--skip-patch)")
     
     # 總結
     print("\n" + "=" * 70)
@@ -1141,7 +1520,8 @@ def run_all_tests(skip_tests=None):
         "integrity": "完整性校驗測試",
         "rebound": "管線反彈測試",
         "retrospective": "回溯日誌測試",
-        "simple": "簡單日誌測試"
+        "simple": "簡單日誌測試",
+        "patch": "增量更新與安全防護測試"
     }
     
     for key, result in results.items():
@@ -1172,7 +1552,8 @@ def run_specific_test(test_name):
         "integrity": TestIntegrityCheck.run,
         "rebound": TestPipelineRebound.run,
         "retrospective": TestRetrospectiveLogging.run,
-        "simple": TestSimpleLogging.run
+        "simple": TestSimpleLogging.run,
+        "patch": TestIncrementalPatchSystem.run
     }
     
     if test_name not in test_map:
@@ -1217,6 +1598,8 @@ if __name__ == "__main__":
                         help="跳過回溯日誌測試")
     parser.add_argument("--skip-simple", action="store_true",
                         help="跳過簡單日誌測試")
+    parser.add_argument("--skip-patch", action="store_true",
+                        help="跳過增量更新與安全防護測試")
     
     args = parser.parse_args()
     
@@ -1242,6 +1625,8 @@ if __name__ == "__main__":
             skip_tests.append("retrospective")
         if args.skip_simple:
             skip_tests.append("simple")
+        if args.skip_patch:
+            skip_tests.append("patch")
         
         success = run_all_tests(skip_tests if skip_tests else None)
         sys.exit(0 if success else 1)
