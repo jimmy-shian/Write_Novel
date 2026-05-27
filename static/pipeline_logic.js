@@ -55,10 +55,12 @@ function resolveNextStageFromDecision(decision, currentStage, novelData) {
         case 'worldview':
           return 'characters';
         case 'characters':
+          return 'volumes';
+        case 'volumes':
           return 'volume_skeleton';
         case 'volume_skeleton':
-          return 'foreshadowing_orchestration';
-        case 'foreshadowing_orchestration':
+        //   return 'foreshadowing_orchestration';
+        // case 'foreshadowing_orchestration':
           return 'plot';
         case 'plot':
           return 'writer';

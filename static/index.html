@@ -97,29 +97,36 @@
                                 <div class="stage-status"></div>
                             </div>
                             <div class="stage-connector"></div>
-                            <div class="stage-indicator" data-stage="plot">
-                                <div class="stage-icon">📋</div>
-                                <div class="stage-label">大綱</div>
+                            <!-- 新增：篇卷規劃設計 -->
+                            <div class="stage-indicator" data-stage="volumes">
+                                <div class="stage-icon">📚</div>
+                                <div class="stage-label">卷設定</div>
                                 <div class="stage-status"></div>
                             </div>
                             <div class="stage-connector"></div>
-                            <!-- 新增：四階段漏斗流 Stage 2 -->
+                            <!-- 四階段漏斗流 Stage 2 -->
                             <div class="stage-indicator" data-stage="volume_skeleton">
                                 <div class="stage-icon">🦴</div>
-                                <div class="stage-label">簡易章綱</div>
+                                <div class="stage-label">骨架</div>
                                 <div class="stage-status"></div>
                             </div>
                             <div class="stage-connector"></div>
-                            <!-- 新增：四階段漏斗流 Stage 3 -->
+                            <!-- 四階段漏斗流 Stage 3 -->
                             <div class="stage-indicator" data-stage="foreshadowing_orchestration">
                                 <div class="stage-icon">🕸️</div>
-                                <div class="stage-label">伏筆編織</div>
+                                <div class="stage-label">分配伏筆</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="plot">
+                                <div class="stage-icon">📋</div>
+                                <div class="stage-label">詳細章</div>
                                 <div class="stage-status"></div>
                             </div>
                             <div class="stage-connector"></div>
                             <div class="stage-indicator" data-stage="writer">
                                 <div class="stage-icon">✍️</div>
-                                <div class="stage-label">正文</div>
+                                <div class="stage-label">寫故事</div>
                                 <div class="stage-status"></div>
                             </div>
                         </div>
@@ -370,14 +377,14 @@
                     </svg>
                     串流
                 </button>
-                <button id="btn-clear-chat" class="btn btn-ghost btn-xs" title="清空對話" style="margin-left:auto;opacity:0.7;border:none;background:none;font-size:0.75rem;color:var(--text-muted);padding:0 2px;">🗑</button>
+                <button id="btn-clear-chat" class="btn btn-ghost btn-xs" title="清空對話" style="margin-left:auto;opacity:0.7;border:none;background:none;color:var(--shadow-sm);padding:0 2px;font-size:var(--font-xl);border:1px solid var(--text-muted);">🗑</button>
             </nav>
             
             <!-- 總監頁籤內容 -->
             <div id="tab-content-director" class="tab-content active">
                 <div class="chat-header">
                     <div class="agent-badge">
-                        <svg viewBox="0 0 24 24" width="50" height="50" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                         </svg>
                         <span>Co-pilot 小說總監</span>

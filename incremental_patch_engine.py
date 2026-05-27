@@ -13,10 +13,8 @@ def clean_json_text(text):
     """
     if not text:
         return ""
-    if isinstance(text, str):
-        # 0. Repair missing/malformed quotes (e.g., "brief_title": 心靈的震盪", or "missing": "unclosed,)
-        text = re.sub(r':\s*([^"\s\{\[\d\-][^"\n,]*)"(?=\s*[,\}])', r': "\1"', text)
-        text = re.sub(r':\s*"([^"\n,]+)(?=\s*[,\}])', r': "\1"', text)
+    if not isinstance(text, str):
+        return text
         
     text = text.strip()
     
@@ -24,9 +22,10 @@ def clean_json_text(text):
     if text and not text.startswith("{") and not text.startswith("["):
         if re.match(r'^\s*"\w+"\s*:', text) or re.match(r'^\s*\'\w+\'\s*:', text):
             text = "{" + text + "}"
-    
+            
     # 1. Look for markdown code blocks
     code_blocks = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    candidate = text
     if code_blocks:
         for block in reversed(code_blocks):
             block_stripped = block.strip()
@@ -35,15 +34,27 @@ def clean_json_text(text):
                 if re.match(r'^\s*"\w+"\s*:', block_stripped) or re.match(r'^\s*\'\w+\'\s*:', block_stripped):
                     block_stripped = "{" + block_stripped + "}"
             if block_stripped.startswith("{") or block_stripped.startswith("["):
-                return block_stripped
-                
-    # 2. Extract braces block
-    all_braces = re.findall(r"(\{.*\}|\[.*\])", text, re.DOTALL)
-    if all_braces:
-        all_braces.sort(key=len, reverse=True)
-        return all_braces[0].strip()
+                candidate = block_stripped
+                break
+    else:
+        # 2. Extract braces block
+        all_braces = re.findall(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+        if all_braces:
+            all_braces.sort(key=len, reverse=True)
+            candidate = all_braces[0].strip()
+            
+    # 如果已經是合法 JSON，直接回傳，防止 naive regex 進行錯誤替換（如字串內含冒號）
+    try:
+        json.loads(candidate)
+        return candidate
+    except Exception:
+        pass
         
-    return text
+    # 若 JSON 解析失敗，才進行 naive 補引號嘗試
+    repaired = re.sub(r':\s*([^"\s\{\[\d\-][^"\n,]*)"(?=\s*[,\}])', r': "\1"', candidate)
+    repaired = re.sub(r':\s*"([^"\n,]+)(?=\s*[,\}])', r': "\1"', repaired)
+    
+    return repaired
 
 def parse_incremental_response(text):
     """
@@ -413,11 +424,50 @@ def post_merge_validation(merged_data, target_section, original_data=None):
                     elif "name" not in c or not c["name"]:
                         errors.append(f"Character at {idx} is missing name")
                 
-                # Check original length to ensure characters are not dropped
+                # Check that no unique, non-placeholder characters are dropped by comparing core names
                 if original_data:
                     orig_chars = original_data.get("characters", [])
-                    if len(chars) < len(orig_chars):
-                        errors.append(f"Merged characters count ({len(chars)}) is smaller than original ({len(orig_chars)})")
+                    
+                    placeholder_names = {
+                        "新登場的次要角色", "待補充", "暫無", "placeholder", "新角色", "路人", 
+                        "客棧老闆", "符合人設說話風格", "todo", "新登場次要角色"
+                    }
+                    
+                    def get_core_name(name_str):
+                        if not name_str:
+                            return ""
+                        import re
+                        name_str = re.sub(r'[\(（].*?[\)）]', '', name_str)
+                        for separator in ['-', '–', '—', '_', ':', '：', ' ', '\t']:
+                            if separator in name_str:
+                                parts = name_str.split(separator)
+                                if parts[0].strip():
+                                    name_str = parts[0]
+                        return name_str.strip().lower()
+                    
+                    # Compute sets of core names
+                    orig_cores = set()
+                    for oc in orig_chars:
+                        if isinstance(oc, dict):
+                            oc_name = oc.get("name", "").strip()
+                            if oc_name and not any(p in oc_name.lower() or oc_name.lower() in p for p in placeholder_names):
+                                core = get_core_name(oc_name)
+                                if core:
+                                    orig_cores.add(core)
+                                    
+                    new_cores = set()
+                    for nc in chars:
+                        if isinstance(nc, dict):
+                            nc_name = nc.get("name", "").strip()
+                            if nc_name:
+                                core = get_core_name(nc_name)
+                                if core:
+                                    new_cores.add(core)
+                                    
+                    # Check for missing core names
+                    missing_cores = orig_cores - new_cores
+                    if missing_cores:
+                        errors.append(f"Merged characters are missing core characters from the original setup: {list(missing_cores)}")
                         
     elif target_section in ["plot", "chapters"]:
         if not isinstance(merged_data, dict) or "chapters" not in merged_data:

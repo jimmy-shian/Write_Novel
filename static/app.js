@@ -288,32 +288,50 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'running');
                 updateDirectorMessage('👥 開始生成角色設定...');
                 await executePipelineStage('characters', userPrompt);
-            } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱') {
+            } else if (target === 'volumes' || target === '篇卷規劃' || target === '卷設定') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
-                updatePipelineStage('plot', 'running');
-                updateDirectorMessage('📋 開始 Stage 4：微觀大綱詳細展開...');
-                showToast('📋 開始 Stage 4：微觀大綱詳細展開...');
-                await executePipelineStage('plot', userPrompt);
-            } else if (target === 'macro_skeleton' || target === 'volume_skeleton' || target === '宏觀骨架') {
-                updatePipelineStage('plot', 'running');
-                updateDirectorMessage('🏗️ 開始 Stage 2：生成全書千章宏觀骨架...');
-                showToast('🏗️ 開始 Stage 2：全書千章宏觀骨架生成...');
+                updatePipelineStage('volumes', 'running');
+                updateDirectorMessage('📚 開始規劃全書篇卷結構...');
+                showToast('📚 開始規劃全書篇卷結構...');
+                await executePipelineStage('volumes', userPrompt);
+            } else if (target === 'macro_skeleton' || target === 'volume_skeleton' || target === '宏觀骨架' || target === '骨架') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('volumes', 'done');
+                updatePipelineStage('volume_skeleton', 'running');
+                updateDirectorMessage('🏗️ 生成全書各卷章大綱骨架...');
+                showToast('🏗️ 生成全書各卷章大綱骨架...');
                 const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
                 if (skeletonSuccess && state.isPipelineRunning) {
-                    updateDirectorMessage('🔍 Stage 2 完成，請總監評估下一步...');
+                    updateDirectorMessage('🔍 骨架生成完成，請總監評估下一步...');
                     const nextDecision = await runDirectorDecision('volume_skeleton', userPrompt);
                     await executeDirectorAction(nextDecision, userPrompt);
                 } else if (!skeletonSuccess) {
-                    updateDirectorMessage('⚠️ Stage 2 生成失敗，已停止管線。');
+                    updateDirectorMessage('⚠️ 骨架生成失敗，已停止管線。');
                     state.isPipelineRunning = false;
                     showPipelineProgress(false);
                 }
-            } else if (target === 'foreshadowing_orchestration' || target === 'foreshadowing_align' || target === '伏筆對齊') {
-                updateDirectorMessage('🎭 開始 Stage 3：全局伏筆編織對齊...');
-                showToast('🎭 開始 Stage 3：全局伏筆編織對齊...');
+            } else if (target === 'foreshadowing_orchestration' || target === 'foreshadowing_align' || target === '伏筆對齊' || target === '分配伏筆') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('volumes', 'done');
+                updatePipelineStage('volume_skeleton', 'done');
+                updatePipelineStage('foreshadowing_orchestration', 'running');
+                updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
+                showToast('🎭 開始全局伏筆編織對齊...');
                 await executePipelineStage('foreshadowing_orchestration', userPrompt);
-            } else if (target === 'writer' || target === '正文寫作') {
+            } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱' || target === '詳細章') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('volumes', 'done');
+                updatePipelineStage('volume_skeleton', 'done');
+                updatePipelineStage('foreshadowing_orchestration', 'done');
+                updatePipelineStage('plot', 'running');
+                updateDirectorMessage('📋 開始微觀大綱詳細展開...');
+                showToast('📋 開始微觀大綱詳細展開...');
+                await executePipelineStage('plot', userPrompt);
+            } else if (target === 'writer' || target === '正文寫作' || target === '寫故事') {
                 const volumes = state.currentNovelData?.volumes || [];
                 const hasValidOutlines = volumes.every(vol => {
                     const outline = vol.chapters_outline;
@@ -339,6 +357,9 @@ async function executeDirectorAction(decision, userPrompt) {
 
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
+                updatePipelineStage('volumes', 'done');
+                updatePipelineStage('volume_skeleton', 'done');
+                updatePipelineStage('foreshadowing_orchestration', 'done');
                 updatePipelineStage('plot', 'done');
                 updatePipelineStage('writer', 'running');
                 updateDirectorMessage('✍️ 開始撰寫正文...');
@@ -359,7 +380,16 @@ async function executeDirectorAction(decision, userPrompt) {
             } else if (target.includes('character') || target.includes('角色')) {
                 updatePipelineStage('characters', 'running');
                 await executePipelineStage('characters', enhancedPrompt);
-            } else if (target.includes('plot') || target.includes('大綱')) {
+            } else if (target.includes('volume') || target.includes('卷')) {
+                updatePipelineStage('volumes', 'running');
+                await executePipelineStage('volumes', enhancedPrompt);
+            } else if (target.includes('skeleton') || target.includes('骨架')) {
+                updatePipelineStage('volume_skeleton', 'running');
+                await executePipelineStage('volume_skeleton', enhancedPrompt);
+            } else if (target.includes('foreshadowing') || target.includes('伏筆')) {
+                updatePipelineStage('foreshadowing_orchestration', 'running');
+                await executePipelineStage('foreshadowing_orchestration', enhancedPrompt);
+            } else if (target.includes('plot') || target.includes('大綱') || target.includes('詳細章')) {
                 updatePipelineStage('plot', 'running');
                 await executePipelineStage('plot', enhancedPrompt);
             } else {
@@ -382,9 +412,9 @@ async function executeDirectorAction(decision, userPrompt) {
         
         case 'GO_BACK_TO_CHARACTERS': {
             // 檢查是否為合併重複角色的請求
-            const mergeResult = mergeDuplicateCharacters(decision.hint);
+            const mergeResult = await mergeDuplicateCharacters(decision.hint);
             if (mergeResult) {
-                showToast('⚡ 總監指示合併重複角色...');
+                showToast('⚡ 總監指示合併重複角色，已完成去重...');
                 updateDirectorMessage(`🔧 角色合併完成，重新生成角色設定...`);
                 // 合併後繼續重新生成角色
                 updatePipelineStage('characters', 'running');
@@ -543,15 +573,18 @@ async function executeDirectorAction(decision, userPrompt) {
 
         case 'help_worldview':
         case 'help_characters':
+        case 'help_volumes':
         case 'help_plot': {
             const helpTarget = action.replace('help_', '');
             const helpLabels = {
                 'worldview': '世界觀設定',
                 'characters': '角色聖經',
+                'volumes': '篇卷規劃',
                 'plot': '章節大綱'
             };
-            showToast(`🔍 總監請求調閱「${helpLabels[helpTarget]}」詳細數據...`);
-            appendChatMessage('system', `🔍 **[總監調閱數據]** 總監因『${decision.reason || '深度審查需要'}』請求查看完整的${helpLabels[helpTarget]}。正在動態加載並回傳給總監...`);
+            const helpLabelText = helpLabels[helpTarget] || helpTarget;
+            showToast(`🔍 總監請求調閱「${helpLabelText}」詳細數據...`);
+            appendChatMessage('system', `🔍 **[總監調閱數據]** 總監因『${decision.reason || '深度審查需要'}』請求查看完整的${helpLabelText}。正在動態加載並回傳給總監...`);
             
             setTimeout(async () => {
                 const nextDecision = await window.runDirectorDecisionHelp(state.activeTab || 'init', action, decision.reason || '');
@@ -593,6 +626,7 @@ async function executeNextMissingStage(userPrompt) {
     const hasWorldview = state.currentNovelData?.worldbuilding && state.currentNovelData.worldbuilding.trim().length > 50;
     const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
     const volumes = state.currentNovelData?.volumes || [];
+    const hasVolumes = volumes.length > 0;
     const hasSkeletons = volumes.length > 0 && volumes.every(v => v.chapters_outline);
     const hasPlot = state.currentNovelData?.plot && Array.isArray(state.currentNovelData.plot.chapters) && state.currentNovelData.plot.chapters.length > 0 && state.currentNovelData.plot.chapters.every(isDetailedPlotOutline);
     
@@ -605,21 +639,31 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('characters', 'running');
         updateDirectorMessage('👥 開始生成角色設定...');
         await executePipelineStage('characters', userPrompt);
-    } else if (!hasSkeletons) {
-        // 【Step 4 修復】檢查骨架是否完成，而非直接進入 plot
+    } else if (!hasVolumes) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
-        updatePipelineStage('plot', 'running');
+        updatePipelineStage('volumes', 'running');
+        updateDirectorMessage('📚 開始規劃篇卷結構...');
+        await executePipelineStage('volumes', userPrompt);
+    } else if (!hasSkeletons) {
+        updatePipelineStage('worldview', 'done');
+        updatePipelineStage('characters', 'done');
+        updatePipelineStage('volumes', 'done');
+        updatePipelineStage('volume_skeleton', 'running');
         updateDirectorMessage('🏗️ 開始生成全書卷骨架...');
         await executePipelineStage('volume_skeleton', userPrompt);
     } else if (!state.foreshadowingOrchestrated) {
         state.foreshadowingOrchestrated = true;
-        updatePipelineStage('plot', 'running');
+        updatePipelineStage('volume_skeleton', 'done');
+        updatePipelineStage('foreshadowing_orchestration', 'running');
         updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
         await executePipelineStage('foreshadowing_orchestration', userPrompt);
     } else if (!hasPlot) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
+        updatePipelineStage('volumes', 'done');
+        updatePipelineStage('volume_skeleton', 'done');
+        updatePipelineStage('foreshadowing_orchestration', 'done');
         updatePipelineStage('plot', 'running');
         updateDirectorMessage('📋 開始生成詳細章節大綱...');
         await executePipelineStage('plot', userPrompt);
@@ -627,6 +671,9 @@ async function executeNextMissingStage(userPrompt) {
         // 所有前期準備完成，開始寫作
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
+        updatePipelineStage('volumes', 'done');
+        updatePipelineStage('volume_skeleton', 'done');
+        updatePipelineStage('foreshadowing_orchestration', 'done');
         updatePipelineStage('plot', 'done');
         updatePipelineStage('writer', 'running');
         updateDirectorMessage('✍️ 前期準備完成，開始撰寫正文...');
@@ -3507,124 +3554,29 @@ function isMergeDuplicateCharacters(hint) {
  * @param {string|null} hint - 總監決策中的 hint
  * @returns {object|null} 合併結果，包含成功與否和詳細資訊
  */
-function mergeDuplicateCharacters(hint) {
+async function mergeDuplicateCharacters(hint) {
     if (!isMergeDuplicateCharacters(hint)) {
         return null;
     }
     
     try {
-        const charactersData = state.currentNovelData?.characters;
-        if (!charactersData || !charactersData.characters) {
-            console.warn('[mergeDuplicateCharacters] 角色資料為空或格式錯誤');
-            return null;
-        }
-        
-        const characters = charactersData.characters;
-        
-        // 從 hint 中提取角色名稱對（格式：「美娜（第71章與第106章）」）
-        const duplicatePattern = /([^\s（(]+)[（(](第?\d+章[^）)]+)與(第?\d+章[^）)]+)[)）]/g;
-        const duplicates = [];
-        let match;
-        
-        while ((match = duplicatePattern.exec(hint)) !== null) {
-            const charName = match[1];
-            const firstEntry = match[2]; // 例如 "第71章"
-            const secondEntry = match[3]; // 例如 "第106章"
-            duplicates.push({ name: charName, entries: [firstEntry, secondEntry] });
-        }
-        
-        if (duplicates.length === 0) {
-            console.warn('[mergeDuplicateCharacters] 無法從 hint 中解析重複角色資訊:', hint);
-            return null;
-        }
-        
-        const result = {
-            success: true,
-            merged: [],
-            deleted: [],
-            totalMerged: 0
-        };
-        
-        // 對每個重複角色執行合併
-        for (const dup of duplicates) {
-            // 找到所有同名角色
-            const matchingChars = characters.filter(c => c.name === dup.name);
-            
-            if (matchingChars.length < 2) {
-                console.warn(`[mergeDuplicateCharacters] 角色「${dup.name}」在角色 Bible 中沒有重複`);
-                continue;
+        console.log('[mergeDuplicateCharacters] 偵測到重複角色合併請求，發送後端 API...');
+        const response = await fetch(`/api/novels/${state.currentNovelId}/characters/deduplicate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
             }
-            
-            // 根據 entry_phase 排序，保留第一個（entry_phase 較小的），刪除其餘
-            matchingChars.sort((a, b) => {
-                const phaseA = parseInt(a.entry_phase) || 0;
-                const phaseB = parseInt(b.entry_phase) || 0;
-                return phaseA - phaseB;
-            });
-            
-            const keepChar = matchingChars[0];
-            const deleteChars = matchingChars.slice(1);
-            
-            // 合併 entry_phase（取所有 entry_phase 的並集）
-            const allPhases = new Set();
-            for (const char of matchingChars) {
-                if (char.entry_phase) {
-                    const phases = Array.isArray(char.entry_phase) 
-                        ? char.entry_phase 
-                        : [char.entry_phase];
-                    phases.forEach(p => allPhases.add(p));
-                }
-            }
-            keepChar.entry_phase = Array.from(allPhases);
-            
-            // 合併其他欄位（取最完整的）
-            for (const delChar of deleteChars) {
-                result.deleted.push({
-                    name: delChar.name,
-                    reason: `與第${matchingChars.indexOf(delChar)}個${dup.name}重複`
-                });
-            }
-            
-            result.merged.push({
-                name: dup.name,
-                kept: keepChar,
-                mergedEntries: duplicates.length,
-                combinedPhases: keepChar.entry_phase
-            });
-            result.totalMerged += deleteChars.length;
+        });
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || '後端去重合併失敗');
         }
+        const data = await response.json();
+        console.log('[mergeDuplicateCharacters] 後端合併成功:', data);
         
-        // 從陣列中刪除重複角色
-        for (const dup of duplicates) {
-            const indicesToRemove = [];
-            let firstFound = false;
-            
-            for (let i = 0; i < characters.length; i++) {
-                if (characters[i].name === dup.name) {
-                    if (firstFound) {
-                        indicesToRemove.push(i);
-                    } else {
-                        firstFound = true;
-                    }
-                }
-            }
-            
-            // 從後往前刪除（避免索引偏移）
-            for (let i = indicesToRemove.length - 1; i >= 0; i--) {
-                characters.splice(indicesToRemove[i], 1);
-            }
-        }
-        
-        // 更新狀態和顯示
-        state.currentNovelData.characters = charactersData;
-        state.currentNovelData.characters_raw = JSON.stringify(charactersData, null, 2);
-        if (el.editorCharactersJson) {
-            el.editorCharactersJson.value = state.currentNovelData.characters_raw;
-        }
-        
-        console.log('[mergeDuplicateCharacters] 合併完成:', result);
-        return result;
-        
+        // 重新載入設定以獲取最新的角色資料
+        await loadNovelDetails(state.currentNovelId);
+        return data;
     } catch (error) {
         console.error('[mergeDuplicateCharacters] 合併失敗:', error);
         return null;
@@ -4866,6 +4818,51 @@ function setupEventListeners() {
             async () => {
                 // Refresh memory to keep SQLite state in sync
                 await loadNovelDetails(state.currentNovelId);
+                
+                // Parse the response for TRIGGER_AGENT action
+                const decisionResult = parseDirectorDecisionText(responseText, state.activeTab || 'init');
+                if (decisionResult && decisionResult.action === 'TRIGGER_AGENT') {
+                    const target = decisionResult.target;
+                    const hint = decisionResult.hint;
+                    const volIdx = decisionResult.volume_index;
+                    const chIdx = decisionResult.chapter_index;
+                    
+                    if (target) {
+                        showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
+                        
+                        // Check if state.isAutoExecuteMode is true
+                        if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer'].includes(target)) {
+                            showToast(`🚀 [一鍵流程] 將從「${target}」階段開始向後自動執行...`);
+                            state.isPipelineRunning = true;
+                            showPipelineProgress(true);
+                            
+                            await executeDirectorAction({
+                                action: 'CONTINUE',
+                                target: target,
+                                hint: hint,
+                                volume_index: volIdx,
+                                chapter_index: chIdx
+                            }, hint || '請根據總監指示繼續創作');
+                        } else {
+                            showToast(`⚡ [非一鍵流程] 僅執行「${target}」單一步驟，執行完成後將停止。`);
+                            state.isPipelineRunning = false;
+                            showPipelineProgress(false);
+                            
+                            if (target === 'writer') {
+                                const activeCh = chIdx || state.activeChapterIndex || 1;
+                                state.activeChapterIndex = activeCh;
+                                await executePipelineStage('writer', hint || '請撰寫正文');
+                            } else if (target === 'editor') {
+                                const activeCh = chIdx || state.activeChapterIndex || 1;
+                                await executeChapterProseEditFlow(activeCh, hint || '請精修正文');
+                            } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot'].includes(target)) {
+                                await executePipelineStage(target, hint || '請根據總監指示更新');
+                            } else {
+                                console.warn('Unknown TRIGGER_AGENT target:', target);
+                            }
+                        }
+                    }
+                }
             }
         );
     };

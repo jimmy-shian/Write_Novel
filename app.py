@@ -60,10 +60,11 @@ from agents import (
     set_director_user_prompt,
     get_director_auto_execute,
     run_volume_skeleton_planner,
-    run_foreshadowing_orchestrator
+    run_foreshadowing_orchestrator,
+    run_volumes_planner
 )
-# 增量生成 Agent
-from agents_incremental import (
+# 增量生成 Agent (直接從 agent_extension 導入，agents_incremental.py 已刪除)
+from agent_extension import (
     run_incremental_architect,
     run_incremental_character_designer,
     run_incremental_plot_planner,
@@ -188,6 +189,19 @@ def api_save_characters(novel_id: str, payload: CharactersSave):
     v = save_characters(novel_id, payload.json_data)
     return {"status": "success", "version": v}
 
+@app.post("/api/novels/{novel_id}/characters/deduplicate")
+def api_deduplicate_characters(novel_id: str):
+    char_data = get_latest_characters(novel_id)
+    if not char_data:
+        raise HTTPException(status_code=404, detail="尚無角色設定可進行去重")
+    parsed = char_data.get("parsed_data")
+    if not parsed or "characters" not in parsed:
+        raise HTTPException(status_code=400, detail="角色聖經結構不完整")
+    
+    # save_characters automatically triggers traditional conversion and clean_and_deduplicate_characters
+    v = save_characters(novel_id, parsed)
+    return {"status": "success", "version": v}
+
 @app.post("/api/novels/{novel_id}/plot")
 def api_save_plot(novel_id: str, payload: PlotSave):
     v = save_plot_chapters(novel_id, payload.outline_json)
@@ -295,6 +309,15 @@ def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
         run_story_architect(novel_id, user_prompt),
+        media_type="text/event-stream"
+    )
+
+@app.post("/api/agent/volumes-planner")
+def api_agent_volumes_planner(novel_id: str = Body(...), user_prompt: Optional[str] = Body(None)):
+    if not get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        run_volumes_planner(novel_id, user_prompt),
         media_type="text/event-stream"
     )
 
@@ -744,7 +767,7 @@ def api_agent_foreshadowing_orchestrate(payload: ForeshadowingOrchestrateRequest
 
 @app.post("/api/novels/{novel_id}/volumes/{volume_index}/align")
 def api_align_volume(novel_id: str, volume_index: int):
-    from agents_incremental import run_volume_jit_alignment
+    from agent_extension import run_volume_jit_alignment
     return StreamingResponse(
         run_volume_jit_alignment(novel_id, volume_index),
         media_type="text/event-stream"

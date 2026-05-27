@@ -61,14 +61,28 @@ test("getPipelinePrompt: 全空白輸入回退到 fallback", () => {
 // resolveNextStageFromDecision 測試
 // ==========================================
 
-// CONTINUE 動作測試
 test("resolveNextStageFromDecision: CONTINUE 從 worldview → characters", () => {
   const result = resolveNextStageFromDecision({ action: 'CONTINUE' }, 'worldview');
   assert.equal(result, 'characters');
 });
 
-test("resolveNextStageFromDecision: CONTINUE 從 characters → plot", () => {
+test("resolveNextStageFromDecision: CONTINUE 從 characters → volumes", () => {
   const result = resolveNextStageFromDecision({ action: 'CONTINUE' }, 'characters');
+  assert.equal(result, 'volumes');
+});
+
+test("resolveNextStageFromDecision: CONTINUE 從 volumes → volume_skeleton", () => {
+  const result = resolveNextStageFromDecision({ action: 'CONTINUE' }, 'volumes');
+  assert.equal(result, 'volume_skeleton');
+});
+
+test("resolveNextStageFromDecision: CONTINUE 從 volume_skeleton → foreshadowing_orchestration", () => {
+  const result = resolveNextStageFromDecision({ action: 'CONTINUE' }, 'volume_skeleton');
+  assert.equal(result, 'foreshadowing_orchestration');
+});
+
+test("resolveNextStageFromDecision: CONTINUE 從 foreshadowing_orchestration → plot", () => {
+  const result = resolveNextStageFromDecision({ action: 'CONTINUE' }, 'foreshadowing_orchestration');
   assert.equal(result, 'plot');
 });
 

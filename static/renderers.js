@@ -724,46 +724,68 @@ export function renderPlotTab() {
                                               !!c.purpose || !!c.emotional_tone || !!c.cliffhanger;
                     const hasTitleOrSummary = c.title && c.title.trim() !== '' && c.title !== '待設定標題';
                     
-                    // 骨架數據通常有 brief_title，微觀大綱不應該有這個字段
-                    const isSkeleton = c.brief_title !== undefined && c.brief_title !== null;
+                    // 💡 修復：改為「有詳細結構 → 是微觀章節」為主判斷。
+                    // 即使有 brief_title（合併後骨架欄位仍保留），只要有詳細結構欄位就視為微觀大綱。
+                    // 舊邏輯：isSkeleton = has brief_title → 從 microChapters 中排除（錯誤！）
+                    const isDetailedChapter = hasMicroStructure || hasTitleOrSummary;
                     
-                    return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
+                    return isDetailedChapter;
                 });
 
                 // 2. 💡【Step 1 修復】直接使用 chapters_outline 作為骨架渲染源
-                const outl = Array.isArray(vol.chapters_outline) ? vol.chapters_outline : JSON.parse(vol.chapters_outline || '[]');
-                const volSkeletonChapters = outl;
+                let outl = [];
+                try {
+                    const raw = vol.chapters_outline;
+                    if (Array.isArray(raw)) {
+                        outl = raw;
+                    } else if (typeof raw === 'string' && raw.trim()) {
+                        outl = JSON.parse(raw);
+                        if (!Array.isArray(outl)) outl = [];
+                    }
+                } catch(e) {
+                    outl = [];
+                }
                 
-                // 💡 調試：觀察實際取到的資料結構
-                console.log(`[DEBUG] Vol ${volIdx} skeleton data:`, JSON.stringify(volSkeletonChapters).substring(0, 500));
+                // 輔助函式：判斷一個章節是否已詳細化（有 events/purpose/cliffhanger 等詳細欄位）
+                function isDetailedChapterObj(ch) {
+                    return (Array.isArray(ch.events) && ch.events.length > 0) ||
+                           !!ch.purpose || !!ch.emotional_tone || !!ch.cliffhanger ||
+                           (ch.title && ch.title !== ch.brief_title && ch.title.trim() !== '' && ch.title !== '待設定標題');
+                }
 
                 // 3. 💡【核心修復點】：建立雙層 Map 緩衝區，進行逐章無縫融合
-                // 💡 終極防禦網：攔截 LLM 各種千奇百怪的章節索引命名
+                // chapters_outline 可能同時含骨架章節和合併後的詳細章節（兩者都在）
                 const skeletonMap = new Map();
-                volSkeletonChapters.forEach(ch => {
-                    // 💡 終極防禦網：攔截 LLM 各種千奇百怪的章節索引命名（chapter_index、chapter、index、id 等）
+                const outlineDetailMap = new Map(); // 來自 chapters_outline 的詳細章節
+
+                outl.forEach(ch => {
                     const rawIdx = ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id;
                     const idx = parseInt(rawIdx);
-                    
                     if (!isNaN(idx)) {
-                        skeletonMap.set(idx, ch);
-                        // 調試：確認是否成功 Mapping 到正確的章節號
-                        console.log(`[DEBUG] Skeleton ch${idx} mapped! Title:`, ch.brief_title || ch.title);
+                        if (isDetailedChapterObj(ch)) {
+                            // 已詳細化的章節 → 進 outlineDetailMap（優先被 plot.chapters 覆蓋）
+                            outlineDetailMap.set(idx, ch);
+                        } else {
+                            // 純骨架章節（只有 brief_title/brief_summary）→ 進 skeletonMap
+                            skeletonMap.set(idx, ch);
+                        }
                     }
                 });
 
+                // microMap：優先從 plot.chapters（全局大綱）取，其次從 chapters_outline 的詳細部分取
                 const microMap = new Map();
+                // 先放 chapters_outline 中的詳細章節作底
+                outlineDetailMap.forEach((ch, idx) => {
+                    microMap.set(idx, ch);
+                });
+                // 再用 plot.chapters 覆蓋（plot.chapters 是主要來源，優先級更高）
                 volMicroChapters.forEach(ch => {
                     const idx = parseInt(ch.chapter_index);
                     if (!isNaN(idx)) {
                         microMap.set(idx, ch);
-                        console.log(`[DEBUG-MICRO] ch${idx} mapped! Title:`, ch.title);
                     }
                 });
                 
-                // 💡 調試：顯示 microMap 的最終狀態
-                console.log(`[DEBUG] Vol ${volIdx} microMap size:`, microMap.size, '| skeletonMap size:', skeletonMap.size);
-
                 // 4. 動態收集本卷需要呈現的所有章節全局序號集合
                 //    優先收集骨架章節（Stage 2），再補足微觀大綱章節（Stage 4）
                 const chapterIdxSet = new Set();
@@ -771,8 +793,8 @@ export function renderPlotTab() {
                 // 4.1 收集骨架章節（Stage 2 產出）
                 skeletonMap.forEach((_, idx) => chapterIdxSet.add(idx));
                 
-                // 4.2 收集微觀大綱章節（Stage 4 產出）
-                volMicroChapters.forEach(ch => chapterIdxSet.add(parseInt(ch.chapter_index)));
+                // 4.2 收集微觀大綱章節（Stage 4 產出 + chapters_outline 合併的詳細章節）
+                microMap.forEach((_, idx) => chapterIdxSet.add(idx));
                 
                 // 4.3 💡【Step 3 修復】：只有當有實際大綱內容時才填補格子，否則保持乾淨空狀態
                 // 當 outl 為空時，不應該產生 50 個「待設定」的虛擬章節
@@ -795,6 +817,7 @@ export function renderPlotTab() {
                         return { chapter_index: idx, title: '待設定標題', summary: '待設定摘要', __renderMode: 'empty' };
                     }
                 });
+
 
                 // 重新校準總規劃章節數與百分比
                 // 💡 修正點 1：總章數應該拿目前展示列表的長度（無論是微觀還是骨架），若皆無則拿該卷預設的 chapter_count

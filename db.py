@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 try:
     from opencc import OpenCC
     _s2t_converter = OpenCC('s2t')
+    # 進行安全自我檢測，防止 Windows 環境下 opencc 造成中文字串編碼損毀 (Mojibake)
+    if _s2t_converter.convert("測試") != "測試":
+        _s2t_converter = None
 except Exception:
     # 若套件未安裝或載入失敗，fallback 為 identity function
     _s2t_converter = None
@@ -845,13 +848,193 @@ def get_latest_characters(novel_id):
         return data
     return None
 
+def clean_and_deduplicate_characters(characters_list):
+    if not isinstance(characters_list, list):
+        return characters_list
+        
+    cleaned_chars = []
+    
+    # 1. Filter out invalid/placeholder characters
+    placeholder_names = {
+        "新登場的次要角色", "待補充", "暫無", "placeholder", "新角色", "路人", 
+        "客棧老闆", "符合人設說話風格", "todo", "新登場次要角色"
+    }
+    
+    for c in characters_list:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name", "").strip()
+        if not name:
+            continue
+            
+        # If name is a placeholder, skip
+        is_placeholder = False
+        for pn in placeholder_names:
+            if pn in name.lower() or name.lower() in pn:
+                is_placeholder = True
+                break
+        if is_placeholder:
+            continue
+            
+        # Clean fields in the character dictionary
+        cleaned_c = {}
+        for k, v in c.items():
+            if isinstance(v, str):
+                v_clean = v.strip()
+                # If value is a placeholder text, make it empty
+                if any(p in v_clean.lower() for p in ["符合人設說話風格", "請填入", "待定", "暫無", "待補充"]):
+                    v_clean = ""
+                cleaned_c[k] = v_clean
+            elif isinstance(v, list):
+                # Clean elements of lists
+                cleaned_list = []
+                for x in v:
+                    if isinstance(x, str):
+                        x_clean = x.strip()
+                        if not any(p in x_clean.lower() for p in ["符合人設說話風格", "請填入", "待定", "暫無", "待補充"]):
+                            cleaned_list.append(x_clean)
+                    else:
+                        cleaned_list.append(x)
+                cleaned_c[k] = cleaned_list
+            else:
+                cleaned_c[k] = v
+        cleaned_chars.append(cleaned_c)
+        
+    # Helper to get core name
+    def get_core_name(name_str):
+        if not name_str:
+            return ""
+        import re
+        # Remove content in parentheses
+        name_str = re.sub(r'[\(（].*?[\)）]', '', name_str)
+        # Remove content after hyphens, dashes, colons or spaces
+        for separator in ['-', '–', '—', '_', ':', '：', ' ', '\t']:
+            if separator in name_str:
+                parts = name_str.split(separator)
+                if parts[0].strip():
+                    name_str = parts[0]
+        return name_str.strip()
+
+    # Helper to merge two characters
+    def merge_two_characters_backend(c1, c2):
+        name1 = c1.get("name", "")
+        name2 = c2.get("name", "")
+        
+        chosen_name = name1
+        if name2 and len(name2) < len(name1):
+            chosen_name = name2
+        if not chosen_name:
+            chosen_name = name1 or name2
+            
+        merged = {"name": chosen_name}
+        
+        # Field: role
+        r1 = c1.get("role", "")
+        r2 = c2.get("role", "")
+        merged["role"] = r1 if len(str(r1)) >= len(str(r2)) else r2
+        
+        # Field: entry_phase
+        ep1 = c1.get("entry_phase", "")
+        ep2 = c2.get("entry_phase", "")
+        merged["entry_phase"] = ep1 if ep1 else ep2
+        
+        # Field: personality (list)
+        p1 = c1.get("personality", [])
+        p2 = c2.get("personality", [])
+        if isinstance(p1, str): p1 = [p1]
+        if isinstance(p2, str): p2 = [p2]
+        p_merged = list(set((p1 or []) + (p2 or [])))
+        merged["personality"] = [x for x in p_merged if x]
+        
+        # Text fields
+        for field in ["want", "need", "fatal_flaw", "motivation", "arc", "speech_style"]:
+            val1 = c1.get(field, "")
+            val2 = c2.get(field, "")
+            if val1 and val2:
+                if val1.strip().lower() == val2.strip().lower():
+                    merged[field] = val1
+                else:
+                    merged[field] = val1 if len(str(val1)) >= len(str(val2)) else val2
+            else:
+                merged[field] = val1 or val2
+                
+        # Relationships (list of dicts)
+        rel1 = c1.get("relationships", []) or []
+        rel2 = c2.get("relationships", []) or []
+        if not isinstance(rel1, list): rel1 = [rel1]
+        if not isinstance(rel2, list): rel2 = [rel2]
+        
+        merged_rels = []
+        rel_by_target = {}
+        for r in rel1 + rel2:
+            if not isinstance(r, dict):
+                continue
+            target = r.get("with")
+            if not target:
+                continue
+            target_core = get_core_name(target)
+            if target_core not in rel_by_target:
+                rel_by_target[target_core] = r.copy()
+            else:
+                existing = rel_by_target[target_core]
+                t_type = r.get("type", "")
+                e_type = existing.get("type", "")
+                if t_type and t_type not in e_type:
+                    existing["type"] = f"{e_type} / {t_type}" if e_type else t_type
+                t_evo = r.get("evolution", "")
+                e_evo = existing.get("evolution", "")
+                if t_evo and t_evo not in e_evo:
+                    existing["evolution"] = f"{e_evo}。{t_evo}" if e_evo else t_evo
+                    
+        merged["relationships"] = list(rel_by_target.values())
+        return merged
+
+    # 2. Group by core name and merge
+    merged_by_core = {}
+    core_order = []  # To preserve original ordering of appearance
+    
+    for c in cleaned_chars:
+        name = c.get("name", "")
+        core = get_core_name(name)
+        if not core:
+            continue
+            
+        if core not in merged_by_core:
+            merged_by_core[core] = c
+            core_order.append(core)
+        else:
+            # Merge with existing
+            existing = merged_by_core[core]
+            merged_by_core[core] = merge_two_characters_backend(existing, c)
+            
+    # Reconstruct list
+    result = [merged_by_core[core] for core in core_order]
+    return result
+
 def save_characters(novel_id, json_data):
     if isinstance(json_data, dict) or isinstance(json_data, list):
         # 先將字典/清單內的字串進行繁體轉換
         json_data = _convert_obj_to_traditional(json_data)
+        
+        # 🚨 自動執行去重與合併 🚨
+        if isinstance(json_data, dict) and "characters" in json_data:
+            json_data["characters"] = clean_and_deduplicate_characters(json_data["characters"])
+        elif isinstance(json_data, list):
+            json_data = clean_and_deduplicate_characters(json_data)
+            
         json_str = json.dumps(json_data, ensure_ascii=False)
     else:
         json_str = _to_traditional(json_data)
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and "characters" in parsed:
+                parsed["characters"] = clean_and_deduplicate_characters(parsed["characters"])
+                json_str = json.dumps(parsed, ensure_ascii=False)
+            elif isinstance(parsed, list):
+                parsed = clean_and_deduplicate_characters(parsed)
+                json_str = json.dumps(parsed, ensure_ascii=False)
+        except:
+            pass
         
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -921,6 +1104,9 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
     )
     
     # 2. Automatically sync and distribute chapters outlines to individual volumes in the volumes table
+    #    ⚠️ 重要：採用「合併模式」，不直接覆蓋骨架數據。
+    #    骨架欄位（brief_title/brief_summary/allocated_tasks）必須保留，
+    #    只將詳細大綱的欄位 patch 進去。
     if not skip_volume_sync:
         if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
             chapters_list = parsed_dict["chapters"]
@@ -938,33 +1124,87 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
                         vol_groups[vol_idx] = []
                     vol_groups[vol_idx].append(ch)
             
-            # Save or update chapters_outline in volumes table for each volume
-            for vol_idx, vol_chaps in vol_groups.items():
-                vol_chaps_str = json.dumps(vol_chaps, ensure_ascii=False)
+            # 對每個卷進行合併式更新（merge into existing skeleton）
+            for vol_idx, new_detail_chaps in vol_groups.items():
+                # 建立詳細大綱的 chapter_index -> chapter_data 映射
+                detail_map = {}
+                for ch in new_detail_chaps:
+                    try:
+                        c_idx = int(ch.get("chapter_index", 0))
+                        if c_idx > 0:
+                            detail_map[c_idx] = ch
+                    except:
+                        pass
                 
-                # Check if this volume exists in db
+                # 讀取目前卷的骨架（chapters_outline）
                 vol_row = cursor.execute(
-                    "SELECT id FROM volumes WHERE novel_id = ? AND volume_index = ?",
+                    "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
                     (novel_id, vol_idx)
                 ).fetchone()
                 
                 if vol_row:
+                    existing_outline_str = vol_row["chapters_outline"]
+                    
+                    # 嘗試解析現有骨架
+                    existing_skeleton = []
+                    if existing_outline_str:
+                        try:
+                            existing_skeleton = json.loads(existing_outline_str)
+                            if not isinstance(existing_skeleton, list):
+                                existing_skeleton = []
+                        except:
+                            existing_skeleton = []
+                    
+                    # 建立骨架的 chapter_index -> skeleton_ch 映射
+                    skeleton_map = {}
+                    for sk_ch in existing_skeleton:
+                        raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
+                        try:
+                            sk_idx = int(raw_idx)
+                            skeleton_map[sk_idx] = sk_ch
+                        except:
+                            pass
+                    
+                    # 💡 合併：將詳細大綱欄位 patch 進骨架（保留骨架欄位）
+                    # 骨架中已有的章節 → 合併詳細欄位
+                    # 骨架中沒有的章節 → 新增（但標記為非骨架）
+                    merged_chapters = {}
+                    
+                    # 先把所有骨架章節放入
+                    for sk_idx, sk_ch in skeleton_map.items():
+                        merged_chapters[sk_idx] = dict(sk_ch)  # 保留所有骨架欄位
+                    
+                    # 再把詳細大綱合併進去
+                    for det_idx, det_ch in detail_map.items():
+                        if det_idx in merged_chapters:
+                            # 合併：詳細欄位覆蓋，骨架欄位保留（不刪除 brief_title 等）
+                            merged_chapters[det_idx].update(det_ch)
+                        else:
+                            # 新章節直接加入
+                            merged_chapters[det_idx] = dict(det_ch)
+                    
+                    # 按章節序號排序
+                    merged_list = [merged_chapters[k] for k in sorted(merged_chapters.keys())]
+                    merged_str = json.dumps(merged_list, ensure_ascii=False)
+                    
                     cursor.execute(
-                        "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
-                        (vol_chaps_str, novel_id, vol_idx)
+                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                        (merged_str, vol_row["id"])
                     )
                 else:
-                    # Dynamically create new volume card if it does not exist
+                    # 卷不存在，直接新建（無骨架可合併）
                     v_start, v_end = get_volume_chapter_range(vols, vol_idx)
+                    new_chaps_str = json.dumps(list(detail_map.values()), ensure_ascii=False)
                     cursor.execute(
                         "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
                         "VALUES (?, ?, ?, ?, ?, 0, ?)",
-                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", vol_chaps_str)
+                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", new_chaps_str)
                     )
                     
     conn.commit()
     conn.close()
     return next_version
+
 
 # --- CHAPTERS (VERSIONED) ---
 def get_latest_chapter(novel_id, chapter_index):

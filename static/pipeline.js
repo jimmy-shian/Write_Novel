@@ -131,6 +131,13 @@ export async function executePipelineStage(stage, userPrompt) {
                 state.activeTab = 'characters';
                 agentName = 'Character Designer (角色設計大師)';
                 break;
+            case 'volumes':
+                endpoint = '/api/agent/volumes-planner';
+                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Volumes Planner (篇卷結構規劃師)';
+                break;
             case 'plot':
                 endpoint = '/api/agent/plot-planner';
                 body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
@@ -147,14 +154,14 @@ export async function executePipelineStage(stage, userPrompt) {
                 // resolve();
                 window.generateAllVolumeSkeletons(userPrompt).then(() => resolve());
                 return;
-            case 'foreshadowing_orchestration':
-                // Stage 3: 全局伏筆編織對齊
-                endpoint = '/api/agent/foreshadowing-orchestrate';
-                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
-                targetTextarea = el.editorPlotJson;
-                state.activeTab = 'plot';
-                agentName = 'Foreshadowing Orchestrator (伏筆編織導演)';
-                break;
+            // case 'foreshadowing_orchestration':
+            //     // Stage 3: 全局伏筆編織對齊
+            //     endpoint = '/api/agent/foreshadowing-orchestrate';
+            //     body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+            //     targetTextarea = el.editorPlotJson;
+            //     state.activeTab = 'plot';
+            //     agentName = 'Foreshadowing Orchestrator (伏筆編織導演)';
+            //     break;
             case 'writer':
                 endpoint = '/api/agent/write-chapter';
                 body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
