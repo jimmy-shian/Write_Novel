@@ -277,6 +277,79 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
 
+        case 'INCREMENTAL_MODIFY_CHARACTER': {
+            const charIdx = decision.target_char_index ?? null;
+            const field = decision.field_name || null;
+            showToast(`⚡ 總監指示執行增量修改角色設定...`);
+            updatePipelineStage('characters', 'running');
+            updateDirectorMessage(`⚡ 正在增量修改角色...`);
+            
+            await executeIncrementalUpdate('character', {
+                target_char_index: charIdx,
+                field_name: field,
+                hint: hint
+            });
+            
+            if (state.isPipelineRunning) {
+                updateDirectorMessage('🔄 角色增量修改完成，重新評估創作現狀中...');
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+        
+        case 'INCREMENTAL_APPEND_CHARACTER': {
+            showToast(`⚡ 總監指示執行增量追加新角色...`);
+            updatePipelineStage('characters', 'running');
+            updateDirectorMessage(`⚡ 正在增量追加角色...`);
+            
+            await executeIncrementalUpdate('new_character', {
+                hint: hint
+            });
+            
+            if (state.isPipelineRunning) {
+                updateDirectorMessage('🔄 角色增量追加完成，重新評估創作現狀中...');
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+        
+        case 'INCREMENTAL_MODIFY_SKELETON': {
+            const volIdx = decision.volume_index || 1;
+            showToast(`⚡ 總監指示執行第 ${volIdx} 卷大綱骨架增量修正...`);
+            updatePipelineStage('volume_skeleton', 'running');
+            updateDirectorMessage(`⚡ 正在增量修正第 ${volIdx} 卷骨架...`);
+            
+            await executeIncrementalUpdate('volume_skeleton', {
+                volume_index: volIdx,
+                hint: hint
+            });
+            
+            if (state.isPipelineRunning) {
+                updateDirectorMessage('🔄 卷骨架增量修正完成，重新評估創作現狀中...');
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+        
+        case 'INCREMENTAL_MODIFY_CHARACTER_FULL': {
+            const charIdx = decision.target_char_index ?? null;
+            showToast(`⚡ 總監指示執行增量角色完整修改 (完整模式)...`);
+            updatePipelineStage('characters', 'running');
+            updateDirectorMessage(`⚡ 正在增量完整修改角色...`);
+            
+            await executeIncrementalUpdate('character', {
+                target_char_index: charIdx,
+                field_name: null,
+                hint: hint
+            });
+            
+            if (state.isPipelineRunning) {
+                updateDirectorMessage('🔄 角色增量完整修改完成，重新評估創作現狀中...');
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            break;
+        }
+
         case 'CONTINUE': {
             const target = (decision.target || '').toString().trim().toLowerCase();
             if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
@@ -2059,6 +2132,9 @@ function openCharacterAIEnhanceModal(charIndex, charName) {
 
 // NEW: Open character edit modal
 function openCharacterEditModal(index, character) {
+    const char = character || state.currentNovelData?.characters?.characters?.[index];
+    if (!char) return;
+    
     // Create modal if doesn't exist
     let editModal = document.getElementById('modal-character-edit');
     if (!editModal) {
@@ -2118,20 +2194,20 @@ function openCharacterEditModal(index, character) {
     }
     
     // Populate fields
-    document.getElementById('edit-char-name').value = character.name || '';
-    document.getElementById('edit-char-role').value = character.role || '配角';
-    document.getElementById('edit-char-motivation').value = character.motivation || character.want || '';
-    document.getElementById('edit-char-arc').value = character.arc || character.need || '';
-    document.getElementById('edit-char-personality').value = (character.personality || []).join(', ');
+    document.getElementById('edit-char-name').value = char.name || '';
+    document.getElementById('edit-char-role').value = char.role || '配角';
+    document.getElementById('edit-char-motivation').value = char.motivation || char.want || '';
+    document.getElementById('edit-char-arc').value = char.arc || char.need || '';
+    document.getElementById('edit-char-personality').value = (char.personality || []).join(', ');
     
     // Support flaws as array or string or fatal_flaw
     let flawsText = '';
-    if (Array.isArray(character.flaws)) {
-        flawsText = character.flaws.join(', ');
-    } else if (typeof character.flaws === 'string') {
-        flawsText = character.flaws;
-    } else if (character.fatal_flaw) {
-        flawsText = character.fatal_flaw;
+    if (Array.isArray(char.flaws)) {
+        flawsText = char.flaws.join(', ');
+    } else if (typeof char.flaws === 'string') {
+        flawsText = char.flaws;
+    } else if (char.fatal_flaw) {
+        flawsText = char.fatal_flaw;
     }
     document.getElementById('edit-char-flaws').value = flawsText;
     
@@ -2820,6 +2896,38 @@ async function executeIncrementalUpdate(target, params) {
                 );
             });
             
+        case 'volume_skeleton':
+            // 增量更新卷骨架
+            showToast("🏗️ 增量更新卷骨架...");
+            showAgentProcessingIndicator('volume_skeleton', 'Volume Skeleton Planner (增量更新卷骨架)');
+            return new Promise((resolve) => {
+                streamAPI(
+                    '/api/agent/incremental-skeleton',
+                    { 
+                        novel_id: state.currentNovelId, 
+                        volume_index: params.volume_index || 1,
+                        user_hint: user_hint || params.hint || '修改卷骨架'
+                    },
+                    (delta) => {
+                        window.updateAgentStreamOutput('volume_skeleton', delta);
+                    },
+                    (delta) => {
+                        window.updateAgentStreamOutput('volume_skeleton', delta);
+                    },
+                    (err) => {
+                        window.updateAgentStreamOutput('volume_skeleton', `\n[Error: ${err}]`);
+                        showToast("Error: " + err);
+                        hideAgentProcessingIndicator('volume_skeleton');
+                    },
+                    async () => {
+                        showToast("卷骨架更新完成");
+                        hideAgentProcessingIndicator('volume_skeleton');
+                        await loadNovelDetails(state.currentNovelId);
+                        resolve(true);
+                    }
+                );
+            });
+            
         default:
             showToast(`⚠️ 不支援的增量操作目標: ${target}`);
             return false;
@@ -3297,6 +3405,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                     streamTarget.innerHTML = renderMarkdown(thinkingText);
                 }
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
+                window.updateAgentStreamOutput('director', thinkingDelta, 'thinking');
             },
             // onContent
             (delta) => {
@@ -3304,8 +3413,8 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
                 // 寫入聊天區的 Markdown 渲染
                 streamTarget.innerHTML = renderMarkdown(responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
-                // 同時寫入 stream-output-worldview 終端（第四個串流）
-                window.updateAgentStreamOutput('worldview', delta);
+                // 同時寫入 stream-output-terminal 終端
+                window.updateAgentStreamOutput('director', delta, 'content');
             },
             // onError
             (err) => {
@@ -3433,12 +3542,14 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
                 thinkingDetails.open = true;
                 thinkingPre.textContent += thinkingDelta;
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
+                window.updateAgentStreamOutput('director', thinkingDelta, 'thinking');
             },
             // onContent
             (delta) => {
                 responseText += delta;
                 streamTarget.innerHTML = renderMarkdown(responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
+                window.updateAgentStreamOutput('director', delta, 'content');
             },
             // onError
             (err) => {
@@ -4159,7 +4270,8 @@ async function handleDrawerPromptSubmit() {
             async () => {
                 showToast("世界觀結構起草完畢");
                 await loadNovelDetails(state.currentNovelId);
-            }
+            },
+            { tabName: 'worldview', agentName: '故事結構架構師 (Story Architect)' }
         );
     }
     
@@ -4172,7 +4284,8 @@ async function handleDrawerPromptSubmit() {
             async () => {
                 showToast("角色 Bible 生成完畢");
                 await loadNovelDetails(state.currentNovelId);
-            }
+            },
+            { tabName: 'characters', agentName: '角色設計大師 (Character Designer)' }
         );
     }
     
@@ -4184,7 +4297,8 @@ async function handleDrawerPromptSubmit() {
             async () => {
                 showToast("章節大綱拆分完畢");
                 await loadNovelDetails(state.currentNovelId);
-            }
+            },
+            { tabName: 'plot', agentName: '章節劇情規劃師 (Plot Planner)' }
         );
     }
     
@@ -4802,12 +4916,14 @@ function setupEventListeners() {
                 thinkingDetails.open = true;
                 thinkingPre.textContent += thinkingDelta;
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
+                window.updateAgentStreamOutput('copilot', thinkingDelta, 'thinking');
             },
             // onContent
             (delta) => {
                 responseText += delta;
                 streamTarget.innerHTML = renderMarkdown(responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
+                window.updateAgentStreamOutput('copilot', delta, 'content');
             },
             // onError
             (err) => {
@@ -5535,6 +5651,8 @@ function getAgentDetails(endpoint) {
         return { name: '正文編輯編審 (Editor Agent)', icon: '✏️' };
     } else if (endpoint.includes('copilot-chat')) {
         return { name: '協同總監 (Co-pilot Novel Director)', icon: '🧠' };
+    } else if (endpoint.includes('director-decision')) {
+        return { name: '創意總監 (Creative Director)', icon: '🎬' };
     }
     return { name: 'AI Agent', icon: '🤖' };
 }
@@ -5559,6 +5677,7 @@ window.onStreamAPIStart = function(endpoint, body) {
     if (emptyState) emptyState.style.display = 'none';
     
     const details = getAgentDetails(endpoint);
+    window.lastStreamAgentTab = details.name; // Keep track of active agent tab!
     
     // 2. 活化並控制原生的「當前 Agent 標籤」
     const agentLabel = document.getElementById('stream-agent-label');

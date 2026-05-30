@@ -146,7 +146,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         if (dataStr === '[DONE]') continue;
                         const parsed = JSON.parse(dataStr);
                         
-                        if (parsed.type === 'thinking') {
+                        if (parsed.type === 'reset') {
+                            if (typeof onThinking === 'function') onThinking("[RESET]");
+                            if (typeof onContent === 'function') onContent("[RESET]");
+                        } else if (parsed.type === 'thinking') {
                             if (typeof onThinking === 'function') onThinking(parsed.delta);
                         } else if (parsed.type === 'content') {
                             if (typeof onContent === 'function') onContent(parsed.delta);

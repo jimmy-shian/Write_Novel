@@ -407,7 +407,7 @@ export function renderCharactersTab() {
                             ${entryText}
                         </div>
                         <div class="char-card-actions">
-                            <button class="char-action-btn edit-btn" onclick="openCharacterEditModal(${idx}, state.currentNovelData.characters.characters[${idx}])" title="編輯角色">
+                            <button class="char-action-btn edit-btn" onclick="openCharacterEditModal(${idx})" title="編輯角色">
                                 ✏️
                             </button>
                             <button class="char-action-btn delete-btn" onclick="deleteCharacter(${idx})" title="刪除角色">

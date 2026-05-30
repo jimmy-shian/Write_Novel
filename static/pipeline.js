@@ -154,14 +154,6 @@ export async function executePipelineStage(stage, userPrompt) {
                 // resolve();
                 window.generateAllVolumeSkeletons(userPrompt).then(() => resolve());
                 return;
-            // case 'foreshadowing_orchestration':
-            //     // Stage 3: 全局伏筆編織對齊
-            //     endpoint = '/api/agent/foreshadowing-orchestrate';
-            //     body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
-            //     targetTextarea = el.editorPlotJson;
-            //     state.activeTab = 'plot';
-            //     agentName = 'Foreshadowing Orchestrator (伏筆編織導演)';
-            //     break;
             case 'writer':
                 endpoint = '/api/agent/write-chapter';
                 body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
@@ -434,10 +426,9 @@ export async function writeAllChaptersSequentially(userPrompt) {
     }
 
     if (hasUnplannedVolumes && state.isPipelineRunning) {
-        updateDirectorMessage('📋 偵測到仍有未規劃大綱的篇卷，即將全自動啟動下一階段大綱規劃與伏筆對齊流程...');
+        updateDirectorMessage('📋 偵測到仍有未規劃大綱的篇卷，即將全自動啟動下一階段大綱規劃與流程...');
         showToast('📋 偵測到未完篇卷，即將開始規劃下一波章節大綱...');
         await window.generateAllVolumeSkeletons(userPrompt);
-        await executePipelineStage('foreshadowing_orchestration', userPrompt);
         await executePipelineStage('plot', userPrompt);
         return;
     }

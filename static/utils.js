@@ -27,11 +27,22 @@ export function parseWorldviewJSON(text) {
         key_turning_points: []
     };
 
-    if (!text || text.trim().length === 0) {
+    if (!text || String(text).trim().length === 0) {
         return defaultStructure;
     }
 
-    const textStripped = text.trim();
+    let textStripped = String(text).trim();
+    
+    // Proactively strip thinking tags if present
+    textStripped = textStripped.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    // Strip markdown codeblock fences if present
+    if (textStripped.startsWith("```")) {
+        textStripped = textStripped.replace(/^```(?:json)?\s*/i, '');
+        textStripped = textStripped.replace(/\s*```$/, '');
+        textStripped = textStripped.trim();
+    }
+
     if (textStripped.startsWith("{") && textStripped.endsWith("}")) {
         try {
             const parsed = JSON.parse(textStripped);
