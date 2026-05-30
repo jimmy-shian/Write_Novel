@@ -5828,6 +5828,7 @@ window.closeSeedModal = closeSeedModal;
 window.closeCustomDialog = closeCustomDialog;
 window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallback
 window.saveProseDirect = saveProseDirect;
+window.savePlotOutlineDirect = savePlotOutlineDirect;
 
 // Direct aliases for worldview complex rendering
 window.editWorldviewComplexList = openWorldviewComplexListEditModal;
@@ -5866,31 +5867,57 @@ window.deleteCharacter = function(index) {
 // Plot Chapter handlers
 window.openChapterOutlineEditModal = openChapterOutlineEditModal;
 window.openManualChapterInsertModal = openManualChapterInsertModal;
-window.deletePlotChapter = function(index) {
+// deletePlotChapter(chapterIndex)：以「全局章節號」作為識別鍵刪除
+// chapterIndex 為全局章節號（正整數），而非 plot.chapters 的陣列 index
+window.deletePlotChapter = function(chapterIndex) {
     window.showCustomDialog({
         title: '🗑️ 刪除章節大綱',
-        message: '您確定要刪除此章節大綱嗎？（已寫完的正文不會受影響，但大綱本身會永久刪除）',
+        message: `您確定要刪除第 ${chapterIndex} 章大綱嗎？（已寫完的正文不受影響，骨架與大綱本身會永久刪除）`,
         type: 'confirm'
     }).then(confirmed => {
-        if (confirmed) {
-            const plotData = state.currentNovelData?.plot;
-            if (plotData && plotData.chapters && plotData.chapters[index] !== undefined) {
-                plotData.chapters.splice(index, 1);
-                
-                // Re-index remaining chapters
-                plotData.chapters.forEach((ch, i) => {
-                    ch.chapter_index = i + 1;
-                });
-                
-                state.currentNovelData.plot = plotData;
-                const newRaw = JSON.stringify(plotData, null, 2);
-                state.currentNovelData.plot_raw = newRaw;
-                if (el.editorPlotJson) el.editorPlotJson.value = newRaw;
-                
-                savePlotOutlineDirect();
-                showToast('章節大綱已刪除');
+        if (!confirmed) return;
+
+        const targetIdx = parseInt(chapterIndex);
+        if (!targetIdx || targetIdx <= 0) { showToast('❌ 無效的章節編號'); return; }
+
+        // ── Step 1：從 plot.chapters 中移除（微觀大綱來源）──────────────
+        const plotData = state.currentNovelData?.plot || { chapters: [] };
+        if (!Array.isArray(plotData.chapters)) plotData.chapters = [];
+        const beforeLen = plotData.chapters.length;
+        plotData.chapters = plotData.chapters.filter(
+            ch => parseInt(ch.chapter_index) !== targetIdx
+        );
+        const removedFromPlot = plotData.chapters.length < beforeLen;
+
+        // ── Step 2：從 volumes.chapters_outline 中移除（骨架來源）────────
+        const volumes = state.currentNovelData?.volumes || [];
+        volumes.forEach(vol => {
+            let outl = [];
+            try {
+                const raw = vol.chapters_outline;
+                if (Array.isArray(raw)) outl = raw;
+                else if (typeof raw === 'string' && raw.trim()) outl = JSON.parse(raw);
+            } catch (e) { outl = []; }
+            const outlBefore = outl.length;
+            outl = outl.filter(ch => {
+                const rawIdx = ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id;
+                return parseInt(rawIdx) !== targetIdx;
+            });
+            if (outl.length !== outlBefore) {
+                vol.chapters_outline = outl; // 同步更新記憶體狀態
             }
-        }
+        });
+
+        // ── Step 3：更新記憶體狀態 ───────────────────────────────────────
+        state.currentNovelData.plot = plotData;
+        const newRaw = JSON.stringify(plotData, null, 2);
+        state.currentNovelData.plot_raw = newRaw;
+        state.currentNovelData.volumes = volumes;
+        if (el.editorPlotJson) el.editorPlotJson.value = newRaw;
+
+        // ── Step 4：存檔（後端 save_plot_chapters 會同步 volumes 骨架）──
+        savePlotOutlineDirect();
+        showToast(`🗑️ 第 ${targetIdx} 章大綱已刪除`);
     });
 };
 

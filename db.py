@@ -1111,15 +1111,26 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
     )
     
     # 2. Automatically sync and distribute chapters outlines to individual volumes in the volumes table
-    #    ⚠️ 重要：採用「合併模式」，不直接覆蓋骨架數據。
+    #    ⚠️ 重要：採用「智慧合併+刪除同步模式」，不直接覆蓋骨架數據。
     #    骨架欄位（brief_title/brief_summary/allocated_tasks）必須保留，
-    #    只將詳細大綱的欄位 patch 進去。
+    #    只將詳細大綱的欄位 patch 進去；同時刪除 incoming 中已移除的章節。
     if not skip_volume_sync:
         if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
             chapters_list = parsed_dict["chapters"]
         if isinstance(chapters_list, list):
             vol_groups = {}
             vols = get_volumes(novel_id)
+            
+            # 💡 建立全書 incoming chapter_index 的完整集合（用於刪除同步）
+            all_incoming_chapter_indices = set()
+            for ch in chapters_list:
+                try:
+                    c_idx = int(ch.get("chapter_index", 0))
+                    if c_idx > 0:
+                        all_incoming_chapter_indices.add(c_idx)
+                except:
+                    pass
+            
             for ch in chapters_list:
                 try:
                     c_idx = int(ch.get("chapter_index", 0))
@@ -1131,7 +1142,7 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
                         vol_groups[vol_idx] = []
                     vol_groups[vol_idx].append(ch)
             
-            # 對每個卷進行合併式更新（merge into existing skeleton）
+            # 💡 對每個有資料的卷進行合併式更新 + 刪除同步
             for vol_idx, new_detail_chaps in vol_groups.items():
                 # 建立詳細大綱的 chapter_index -> chapter_data 映射
                 detail_map = {}
@@ -1172,14 +1183,16 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
                         except:
                             pass
                     
-                    # 💡 合併：將詳細大綱欄位 patch 進骨架（保留骨架欄位）
-                    # 骨架中已有的章節 → 合併詳細欄位
-                    # 骨架中沒有的章節 → 新增（但標記為非骨架）
+                    # 合併：將詳細大綱欄位 patch 進骨架（保留骨架欄位）
                     merged_chapters = {}
                     
-                    # 先把所有骨架章節放入
+                    # 先把所有骨架章節放入（但只保留在 incoming 中仍存在的章節）
+                    # 💡 核心修復：若骨架章節的 index 不在 all_incoming_chapter_indices 中，
+                    #    代表已被前端刪除，直接跳過（實現骨架刪除同步）
                     for sk_idx, sk_ch in skeleton_map.items():
-                        merged_chapters[sk_idx] = dict(sk_ch)  # 保留所有骨架欄位
+                        if sk_idx in all_incoming_chapter_indices:
+                            merged_chapters[sk_idx] = dict(sk_ch)  # 保留所有骨架欄位
+                        # 不在 incoming 中 → 已被刪除，不放入 merged
                     
                     # 再把詳細大綱合併進去
                     for det_idx, det_ch in detail_map.items():
@@ -1207,6 +1220,39 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
                         "VALUES (?, ?, ?, ?, ?, 0, ?)",
                         (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", new_chaps_str)
                     )
+            
+            # 💡 額外處理：對於「有骨架但 incoming 中完全沒有任何章節的卷」，
+            #    也要清除其骨架中已被刪除的章節（例如刪除骨架章節後 plot.chapters 為空時）
+            all_vol_indices = set(v.get("volume_index", 0) for v in vols)
+            for vol_idx in all_vol_indices:
+                if vol_idx not in vol_groups:
+                    # 這個卷在 incoming 中沒有任何章節 → 它的骨架也可能需要清除已刪除章節
+                    vol_row = cursor.execute(
+                        "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
+                        (novel_id, vol_idx)
+                    ).fetchone()
+                    if vol_row and vol_row["chapters_outline"]:
+                        try:
+                            existing_skeleton = json.loads(vol_row["chapters_outline"])
+                            if isinstance(existing_skeleton, list):
+                                # 只保留 incoming 中仍存在的章節
+                                filtered = []
+                                for sk_ch in existing_skeleton:
+                                    raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
+                                    try:
+                                        sk_idx = int(raw_idx)
+                                        if sk_idx in all_incoming_chapter_indices:
+                                            filtered.append(sk_ch)
+                                    except:
+                                        pass
+                                # 若有章節被刪除，更新骨架
+                                if len(filtered) != len(existing_skeleton):
+                                    cursor.execute(
+                                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                                        (json.dumps(filtered, ensure_ascii=False), vol_row["id"])
+                                    )
+                        except:
+                            pass
                     
     conn.commit()
     conn.close()

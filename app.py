@@ -594,13 +594,22 @@ def api_delete_volume(novel_id: str, vol_idx: int):
         raise HTTPException(status_code=404, detail="Novel not found")
     
     vols = db.get_volumes(novel_id)
+    
+    # Get the chapter range for this volume to determine which chapters belong to it
+    range_start, range_end = db.get_volume_chapter_range(vols, vol_idx)
+    
+    # Filter out the volume from volumes list
     vols = [v for v in vols if v.get("volume_index") != vol_idx]
     db.save_volumes(novel_id, vols)
     
-    # Also delete chapters in this volume
+    # Also delete chapters in this volume (by chapter_index range, not volume_index field)
     plot = db.get_stitched_plot(novel_id)
     if plot and "chapters" in plot:
-        plot["chapters"] = [ch for ch in plot["chapters"] if ch.get("volume_index", 0) != vol_idx]
+        # chapters don't have volume_index field, use chapter_index range instead
+        plot["chapters"] = [
+            ch for ch in plot["chapters"]
+            if not (range_start <= (ch.get("chapter_index", 0) or 0) <= range_end)
+        ]
         db.save_plot_chapters(novel_id, plot)
     
     return {"status": "success"}

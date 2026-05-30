@@ -955,7 +955,7 @@ export function renderPlotTab() {
                             <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: var(--font-2xs); text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
                                 <div class="chapter-card-actions" onclick="event.stopPropagation()">
                                     <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
-                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${globalIdx})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
+                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${chapterIndex})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
                                 </div>
                             </div>
                             <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: var(--font-sm); font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
