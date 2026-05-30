@@ -473,19 +473,35 @@ export function renderPlotTab() {
     
     el.editorPlotJson.value = state.currentNovelData?.plot_raw || JSON.stringify({ chapters: [] }, null, 2);
     
-    // Auto-generate virtual volumes if missing but chapters exist
-    if (volumes.length === 0 && chapters.length > 0) {
-        const maxChapterIndex = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
-        const numVolumes = Math.ceil(maxChapterIndex / 50) || 1;
-        for (let i = 1; i <= numVolumes; i++) {
-            volumes.push({
-                volume_index: i,
-                title: `第 ${i} 卷`,
-                summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
-                factions: "全域陣列",
-                is_dirty: 0
-            });
+    // Auto-generate virtual volumes and pad missing volume indexes (e.g., Vol 1 to Vol max)
+    let maxVolIdx = 0;
+    if (volumes.length > 0) {
+        maxVolIdx = Math.max(...volumes.map(v => parseInt(v.volume_index) || 0));
+    }
+    if (chapters.length > 0) {
+        const maxChIdx = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
+        maxVolIdx = Math.max(maxVolIdx, Math.ceil(maxChIdx / 50) || 1);
+    }
+    
+    if (maxVolIdx > 0) {
+        const fullVolumes = [];
+        for (let i = 1; i <= maxVolIdx; i++) {
+            const existingVol = volumes.find(v => parseInt(v.volume_index) === i);
+            if (existingVol) {
+                fullVolumes.push(existingVol);
+            } else {
+                fullVolumes.push({
+                    volume_index: i,
+                    title: `第 ${i} 卷`,
+                    summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
+                    factions: "全域陣列",
+                    is_dirty: 0,
+                    chapter_count: 50,
+                    chapters_outline: []
+                });
+            }
         }
+        volumes = fullVolumes;
     }
     
     // Expose scrollToVolume function globally
@@ -1046,9 +1062,39 @@ export function renderPlotTab() {
                 if (tlNav) {
                     tlNav.innerHTML = ''; // 清空舊內容
                     
-                    // 💡 動態讀取最新的全局數據，避免閉包變數鎖定 (Closure locking)
-                    const volumes = state.currentNovelData?.volumes || [];
+                    // 💡 動態讀取最新的全局數據，並自動填充缺失的虛擬卷
+                    let volumes = state.currentNovelData?.volumes || [];
                     const chapters = state.currentNovelData?.plot?.chapters || [];
+                    
+                    let maxVolIdx = 0;
+                    if (volumes.length > 0) {
+                        maxVolIdx = Math.max(...volumes.map(v => parseInt(v.volume_index) || 0));
+                    }
+                    if (chapters.length > 0) {
+                        const maxChIdx = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
+                        maxVolIdx = Math.max(maxVolIdx, Math.ceil(maxChIdx / 50) || 1);
+                    }
+                    
+                    if (maxVolIdx > 0) {
+                        const fullVolumes = [];
+                        for (let i = 1; i <= maxVolIdx; i++) {
+                            const existingVol = volumes.find(v => parseInt(v.volume_index) === i);
+                            if (existingVol) {
+                                fullVolumes.push(existingVol);
+                            } else {
+                                fullVolumes.push({
+                                    volume_index: i,
+                                    title: `第 ${i} 卷`,
+                                    summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
+                                    factions: "全域陣列",
+                                    is_dirty: 0,
+                                    chapter_count: 50,
+                                    chapters_outline: []
+                                });
+                            }
+                        }
+                        volumes = fullVolumes;
+                    }
                     
                     // 💡 動態生成篇卷範圍累加器（完美對齊卡片渲染邏輯）
                     const sortedVols = [...volumes].sort((a, b) => parseInt(a.volume_index) - parseInt(b.volume_index));

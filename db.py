@@ -440,6 +440,16 @@ def db_init():
     # Clean up empty configurations to let .env configuration take priority
     cursor.execute("DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL")
     
+    # 9. Global Foreshadowing Blueprint table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS foreshadowing_blueprints (
+        novel_id TEXT PRIMARY KEY,
+        blueprint_json TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+    )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -518,6 +528,11 @@ def save_volumes(novel_id, volumes_list):
         )
     conn.commit()
     conn.close()
+    
+    try:
+        precompute_global_foreshadowing(novel_id)
+    except Exception as e:
+        print(f"[WARN] Failed to auto-precompute global foreshadowing inside save_volumes: {e}")
 
 def get_volumes(novel_id):
     conn = get_db_connection()
@@ -1827,6 +1842,11 @@ def delete_volume(novel_id, volume_index):
             
     conn.commit()
     conn.close()
+    
+    try:
+        precompute_global_foreshadowing(novel_id)
+    except Exception as e:
+        print(f"[WARN] Failed to auto-precompute global foreshadowing inside delete_volume: {e}")
 
 def get_stitched_plot(novel_id):
     volumes = get_volumes(novel_id)
@@ -2115,5 +2135,102 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
     conn.close()
     print(f"[HEALING SUCCESS] Deleted and shifted chapter range [{start_del}, {end_del}] for novel {novel_id}.")
     return start_del, end_del
+
+
+def precompute_global_foreshadowing(novel_id):
+    """
+    [新功能] 根據卷結構與世界觀伏筆/轉折設定，預計算全書總章數與全域伏筆/轉折的絕對章節分配，
+    並儲存為單一且確定的 Blueprint JSON，防止 volume_skeleton 生成時漂移。
+    """
+    # 1. 取得所有篇卷，計算總章數 T
+    volumes = get_volumes(novel_id)
+    if not volumes:
+        return {
+            "T": 120,
+            "foreshadowing_allocations": [],
+            "turning_allocations": []
+        }
+        
+    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
+    _, T = get_volume_chapter_range(volumes, sorted_vols[-1]["volume_index"])
+    
+    # 2. 取得世界觀中所有的伏筆種子與關鍵轉折點
+    wb = get_latest_worldbuilding(novel_id)
+    worldview_parsed = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
+    all_turns = worldview_parsed.get("key_turning_points", [])
+    
+    import hashlib
+    import random
+    
+    # 3. 初始化確定性隨機數生成器
+    h_seed = int(hashlib.md5(f"global_blueprint_{novel_id}".encode('utf-8')).hexdigest(), 16) % (2**32)
+    r = random.Random(h_seed)
+    
+    # 4. 棋盤式散射：伏筆埋設與回收位置
+    foreshadowing_allocations = []
+    min_span = max(1, T // 10)
+    for idx, seed in enumerate(all_seeds):
+        if T <= 2:
+            P = 1
+            R = T
+        else:
+            P = r.randint(1, max(1, T - min_span))
+            R = r.randint(P + min_span, T)
+        foreshadowing_allocations.append((P, R))
+        
+    # 5. 關鍵轉折點位置
+    turning_allocations = []
+    for jdx, turn in enumerate(all_turns):
+        K = r.randint(1, T)
+        turning_allocations.append(K)
+        
+    blueprint = {
+        "T": T,
+        "foreshadowing_allocations": foreshadowing_allocations,
+        "turning_allocations": turning_allocations
+    }
+    
+    # 6. 保存至資料庫
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO foreshadowing_blueprints (novel_id, blueprint_json) VALUES (?, ?)",
+        (novel_id, json.dumps(blueprint, ensure_ascii=False))
+    )
+    conn.commit()
+    conn.close()
+    
+    print(f"[DB] Global foreshadowing blueprint precomputed successfully for novel {novel_id} (T={T})")
+    return blueprint
+
+
+def get_global_foreshadowing_blueprint(novel_id):
+    """
+    [新功能] 獲取預計算的伏筆分配藍圖。
+    具備自癒檢驗：若藍圖長度與目前世界觀種子/轉折點個數不一致，或尚未預計算，則會自動重算！
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    worldview_parsed = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
+    all_turns = worldview_parsed.get("key_turning_points", [])
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT blueprint_json FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,)).fetchone()
+    conn.close()
+    
+    if row:
+        try:
+            blueprint = json.loads(row["blueprint_json"])
+            # 自癒檢驗長度是否一致
+            if (len(blueprint.get("foreshadowing_allocations", [])) == len(all_seeds) and 
+                len(blueprint.get("turning_allocations", [])) == len(all_turns)):
+                return blueprint
+        except Exception as e:
+            print(f"[WARN] Failed to load/validate global blueprint: {e}")
+            
+    # 若不一致或尚未預計算，自動觸發並回傳預計算結果
+    return precompute_global_foreshadowing(novel_id)
 
 

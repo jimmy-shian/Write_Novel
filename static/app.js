@@ -2337,7 +2337,7 @@ function openManualChapterInsertModal(afterChapterIndex) {
         try {
             await requestAPI(`/api/novels/${state.currentNovelId}/plot/chapters/insert`, 'POST', {
                 insert_after_index: afterChapterIndex,
-                chapter_data: chapterData
+                new_chapter: chapterData
             });
             modal.classList.remove('active');
             showToast('新章節已插入');
@@ -4935,46 +4935,55 @@ function setupEventListeners() {
                 // Refresh memory to keep SQLite state in sync
                 await loadNovelDetails(state.currentNovelId);
                 
-                // Parse the response for TRIGGER_AGENT action
+                // Parse the response for TRIGGER_AGENT action (also support stage names directly as actions)
                 const decisionResult = parseDirectorDecisionText(responseText, state.activeTab || 'init');
-                if (decisionResult && decisionResult.action === 'TRIGGER_AGENT') {
-                    const target = decisionResult.target;
-                    const hint = decisionResult.hint;
-                    const volIdx = decisionResult.volume_index;
-                    const chIdx = decisionResult.chapter_index;
+                if (decisionResult) {
+                    let action = decisionResult.action;
+                    let target = decisionResult.target;
+                    const validStages = ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer', 'editor'];
                     
-                    if (target) {
-                        showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
+                    if (action === 'TRIGGER_AGENT' || validStages.includes(String(action).toLowerCase())) {
+                        if (validStages.includes(String(action).toLowerCase()) && !target) {
+                            target = String(action).toLowerCase();
+                        }
                         
-                        // Check if state.isAutoExecuteMode is true
-                        if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer'].includes(target)) {
-                            showToast(`🚀 [一鍵流程] 將從「${target}」階段開始向後自動執行...`);
-                            state.isPipelineRunning = true;
-                            showPipelineProgress(true);
+                        const hint = decisionResult.hint;
+                        const volIdx = decisionResult.volume_index;
+                        const chIdx = decisionResult.chapter_index;
+                        
+                        if (target) {
+                            showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
                             
-                            await executeDirectorAction({
-                                action: 'CONTINUE',
-                                target: target,
-                                hint: hint,
-                                volume_index: volIdx,
-                                chapter_index: chIdx
-                            }, hint || '請根據總監指示繼續創作');
-                        } else {
-                            showToast(`⚡ [非一鍵流程] 僅執行「${target}」單一步驟，執行完成後將停止。`);
-                            state.isPipelineRunning = false;
-                            showPipelineProgress(false);
-                            
-                            if (target === 'writer') {
-                                const activeCh = chIdx || state.activeChapterIndex || 1;
-                                state.activeChapterIndex = activeCh;
-                                await executePipelineStage('writer', hint || '請撰寫正文');
-                            } else if (target === 'editor') {
-                                const activeCh = chIdx || state.activeChapterIndex || 1;
-                                await executeChapterProseEditFlow(activeCh, hint || '請精修正文');
-                            } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot'].includes(target)) {
-                                await executePipelineStage(target, hint || '請根據總監指示更新');
+                            // Check if state.isAutoExecuteMode is true
+                            if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer'].includes(target)) {
+                                showToast(`🚀 [一鍵流程] 將從「${target}」階段開始向後自動執行...`);
+                                state.isPipelineRunning = true;
+                                showPipelineProgress(true);
+                                
+                                await executeDirectorAction({
+                                    action: 'CONTINUE',
+                                    target: target,
+                                    hint: hint,
+                                    volume_index: volIdx,
+                                    chapter_index: chIdx
+                                }, hint || '請根據總監指示繼續創作');
                             } else {
-                                console.warn('Unknown TRIGGER_AGENT target:', target);
+                                showToast(`⚡ [非一鍵流程] 僅執行「${target}」單一步驟，執行完成後將停止。`);
+                                state.isPipelineRunning = false;
+                                showPipelineProgress(false);
+                                
+                                if (target === 'writer') {
+                                    const activeCh = chIdx || state.activeChapterIndex || 1;
+                                    state.activeChapterIndex = activeCh;
+                                    await executePipelineStage('writer', hint || '請撰寫正文');
+                                } else if (target === 'editor') {
+                                    const activeCh = chIdx || state.activeChapterIndex || 1;
+                                    await executeChapterProseEditFlow(activeCh, hint || '請精修正文');
+                                } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot'].includes(target)) {
+                                    await executePipelineStage(target, hint || '請根據總監指示更新');
+                                } else {
+                                    console.warn('Unknown TRIGGER_AGENT target:', target);
+                                }
                             }
                         }
                     }

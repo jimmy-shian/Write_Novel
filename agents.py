@@ -158,6 +158,13 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
                 db.save_volumes(novel_id, list(merged_vols.values()))
             else:
                 db.save_volumes(novel_id, vols_list)
+            
+            # 預計算全局伏筆與轉折藍圖
+            try:
+                db.precompute_global_foreshadowing(novel_id)
+            except Exception as e:
+                print(f"[WARN] Failed to precompute global foreshadowing in run_volumes_planner: {e}")
+                
         db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="chat")
 
 
@@ -199,40 +206,11 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
     all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
     all_turns = worldview_parsed.get("key_turning_points", [])
     
-    import hashlib
-    import random
-    
-    # Restore the global absolute axis
-    # Calculate the total chapter count T of the book
-    sorted_vols = sorted(all_vols, key=lambda x: int(x.get("volume_index", 0)))
-    if sorted_vols:
-        _, T = db.get_volume_chapter_range(all_vols, sorted_vols[-1]["volume_index"])
-    else:
-        T = 120  # fallback
-
-    # Initialize the deterministic random generator
-    h_seed = int(hashlib.md5(f"global_blueprint_{novel_id}".encode('utf-8')).hexdigest(), 16) % (2**32)
-    r = random.Random(h_seed)
-
-    # Chessboard scattering:
-    # 1. foreshadowing seeds (plants and payoffs)
-    foreshadowing_allocations = []
-    # min span between planting and payoff is 10% of total chapters, or at least 1 chapter
-    min_span = max(1, T // 10)
-    for idx, seed in enumerate(all_seeds):
-        if T <= 2:
-            P = 1
-            R = T
-        else:
-            P = r.randint(1, max(1, T - min_span))
-            R = r.randint(P + min_span, T)
-        foreshadowing_allocations.append((P, R))
-
-    # 2. key turning points
-    turning_allocations = []
-    for jdx, turn in enumerate(all_turns):
-        K = r.randint(1, T)
-        turning_allocations.append(K)
+    # 載入全局預計算的伏筆與轉折藍圖
+    blueprint = db.get_global_foreshadowing_blueprint(novel_id)
+    T = blueprint.get("T", 120)
+    foreshadowing_allocations = blueprint.get("foreshadowing_allocations", [])
+    turning_allocations = blueprint.get("turning_allocations", [])
 
     # Volume Slicing
     allocated_plants = []
@@ -801,3 +779,10 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
         if chapters_skeleton:
             db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
             db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架增量更新完成", message_type="chat")
+
+
+def run_global_foreshadowing_precompute(novel_id):
+    """
+    [新功能] 預計算全域伏筆與轉折絕對分配藍圖的包裝函數
+    """
+    db.precompute_global_foreshadowing(novel_id)

@@ -257,6 +257,61 @@ class TestAINovelFactory(unittest.TestCase):
             self.assertTrue(1 <= P <= T)
             self.assertTrue(1 <= R <= T)
 
+    # --- 9. Global Foreshadowing Precomputation Tests ---
+    def test_global_foreshadowing_precomputation(self):
+        # 1. Save worldview with seeds and turning points
+        wv_content = json.dumps({
+            "theme": "伏筆測試",
+            "main_conflict": "衝突",
+            "worldview": "世界觀",
+            "macro_outline": "大綱",
+            "multi_act_structure": [],
+            "progressive_character_plan": [],
+            "foreshadowing_seeds": ["伏筆A", "伏筆B", "伏筆C"],
+            "key_turning_points": ["轉折X", "轉折Y"]
+        }, ensure_ascii=False)
+        db.save_worldbuilding(self.novel_id, wv_content)
+        
+        # 2. Save some volumes with specified chapter count (e.g. Vol 1 has 30 chapters, Vol 2 has 40 chapters)
+        volumes_list = [
+            {"volume_index": 1, "title": "第一卷", "summary": "摘要1", "chapter_count": 30},
+            {"volume_index": 2, "title": "第二卷", "summary": "摘要2", "chapter_count": 40}
+        ]
+        db.save_volumes(self.novel_id, volumes_list)
+        
+        # 3. Read precomputed blueprint from DB (since save_volumes triggers auto-precompute)
+        blueprint = db.get_global_foreshadowing_blueprint(self.novel_id)
+        self.assertIsNotNone(blueprint)
+        
+        # T should be 30 + 40 = 70 chapters
+        self.assertEqual(blueprint["T"], 70)
+        self.assertEqual(len(blueprint["foreshadowing_allocations"]), 3)
+        self.assertEqual(len(blueprint["turning_allocations"]), 2)
+        
+        # Verify allocations ranges
+        for P, R in blueprint["foreshadowing_allocations"]:
+            self.assertTrue(1 <= P < R <= 70)
+        for K in blueprint["turning_allocations"]:
+            self.assertTrue(1 <= K <= 70)
+            
+        # 4. Modify worldview (add a new seed) and test automatic self-healing precomputation
+        wv_content_updated = json.dumps({
+            "theme": "伏筆測試",
+            "main_conflict": "衝突",
+            "worldview": "世界觀",
+            "macro_outline": "大綱",
+            "multi_act_structure": [],
+            "progressive_character_plan": [],
+            "foreshadowing_seeds": ["伏筆A", "伏筆B", "伏筆C", "新增伏筆D"],
+            "key_turning_points": ["轉折X", "轉折Y"]
+        }, ensure_ascii=False)
+        db.save_worldbuilding(self.novel_id, wv_content_updated)
+        
+        # Calling get_global_foreshadowing_blueprint should auto-detect seed count mismatch (4 seeds vs 3 in old blueprint) and heal it
+        blueprint_updated = db.get_global_foreshadowing_blueprint(self.novel_id)
+        self.assertEqual(len(blueprint_updated["foreshadowing_allocations"]), 4)
+        self.assertEqual(blueprint_updated["T"], 70)
+
 
 if __name__ == "__main__":
     unittest.main()
