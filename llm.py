@@ -159,13 +159,19 @@ def normalize_messages(messages):
 
 def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     """
-    Calls the LLM API using standard streaming and yields custom SSE formatted chunks.
-    Yielded structure:
+    Calls the LLM API using standard streaming with a robust 10-retry guarding engine.
+    Applies exponential backoff with jitter.
+    Yields custom SSE formatted chunks:
     - {"type": "thinking", "delta": "..."}
     - {"type": "content", "delta": "..."}
     - {"type": "error", "message": "..."}
+    - {"type": "reset"}
     - {"type": "done"}
     """
+    import time
+    import random
+    from models.parsers import extract_json_block
+
     config = get_config_for_agent(agent_name)
     
     if not config["api_key"]:
@@ -187,7 +193,8 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     
     if "gpt-oss" in config["model"] and normalized_msgs and normalized_msgs[0]["role"] == "system":
         normalized_msgs[0]["content"] = "Reasoning: high\n" + normalized_msgs[0]["content"]
-    payload = {
+        
+    payload_base = {
         "model": config["model"],
         "messages": normalized_msgs,
         "max_tokens": int(config["max_tokens"]),
@@ -196,134 +203,168 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         "stream": True,
     }
     
-    # 【Step 2 修復】避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
-    if agent_name in ["architect", "character", "plot"] and "gpt-oss" not in config["model"]:
-        payload["response_format"] = {"type": "json_object"}
+    # 避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
+    if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in config["model"]:
+        payload_base["response_format"] = {"type": "json_object"}
     
     if config["enable_thinking"]:
-        payload["chat_template_kwargs"] = {"enable_thinking": True}
+        payload_base["chat_template_kwargs"] = {"enable_thinking": True}
         
     # Auto-inject preset parameters if model matches
     model_name = config["model"]
     if model_name in NVIDIA_MODEL_PRESETS:
-        payload.update(NVIDIA_MODEL_PRESETS[model_name])
+        payload_base.update(NVIDIA_MODEL_PRESETS[model_name])
         
     if custom_payload_overrides:
-        payload.update(custom_payload_overrides)
+        payload_base.update(custom_payload_overrides)
+
+    max_retries = 10
+    fixed_delay = 2.0  # 固定間隔 2 秒，不再使用指數退避
+
+    for attempt in range(1, max_retries + 1):
+        accumulated_content = []
+        has_yielded_anything = False
+        in_think_block = False
         
-    try:
-        # Ensure proper endpoint path for NVIDIA API
-        base_url = config["base_url"].rstrip("/")
-        if not base_url.endswith("/chat/completions"):
-            base_url += "/chat/completions"
-        
-        response = requests.post(
-            base_url,
-            headers=headers,
-            json=payload,
-            stream=True,
-            timeout=300
-        )
-        
-        if response.status_code != 200:
-            error_text = response.text
-            try:
-                err_json = response.json()
-                error_msg = err_json.get("error", {}).get("message", error_text)
-            except:
-                error_msg = error_text
+        try:
+            # If this is not the first attempt, yield a reset and retry notification
+            if attempt > 1:
+                yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "message": f"⚠️ [系統防禦重試] API 呼叫異常或輸出格式有誤。正在進行第 {attempt}/{max_retries} 次自動重試... (等待 {fixed_delay:.1f} 秒)"
+                }, ensure_ascii=False) + "\n\n"
                 
-            yield "data: " + json.dumps({
-                "type": "error",
-                "message": f"API Error ({response.status_code}): {error_msg}"
-            }, ensure_ascii=False) + "\n\n"
+                # 固定間隔 2 秒
+                time.sleep(fixed_delay)
+                
+            base_url = config["base_url"].rstrip("/")
+            if not base_url.endswith("/chat/completions"):
+                base_url += "/chat/completions"
+            
+            response = requests.post(
+                base_url,
+                headers=headers,
+                json=payload_base,
+                stream=True,
+                timeout=300
+            )
+            
+            if response.status_code != 200:
+                error_text = response.text
+                try:
+                    err_json = response.json()
+                    error_msg = err_json.get("error", {}).get("message", error_text)
+                except:
+                    error_msg = error_text
+                raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
+                
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                    
+                decoded_line = line.decode("utf-8").strip()
+                
+                if decoded_line.startswith("data:"):
+                    data_str = decoded_line[5:].strip()
+                    
+                    if data_str == "[DONE]":
+                        break
+                        
+                    try:
+                        data_json = json.loads(data_str)
+                        choices = data_json.get("choices", [])
+                        if not choices:
+                            continue
+                            
+                        delta = choices[0].get("delta", {})
+                        
+                        # Check for reasoning fields (Nvidia/Nemotron reasoning stream fields)
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                        content = delta.get("content") or ""
+                        
+                        if reasoning:
+                            has_yielded_anything = True
+                            yield "data: " + json.dumps({
+                                "type": "thinking",
+                                "delta": reasoning
+                            }, ensure_ascii=False) + "\n\n"
+                            continue
+                            
+                        if content:
+                            has_yielded_anything = True
+                            
+                            # Detect inline think blocks (some models use <think> tags)
+                            think_start = "<think>"
+                            think_end = "</think>"
+                            
+                            if think_start in content:
+                                in_think_block = True
+                                parts = content.split(think_start)
+                                if parts[0]:
+                                    accumulated_content.append(parts[0])
+                                    yield "data: " + json.dumps({
+                                        "type": "content",
+                                        "delta": parts[0]
+                                    }, ensure_ascii=False) + "\n\n"
+                                if len(parts) > 1 and parts[1]:
+                                    yield "data: " + json.dumps({
+                                        "type": "thinking",
+                                        "delta": parts[1]
+                                    }, ensure_ascii=False) + "\n\n"
+                                continue
+                                
+                            if think_end in content:
+                                in_think_block = False
+                                parts = content.split(think_end)
+                                if parts[0]:
+                                    yield "data: " + json.dumps({
+                                        "type": "thinking",
+                                        "delta": parts[0]
+                                    }, ensure_ascii=False) + "\n\n"
+                                if len(parts) > 1 and parts[1]:
+                                    accumulated_content.append(parts[1])
+                                    yield "data: " + json.dumps({
+                                        "type": "content",
+                                        "delta": parts[1]
+                                    }, ensure_ascii=False) + "\n\n"
+                                continue
+                                
+                            if in_think_block:
+                                yield "data: " + json.dumps({
+                                    "type": "thinking",
+                                    "delta": content
+                                }, ensure_ascii=False) + "\n\n"
+                            else:
+                                accumulated_content.append(content)
+                                yield "data: " + json.dumps({
+                                    "type": "content",
+                                    "delta": content
+                                }, ensure_ascii=False) + "\n\n"
+                                
+                    except Exception as e:
+                        continue
+            
+            # --- Validations ---
+            full_text = "".join(accumulated_content)
+            
+            # If JSON is expected, validate it
+            if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+                parsed_json = extract_json_block(full_text)
+                if not parsed_json or len(parsed_json) == 0:
+                    raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
+                    
+            # If we reached here, the call succeeded!
             yield "data: " + json.dumps({"type": "done"}) + "\n\n"
             return
             
-        in_think_block = False
-        
-        for line in response.iter_lines():
-            if not line:
-                continue
-                
-            decoded_line = line.decode("utf-8").strip()
-            
-            if decoded_line.startswith("data:"):
-                data_str = decoded_line[5:].strip()
-                
-                if data_str == "[DONE]":
-                    break
-                    
-                try:
-                    data_json = json.loads(data_str)
-                    choices = data_json.get("choices", [])
-                    if not choices:
-                        continue
-                        
-                    delta = choices[0].get("delta", {})
-                    
-                    # Check for thinking model reasoning field
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    content = delta.get("content") or ""
-                    
-                    if reasoning:
-                        yield "data: " + json.dumps({
-                            "type": "thinking",
-                            "delta": reasoning
-                        }, ensure_ascii=False) + "\n\n"
-                        continue
-                        
-                    if content:
-                        # Detect inline think blocks (some models use <think> tags)
-                        think_start = "<think>"
-                        think_end = "</think>"
-                        
-                        if think_start in content:
-                            in_think_block = True
-                            parts = content.split(think_start)
-                            if parts[0]:
-                                yield "data: " + json.dumps({
-                                    "type": "content",
-                                    "delta": parts[0]
-                                }, ensure_ascii=False) + "\n\n"
-                            if len(parts) > 1 and parts[1]:
-                                yield "data: " + json.dumps({
-                                    "type": "thinking",
-                                    "delta": parts[1]
-                                }, ensure_ascii=False) + "\n\n"
-                            continue
-                            
-                        if think_end in content:
-                            in_think_block = False
-                            parts = content.split(think_end)
-                            if parts[0]:
-                                yield "data: " + json.dumps({
-                                    "type": "thinking",
-                                    "delta": parts[0]
-                                }, ensure_ascii=False) + "\n\n"
-                            if len(parts) > 1 and parts[1]:
-                                yield "data: " + json.dumps({
-                                    "type": "content",
-                                    "delta": parts[1]
-                                }, ensure_ascii=False) + "\n\n"
-                            continue
-                            
-                        # Standard stream forwarding
-                        yield "data: " + json.dumps({
-                            "type": "thinking" if in_think_block else "content",
-                            "delta": content
-                        }, ensure_ascii=False) + "\n\n"
-                        
-                except Exception as e:
-                    # Ignore JSON parsing errors for partial chunks
-                    continue
-                    
-        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-        
-    except requests.exceptions.RequestException as e:
-        yield "data: " + json.dumps({
-            "type": "error",
-            "message": f"Request Failed: {str(e)}"
-        }, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-
+        except Exception as e:
+            print(f"[RETRY ENGINE] Attempt {attempt}/{max_retries} failed for agent '{agent_name}'. Error: {e}")
+            if attempt == max_retries:
+                # Last attempt failed, yield the final error
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "message": f"API 呼叫在重試 {max_retries} 次後依然失敗。錯誤訊息: {str(e)}"
+                }, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+                return
