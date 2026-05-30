@@ -842,11 +842,13 @@ def get_latest_characters(novel_id):
     if row:
         data = dict(row)
         try:
-            data["parsed_data"] = json.loads(data["json_data"])
+            from models.parsers import extract_json_block
+            data["parsed_data"] = extract_json_block(data["json_data"])
         except:
             data["parsed_data"] = {}
         return data
     return None
+
 
 def clean_and_deduplicate_characters(characters_list):
     if not isinstance(characters_list, list):
@@ -1026,7 +1028,8 @@ def save_characters(novel_id, json_data):
     else:
         json_str = _to_traditional(json_data)
         try:
-            parsed = json.loads(json_str)
+            from models.parsers import extract_json_block
+            parsed = extract_json_block(json_str)
             if isinstance(parsed, dict) and "characters" in parsed:
                 parsed["characters"] = clean_and_deduplicate_characters(parsed["characters"])
                 json_str = json.dumps(parsed, ensure_ascii=False)
@@ -1064,7 +1067,8 @@ def get_latest_plot_chapters(novel_id):
     if row:
         data = dict(row)
         try:
-            parsed = json.loads(data["outline_json"])
+            from models.parsers import extract_json_block
+            parsed = extract_json_block(data["outline_json"])
             if isinstance(parsed, list):
                 data["parsed_data"] = {"chapters": parsed}
             else:
@@ -1084,7 +1088,10 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
     else:
         json_str = _to_traditional(outline_json)
         try:
-            parsed_dict = json.loads(outline_json)
+            from models.parsers import extract_json_block
+            parsed_dict = extract_json_block(json_str)
+            if parsed_dict:
+                json_str = json.dumps(parsed_dict, ensure_ascii=False)
         except:
             parsed_dict = {}
         
