@@ -74,14 +74,14 @@ DIRECTOR_COMMON_FOOTER = """
 | `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
 | `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
 | `GO_BACK_TO_WORLDVIEW` | 發現世界觀重大缺失（大綱方向/風格 和設定不符） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
-| `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失 (大綱中提到，但是卻未在角色列表中) | `hint`（具體要修改的角色內容） |
+| `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失 (角色列表為空) | `hint`（具體要修改的角色內容） |
 | `GO_BACK_TO_PLOT` | 發現大綱重大缺失 (大綱為空) | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
 | `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
 | `GO_BACK_TO_SKELETON_EXPANSION` | 發現章節缺漏、序號中斷或空殼章節，退回至骨架增生 (volume_skeleton) 重新生成大綱骨架 | 無 |
 | `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
 | `FINISH` | 全部任務已完成 | 無 |
 | `INCREMENTAL_MODIFY_CHARACTER` | 局部修改角色的特定欄位 | `target_char_index`（角色索引）, `field_name`（要修改的欄位）, `hint`（修改要求） |
-| `INCREMENTAL_APPEND_CHARACTER` | 增量追加新角色 | `hint`（新角色要求） |
+| `INCREMENTAL_APPEND_CHARACTER` | 增量追加新角色(大綱中提到，但是卻未在角色列表中) | `hint`（新角色要求） |
 | `INCREMENTAL_MODIFY_SKELETON` | 卷骨架局部修正 | `volume_index`（卷索引）, `hint`（修正要求） |
 | `INCREMENTAL_MODIFY_CHARACTER_FULL` | 角色局部增量修正（完整模式） | `hint`（修正要求）, `target_char_index`（若有） |
 
@@ -93,7 +93,7 @@ DIRECTOR_COMMON_FOOTER = """
    - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `volumes`。
    - 當 `current_stage` 為 `volumes`，合格後 `target` 應為 `volume_skeleton`。
    - 當 `current_stage` 為 `volume_skeleton`，合格後 `target` 應為 `plot`。
-   - 當 `current_stage` 為 `plot`，合格後 `target` 應為 `writer`。
+   - 當 `current_stage` 為 `plot`，若全書詳細大綱尚未全部細化完成，合格後 `target` 仍應為 `plot`（配合 `chapter_index` 進行下一章骨架的細化）；若詳細大綱已全書完成，合格後 `target` 應為 `writer`。
 4. **增量/局部修改優先原則**：
    - 如果當前 `characters` 設計中大部分極佳，只有少數特定角色設定需要微調，優先選擇 `INCREMENTAL_MODIFY_CHARACTER` 或 `INCREMENTAL_MODIFY_CHARACTER_FULL` 而非全量重新跑。
    - 如果當前角色庫有缺漏需補充新人物，優先選擇 `INCREMENTAL_APPEND_CHARACTER`。
@@ -125,6 +125,8 @@ DIRECTOR_COMMON_FOOTER = """
 }}
 ```
 
-## 重要提醒
-- ⚠️ 【plot/plot_review 階段強制放行規則】：當 current_stage 為 `plot` 或 `plot_review` 時，除非大綱出現未登記的新角色需要 `GO_BACK_TO_CHARACTERS`，否則你**必須**直接輸出 `CONTINUE`，target=`plot`，不得以任何理由阻斷。此為最高優先的強制覆蓋規則。
+- ⚠️ 【plot 階段剛性放行與流轉規則】：當 current_stage 為 `plot` 時，你審查當前章節大綱合格後，必須特別注意末尾《系統底層剛性校驗報告》中「詳細章節大綱層」之進度與狀態：
+  1. 若狀態為「❌ 未完成」，代表全書大綱尚未全部章節細化完畢。此時，你**必須**輸出 `"action": "CONTINUE", "target": "plot"`，且必須將 `"chapter_index"` 設為報告中指出的 `👉 【下一章應生成大綱之目標 chapter_index】` 的整數值，以讓系統繼續推進下一章的詳細大綱生成！絕對禁止將 target 設為 "writer" 或其他值！
+  2. 若狀態為「✅ 已完成」，代表全書所有大綱章節已全部細化完畢。此時，你**必須**輸出 `"action": "CONTINUE", "target": "writer"`，且將 `"chapter_index"` 設為 1，正式將整個專案推進到正文寫作階段！
+- ⚠️ 【Plot 階段退回規則】：若當前章節大綱出現了不在角色聖經中的新人物，優先使用 `INCREMENTAL_APPEND_CHARACTER` 自動擴增角色，或在有嚴重大綱缺失時退回 `GO_BACK_TO_PLOT`。
 """

@@ -140,7 +140,11 @@ export async function executePipelineStage(stage, userPrompt) {
                 break;
             case 'plot':
                 endpoint = '/api/agent/plot-planner';
-                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                body = { 
+                    novel_id: state.currentNovelId, 
+                    chapter_index: state.activeChapterIndex || 1,
+                    user_prompt: userPrompt 
+                };
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
                 agentName = 'Plot Planner (章節劇情規劃師)';

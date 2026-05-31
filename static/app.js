@@ -395,6 +395,9 @@ async function executeDirectorAction(decision, userPrompt) {
                 showToast('🎭 開始全局伏筆編織對齊...');
                 await executePipelineStage('foreshadowing_orchestration', userPrompt);
             } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱' || target === '詳細章') {
+                if (decision.chapter_index) {
+                    state.activeChapterIndex = parseInt(decision.chapter_index);
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
@@ -3004,7 +3007,11 @@ async function executeToolCall(tool, params) {
                 el.editorPlotJson.value = '';
                 streamAPI(
                     '/api/agent/plot-planner',
-                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+                    { 
+                        novel_id: state.currentNovelId, 
+                        chapter_index: params.chapter_index || state.activeChapterIndex || 1,
+                        user_prompt: user_prompt || params.hint 
+                    },
                     (delta) => {
                         window.updateAgentStreamOutput('plot', delta);
                     },
@@ -3192,7 +3199,11 @@ async function executeAutoRegenerate(target, params) {
                 const prompt = hint || "請重新規劃章節大綱";
                 streamAPI(
                     '/api/agent/plot-planner',
-                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    { 
+                        novel_id: state.currentNovelId, 
+                        chapter_index: state.activeChapterIndex || 1,
+                        user_prompt: prompt 
+                    },
                     (delta) => {
                         window.updateAgentStreamOutput('plot', delta);
                     },
@@ -3391,7 +3402,11 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
         let thinkingText = ""; // 新增此行
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision',
-            { current_stage: currentStage, user_prompt: userPrompt },
+            { 
+                current_stage: currentStage, 
+                user_prompt: userPrompt,
+                chapter_index: state.activeChapterIndex || 1
+            },
             // onThinking
             (thinkingDelta) => {
                 thinkingText += thinkingDelta; // 新增此行
@@ -4100,7 +4115,11 @@ function runFullPipeline(userPrompt) {
         
         streamAPI(
             '/api/agent/plot-planner',
-            { novel_id: state.currentNovelId, user_prompt: userPrompt },
+            { 
+                novel_id: state.currentNovelId, 
+                chapter_index: state.activeChapterIndex || 1,
+                user_prompt: userPrompt 
+            },
             () => {},
             (delta) => {
                 if (el.editorPlotJson) {
@@ -4292,7 +4311,11 @@ async function handleDrawerPromptSubmit() {
     if (state.activeDrawerAction === 'plot') {
         startAgentStream(
             '/api/agent/plot-planner',
-            { novel_id: state.currentNovelId, user_prompt: userPrompt },
+            { 
+                novel_id: state.currentNovelId, 
+                chapter_index: state.activeChapterIndex || 1,
+                user_prompt: userPrompt 
+            },
             el.editorPlotJson,
             async () => {
                 showToast("章節大綱拆分完畢");
@@ -5346,7 +5369,11 @@ function startStage3_Plot(regenerate = false, hint = null) {
     
     streamAPI(
         '/api/agent/plot-planner',
-        { novel_id: state.currentNovelId, user_prompt: plotPrompt },
+        { 
+            novel_id: state.currentNovelId, 
+            chapter_index: state.activeChapterIndex || 1,
+            user_prompt: plotPrompt 
+        },
         () => {},
         (delta) => {
             if (el.editorPlotJson) {

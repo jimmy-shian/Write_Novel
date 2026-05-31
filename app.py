@@ -93,6 +93,7 @@ class VolumeSkeletonRequest(BaseModel):
 
 class PlotPlannerRequest(BaseModel):
     novel_id: str
+    chapter_index: Optional[int] = None
     user_prompt: Optional[str] = None
     planner_directive: Optional[str] = None
 
@@ -113,6 +114,7 @@ class CopilotChatRequest(BaseModel):
 class DirectorDecisionRequest(BaseModel):
     current_stage: str
     user_prompt: Optional[str] = None
+    chapter_index: Optional[int] = None
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
@@ -360,6 +362,7 @@ def api_agent_plot_planner(payload: PlotPlannerRequest):
     return StreamingResponse(
         agents.run_plot_planner(
             novel_id=payload.novel_id,
+            chapter_index=payload.chapter_index,
             user_prompt=payload.user_prompt,
             planner_directive=payload.planner_directive
         ),
@@ -459,7 +462,7 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
     return StreamingResponse(
-        agents.run_director_decision(novel_id, payload.current_stage, effective_prompt),
+        agents.run_director_decision(novel_id, payload.current_stage, effective_prompt, chapter_index=payload.chapter_index),
         media_type="text/event-stream"
     )
 

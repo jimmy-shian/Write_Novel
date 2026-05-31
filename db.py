@@ -684,7 +684,28 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     """
     [最終完美修正版] 將特定篇卷的高解像度微觀大綱更新至資料庫。
     採用智慧增量合併，並採用直接 SQL 回寫主表，徹底防止 save_plot_chapters 引發反向抹除骨架的 Bug。
+    強制校驗與過濾不在該卷合法章節範圍內的章節，防範跳號與重複。
     """
+    # 💡 0. 讀取合法章節範圍
+    vols = get_volumes(novel_id)
+    start_ch, end_ch = get_volume_chapter_range(vols, volume_index)
+    
+    # 過濾新章節
+    cleaned_node_chapters = []
+    for nc in node_chapters:
+        ch_idx = nc.get("chapter_index")
+        if ch_idx is not None:
+            try:
+                ch_idx_int = int(ch_idx)
+                if start_ch <= ch_idx_int <= end_ch:
+                    cleaned_node_chapters.append(nc)
+                else:
+                    print(f"[WARN] update_volume_outline filtered out out-of-bounds chapter {ch_idx_int} for Vol {volume_index} (expected [{start_ch}, {end_ch}])")
+            except:
+                pass
+        else:
+            cleaned_node_chapters.append(nc)
+            
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -699,7 +720,7 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         try:
             parsed = json.loads(row["chapters_outline"])
             if isinstance(parsed, list):
-                existing_chapters = parsed
+                existing_chapters = [c for c in parsed if start_ch <= int(c.get("chapter_index", 0)) <= end_ch]
         except:
             pass
             
@@ -710,8 +731,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         if ch_idx is not None:
             merged_map[int(ch_idx)] = ch
             
-    # 💡 3. 用新生成的高解像度微觀章節（例如第 10 章）精確覆蓋或插入緩衝區
-    for nc in node_chapters:
+    # 💡 3. 用新生成的高解像度微觀章節精確覆蓋或插入緩衝區
+    for nc in cleaned_node_chapters:
         ch_idx = nc.get("chapter_index")
         if ch_idx is not None:
             merged_map[int(ch_idx)] = nc
@@ -1918,11 +1939,21 @@ def get_stitched_plot(novel_id):
             has_chapters_in_volumes = True
                 
     if has_chapters_in_volumes:
-        try:
-            stitched_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
-        except:
-            pass
-        return {"chapters": stitched_chapters}
+        # 💡 核心修復：確保 chapters_outline 內真的有詳細大綱情節事件（events）才視為已縫合的大綱。
+        # 否則在 Stage 3 尚未生成詳細大綱前，stitched_plot 不應把 Stage 2 的骨架當作大綱回傳。
+        is_detailed = False
+        for ch in stitched_chapters:
+            events = ch.get("events")
+            if events and isinstance(events, list) and len(events) > 0:
+                is_detailed = True
+                break
+                
+        if is_detailed:
+            try:
+                stitched_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
+            except:
+                pass
+            return {"chapters": stitched_chapters}
         
     plot = get_latest_plot_chapters(novel_id)
     return plot["parsed_data"] if plot else {"chapters": []}
@@ -1935,13 +1966,32 @@ def get_stitched_plot(novel_id):
 def save_volume_skeletons(novel_id, volume_index, chapters_skeleton):
     """
     [新功能] 保存某卷的簡易章節骨架大綱到 volumes 表的 chapters_outline 欄位
-    這是 Stage 2 (Volume Skeleton) 的產出儲存點
+    這是 Stage 2 (Volume Skeleton) 的產出儲存點，強制過濾超界章節。
     """
+    volumes = get_volumes(novel_id)
+    start_ch, end_ch = get_volume_chapter_range(volumes, volume_index)
+    
+    # 過濾出界章節，避免不連續跳號或骨架寫入其他卷
+    cleaned_skeleton = []
+    for ch in chapters_skeleton:
+        c_idx = ch.get("chapter_index")
+        if c_idx is not None:
+            try:
+                c_idx_int = int(c_idx)
+                if start_ch <= c_idx_int <= end_ch:
+                    cleaned_skeleton.append(ch)
+                else:
+                    print(f"[WARN] save_volume_skeletons filtered out out-of-bounds chapter {c_idx_int} for Vol {volume_index} (expected [{start_ch}, {end_ch}])")
+            except:
+                pass
+        else:
+            cleaned_skeleton.append(ch)
+            
     conn = get_db_connection()
     cursor = conn.cursor()
     
     # 將章節骨架轉為 JSON 並保存
-    skeleton_json = json.dumps(_convert_obj_to_traditional(chapters_skeleton), ensure_ascii=False, indent=2)
+    skeleton_json = json.dumps(_convert_obj_to_traditional(cleaned_skeleton), ensure_ascii=False, indent=2)
     
     # 更新 volumes 表中該卷的 chapters_outline
     cursor.execute(
@@ -2336,23 +2386,26 @@ def detect_current_stage(novel_id):
     if not has_all_skeletons:
         return "volume_skeleton"
         
-    # 檢查是否已生成詳細大綱。詳細大綱的特徵是章節具有 events 列表，且內含具體的情節場景
+    # 檢查是否已生成所有規劃章節的詳細大綱。詳細大綱的特徵是章節具有 events 列表，且內含具體的情節場景
     plot = get_latest_plot_chapters(novel_id)
-    has_detailed_plot = False
+    detailed_count = 0
     if plot and plot.get("parsed_data"):
         ch_list = plot["parsed_data"].get("chapters", [])
         if ch_list:
             for ch in ch_list:
                 events = ch.get("events")
                 if events and isinstance(events, list) and len(events) > 0:
-                    has_detailed_plot = True
-                    break
+                    detailed_count += 1
                     
-    if not has_detailed_plot:
+    total_planned = sum(_get_clean_chapter_count(v) for v in vols)
+    if total_planned <= 0:
+        total_planned = 1  # 保底至少1章
+        
+    if detailed_count < total_planned:
         return "plot"
         
     chapters = get_all_chapters_latest(novel_id)
-    if not chapters:
+    if len(chapters) < total_planned:
         return "writer"
         
     return "editor"
@@ -2390,7 +2443,7 @@ def generate_validation_report(novel_id):
         report_lines.append("  - 狀態：✅ 已建立")
         # 嘗試解析
         try:
-            parsed_wb = json.loads(wb["content"])
+            parsed_wb = parse_worldview_to_json(wb["content"])
             seeds = parsed_wb.get("foreshadowing_seeds", [])
             turns = parsed_wb.get("key_turning_points", [])
             report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
@@ -2400,7 +2453,7 @@ def generate_validation_report(novel_id):
             for j, t in enumerate(turns):
                 report_lines.append(f"    * [Turn-{j+1}] {t}")
         except Exception as e:
-            report_lines.append("  - 狀態：⚠️ 世界觀非標準 JSON 格式，無法解析伏筆種子。")
+            report_lines.append(f"  - 狀態：⚠️ 世界觀非標準 JSON 格式，無法解析伏筆種子：{e}")
     report_lines.append("")
     
     # 2. 角色聖經
@@ -2473,34 +2526,56 @@ def generate_validation_report(novel_id):
     plot_data = get_stitched_plot(novel_id)
     chapters_outlines = plot_data.get("chapters", []) if plot_data else []
     
-    report_lines.append("【4. 詳細章節大綱層】")
-    if not chapters_outlines:
-        report_lines.append("  - 狀態：❌ 未完成 (尚未生成詳細大綱)")
-    else:
-        report_lines.append(f"  - 詳細大綱已生成章節：共 {len(chapters_outlines)} 章")
+    # 💡 檢查是否真的包含詳細大綱內容（必須有 events 或 scenes 且不為空，區分骨架與詳細大綱）
+    detailed_count = 0
+    if chapters_outlines:
+        for ch in chapters_outlines:
+            evs = ch.get("events") or ch.get("scenes")
+            if evs and isinstance(evs, list) and len(evs) > 0:
+                detailed_count += 1
+                
+    max_expected_ch = sum(_get_clean_chapter_count(v) for v in vols) if vols else 0
+    if max_expected_ch <= 0:
+        max_expected_ch = 1
         
-        # 檢查連續性
+    is_detailed_plot = (detailed_count >= max_expected_ch)
+    
+    report_lines.append("【4. 詳細章節大綱層】")
+    if not is_detailed_plot:
+        report_lines.append(f"  - 狀態：❌ 未完成 (進度: {detailed_count}/{max_expected_ch} 章已細化，其餘 {max_expected_ch - detailed_count} 章僅為骨架)")
+    else:
+        report_lines.append(f"  - 狀態：✅ 已完成 (全書共 {max_expected_ch} 章詳細大綱已全部生成完畢)")
+        
+    if chapters_outlines:
         if vols:
-            max_expected_ch = sum(_get_clean_chapter_count(v) for v in vols)
             expected_set = set(range(1, max_expected_ch + 1))
             actual_set = set()
             
             for ch in chapters_outlines:
                 idx = ch.get("chapter_index")
                 if idx is not None:
-                    actual_set.add(int(idx))
+                    # 💡 只有包含具體 events 場景的章節，才視為已生成詳細大綱
+                    evs = ch.get("events") or ch.get("scenes")
+                    if evs and isinstance(evs, list) and len(evs) > 0:
+                        actual_set.add(int(idx))
                     
-            missing_plot_chapters = expected_set - actual_set
+            missing_plot_chapters = sorted(list(expected_set - actual_set))
             if missing_plot_chapters:
-                report_lines.append(f"  - ⚠️ [進度不一致 / 詳細大綱缺漏] 缺少章節大綱：{sorted(list(missing_plot_chapters))} 章")
+                next_missing = missing_plot_chapters[0]
+                if len(missing_plot_chapters) > 10:
+                    show_list = f"{missing_plot_chapters[:5]} ... {missing_plot_chapters[-5:]}"
+                else:
+                    show_list = f"{missing_plot_chapters}"
+                report_lines.append(f"  - ⚠️ [詳細大綱章節序號不連續 / 缺漏，由系統 Python 邏輯外部計算]：缺少詳細大綱共 {len(missing_plot_chapters)} 章: {show_list}")
+                report_lines.append(f"    👉 【下一章應生成大綱之目標 chapter_index】：{next_missing}")
             else:
-                report_lines.append("  - 連續性檢查：✅ 100% 連續無缺漏")
+                report_lines.append(f"  - 詳細大綱章節序號連續性檢查 (1 至 {max_expected_ch} 章，由系統 Python 邏輯外部計算)：✅ 100% 連續無缺漏")
                 
             # 伏筆與轉折硬指標對齊檢查
             blueprint = get_global_foreshadowing_blueprint(novel_id)
             if blueprint and wb_exists:
                 try:
-                    parsed_wb = json.loads(wb["content"])
+                    parsed_wb = parse_worldview_to_json(wb["content"])
                     all_seeds = parsed_wb.get("foreshadowing_seeds", [])
                     all_turns = parsed_wb.get("key_turning_points", [])
                     foreshadowing_allocations = blueprint.get("foreshadowing_allocations", [])
@@ -2547,7 +2622,7 @@ def generate_validation_report(novel_id):
                 except Exception as e:
                     report_lines.append(f"  - ⚠️ 對齊檢查失敗：{e}")
         else:
-            report_lines.append("  - 連續性檢查：⚠️ 尚未規劃篇卷，無法校對大綱。")
+            report_lines.append("  - 詳細大綱章節序號連續性檢查 (由系統 Python 邏輯外部計算)：⚠️ 尚未規劃篇卷，無法校對大綱。")
     report_lines.append("")
     
     # 5. 正文寫作 (Prose Chapters)
@@ -2573,13 +2648,55 @@ def generate_validation_report(novel_id):
         report_lines.append(f"  - 全書專案正文完成進度：{progress_pct:.2f}% ({len(written_ch)}/{expected_chapters_count} 章)")
         
         if unwritten_chapters:
-            report_lines.append(f"  - ⚠️ [正文斷檔 / 進度不一致]：")
+            report_lines.append(f"  - ⚠️ [正文章節序號不連續 / 斷檔，由系統 Python 邏輯外部計算]：")
             report_lines.append(f"    * 以下章節已被跳過/尚未寫作：{unwritten_chapters}")
             report_lines.append("    * 警告：正文序號不連續，可能導致劇情前言不搭後語！")
         else:
-            report_lines.append("  - 正文連續性：✅ 正文順序推進，無中斷斷檔。")
+            report_lines.append(f"  - 正文章節序號連續性檢查 (1 至 {max(written_indexes)} 章，由系統 Python 邏輯外部計算)：✅ 正文順序推進，無中斷斷檔。")
             
     report_lines.append("=" * 60)
     return "\n".join(report_lines)
+
+
+def save_single_plot_chapter(novel_id, chapter_index, chapter_outline):
+    """
+    [新功能] 保存或更新單個章節的詳細大綱，同時保留大綱中所有其他章節，並正確同步到 volumes。
+    """
+    plot = get_stitched_plot(novel_id) or {"chapters": []}
+    chapters = plot.get("chapters", [])
+    if not isinstance(chapters, list):
+        chapters = []
+    
+    # 確保章節 index 正確設定為整數
+    try:
+        chapter_index = int(chapter_index)
+        chapter_outline["chapter_index"] = chapter_index
+    except Exception as e:
+        print(f"[WARN] save_single_plot_chapter: invalid chapter_index {chapter_index}: {e}")
+    
+    # 更新或追加到完整清單中
+    updated = False
+    for idx, ch in enumerate(chapters):
+        try:
+            curr_idx = int(ch.get("chapter_index") or ch.get("chapter") or 0)
+            if curr_idx == chapter_index:
+                chapters[idx] = chapter_outline
+                updated = True
+                break
+        except:
+            pass
+            
+    if not updated:
+        chapters.append(chapter_outline)
+        
+    # 按 chapter_index 排序
+    try:
+        chapters.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
+    except:
+        pass
+        
+    # 調用全量 save_plot_chapters 完成寫入與 volumes 智慧合併
+    save_plot_chapters(novel_id, {"chapters": chapters}, skip_volume_sync=False, clear_chapters=False)
+
 
 

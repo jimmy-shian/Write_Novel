@@ -286,6 +286,9 @@ SKELETON_APPROVAL_CRITERIA = {
             "foreshadowing_payoffs": "array of strings",
             "turning_points": "array of strings",
             "description": "每章的allocated_tasks三個陣列需存在，可為空陣列"
+        },
+        "character_exclusion": {
+            "description": "【骨架極簡原則】骨架階段只需專注於基本劇情走向與里程碑進展，絕對不需要管角色登場、角色活躍或人物分配等細節。這些人設細節應留到詳細大綱階段處理。"
         }
     },
     "auto_regenerate_hint": "請根據世界觀與 前後各1卷的大綱，重新生成完整的當前卷骨架。"
@@ -353,6 +356,9 @@ PLOT_APPROVAL_CRITERIA = {
         },
         "plot_drive": {
             "description": "每章需有明確的敘事目的，拒絕流水帳"
+        },
+        "character_presence": {
+            "description": "【角色出場深度規劃】詳細大綱階段必須詳細規劃並產生詳細內容，且要確實安排角色活躍場景以滿足全局人設分佈（例如：確保核心主角與關鍵配角活躍於適當的篇卷與情節，在情節中明確展示角色出場與重要戲劇張力）。"
         }
     },
     "auto_regenerate_hint": "請根據世界觀與 前後各1章的骨架大綱，重新生成完整的當前大綱。"

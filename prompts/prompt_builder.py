@@ -699,9 +699,17 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
         # 詳細大綱階段：前後各一章的內容 + 世界觀的 macro_outline
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前詳細大綱的創作質量，並決定下一步的最佳動作。
  
-【審查原則】
-1. 當前階段是「current_stage = {current_stage}」（大綱規劃師）。
-2. ⚠️ 【Plot 階段強制放行】：除非有嚴重人物缺失需要 `GO_BACK_TO_CHARACTERS`，否則必須直接給出 `CONTINUE`，不得故意阻斷。
+【審查原則與重要概念澄清】
+1. 當前階段是「current_stage = {current_stage}」（大綱規劃師，用於審核從『骨架大綱』細化展開成『詳細章節大綱』的成果）。
+2. ⚠️ 請分清「骨架大綱 (Skeleton Outline)」與「詳細大綱 (Detailed Outline)」的區別，避免與校驗報告產生誤解：
+   - 骨架大綱：僅包含 chapter_index、brief_title、brief_summary (或 chapter_title, chapter_summary) 以及 allocated_tasks 欄位，缺少具體的 events、scenes、cliffhanger 或 characters_active 等詳細情節大綱欄位。
+   - 詳細大綱：必須包含 events (場景事件流)、scenes (細節場景)、characters_active (活躍角色)、cliffhanger (章末懸念) 等深入細緻情節欄位。
+   - 如果你看到的章節大綱清單只有標題、摘要與分配任務，代表它【只是骨架大綱，並非詳細大綱】。
+3. ⚠️ 【剛性放行與流轉判斷規則 - 🔥 絕對紅線】：
+   - 你**必須且只能**以結尾的《系統底層剛性校驗報告》中「詳細章節大綱層」之進度與狀態作為你做決策的唯一依據！
+   - **流轉規則 A (大綱未全部完成時)**：若底層校驗報告中，詳細大綱層之狀態為「❌ 未完成」（例如：進度為 1/660），此時只要當前已細化的大綱品質合格，你**必須**輸出 `"action": "CONTINUE", "target": "plot"`，且必須將 `"chapter_index"` 設為報告中指出的 `👉 【下一章應生成大綱之目標 chapter_index】` 的整數值（例如：2）！**絕對禁止**在此時將 target 設為 "writer" 或其他值！
+   - **流轉規則 B (大綱已全部完成時)**：若底層校驗報告中，詳細大綱層之狀態已變為「✅ 已完成」，此時你**必須**輸出 `"action": "CONTINUE", "target": "writer"`，且將 `"chapter_index"` 設為 1，正式將專案推進至正文寫作階段！
+4. ⚠️ 【剛性指標直接讀取規則】：由於上下文長度限制，傳遞給你的大綱數據只是截取的部分採樣，絕對禁止你試圖透過統計或解析傳入的大綱字串來自行判斷章節是否齊全或連續！所有章節齊全性、連續性之事實一律以 Python 剛性校驗報告為準！
  
 {stage_criteria}
  
@@ -710,7 +718,7 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
         user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
  
-【完整章節大綱列表（前後各1章的上下文）】
+【當前已細化大綱及前後章上下文】
 {plot_text}
  
 請進行深度評估，決定下一步行動！

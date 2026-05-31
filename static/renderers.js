@@ -875,10 +875,25 @@ export function renderPlotTab() {
                             ${skeletonSummary ? `<p style="font-size: var(--font-2xs); color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
                             
                             ${(foreshadowPlants.length > 0 || foreshadowPayoffs.length > 0 || turningPoints.length > 0) ? `
-                            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
-                                ${foreshadowPlants.map(seed => `<span class="seed-pill" style="background: rgba(139, 92, 246, 0.12); color: #8b5cf6; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">🌱 ${seed}</span>`).join('')}
-                                ${foreshadowPayoffs.map(pay => `<span class="payoff-pill" style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">💥 回收: ${pay}</span>`).join('')}
-                                ${turningPoints.map(tp => `<span class="turning-pill" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: var(--font-2xs);">⚡ 轉折: ${tp}</span>`).join('')}
+                            <div class="skeleton-tasks" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 8px;">
+                                ${foreshadowPlants.map(seed => `
+                                    <div class="task-item seed-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #c084fc; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">🌱</span>
+                                        <span>${seed}</span>
+                                    </div>
+                                `).join('')}
+                                ${foreshadowPayoffs.map(pay => `
+                                    <div class="task-item payoff-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #fbbf24; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">💥</span>
+                                        <span>回收: ${pay}</span>
+                                    </div>
+                                `).join('')}
+                                ${turningPoints.map(tp => `
+                                    <div class="task-item turning-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #f87171; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">⚡</span>
+                                        <span>轉折: ${tp}</span>
+                                    </div>
+                                `).join('')}
                             </div>` : ''}
                             
                             <div class="chapter-actions" style="margin-top: 8px; text-align: right;">
@@ -1011,7 +1026,7 @@ export function renderPlotTab() {
                     </div>
                     
                     <div class="volume-summary-box" style="font-size: var(--font-2xs); line-height: 1.6; color: var(--text-secondary); background: rgba(0,0,0,0.12); padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px;">
-                        <div><strong>📌 核心情節概要：</strong>${vol.summary || '尚無概要設定。'}</div>
+                        <div style="white-space: pre-wrap;"><strong>📌 核心情節概要：</strong>${(vol.summary || '尚無概要設定。').replace(/\\n/g, '\n')}</div>
                         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                             <strong>🛡️ 登場勢力陣營：</strong>
                             ${factionBadges}
@@ -1488,6 +1503,18 @@ export function renderActiveChapter() {
  */
 export function renderChatMessages() {
     if (!el.chatMessagesContainer) return;
+    
+    // 清空舊對話框內容以利刷新
+    el.chatMessagesContainer.innerHTML = '';
+    
+    // 初始化默認系統歡迎消息，確保清空後能重新加入
+    const systemWelcome = document.createElement('div');
+    systemWelcome.className = 'message system-msg';
+    systemWelcome.innerHTML = `
+        <div class="msg-sender">AI Novel Director</div>
+        <div class="msg-content">你好！我是你的小說創作協同總監。我擁有對當前小說的完整長期記憶 (SQLite)。<br><br>你可以對我發出指令，我會直接指導各個 Agent 配合，或是為你提供靈感！</div>
+    `;
+    el.chatMessagesContainer.appendChild(systemWelcome);
     
     const messages = state.currentNovelData?.chat_memory || state.currentNovelData?.chat_messages || [];
     
