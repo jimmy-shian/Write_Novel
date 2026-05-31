@@ -5095,7 +5095,7 @@ function initializeChatHistory() {
         systemWelcome.className = 'message system-msg';
         systemWelcome.innerHTML = `
             <div class="msg-sender">AI Novel Director</div>
-            <div class="msg-content">你好！我是你的小說創作協同總監。我擁有對當前小說的完整長期記憶 (SQLite)。<br><br>你可以對我發出指令，例如：<br>「幫我修改主角設定，讓他背景多一條伏筆」<br>「給我想 3 個世界觀的魔法限制」<br>「重寫第一章，讓氛圍更懸疑」<br><br>我會直接指導各個 Agent 配合，或是為你提供靈感！</div>
+            <div class="msg-content">你好！我是你的小說創作協同總監。我擁有對當前小說的完整長期記憶 (SQLite)。<br><br>你可以對我發出指令，我會直接指導各個 Agent 配合，或是為你提供靈感！</div>
         `;
         chatContainer.appendChild(systemWelcome);
     }
@@ -6125,18 +6125,45 @@ async function generateAllVolumeSkeletons(userPrompt) {
     
     if (volumes.length === 0) {
         updateDirectorMessage('⚠️ 警告：系統中尚未規劃任何篇卷！正在從世界觀設定中自動檢測卷數...');
-        // 嘗試從 worldbuilding 中解析卷數
+        // 嘗試從 worldbuilding 中解析卷數與章節數
         const wbContent = state.currentNovelData?.worldbuilding || '';
-        const defaultVolumes = 5; // 至少要有 5 卷
+        let defaultVolumes = 5;
+        let volData = [];
+        
+        try {
+            let cleanWb = wbContent.trim();
+            if (cleanWb.includes('```')) {
+                const match = cleanWb.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+                if (match) cleanWb = match[1].strip ? match[1].strip() : match[1];
+            }
+            const parsed = JSON.parse(cleanWb);
+            if (parsed && Array.isArray(parsed.volumes)) {
+                volData = parsed.volumes;
+                defaultVolumes = volData.length;
+            } else if (parsed && Array.isArray(parsed.multi_act_structure)) {
+                defaultVolumes = parsed.multi_act_structure.length;
+                volData = parsed.multi_act_structure.map((act, idx) => ({
+                    volume_index: idx + 1,
+                    title: act.title || `第 ${idx + 1} 卷`,
+                    summary: act.content || `本卷概要...`,
+                    chapter_count: 20
+                }));
+            }
+        } catch (e) {
+            console.warn("Failed to parse worldview for initial volumes:", e);
+        }
+        
         updateDirectorMessage(`📚 將基於世界觀設定自動生成 ${defaultVolumes} 卷的簡易章節骨架...`);
         
         // 為缺失的卷創建預設設定
         for (let i = 1; i <= defaultVolumes; i++) {
+            const predefined = volData[i - 1] || {};
             try {
                 await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${i}`, 'POST', {
-                    title: `第 ${i} 卷`,
-                    summary: `本卷的全新大綱概要描述...`,
-                    factions: `全域勢力`
+                    title: predefined.title || `第 ${i} 卷`,
+                    summary: predefined.summary || predefined.content || `本卷的全新大綱概要描述...`,
+                    factions: predefined.factions ? (Array.isArray(predefined.factions) ? predefined.factions.join(', ') : String(predefined.factions)) : `全域勢力`,
+                    chapter_count: predefined.chapter_count || 20
                 });
             } catch (e) {
                 console.warn(`Volume ${i} creation failed:`, e);

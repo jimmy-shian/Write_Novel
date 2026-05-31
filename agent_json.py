@@ -47,37 +47,37 @@ WORLDVIEW_APPROVAL_CRITERIA = {
         "theme": {
             "min_length": 50,
             "max_length": 500,
-            "description": "核心主題需具備深度與哲學命題，長度50-500字"
+            "description": "核心主題需具備深度與哲學命題"
         },
         "main_conflict": {
             "min_length": 100,
             "max_length": 800,
-            "description": "核心衝突需明確描述多陣營張力，長度100-800字"
+            "description": "核心衝突需明確描述多陣營張力"
         },
         "worldview": {
             "min_length": 300,
-            "description": "世界觀需包含地理、力量體系、社會結構、氛圍等要素，至少300字"
+            "description": "世界觀需包含地理、力量體系、社會結構、氛圍等要素"
         },
         "macro_outline": {
             "min_length": 200,
-            "description": "宏觀大綱需完整描述故事走向，至少200字"
+            "description": "宏觀大綱需完整描述故事走向"
         },
         "multi_act_structure": {
-            "min_acts": 3,
-            "max_acts": 6,
-            "description": "多幕結構需3-6幕，每幕需有明確的起承轉合功能與內容描述"
+            "min_acts": 5,
+            "max_acts": 10,
+            "description": "多幕結構需5-10幕，每幕需有明確的起承轉合功能與內容描述"
         },
         "progressive_character_plan": {
-            "min_waves": 3,
-            "description": "角色漸進規劃需至少3波，反映角色的階段性登場與成長"
+            "min_waves": 5,
+            "description": "角色漸進規劃需5波以上，反映角色的階段性登場與成長"
         },
         "foreshadowing_seeds": {
-            "min_count": 20,
-            "description": "伏筆種子需至少20個，每個需標明早期埋設點、中期干擾、后期收束"
+            "min_count": 30,
+            "description": "伏筆種子需至少30個，每個需標明早期埋設點、中期干擾、后期收束"
         },
         "key_turning_points": {
-            "min_count": 15,
-            "description": "關鍵轉折點需至少15個，每個需標明觸發條件與全局影響"
+            "min_count": 40,
+            "description": "關鍵轉折點需至少40個，每個需標明觸發條件與全局影響"
         },
         "consistency": {
             "description": "各欄位間需邏輯一致，伏筆與轉折點需相互呼應"
@@ -139,15 +139,15 @@ CHARACTER_APPROVAL_CRITERIA = {
             "want_min_length": 20,
             "need_min_length": 20,
             "fatal_flaw_min_length": 15,
-            "description": "每個角色需具備完整的外在目標(Want)、內在需求(Need)、致命缺陷(Fatal Flaw)，各至少20/20/15字"
+            "description": "每個角色需具備完整的外在目標(Want)、內在需求(Need)、致命缺陷(Fatal Flaw)"
         },
         "character_arc": {
             "min_length": 30,
-            "description": "成長弧線(Arc)需清晰描述角色的變化軌跡，至少30字"
+            "description": "成長弧線(Arc)需清晰描述角色的變化軌跡"
         },
         "speech_style": {
             "min_length": 15,
-            "description": "說話風格需具體描述口頭禪、語氣特徵，至少15字"
+            "description": "說話風格需具體描述口頭禪、語氣特徵"
         },
         "relationships": {
             "min_relationships": 2,
@@ -189,9 +189,9 @@ VOLUME_APPROVAL_CRITERIA = {
     "display_name": "篇卷規劃師",
     "criteria": {
         "volume_count": {
-            "min_count": 3,
-            "max_count": 5,
-            "description": "卷數建議3-5卷，需與世界觀的多幕結構呼應"
+            "min_count": 10,
+            "max_count": 15,
+            "description": "卷數建議10-15卷，需與世界觀的多幕結構呼應"
         },
         "required_fields": {
             "per_volume": ["volume_index", "title", "summary", "chapter_count", "factions", "time_timeline", "sequence_context", "applicable_rules"],
@@ -199,17 +199,17 @@ VOLUME_APPROVAL_CRITERIA = {
         },
         "title": {
             "min_length": 3,
-            "description": "每卷標題需精煉且富有文采，至少3個字"
+            "description": "每卷標題需精煉且富有文采"
         },
         "summary": {
             "min_length": 200,
             "max_length": 300,
-            "description": "每卷概要需200-300字，描述核心情節與高潮點"
+            "description": "每卷概要需描述核心情節與高潮點"
         },
         "chapter_count": {
-            "min_per_volume": 20,
-            "max_per_volume": 100,
-            "description": "每卷章節數需20-100章，保持容量得當"
+            "min_per_volume": 50,
+            "max_per_volume": 200,
+            "description": "每卷章節數需50-200章，保持容量得當"
         },
         "structure_coherence": {
             "description": "卷順序需連續，不可遺漏或斷檔；相鄰卷間需有情節銜接"
@@ -224,7 +224,7 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷需有明確功能定位（起、承、轉、合），卷尾需有適當的高潮或懸念"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀設定與角色清單，生成全書的篇卷結構，包括卷數（建議 3-5 卷）、每卷標題、概要（200-300 字），以及各卷的關鍵事件轉折與主要角色登場安排。",
+    "auto_regenerate_hint": "請根據世界觀設定與角色清單，生成全書的篇卷結構，包括卷數（建議 10-15 卷）、每卷標題、概要，以及各卷的關鍵事件轉折與主要角色登場安排。",
     "patch_hint": "請只生成第 {idx} 卷的內容，傳入 hint 指示。"
 }
 
@@ -264,12 +264,12 @@ SKELETON_APPROVAL_CRITERIA = {
         },
         "chapter_title": {
             "min_length": 3,
-            "description": "每章標題需精煉且富有文采，至少3個字"
+            "description": "每章標題需精煉且富有文采"
         },
         "chapter_summary": {
             "min_length": 50,
             "max_length": 100,
-            "description": "每章摘要需50-100字，描述本章核心情節里程碑"
+            "description": "每章摘要需描述本章核心情節里程碑"
         },
         "foreshadowing_allocation": {
             "min_plants": 1,
@@ -288,7 +288,7 @@ SKELETON_APPROVAL_CRITERIA = {
             "description": "每章的allocated_tasks三個陣列需存在，可為空陣列"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與前後各1卷的大綱，重新生成完整的卷骨架。"
+    "auto_regenerate_hint": "請根據世界觀與 前後各1卷的大綱，重新生成完整的當前卷骨架。"
 }
 
 
@@ -335,9 +335,9 @@ PLOT_APPROVAL_CRITERIA = {
             "description": "每章需有清晰的時間設定與與前章的時間跨度"
         },
         "events": {
-            "min_scenes": 1,
+            "min_scenes": 0,
             "max_scenes": 4,
-            "description": "每章需包含1-4個具體場景事件，描述動作衝突與後果"
+            "description": "每章需包含0-4個具體場景事件，描述動作衝突與後果"
         },
         "foreshadowing_sync": {
             "description": "伏筆種植(foreshadowing_plant)與回收(foreshadowing_payoff)需與骨架分配的allocated_tasks一致"
@@ -355,7 +355,7 @@ PLOT_APPROVAL_CRITERIA = {
             "description": "每章需有明確的敘事目的，拒絕流水帳"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與前後各1章的骨架大綱，重新生成完整的大綱。"
+    "auto_regenerate_hint": "請根據世界觀與 前後各1章的骨架大綱，重新生成完整的當前大綱。"
 }
 
 
@@ -390,7 +390,7 @@ WRITER_APPROVAL_CRITERIA = {
     "criteria": {
         "content_length": {
             "min_words": 1500,
-            "description": "每章正文至少1500字，確保足夠的敘事深度"
+            "description": "每章正文需確保足夠的敘事深度"
         },
         "structure_compliance": {
             "description": "正文需嚴格按照大綱的時間設定、場景、伏筆順序展開"
@@ -399,7 +399,7 @@ WRITER_APPROVAL_CRITERIA = {
             "description": "需透過環境渲染、肢體動作、台詞、心理描寫展現情節，避免純敘述"
         },
         "character_consistency": {
-            "description": "角色台詞、語氣、動作、神態需100%符合角色聖經"
+            "description": "角色台詞、語氣、動作、神態需符合角色聖經"
         },
         "foreshadowing_execution": {
             "description": "伏筆需自然融入敘事，回收時需營造驚喜與合理性"
@@ -414,7 +414,7 @@ WRITER_APPROVAL_CRITERIA = {
             "description": "章末懸念需有效鉤住讀者"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與前後各1卷的詳細大綱，以及後三章即將收回的伏筆內容，重新生成正文。"
+    "auto_regenerate_hint": "請根據世界觀與 前後各1卷的詳細大綱，以及後三章即將收回的伏筆內容，重新生成正文。"
 }
 
 

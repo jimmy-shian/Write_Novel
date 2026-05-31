@@ -473,36 +473,8 @@ export function renderPlotTab() {
     
     el.editorPlotJson.value = state.currentNovelData?.plot_raw || JSON.stringify({ chapters: [] }, null, 2);
     
-    // Auto-generate virtual volumes and pad missing volume indexes (e.g., Vol 1 to Vol max)
-    let maxVolIdx = 0;
-    if (volumes.length > 0) {
-        maxVolIdx = Math.max(...volumes.map(v => parseInt(v.volume_index) || 0));
-    }
-    if (chapters.length > 0) {
-        const maxChIdx = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
-        maxVolIdx = Math.max(maxVolIdx, Math.ceil(maxChIdx / 50) || 1);
-    }
-    
-    if (maxVolIdx > 0) {
-        const fullVolumes = [];
-        for (let i = 1; i <= maxVolIdx; i++) {
-            const existingVol = volumes.find(v => parseInt(v.volume_index) === i);
-            if (existingVol) {
-                fullVolumes.push(existingVol);
-            } else {
-                fullVolumes.push({
-                    volume_index: i,
-                    title: `第 ${i} 卷`,
-                    summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
-                    factions: "全域陣列",
-                    is_dirty: 0,
-                    chapter_count: 50,
-                    chapters_outline: []
-                });
-            }
-        }
-        volumes = fullVolumes;
-    }
+    // Simply sort volumes sequentially based on volume_index (no virtual placeholder padding)
+    volumes = [...volumes].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
     
     // Expose scrollToVolume function globally
     window.scrollToVolume = function(volIdx) {
@@ -1062,39 +1034,8 @@ export function renderPlotTab() {
                 if (tlNav) {
                     tlNav.innerHTML = ''; // 清空舊內容
                     
-                    // 💡 動態讀取最新的全局數據，並自動填充缺失的虛擬卷
-                    let volumes = state.currentNovelData?.volumes || [];
-                    const chapters = state.currentNovelData?.plot?.chapters || [];
-                    
-                    let maxVolIdx = 0;
-                    if (volumes.length > 0) {
-                        maxVolIdx = Math.max(...volumes.map(v => parseInt(v.volume_index) || 0));
-                    }
-                    if (chapters.length > 0) {
-                        const maxChIdx = Math.max(...chapters.map(c => parseInt(c.chapter_index) || 0));
-                        maxVolIdx = Math.max(maxVolIdx, Math.ceil(maxChIdx / 50) || 1);
-                    }
-                    
-                    if (maxVolIdx > 0) {
-                        const fullVolumes = [];
-                        for (let i = 1; i <= maxVolIdx; i++) {
-                            const existingVol = volumes.find(v => parseInt(v.volume_index) === i);
-                            if (existingVol) {
-                                fullVolumes.push(existingVol);
-                            } else {
-                                fullVolumes.push({
-                                    volume_index: i,
-                                    title: `第 ${i} 卷`,
-                                    summary: `本卷包含第 ${(i-1)*50 + 1} 章至第 ${i*50} 章。`,
-                                    factions: "全域陣列",
-                                    is_dirty: 0,
-                                    chapter_count: 50,
-                                    chapters_outline: []
-                                });
-                            }
-                        }
-                        volumes = fullVolumes;
-                    }
+                    // Simply sort volumes sequentially based on volume_index (no virtual placeholder padding)
+                    volumes = [...volumes].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
                     
                     // 💡 動態生成篇卷範圍累加器（完美對齊卡片渲染邏輯）
                     const sortedVols = [...volumes].sort((a, b) => parseInt(a.volume_index) - parseInt(b.volume_index));
@@ -1549,14 +1490,6 @@ export function renderChatMessages() {
     if (!el.chatMessagesContainer) return;
     
     const messages = state.currentNovelData?.chat_memory || state.currentNovelData?.chat_messages || [];
-    
-    // Render the default system greeting first
-    el.chatMessagesContainer.innerHTML = `
-        <div class="message system-msg">
-            <div class="msg-sender">AI Novel Director</div>
-            <div class="msg-content">你好！我是你的小說創作協同總監。我擁有對當前小說的完整長期記憶 (SQLite)。<br><br>你可以對我發出指令，例如：<br>「幫我修改主角設定，讓他背景多一條伏筆」<br>「給我想 3 個世界觀的魔法限制」<br>「重寫第一章，讓氛圍更懸疑」<br><br>我會直接指導各個 Agent 配合，或是為你提供靈感！</div>
-        </div>
-    `;
     
     if (messages.length > 0) {
         messages.forEach((msg, idx) => {

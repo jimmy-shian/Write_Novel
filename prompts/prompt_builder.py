@@ -28,8 +28,8 @@ from prompts.prompt_instructions import (
 
 # --- 世界觀摘要輔助函數 ---
 # 用於提取世界觀的關鍵摘要，避免過長的上下文導致 API 失敗
-MAX_WORLDVIEW_SUMMARY_LENGTH = 1500  # 限制摘要長度
-MAX_MACRO_OUTLINE_LENGTH = 1500       # 限制大綱長度
+MAX_WORLDVIEW_SUMMARY_LENGTH = 999999  # 徹底砍掉 1500 字上限，以完整設定提供大上下文
+MAX_MACRO_OUTLINE_LENGTH = 999999       # 徹底砍掉大綱長度限制
 
 # --- 角色基本設定輔助函數 ---
 # 定義角色只需要傳入的基本欄位，過濾掉冗長的背景故事等欄位
@@ -45,7 +45,7 @@ CHARACTER_BASIC_FIELDS = [
     "speech_style"
 ]
 
-MAX_CHARACTERS_SUMMARY_LENGTH = 2500  # 限制角色摘要總長度
+MAX_CHARACTERS_SUMMARY_LENGTH = 999999  # 徹底砍掉角色摘要長度限制
 
 def extract_character_basic(characters_data):
     """
@@ -479,9 +479,10 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
         {"role": "user", "content": user_content}
     ]
 
-def build_copilot_chat_messages(worldview_text, characters_text, plot_text, history_context, user_message):
+def build_copilot_chat_messages(worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None):
     """Copilot 創意決策總監聊天提示詞"""
-    validation_report = "底層校驗一切正常。全階段架構完備。"
+    if not validation_report:
+        validation_report = "底層校驗一切正常。全階段架構完備。"
     written_chapters_text = "未進入正文寫作"
     
     # 對角色聖經進行基本設定篩選
@@ -514,7 +515,66 @@ def build_copilot_chat_messages(worldview_text, characters_text, plot_text, hist
         {"role": "user", "content": user_content}
     ]
 
-def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt):
+def mask_worldview_seeds_and_turns(worldview_text):
+    if not worldview_text:
+        return worldview_text
+    
+    try:
+        parsed = json.loads(worldview_text)
+        if isinstance(parsed, dict):
+            if "foreshadowing_seeds" in parsed:
+                parsed["foreshadowing_seeds"] = "此區塊通過審核不需評判"
+            if "key_turning_points" in parsed:
+                parsed["key_turning_points"] = "此區塊通過審核不需評判"
+            return json.dumps(parsed, ensure_ascii=False, indent=2)
+    except:
+        pass
+        
+    content = worldview_text
+    headers = [
+        "【核心主題】",
+        "【核心衝突】",
+        "【世界觀設定】",
+        "【整體故事大綱】",
+        "【多幕式結構】",
+        "【角色漸進規劃策略】",
+        "【伏筆種子】",
+        "【關鍵轉折點】"
+    ]
+    
+    pos = []
+    for h in headers:
+        idx = content.find(h)
+        if idx != -1:
+            pos.append((idx, h))
+    pos.sort()
+    
+    if not pos:
+        return worldview_text
+        
+    new_parts = []
+    last_end = 0
+    for i in range(len(pos)):
+        start_idx = pos[i][0]
+        header = pos[i][1]
+        end_idx = pos[i+1][0] if i + 1 < len(pos) else len(content)
+        
+        if start_idx > last_end:
+            new_parts.append(content[last_end:start_idx])
+            
+        if header in ["【伏筆種子】", "【關鍵轉折點】"]:
+            new_parts.append(f"{header}\n此區塊通過審核不需評判\n")
+        else:
+            new_parts.append(content[start_idx:end_idx])
+            
+        last_end = end_idx
+        
+    if last_end < len(content):
+        new_parts.append(content[last_end:])
+        
+    return "".join(new_parts)
+
+def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report):
     """總監決策評判提示詞
     
     根據不同階段傳入對應的審查內容：
@@ -542,195 +602,199 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
                 parts = worldview_text.split("【整體故事大綱】")
                 if len(parts) > 1:
                     macro_outline = parts[1].strip()
+                    
+    # 總監評斷世界觀時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
+    if current_stage != "worldview":
+        worldview_text = mask_worldview_seeds_and_turns(worldview_text)
     
     # 根據 current_stage 構建不同的審查內容
     if current_stage == "worldview":
         # 世界觀階段：只傳世界觀完整內容 + 評斷提示詞
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前世界觀的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（世界觀架構師）。
+1. 當前階段是「current_stage = {current_stage}」（世界觀架構師）。
 2. 對比使用者的原始意圖，檢查世界觀是否完整且具備深度。
 3. 確認伏筆種子與關鍵轉折點是否足夠且相互呼應。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【使用者原始需求】
 {user_prompt}
-
+ 
 【完整世界觀設定】
 {worldview_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "characters":
         # 角色階段：完整角色列表
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前角色設計的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（角色設計師）。
-2. 檢查角色是否與世界觀保持一致，關係網是否邏輯連貫。
+1. 當前階段是「current_stage = {current_stage}」（角色設計師）。
+2. 角色關係網是否邏輯連貫。
 3. 確認角色的心理深度、成長弧線是否完整。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【世界觀背景】
 {worldview_text}
-
+ 
 【完整角色列表（完整設定）】
 {characters_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "volumes":
         # 卷階段：完整卷列表 + 世界觀的 macro_outline
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前篇卷規劃的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（篇卷規劃師）。
+1. 當前階段是「current_stage = {current_stage}」（篇卷規劃師）。
 2. 檢查卷結構是否與世界觀的 multi_act_structure 呼應。
 3. 確認每卷的功能定位是否明確，情節銜接是否連貫。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
-
+ 
 【完整篇卷列表（完整設定）】
 {plot_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "volume_skeleton":
         # 骨架階段：完整骨架(每2卷一組) + 世界觀的 macro_outline
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前卷骨架的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（篇卷骨架規劃師）。
-2. 檢查章節序號是否連續，標題是否精煉。
-3. 確認伏筆分配是否合理，轉折點安排是否得當。
-
+1. 當前階段是「current_stage = {current_stage}」（篇卷骨架規劃師）。
+2. 檢查骨架是否和該卷的設定相關。
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
-
+ 
 【完整卷骨架列表（完整設定）】
 {plot_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "plot":
         # 詳細大綱階段：前後各一章的內容 + 世界觀的 macro_outline
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前詳細大綱的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（大綱規劃師）。
+1. 當前階段是「current_stage = {current_stage}」（大綱規劃師）。
 2. ⚠️ 【Plot 階段強制放行】：除非有嚴重人物缺失需要 `GO_BACK_TO_CHARACTERS`，否則必須直接給出 `CONTINUE`，不得故意阻斷。
-3. 檢查伏筆同步性、轉折點對齊、懸念鉤子有效性。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
-
+ 
 【完整章節大綱列表（前後各1章的上下文）】
 {plot_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "writer":
         # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆)
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（正文寫作作家）。
+1. 當前階段是「current_stage = {current_stage}」（正文寫作作家）。
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         # 對角色聖經進行基本設定篩選
         characters_filtered = extract_character_basic(characters_text)
         user_content = f"""【世界觀背景】
 {worldview_text}
-
+ 
 【角色 Bible 聖經（基本設定）】
 {json.dumps(characters_filtered, ensure_ascii=False, indent=2)}
-
+ 
 【當前章節大綱】
 {plot_text}
-
+ 
 【本章正文（完整內容）】
 {written_chapters_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     elif current_stage == "editor":
         # 編輯階段：該章的完整潤色內容
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前潤色後正文的質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」（編輯姬）。
+1. 當前階段是「current_stage = {current_stage}」（編輯姬）。
 2. 檢查潤色後是否比原版有明顯提升。
 3. 確認角色人設、大綱走向、伏筆完整性是否保持。
-
+ 
 {stage_criteria}
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【世界觀背景】
 {worldview_text}
-
+ 
 【原章節大綱】
 {plot_text}
-
+ 
 【潤色後正文（完整內容）】
 {written_chapters_text}
-
+ 
 請進行深度評估，決定下一步行動！
 """
     
     else:
         # 默認通用格式
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前階段的創作質量，並決定下一步的最佳動作。
-
+ 
 【審查原則】
-1. 當前階段是「{current_stage}」。
+1. 當前階段是「current_stage = {current_stage}」。
 2. 對比使用者的原始意圖，檢查是否有邏輯跳躍、設定穿幫、或者是套用流水帳的情形。
 3. ⚠️ 【Plot / Outline 階段強制放行】：若當前階段是 `plot` 或 `plot_review`，除非有嚴重人物缺失需要 `GO_BACK_TO_CHARACTERS`，否則必須直接給出 `CONTINUE`，不得故意阻斷。
-
+ 
 {DIRECTOR_COMMON_FOOTER}
 """
         user_content = f"""【創作主軸需求】
 {user_prompt}
-
+ 
 【當前各板塊數據】
 - 世界觀設定：{worldview_text[:1500] if worldview_text else "（空）"}
 - 角色設定：{characters_text[:1500] if characters_text else "（空）"}
 - 大綱設定：{plot_text[:1500] if plot_text else "（空）"}
 - 正文：{written_chapters_text[:1500] if written_chapters_text else "（空）"}
-
+ 
 請進行深度評估，決定下一步行動！
 """
+    
+    system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
     return [
         {"role": "system", "content": system_prompt},

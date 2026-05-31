@@ -48,7 +48,7 @@ def run_story_architect(novel_id, user_prompt):
     messages = build_story_architect_messages(genre, style, user_prompt)
     
     # Store chat history
-    db.save_chat_message(novel_id, "user", f"開始生成世界觀。要求: {user_prompt}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"開始生成世界觀。要求: {user_prompt}", message_type="pipeline")
     
     # Run streaming
     stream = call_llm_stream("architect", messages)
@@ -67,7 +67,7 @@ def run_story_architect(novel_id, user_prompt):
     # Save output to database
     if full_text.strip():
         db.save_worldbuilding(novel_id, full_text)
-        db.save_chat_message(novel_id, "assistant", f"世界觀生成成功！版本已更新。", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"世界觀生成成功！版本已更新。", message_type="pipeline")
 
 
 # =============================================================================
@@ -89,7 +89,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     
     messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index)
     
-    db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")
     
     stream = call_llm_stream("character", messages)
     accumulated = []
@@ -106,7 +106,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     full_text = "".join(accumulated)
     if full_text.strip():
         db.save_characters(novel_id, full_text)
-        db.save_chat_message(novel_id, "assistant", f"角色聖經更新完畢！版本已更新。", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"角色聖經更新完畢！版本已更新。", message_type="pipeline")
 
 
 # =============================================================================
@@ -126,9 +126,9 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     
     messages = build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx)
     
-    db.save_chat_message(novel_id, "user", f"執行篇卷規劃。模式: {mode}, 卷數: {target_vol_idx or '全書'}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"執行篇卷規劃。模式: {mode}, 卷數: {target_vol_idx or '全書'}", message_type="pipeline")
     
-    stream = call_llm_stream("architect", messages) # Map to architect model for volumes planning
+    stream = call_llm_stream("volumes", messages) # Map to volumes model for volumes planning
     accumulated = []
     for chunk in stream:
         yield chunk
@@ -155,9 +155,9 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
                     pv_idx = pv.get("volume_index", target_vol_idx)
                     pv["volume_index"] = pv_idx
                     merged_vols[pv_idx] = pv
-                db.save_volumes(novel_id, list(merged_vols.values()))
+                db.save_volumes(novel_id, list(merged_vols.values()), clear_downstream=False)
             else:
-                db.save_volumes(novel_id, vols_list)
+                db.save_volumes(novel_id, vols_list, clear_downstream=True)
             
             # 預計算全局伏筆與轉折藍圖
             try:
@@ -165,7 +165,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
             except Exception as e:
                 print(f"[WARN] Failed to precompute global foreshadowing in run_volumes_planner: {e}")
                 
-        db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="pipeline")
 
 
 # =============================================================================
@@ -265,9 +265,9 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
         surrounding_context, precalc_clues, user_prompt
     )
     
-    db.save_chat_message(novel_id, "user", f"生成第 {volume_index} 卷骨架大綱。章節範圍: {start_ch} - {end_ch}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"生成第 {volume_index} 卷骨架大綱。章節範圍: {start_ch} - {end_ch}", message_type="pipeline")
     
-    stream = call_llm_stream("plot", messages) # Map to plot model
+    stream = call_llm_stream("volume_skeleton", messages) # Map to volume skeleton model
     accumulated = []
     for chunk in stream:
         yield chunk
@@ -288,7 +288,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
         
         if chapters_skeleton:
             db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
-        db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷簡易骨架大綱已更新成功！", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷簡易骨架大綱已更新成功！", message_type="pipeline")
 
 
 # =============================================================================
@@ -335,7 +335,7 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     
     messages = build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt)
     
-    db.save_chat_message(novel_id, "user", f"生成詳細章節大綱。要求: {user_prompt or '依骨架展開'}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"生成詳細章節大綱。要求: {user_prompt or '依骨架展開'}", message_type="pipeline")
     
     stream = call_llm_stream("plot", messages)
     accumulated = []
@@ -353,8 +353,8 @@ def run_plot_planner(novel_id, user_prompt=None, planner_directive=None):
     if full_text.strip():
         from models.parsers import extract_json_block
         parsed_plot = extract_json_block(full_text)
-        db.save_plot_chapters(novel_id, parsed_plot)
-        db.save_chat_message(novel_id, "assistant", f"詳細大綱已保存成功！", message_type="chat")
+        db.save_plot_chapters(novel_id, parsed_plot, clear_chapters=True)
+        db.save_chat_message(novel_id, "assistant", f"詳細大綱已保存成功！", message_type="pipeline")
 
 
 # =============================================================================
@@ -428,7 +428,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         vol_outline_context, clue_payoff_details, custom_style, chapter_index
     )
     
-    db.save_chat_message(novel_id, "user", f"開始寫作第 {chapter_index} 章。風格: {custom_style}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"開始寫作第 {chapter_index} 章。風格: {custom_style}", message_type="pipeline")
     
     stream = call_llm_stream("writer", messages)
     accumulated = []
@@ -455,7 +455,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
                 break
                 
         db.save_chapter(novel_id, chapter_index, prose_val, synopsis=current_outline.get("title", f"第 {chapter_index} 章"), thinking=thinking_val)
-        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文寫作完成！", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文寫作完成！", message_type="pipeline")
 
 
 # =============================================================================
@@ -475,7 +475,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
     
     messages = build_editor_agent_messages(chapter_index, edit_instructions, original_prose)
     
-    db.save_chat_message(novel_id, "user", f"調用編輯姬潤色第 {chapter_index} 章。指示: {edit_instructions}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"調用編輯姬潤色第 {chapter_index} 章。指示: {edit_instructions}", message_type="pipeline")
     
     stream = call_llm_stream("editor", messages)
     accumulated = []
@@ -492,7 +492,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
     full_text = "".join(accumulated)
     if full_text.strip():
         db.save_chapter(novel_id, chapter_index, full_text, synopsis=current_synopsis)
-        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功潤色替換！", message_type="chat")
+        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功潤色替換！", message_type="pipeline")
 
 
 # =============================================================================
@@ -503,12 +503,20 @@ def run_copilot_chat(novel_id, user_message):
     AI Copilot Chat: User speaks, Copilot analyzes intent, recommends best flow, and chats.
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要
+    # 由於 MAX_WORLDVIEW_SUMMARY_LENGTH = 999999，extract_worldview_summary 會保留完整設定
     worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
-    plot_data = db.get_stitched_plot(novel_id)
-    plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+    
+    # 透過 Python 動態偵測階段，修復先前 current_stage 未定義 Bug
+    current_stage = db.detect_current_stage(novel_id)
+    
+    if current_stage == "volumes":
+        vols = db.get_volumes(novel_id)
+        plot_text = json.dumps({"volumes": vols}, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
+    else:
+        plot_data = db.get_stitched_plot(novel_id)
+        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
     
     # 建立系統記憶歷史以保證上下文連貫
     history = db.get_chat_memory(novel_id, limit=10)
@@ -516,12 +524,19 @@ def run_copilot_chat(novel_id, user_message):
     for h in history:
         history_context += f"【{h['role']}】：{h['content']}\n"
 
-    messages = build_copilot_chat_messages(worldview_text, characters_text, plot_text, history_context, user_message)
+    # 生成 Python 剛性指標檢查報告
+    validation_report = db.generate_validation_report(novel_id)
+
+    messages = build_copilot_chat_messages(
+        worldview_text, characters_text, plot_text, history_context, user_message, 
+        validation_report=validation_report
+    )
     
     db.save_chat_message(novel_id, "user", user_message, message_type="chat")
     
     stream = call_llm_stream("copilot", messages)
     accumulated = []
+    thinking_accumulated = []
     for chunk in stream:
         yield chunk
         if chunk.startswith("data:"):
@@ -529,12 +544,15 @@ def run_copilot_chat(novel_id, user_message):
                 data = json.loads(chunk[5:].strip())
                 if data.get("type") == "content":
                     accumulated.append(data.get("delta", ""))
+                elif data.get("type") == "thinking":
+                    thinking_accumulated.append(data.get("delta", ""))
             except:
                 pass
                 
     full_text = "".join(accumulated)
+    full_thinking = "".join(thinking_accumulated)
     if full_text.strip():
-        db.save_chat_message(novel_id, "assistant", full_text, message_type="chat")
+        db.save_chat_message(novel_id, "assistant", full_text, thinking=full_thinking if full_thinking.strip() else None, message_type="chat")
 
 
 # =============================================================================
@@ -546,19 +564,32 @@ def run_director_decision(novel_id, current_stage, user_prompt):
     CONTINUE, AUTO_REGENERATE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
+    # 總監評審世界觀時需要完整傳入，其他階段則在 build_director_decision_messages 中縮減為特定文字說明
+    worldview_text = wb["content"] if wb else "尚無世界觀設定"
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
-    plot_data = db.get_stitched_plot(novel_id)
-    plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+    
+    if current_stage in ("volumes", "volume_skeleton"):
+        vols = db.get_volumes(novel_id)
+        plot_text = json.dumps(vols, ensure_ascii=False, indent=2) if vols else "尚無篇卷與骨架規劃"
+    else:
+        plot_data = db.get_stitched_plot(novel_id)
+        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+        
     written_ch = db.get_all_chapters_latest(novel_id)
     written_chapters_text = f"已完成正文章節數：{len(written_ch)} 章"
     
-    messages = build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt)
+    # 生成 Python 剛性指標檢查報告
+    validation_report = db.generate_validation_report(novel_id)
+    
+    messages = build_director_decision_messages(
+        current_stage, worldview_text, characters_text, plot_text, written_chapters_text, 
+        user_prompt, validation_report
+    )
     
     stream = call_llm_stream("copilot", messages)
     accumulated = []
+    thinking_accumulated = []
     for chunk in stream:
         yield chunk
         if chunk.startswith("data:"):
@@ -566,12 +597,15 @@ def run_director_decision(novel_id, current_stage, user_prompt):
                 data = json.loads(chunk[5:].strip())
                 if data.get("type") == "content":
                     accumulated.append(data.get("delta", ""))
+                elif data.get("type") == "thinking":
+                    thinking_accumulated.append(data.get("delta", ""))
             except:
                 pass
                 
     full_text = "".join(accumulated)
+    full_thinking = "".join(thinking_accumulated)
     if full_text.strip():
-        db.save_chat_message(novel_id, "director", f"【總監階段評估 ({current_stage})】\n{full_text}", message_type="director")
+        db.save_chat_message(novel_id, "director", f"【總監階段評估 ({current_stage})】\n{full_text}", thinking=full_thinking if full_thinking.strip() else None, message_type="director")
 
 
 def run_director_decision_help(novel_id, current_stage, help_action, help_reason):
@@ -583,8 +617,12 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     worldview_text = wb["content"] if wb else "尚無世界觀設定"  # 這裡需要完整內容因為是調閱
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
-    plot_data = db.get_stitched_plot(novel_id)
-    plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+    if current_stage == "volumes":
+        vols = db.get_volumes(novel_id)
+        plot_text = json.dumps({"volumes": vols}, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
+    else:
+        plot_data = db.get_stitched_plot(novel_id)
+        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
     
     target_data = ""
     if "worldview" in help_action:
@@ -598,6 +636,7 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     
     stream = call_llm_stream("copilot", messages)
     accumulated = []
+    thinking_accumulated = []
     for chunk in stream:
         yield chunk
         if chunk.startswith("data:"):
@@ -605,12 +644,15 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
                 data = json.loads(chunk[5:].strip())
                 if data.get("type") == "content":
                     accumulated.append(data.get("delta", ""))
+                elif data.get("type") == "thinking":
+                    thinking_accumulated.append(data.get("delta", ""))
             except:
                 pass
                 
     full_text = "".join(accumulated)
+    full_thinking = "".join(thinking_accumulated)
     if full_text.strip():
-        db.save_chat_message(novel_id, "director", f"【總監輔助評估 ({current_stage})】\n{full_text}", message_type="director")
+        db.save_chat_message(novel_id, "director", f"【總監輔助評估 ({current_stage})】\n{full_text}", thinking=full_thinking if full_thinking.strip() else None, message_type="director")
 
 
 # =============================================================================
@@ -626,7 +668,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     
     messages = build_incremental_architect_messages(target_section, worldview_text, user_hint)
     
-    db.save_chat_message(novel_id, "user", f"增量世界觀修改。板塊: {target_section}, 要求: {user_hint}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"增量世界觀修改。板塊: {target_section}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("architect", messages)
     accumulated = []
     for chunk in stream:
@@ -644,7 +686,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
         from incremental_patch_engine import validate_and_merge_incremental_patch
         success, version, err = validate_and_merge_incremental_patch(novel_id, target_section, "PATCH", full_text)
         if success:
-            db.save_chat_message(novel_id, "assistant", f"增量世界觀更新完成 (版本 {version})", message_type="chat")
+            db.save_chat_message(novel_id, "assistant", f"增量世界觀更新完成 (版本 {version})", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"增量世界觀更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
@@ -675,7 +717,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     )
     
     action = "PATCH" if target_char_index is not None else "APPEND"
-    db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {target_char_index if target_char_index is not None else '新增'}, 要求: {user_hint}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {target_char_index if target_char_index is not None else '新增'}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("character", messages)
     accumulated = []
     for chunk in stream:
@@ -698,7 +740,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
             extra["field_name"] = field_name
         success, version, err = validate_and_merge_incremental_patch(novel_id, "characters", action, full_text, extra)
         if success:
-            db.save_chat_message(novel_id, "assistant", f"角色增量更新完成 (版本 {version})", message_type="chat")
+            db.save_chat_message(novel_id, "assistant", f"角色增量更新完成 (版本 {version})", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"角色增量更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
@@ -716,7 +758,7 @@ def run_incremental_plot_planner(novel_id, insert_after_index, user_hint):
     
     messages = build_incremental_plot_planner_messages(worldview_text, plot_text, insert_after_index, user_hint)
     
-    db.save_chat_message(novel_id, "user", f"增量大綱更新。插入位置: {insert_after_index}, 要求: {user_hint}", message_type="chat")
+    db.save_chat_message(novel_id, "user", f"增量大綱更新。插入位置: {insert_after_index}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("plot", messages)
     accumulated = []
     for chunk in stream:
@@ -734,7 +776,7 @@ def run_incremental_plot_planner(novel_id, insert_after_index, user_hint):
         from incremental_patch_engine import validate_and_merge_incremental_patch
         success, version, err = validate_and_merge_incremental_patch(novel_id, "plot", "INSERT", full_text, {"insert_after_index": insert_after_index})
         if success:
-            db.save_chat_message(novel_id, "assistant", f"詳細大綱增量更新完成 (版本 {version})", message_type="chat")
+            db.save_chat_message(novel_id, "assistant", f"詳細大綱增量更新完成 (版本 {version})", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"大綱增量更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
@@ -757,8 +799,8 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
     from prompts.prompt_builder import build_incremental_skeleton_messages
     messages = build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint)
     
-    db.save_chat_message(novel_id, "user", f"增量卷骨架修改。卷: {volume_index}, 要求: {user_hint}", message_type="chat")
-    stream = call_llm_stream("plot", messages)
+    db.save_chat_message(novel_id, "user", f"增量卷骨架修改。卷: {volume_index}, 要求: {user_hint}", message_type="pipeline")
+    stream = call_llm_stream("volume_skeleton", messages)
     accumulated = []
     for chunk in stream:
         yield chunk
@@ -778,7 +820,7 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
         
         if chapters_skeleton:
             db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
-            db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架增量更新完成", message_type="chat")
+            db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架增量更新完成", message_type="pipeline")
 
 
 def run_global_foreshadowing_precompute(novel_id):

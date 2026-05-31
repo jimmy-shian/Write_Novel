@@ -63,6 +63,20 @@ AGENT_DEFAULTS = {
         "max_tokens": 16384,
         "enable_thinking": 1
     },
+    "volumes": {
+        "model": os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
+        "temperature": 0.30,
+        "top_p": 0.95,
+        "max_tokens": 16384,
+        "enable_thinking": 1
+    },
+    "volume_skeleton": {
+        "model": os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT", "qwen/qwen3.5-122b-a10b"),
+        "temperature": 0.35,
+        "top_p": 0.95,
+        "max_tokens": 16384,
+        "enable_thinking": 1
+    },
     "plot": {
         "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "qwen/qwen3.5-122b-a10b"),
         "temperature": 0.35,
@@ -94,8 +108,9 @@ AGENT_DEFAULTS = {
 }
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -106,7 +121,7 @@ def sync_agent_configs_from_env(cursor):
     This ensures that database re-runs/initialization will always sync and overwrite 
     the DB settings with the values defined in .env.
     """
-    agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
+    agents = ["global", "architect", "character", "volumes", "volume_skeleton", "plot", "writer", "editor", "copilot"]
     
     # Mapping for Env keys
     env_keys = {
@@ -136,6 +151,24 @@ def sync_agent_configs_from_env(cursor):
             "top_p": "TOP_P_CHARACTER",
             "max_tokens": "MAX_TOKENS_CHARACTER",
             "enable_thinking": "ENABLE_THINKING_CHARACTER"
+        },
+        "volumes": {
+            "api_key": "NVIDIA_API_KEY_VOLUMES",
+            "base_url": "BASE_URL_VOLUMES",
+            "model": "MODEL_VOLUMES",
+            "temperature": "TEMPERATURE_VOLUMES",
+            "top_p": "TOP_P_VOLUMES",
+            "max_tokens": "MAX_TOKENS_VOLUMES",
+            "enable_thinking": "ENABLE_THINKING_VOLUMES"
+        },
+        "volume_skeleton": {
+            "api_key": "NVIDIA_API_KEY_VOLUME_SKELETON",
+            "base_url": "BASE_URL_VOLUME_SKELETON",
+            "model": "MODEL_VOLUME_SKELETON",
+            "temperature": "TEMPERATURE_VOLUME_SKELETON",
+            "top_p": "TOP_P_VOLUME_SKELETON",
+            "max_tokens": "MAX_TOKENS_VOLUME_SKELETON",
+            "enable_thinking": "ENABLE_THINKING_VOLUME_SKELETON"
         },
         "plot": {
             "api_key": "NVIDIA_API_KEY_PLOT",
@@ -196,6 +229,10 @@ def sync_agent_configs_from_env(cursor):
                 model = os.getenv("MODEL_STORY")
             elif agent == "plot":
                 model = os.getenv("MODEL_CRITIC")
+            elif agent == "volumes":
+                model = os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT")
+            elif agent == "volume_skeleton":
+                model = os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT")
             if not model:
                 model = os.getenv("MODEL_GLOBAL") or "google/gemma-3n-e4b-it"
 
@@ -434,11 +471,10 @@ def db_init():
     except sqlite3.OperationalError:
         pass
     
-    # Sync all configurations from .env on start
-    sync_agent_configs_from_env(cursor)
-    
-    # Clean up empty configurations to let .env configuration take priority
-    cursor.execute("DELETE FROM agent_configs WHERE api_key = '' OR api_key IS NULL")
+    # Sync all configurations from .env on start ONLY if table is empty
+    cfg_count = cursor.execute("SELECT COUNT(*) as cnt FROM agent_configs").fetchone()["cnt"]
+    if cfg_count == 0:
+        sync_agent_configs_from_env(cursor)
     
     # 9. Global Foreshadowing Blueprint table
     cursor.execute("""
@@ -496,10 +532,14 @@ def delete_novel(novel_id):
     conn.close()
 
 # --- VOLUMES (篇卷) HELPERS ---
-def save_volumes(novel_id, volumes_list):
+def save_volumes(novel_id, volumes_list, clear_downstream=False):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
+    if clear_downstream:
+        cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+        cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
+        cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
     for idx, vol in enumerate(volumes_list):
         volume_index = vol.get("volume_index", idx + 1)
         title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
@@ -1094,7 +1134,7 @@ def get_latest_plot_chapters(novel_id):
         return data
     return None
 
-def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
+def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_chapters=False):
     if isinstance(outline_json, dict) or isinstance(outline_json, list):
         # 轉換所有字串為繁體再序列化
         outline_json = _convert_obj_to_traditional(outline_json)
@@ -1112,6 +1152,9 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False):
         
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    if clear_chapters:
+        cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
     
     # 1. Save to master plot_chapters table for versioning and fallback
     row = cursor.execute(
@@ -1332,7 +1375,7 @@ def get_chat_memory(novel_id, limit=20, message_type=None):
         ).fetchall()
     else:
         rows = cursor.execute(
-            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? AND message_type IN ('chat', 'director') ORDER BY id DESC LIMIT ?",
             (novel_id, limit)
         ).fetchall()
     conn.close()
@@ -1402,6 +1445,19 @@ def parse_worldview_to_json(content):
             content = content.split("\n\n【全域")[0]
             
     content_stripped = content.strip()
+    # 💡 核心修復：處理 markdown codeblock 包含的 JSON 格式
+    if "```" in content_stripped:
+        import re
+        cleaned = re.sub(r"<think>.*?</think>", "", content_stripped, flags=re.DOTALL).strip()
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.DOTALL)
+        if json_match:
+            content_stripped = json_match.group(1).strip()
+        else:
+            first_brace = cleaned.find("{")
+            last_brace = cleaned.rfind("}")
+            if first_brace != -1 and last_brace != -1:
+                content_stripped = cleaned[first_brace:last_brace + 1].strip()
+
     if content_stripped.startswith("{") and content_stripped.endswith("}"):
         try:
             parsed = json.loads(content_stripped)
@@ -2167,22 +2223,47 @@ def precompute_global_foreshadowing(novel_id):
     h_seed = int(hashlib.md5(f"global_blueprint_{novel_id}".encode('utf-8')).hexdigest(), 16) % (2**32)
     r = random.Random(h_seed)
     
-    # 4. 棋盤式散射：伏筆埋設與回收位置
+    # 4. 確定性循環對齊散射：保證每個卷均勻分配到伏筆埋設與回收任務，絕不漏空
     foreshadowing_allocations = []
-    min_span = max(1, T // 10)
+    V = len(sorted_vols)
+    
     for idx, seed in enumerate(all_seeds):
-        if T <= 2:
-            P = 1
-            R = T
+        if V <= 1:
+            # 單卷時保底前後散射
+            start_p, end_p = get_volume_chapter_range(volumes, sorted_vols[0]["volume_index"])
+            if end_p - start_p >= 1:
+                P = r.randint(start_p, end_p - 1)
+                R = r.randint(P + 1, end_p)
+            else:
+                P = start_p
+                R = end_p
         else:
-            P = r.randint(1, max(1, T - min_span))
-            R = r.randint(P + min_span, T)
+            # 多卷時，循環指定埋設卷與回收卷，保證跨卷張力
+            v_p_idx = (idx % V) + 1  # 埋設卷
+            if v_p_idx < V:
+                v_r_idx = r.randint(v_p_idx + 1, V)  # 回收卷在埋設卷之後
+            else:
+                # 若為最後一卷，則將埋設點放到前面任意一卷，回收點放在最後一卷
+                v_p_idx = r.randint(1, V - 1)
+                v_r_idx = V
+                
+            start_p, end_p = get_volume_chapter_range(volumes, v_p_idx)
+            start_r, end_r = get_volume_chapter_range(volumes, v_r_idx)
+            
+            P = r.randint(start_p, end_p)
+            R = r.randint(start_r, end_r)
+            
         foreshadowing_allocations.append((P, R))
         
-    # 5. 關鍵轉折點位置
+    # 5. 關鍵轉折點確定性循環位置分配，確保均勻覆蓋各卷
     turning_allocations = []
     for jdx, turn in enumerate(all_turns):
-        K = r.randint(1, T)
+        if V > 0:
+            v_k_idx = (jdx % V) + 1
+            start_k, end_k = get_volume_chapter_range(volumes, v_k_idx)
+            K = r.randint(start_k, end_k)
+        else:
+            K = r.randint(1, T)
         turning_allocations.append(K)
         
     blueprint = {
@@ -2232,5 +2313,273 @@ def get_global_foreshadowing_blueprint(novel_id):
             
     # 若不一致或尚未預計算，自動觸發並回傳預計算結果
     return precompute_global_foreshadowing(novel_id)
+
+
+def detect_current_stage(novel_id):
+    """
+    根據資料庫進度動態偵測當前創作階段 (worldview -> characters -> volumes -> volume_skeleton -> plot -> writer -> editor)
+    """
+    wb = get_latest_worldbuilding(novel_id)
+    if not wb or not wb["content"].strip():
+        return "worldview"
+        
+    char = get_latest_characters(novel_id)
+    if not char or not char["json_data"] or char["json_data"] == "{'characters': []}":
+        return "characters"
+        
+    vols = get_volumes(novel_id)
+    if not vols:
+        return "volumes"
+        
+    # 如果有任何一卷尚未規劃簡易骨架大綱，則為 volume_skeleton 階段
+    has_all_skeletons = all(v.get("chapters_outline") for v in vols)
+    if not has_all_skeletons:
+        return "volume_skeleton"
+        
+    # 檢查是否已生成詳細大綱。詳細大綱的特徵是章節具有 events 列表，且內含具體的情節場景
+    plot = get_latest_plot_chapters(novel_id)
+    has_detailed_plot = False
+    if plot and plot.get("parsed_data"):
+        ch_list = plot["parsed_data"].get("chapters", [])
+        if ch_list:
+            for ch in ch_list:
+                events = ch.get("events")
+                if events and isinstance(events, list) and len(events) > 0:
+                    has_detailed_plot = True
+                    break
+                    
+    if not has_detailed_plot:
+        return "plot"
+        
+    chapters = get_all_chapters_latest(novel_id)
+    if not chapters:
+        return "writer"
+        
+    return "editor"
+
+
+def generate_validation_report(novel_id):
+    """
+    用 Python 硬碼（Hardcoded）計算的客觀指標報告，避免 AI 通靈。
+    進行嚴格的資料完整性與邏輯一致性檢查，並產出易於被 AI 總監解析的剛性指標報告。
+    """
+    report_lines = []
+    report_lines.append("=" * 60)
+    report_lines.append("🤖 系統底層剛性資料結構與進度校驗報告 (VALIDATION REPORT)")
+    report_lines.append("=" * 60)
+    
+    # 讀取小說基本資料
+    novel = get_novel(novel_id)
+    if not novel:
+        return "❌ 錯誤：找不到該小說資料。"
+        
+    title = novel.get("title", "未命名")
+    genre = novel.get("genre", "未分類")
+    style = novel.get("style", "預設")
+    
+    # 1. 創作需求與世界觀
+    wb = get_latest_worldbuilding(novel_id)
+    wb_exists = wb is not None and len(wb.get("content", "").strip()) > 0
+    
+    report_lines.append("【1. 世界觀與核心設定層】")
+    if not wb_exists:
+        report_lines.append("  - 狀態：❌ 未完成 (世界觀為空)")
+        report_lines.append("  - 伏筆種子：0 個")
+        report_lines.append("  - 關鍵轉折點：0 個")
+    else:
+        report_lines.append("  - 狀態：✅ 已建立")
+        # 嘗試解析
+        try:
+            parsed_wb = json.loads(wb["content"])
+            seeds = parsed_wb.get("foreshadowing_seeds", [])
+            turns = parsed_wb.get("key_turning_points", [])
+            report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
+            for i, s in enumerate(seeds):
+                report_lines.append(f"    * [Seed-{i+1}] {s}")
+            report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
+            for j, t in enumerate(turns):
+                report_lines.append(f"    * [Turn-{j+1}] {t}")
+        except Exception as e:
+            report_lines.append("  - 狀態：⚠️ 世界觀非標準 JSON 格式，無法解析伏筆種子。")
+    report_lines.append("")
+    
+    # 2. 角色聖經
+    char = get_latest_characters(novel_id)
+    char_exists = char is not None and char.get("json_data") and char["json_data"] != "{'characters': []}"
+    
+    report_lines.append("【2. 角色聖經層】")
+    if not char_exists:
+        report_lines.append("  - 狀態：❌ 未完成 (角色聖經為空)")
+    else:
+        try:
+            parsed_char = char.get("parsed_data") or json.loads(char["json_data"])
+            chars_list = parsed_char.get("characters", [])
+            report_lines.append(f"  - 登記角色總數：共 {len(chars_list)} 位")
+            for idx, c in enumerate(chars_list):
+                name = c.get("name", "未命名")
+                role = c.get("role", "未設定")
+                # 欄位完整度檢查
+                missing_fields = []
+                for f in ["personality", "want", "need", "fatal_flaw"]:
+                    if not c.get(f):
+                        missing_fields.append(f)
+                if missing_fields:
+                    report_lines.append(f"    * 角色 [{name}] ({role}) ⚠️ [欄位缺失]：缺少 {', '.join(missing_fields)}")
+                else:
+                    report_lines.append(f"    * 角色 [{name}] ({role}) ✅ 完美完整")
+        except Exception as e:
+            report_lines.append("  - 狀態：⚠️ 角色聖經非標準 JSON 格式，無法解析。")
+    report_lines.append("")
+    
+    # 3. 篇卷規劃與骨架大綱
+    vols = get_volumes(novel_id)
+    report_lines.append("【3. 篇卷規劃與骨架大綱層】")
+    if not vols:
+        report_lines.append("  - 狀態：❌ 未完成 (尚未規劃篇卷)")
+    else:
+        report_lines.append(f"  - 篇卷規劃總數：共 {len(vols)} 卷")
+        total_planned_chapters = sum(_get_clean_chapter_count(v) for v in vols)
+        report_lines.append(f"  - 章節骨架總規劃數：共 {total_planned_chapters} 章")
+        
+        # 檢查每卷的骨架大綱
+        for v in vols:
+            vol_idx = v["volume_index"]
+            vol_title = v["title"]
+            start_ch, end_ch = get_volume_chapter_range(vols, vol_idx)
+            
+            skeleton_list = v.get("chapters_outline")
+            if not skeleton_list:
+                report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：⚠️ [骨架缺失] (尚未規劃簡易章節骨架大綱)")
+            else:
+                report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：✅ 骨架已建立 (第 {start_ch} 章至第 {end_ch} 章，共 {len(skeleton_list)} 章)")
+                # 剛性檢查章節序號覆蓋度
+                expected_indexes = set(range(start_ch, end_ch + 1))
+                actual_indexes = set()
+                for c in skeleton_list:
+                    c_idx = c.get("chapter_index")
+                    if c_idx is not None:
+                        actual_indexes.add(int(c_idx))
+                        
+                missing_indexes = expected_indexes - actual_indexes
+                duplicate_indexes = [x for x in actual_indexes if list(map(lambda y: int(y.get("chapter_index", 0)), skeleton_list)).count(x) > 1]
+                
+                if missing_indexes:
+                    report_lines.append(f"      - ⚠️ [大綱骨架缺漏] 缺少章節：{sorted(list(missing_indexes))}")
+                if duplicate_indexes:
+                    report_lines.append(f"      - ⚠️ [大綱骨架重複] 重複章節：{duplicate_indexes}")
+    report_lines.append("")
+    
+    # 4. 詳細章節大綱 (Stitched Plot)
+    plot_data = get_stitched_plot(novel_id)
+    chapters_outlines = plot_data.get("chapters", []) if plot_data else []
+    
+    report_lines.append("【4. 詳細章節大綱層】")
+    if not chapters_outlines:
+        report_lines.append("  - 狀態：❌ 未完成 (尚未生成詳細大綱)")
+    else:
+        report_lines.append(f"  - 詳細大綱已生成章節：共 {len(chapters_outlines)} 章")
+        
+        # 檢查連續性
+        if vols:
+            max_expected_ch = sum(_get_clean_chapter_count(v) for v in vols)
+            expected_set = set(range(1, max_expected_ch + 1))
+            actual_set = set()
+            
+            for ch in chapters_outlines:
+                idx = ch.get("chapter_index")
+                if idx is not None:
+                    actual_set.add(int(idx))
+                    
+            missing_plot_chapters = expected_set - actual_set
+            if missing_plot_chapters:
+                report_lines.append(f"  - ⚠️ [進度不一致 / 詳細大綱缺漏] 缺少章節大綱：{sorted(list(missing_plot_chapters))} 章")
+            else:
+                report_lines.append("  - 連續性檢查：✅ 100% 連續無缺漏")
+                
+            # 伏筆與轉折硬指標對齊檢查
+            blueprint = get_global_foreshadowing_blueprint(novel_id)
+            if blueprint and wb_exists:
+                try:
+                    parsed_wb = json.loads(wb["content"])
+                    all_seeds = parsed_wb.get("foreshadowing_seeds", [])
+                    all_turns = parsed_wb.get("key_turning_points", [])
+                    foreshadowing_allocations = blueprint.get("foreshadowing_allocations", [])
+                    turning_allocations = blueprint.get("turning_allocations", [])
+                    
+                    unaligned_warnings = []
+                    
+                    # 檢查伏筆埋設與回收
+                    for idx, seed in enumerate(all_seeds):
+                        if idx < len(foreshadowing_allocations):
+                            P, R = foreshadowing_allocations[idx]
+                            # 檢查第 P 章大綱是否埋設了伏筆
+                            p_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == P), None)
+                            if p_ch:
+                                plant_desc = str(p_ch.get("foreshadowing_plant", "")) + str(p_ch.get("events", ""))
+                                if f"Seed-{idx+1}" not in plant_desc and seed[:5] not in plant_desc:
+                                    unaligned_warnings.append(f"第 {P} 章大綱：應埋設 [Seed-{idx+1}]《{seed}》，但大綱中未提及該線索！")
+                                    
+                            # 檢查第 R 章大綱是否回收了伏筆
+                            r_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == R), None)
+                            if r_ch:
+                                payoff_desc = str(r_ch.get("foreshadowing_payoff", "")) + str(r_ch.get("events", ""))
+                                if f"Seed-{idx+1}" not in payoff_desc and seed[:5] not in payoff_desc:
+                                    unaligned_warnings.append(f"第 {R} 章大綱：應回收 [Seed-{idx+1}]《{seed}》，但大綱中未提及該線索！")
+                                    
+                    # 檢查轉折點
+                    for jdx, turn in enumerate(all_turns):
+                        if jdx < len(turning_allocations):
+                            K = turning_allocations[jdx]
+                            k_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == K), None)
+                            if k_ch:
+                                turn_desc = str(k_ch.get("turning_points", "")) + str(k_ch.get("events", ""))
+                                if turn[:5] not in turn_desc:
+                                    unaligned_warnings.append(f"第 {K} 章大綱：應配合關鍵轉折 [Turn-{jdx+1}]《{turn}》，但大綱中未提及！")
+                                    
+                    if unaligned_warnings:
+                        report_lines.append("  - ⚠️ [線索未對齊警告]：")
+                        for w in unaligned_warnings[:5]:
+                            report_lines.append(f"    * {w}")
+                        if len(unaligned_warnings) > 5:
+                            report_lines.append(f"    * ... 及另外 {len(unaligned_warnings)-5} 項未對齊線索。")
+                    else:
+                        report_lines.append("  - 線索對齊檢查：✅ 所有伏筆與轉折點皆在對應章節大綱中完美對齊")
+                except Exception as e:
+                    report_lines.append(f"  - ⚠️ 對齊檢查失敗：{e}")
+        else:
+            report_lines.append("  - 連續性檢查：⚠️ 尚未規劃篇卷，無法校對大綱。")
+    report_lines.append("")
+    
+    # 5. 正文寫作 (Prose Chapters)
+    written_ch = get_all_chapters_latest(novel_id)
+    report_lines.append("【5. 正文寫作與完稿層】")
+    if not written_ch:
+        report_lines.append("  - 狀態：❌ 未完成 (尚未寫作任何正文章節)")
+    else:
+        report_lines.append(f"  - 正文已寫作章節數：共 {len(written_ch)} 章")
+        
+        # 連續性檢查
+        written_indexes = sorted([int(ch["chapter_index"]) for ch in written_ch])
+        expected_chapters_count = sum(_get_clean_chapter_count(v) for v in vols) if vols else max(written_indexes)
+        
+        # 找出斷檔/未寫的章節
+        unwritten_chapters = []
+        for i in range(1, max(written_indexes) + 1):
+            if i not in written_indexes:
+                unwritten_chapters.append(i)
+                
+        # 計算進度百分比
+        progress_pct = (len(written_ch) / expected_chapters_count) * 100 if expected_chapters_count > 0 else 0
+        report_lines.append(f"  - 全書專案正文完成進度：{progress_pct:.2f}% ({len(written_ch)}/{expected_chapters_count} 章)")
+        
+        if unwritten_chapters:
+            report_lines.append(f"  - ⚠️ [正文斷檔 / 進度不一致]：")
+            report_lines.append(f"    * 以下章節已被跳過/尚未寫作：{unwritten_chapters}")
+            report_lines.append("    * 警告：正文序號不連續，可能導致劇情前言不搭後語！")
+        else:
+            report_lines.append("  - 正文連續性：✅ 正文順序推進，無中斷斷檔。")
+            
+    report_lines.append("=" * 60)
+    return "\n".join(report_lines)
 
 

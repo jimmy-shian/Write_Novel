@@ -65,15 +65,17 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
 
 # 總監評斷下一步行動的提示詞，適用於 plot_review、writer_review、editor_review 等階段
 DIRECTOR_COMMON_FOOTER = """
-## 可點擊可用的 ACTION 指令（嚴格選擇一個）
+【如果是 init 階段(初始階段)，請判斷有完成的是哪些，接下來該往哪個步驟進行】
+
+## 可用的 ACTION 指令（嚴格選擇一個）
 
 | ACTION | 用途 | 必要欄位 |
 |--------|------|----------|
 | `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
 | `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
-| `GO_BACK_TO_WORLDVIEW` | 發現世界觀需要調整（角色/大綱/正文暴露的問題） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
-| `GO_BACK_TO_CHARACTERS` | 發現角色設定需要調整 | `hint`（具體要修改的角色內容） |
-| `GO_BACK_TO_PLOT` | 發現大綱需要調整 | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀重大缺失（大綱方向/風格 和設定不符） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
+| `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失 (大綱中提到，但是卻未在角色列表中) | `hint`（具體要修改的角色內容） |
+| `GO_BACK_TO_PLOT` | 發現大綱重大缺失 (大綱為空) | `hint`（具體要修改大綱內容）, `volume_index`（若有，填入整數；否則填 null）, `chapter_index`（若有，填入整數；否則填 null） |
 | `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
 | `GO_BACK_TO_SKELETON_EXPANSION` | 發現章節缺漏、序號中斷或空殼章節，退回至骨架增生 (volume_skeleton) 重新生成大綱骨架 | 無 |
 | `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
@@ -102,7 +104,7 @@ DIRECTOR_COMMON_FOOTER = """
 
 ```
 【總監評估】
-- 當前階段：「{current_stage}」
+- 當前階段：「current_stage = {current_stage}」
 - 完成品質：[優秀/良好/需要修改]
 - 主要發現：[1-3 句具體評估]
 

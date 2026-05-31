@@ -312,6 +312,77 @@ class TestAINovelFactory(unittest.TestCase):
         self.assertEqual(len(blueprint_updated["foreshadowing_allocations"]), 4)
         self.assertEqual(blueprint_updated["T"], 70)
 
+    # --- 10. Rigid Validation Report and Stage Detection Tests ---
+    def test_validation_report_and_stage_detection(self):
+        # 1. Initially it should detect "worldview" stage for a new novel with no worldview
+        db.delete_novel(self.novel_id)
+        db.create_novel(self.novel_id, "剛性測試小說", "Fantasy", "Classic")
+        
+        stage = db.detect_current_stage(self.novel_id)
+        self.assertEqual(stage, "worldview")
+        
+        # 2. Save worldview -> stage should advance to "characters"
+        wv_content = json.dumps({
+            "theme": "主線",
+            "main_conflict": "對立",
+            "worldview": "規則",
+            "macro_outline": "故事大綱",
+            "multi_act_structure": [],
+            "progressive_character_plan": [],
+            "foreshadowing_seeds": ["伏筆種子1"],
+            "key_turning_points": ["轉折點1"]
+        }, ensure_ascii=False)
+        db.save_worldbuilding(self.novel_id, wv_content)
+        
+        stage = db.detect_current_stage(self.novel_id)
+        self.assertEqual(stage, "characters")
+        
+        # 3. Save characters -> stage should advance to "volumes"
+        char_data = {
+            "characters": [
+                {
+                    "name": "主角A",
+                    "role": "主角",
+                    "personality": ["堅毅"],
+                    "want": "生存",
+                    "need": "救贖",
+                    "fatal_flaw": "衝動",
+                    "motivation": "復仇",
+                    "arc": "無",
+                    "relationships": []
+                }
+            ]
+        }
+        db.save_characters(self.novel_id, char_data)
+        stage = db.detect_current_stage(self.novel_id)
+        self.assertEqual(stage, "volumes")
+        
+        # 4. Save volumes -> stage should advance to "volume_skeleton"
+        volumes_list = [
+            {"volume_index": 1, "title": "第一卷", "summary": "開篇卷", "chapter_count": 10}
+        ]
+        db.save_volumes(self.novel_id, volumes_list)
+        stage = db.detect_current_stage(self.novel_id)
+        self.assertEqual(stage, "volume_skeleton")
+        
+        # 5. Save volume skeleton outline -> stage should advance to "plot"
+        skeleton_outline = [
+            {"chapter_index": 1, "brief_title": "第1章", "brief_summary": "介紹"}
+        ]
+        db.update_volume_outline(self.novel_id, 1, skeleton_outline)
+        stage = db.detect_current_stage(self.novel_id)
+        self.assertEqual(stage, "plot")
+        
+        # 6. Generate validation report and check format
+        report = db.generate_validation_report(self.novel_id)
+        self.assertIn("🤖 系統底層剛性資料結構與進度校驗報告", report)
+        self.assertIn("【1. 世界觀與核心設定層】", report)
+        self.assertIn("【2. 角色聖經層】", report)
+        self.assertIn("【3. 篇卷規劃與骨架大綱層】", report)
+        self.assertIn("[Seed-1] 伏筆種子1", report)
+        self.assertIn("[主角A] (主角) ✅ 完美完整", report)
+        self.assertIn("卷 1《第一卷》：✅ 骨架已建立", report)
+
 
 if __name__ == "__main__":
     unittest.main()

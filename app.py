@@ -484,15 +484,17 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
 @app.get("/api/settings")
 def api_get_settings():
     defaults = get_default_config()
-    all_agents = ["global", "architect", "character", "plot", "writer", "editor", "copilot"]
+    all_agents = ["global", "architect", "character", "volumes", "volume_skeleton", "plot", "writer", "editor", "copilot"]
     
     AGENT_DISPLAY_NAMES = {
         "global": "Global 全域 (預設設置)",
         "architect": "1️⃣ Story Architect (故事結構架構師)",
         "character": "2️⃣ Character Designer (角色設計大師)",
-        "plot": "3️⃣ Plot Planner (章節劇情規劃師)",
-        "writer": "4️⃣ Chapter Writer (小說正文寫作作家)",
-        "editor": "5️⃣ Editor Agent (精緻文風編輯)",
+        "volumes": "3️⃣ Volumes Planner (篇卷規劃師)",
+        "volume_skeleton": "4️⃣ Volume Skeleton Planner (篇卷骨架規劃師)",
+        "plot": "5️⃣ Plot Planner (章節劇情規劃師)",
+        "writer": "6️⃣ Chapter Writer (小說正文寫作作家)",
+        "editor": "7️⃣ Editor Agent (精緻文風編輯)",
         "copilot": "🧠 Co-Pilot Orchestrator (AI 總監)"
     }
     
@@ -553,6 +555,7 @@ class VolumeCreatePayload(BaseModel):
     title: str
     summary: Optional[str] = ""
     factions: Optional[str] = ""
+    chapter_count: Optional[int] = 50
 
 @app.post("/api/novels/{novel_id}/volumes/{vol_idx}")
 def api_create_volume(novel_id: str, vol_idx: int, payload: VolumeCreatePayload):
@@ -569,6 +572,7 @@ def api_create_volume(novel_id: str, vol_idx: int, payload: VolumeCreatePayload)
         existing_vol["title"] = payload.title
         existing_vol["summary"] = payload.summary or ""
         existing_vol["factions"] = payload.factions or ""
+        existing_vol["chapter_count"] = payload.chapter_count or 50
         volume_data = existing_vol
     else:
         # Create new volume
@@ -577,7 +581,8 @@ def api_create_volume(novel_id: str, vol_idx: int, payload: VolumeCreatePayload)
             "volume_index": vol_idx,
             "title": payload.title,
             "summary": payload.summary or "",
-            "factions": payload.factions or ""
+            "factions": payload.factions or "",
+            "chapter_count": payload.chapter_count or 50
         }
         vols.append(new_vol)
         volume_data = new_vol
@@ -588,7 +593,7 @@ def api_create_volume(novel_id: str, vol_idx: int, payload: VolumeCreatePayload)
 
 @app.delete("/api/novels/{novel_id}/volumes/{vol_idx}")
 def api_delete_volume(novel_id: str, vol_idx: int):
-    """Delete a volume and its associated chapters."""
+    """Delete a volume, sequentially renumber the remaining volumes, delete its chapters, and renumber remaining chapters."""
     novel = db.get_novel(novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
@@ -600,17 +605,45 @@ def api_delete_volume(novel_id: str, vol_idx: int):
     
     # Filter out the volume from volumes list
     vols = [v for v in vols if v.get("volume_index") != vol_idx]
+    # Re-index remaining volumes sequentially starting from 1
+    vols.sort(key=lambda x: x.get("volume_index", 0))
+    for idx, v in enumerate(vols):
+        v["volume_index"] = idx + 1
+        
     db.save_volumes(novel_id, vols)
     
-    # Also delete chapters in this volume (by chapter_index range, not volume_index field)
+    # 1. Also delete chapters in this volume from plot_chapters outline
     plot = db.get_stitched_plot(novel_id)
     if plot and "chapters" in plot:
-        # chapters don't have volume_index field, use chapter_index range instead
         plot["chapters"] = [
             ch for ch in plot["chapters"]
             if not (range_start <= (ch.get("chapter_index", 0) or 0) <= range_end)
         ]
+        # Re-number remaining chapters in plot outline to be continuous starting from 1
+        plot["chapters"].sort(key=lambda x: int(x.get("chapter_index", 0)))
+        for idx, ch in enumerate(plot["chapters"]):
+            ch["chapter_index"] = idx + 1
+            
         db.save_plot_chapters(novel_id, plot)
+        
+    # 2. Delete corresponding prose chapters in chapters table, and align/renumber the remaining ones
+    conn = db.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Delete chapters in deleted volume
+        cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index BETWEEN ? AND ?", (novel_id, range_start, range_end))
+        
+        # Select all remaining chapters and update their indexes to be continuous
+        rows = cursor.execute("SELECT id, chapter_index FROM chapters WHERE novel_id = ? ORDER BY chapter_index ASC", (novel_id,)).fetchall()
+        for new_idx, row in enumerate(rows):
+            cursor.execute("UPDATE chapters SET chapter_index = ? WHERE id = ?", (new_idx + 1, row["id"]))
+            
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[ERROR] Failed to align SQLite chapters on delete: {e}")
+    finally:
+        conn.close()
     
     return {"status": "success"}
 
