@@ -136,8 +136,10 @@ def normalize_messages(messages):
             other_messages.append({"role": role, "content": content})
             
     normalized = []
+    system_text = "使用繁體中文 zh-TW\n"
     if system_content:
-        normalized.append({"role": "system", "content": "\n".join(system_content)})
+        system_text += "\n".join(system_content)
+    normalized.append({"role": "system", "content": system_text})
         
     if not other_messages:
         return normalized

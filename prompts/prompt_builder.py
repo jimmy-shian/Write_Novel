@@ -414,12 +414,29 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
         {"role": "user", "content": user_content}
     ]
 
-def build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt):
+def build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt, target_chapter_index=None):
     """劇情大綱規劃師提示詞拼接"""
     # 這裡將任務參數帶入大綱規劃
     schema_snippet = get_json_schema_prompt_snippet("plot")
     system_prompt = f"{PLOT_PLANNER_PROMPT.format(seens='對於骨架中指定的 ⚠️【硬性指定埋設伏筆】 與 ⚠️【硬性指定回收伏筆】，你必須在對應章節的 foreshadowing_plant 與 foreshadowing_payoff 欄位中完美承接並展開編織，不得遺漏！', turning_points='對於骨架中指定的 配合指定關鍵轉折點進展，你必須在對應章節的 turning_points 欄位中確實寫入，並在情節中給予充足的戲劇爆發張力！')}\n\n{schema_snippet}\n"
     
+    # 💡 強力引導大綱 Planner 閱讀骨架中的 allocated_tasks 任務分配，並硬性寫出括弧標記以通過後端剛性檢查
+    system_prompt += """
+⚠️【核心剛性指令：伏筆與轉折任務對齊】
+請仔細檢查輸入的「當前待規劃大綱目標章節」中所附帶的「伏筆任務安排 (allocated_tasks)」，不論它出現在骨架中的哪一個欄位：
+1. 如果該章有指派 of `foreshadowing_plants`（埋設伏筆）任務，你**必須**在該章大綱的情節事件中詳細編織伏筆的埋設場景，並原封不動地在輸出 JSON 的 `foreshadowing_plant` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Seed-X] 或 [伏筆 X] 以利識別，但非硬性強制格式）
+2. 如果該章有指派 of `foreshadowing_payoffs`（回收伏筆）任務，你**必須**在該章大綱的情節事件中編織對應伏筆的因果回收情節，並原封不動地在輸出 JSON 的 `foreshadowing_payoff` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Seed-X] 或 [伏筆 X] 以利識別，但非硬性強制格式）
+3. 如果該章有指派 of `turning_points`（關鍵轉折）任務，你**必須**在該章大綱的情節事件中推動並爆發該轉折點，並原封不動地在輸出 JSON 的 `turning_points` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Turn-Y] 或 [轉折點 Y] 以利識別，但非硬性強制格式）
+這是後端 Python 系統與總監審查的任務對齊紅線，絕對不允許漏掉任何一項指派的線索任務！
+
+4. ⚠️【🔥 絕對禁止重複越界與情節打轉】：你只能在骨架中「明確指派」了該伏筆/轉折任務的特定章節內，進行該任務的觸發與登記！絕對禁止在相鄰或後續的章節大綱（例如沒有指派該轉折的第 247、248 章）中，重複描述或聲稱正在呈現已在前文爆發過的轉折點觸發過程（例如：重複描述全城魔法突破臨界值、魔法潮汐失控暴走）。後續章節必須緊接前文情節「向後推進」，只描述該事件產生的「後續影響/餘波」或「當前章節骨架規定的全新情節」，絕對不可複製貼上、原地打轉或重寫前一章的爆發情節！
+"""
+    
+    if target_chapter_index is not None:
+        final_instruction = f"請只輸出第 {target_chapter_index} 章的詳細大綱 JSON；可以回傳單一章節物件，或回傳 chapters 陣列但其中只能包含第 {target_chapter_index} 章，絕對不要生成其他章節。"
+    else:
+        final_instruction = "請為所有章節生成符合結構的詳細大綱 JSON。"
+
     user_content = f"""【世界觀背景】
 {worldview_text}
 
@@ -429,7 +446,7 @@ def build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt):
 【使用者微調/額外要求】
 {user_prompt or "請根據簡易骨架大綱，為全書擴充並生成高品質的詳細大綱 JSON 設定。"}
 
-請為所有章節生成符合結構的詳細大綱 JSON。
+{final_instruction}
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -710,6 +727,7 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
    - **流轉規則 A (大綱未全部完成時)**：若底層校驗報告中，詳細大綱層之狀態為「❌ 未完成」（例如：進度為 1/660），此時只要當前已細化的大綱品質合格，你**必須**輸出 `"action": "CONTINUE", "target": "plot"`，且必須將 `"chapter_index"` 設為報告中指出的 `👉 【下一章應生成大綱之目標 chapter_index】` 的整數值（例如：2）！**絕對禁止**在此時將 target 設為 "writer" 或其他值！
    - **流轉規則 B (大綱已全部完成時)**：若底層校驗報告中，詳細大綱層之狀態已變為「✅ 已完成」，此時你**必須**輸出 `"action": "CONTINUE", "target": "writer"`，且將 `"chapter_index"` 設為 1，正式將專案推進至正文寫作階段！
 4. ⚠️ 【剛性指標直接讀取規則】：由於上下文長度限制，傳遞給你的大綱數據只是截取的部分採樣，絕對禁止你試圖透過統計或解析傳入的大綱字串來自行判斷章節是否齊全或連續！所有章節齊全性、連續性之事實一律以 Python 剛性校驗報告為準！
+5. ⚠️【語意寬容放行提示（🔥重要）】：即使大綱中沒有硬性寫出 [Seed-X] 或 [Turn-Y] 這種字面關鍵字標記，只要故事的「情節與敘事描述」中確實包含且符合該伏筆或轉折點的正確任務設定，此時您也應判定為「對齊正確並准予通過審查」，請直接予以放行（輸出 CONTINUE），不要僅因字面標籤不一致而退回重寫！
  
 {stage_criteria}
  

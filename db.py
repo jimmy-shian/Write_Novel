@@ -471,10 +471,8 @@ def db_init():
     except sqlite3.OperationalError:
         pass
     
-    # Sync all configurations from .env on start ONLY if table is empty
-    cfg_count = cursor.execute("SELECT COUNT(*) as cnt FROM agent_configs").fetchone()["cnt"]
-    if cfg_count == 0:
-        sync_agent_configs_from_env(cursor)
+    # Sync all configurations from .env on start to ensure DB is always up to date
+    sync_agent_configs_from_env(cursor)
     
     # 9. Global Foreshadowing Blueprint table
     cursor.execute("""
@@ -1348,6 +1346,36 @@ def get_latest_chapter(novel_id, chapter_index):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+def get_second_latest_chapter(novel_id, chapter_index):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    rows = cursor.execute(
+        "SELECT * FROM chapters WHERE novel_id = ? AND chapter_index = ? ORDER BY version DESC LIMIT 2",
+        (novel_id, chapter_index)
+    ).fetchall()
+    conn.close()
+    if len(rows) >= 2:
+        return dict(rows[1])
+    return None
+
+def get_latest_edit_instructions(novel_id, chapter_index):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT content FROM chat_memory WHERE novel_id = ? AND role = 'user' AND message_type = 'pipeline' AND content LIKE ? ORDER BY id DESC LIMIT 1",
+        (novel_id, f"%第 {chapter_index} 章%")
+    ).fetchone()
+    conn.close()
+    if row:
+        content = row["content"]
+        # Try to parse instructions out from "指示: {edit_instructions}" or "指示："
+        if "指示:" in content:
+            return content.split("指示:", 1)[1].strip()
+        elif "指示：" in content:
+            return content.split("指示：", 1)[1].strip()
+        return content
+    return "無具體修改指示，由編輯自主優化。" 
 
 def get_all_chapters_latest(novel_id):
     conn = get_db_connection()
@@ -2382,7 +2410,22 @@ def detect_current_stage(novel_id):
         return "volumes"
         
     # 如果有任何一卷尚未規劃簡易骨架大綱，則為 volume_skeleton 階段
-    has_all_skeletons = all(v.get("chapters_outline") for v in vols)
+    has_all_skeletons = True
+    for v in vols:
+        skeleton_list = v.get("chapters_outline")
+        if not skeleton_list:
+            has_all_skeletons = False
+            break
+        # 檢查是否超過50%為 "待設定標題" 佔位符
+        empty_titles = 0
+        for c in skeleton_list:
+            title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+            if not title or title.strip() == "" or title == "待設定標題":
+                empty_titles += 1
+        if empty_titles > len(skeleton_list) * 0.5:
+            has_all_skeletons = False
+            break
+            
     if not has_all_skeletons:
         return "volume_skeleton"
         
@@ -2504,7 +2547,17 @@ def generate_validation_report(novel_id):
             if not skeleton_list:
                 report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：⚠️ [骨架缺失] (尚未規劃簡易章節骨架大綱)")
             else:
-                report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：✅ 骨架已建立 (第 {start_ch} 章至第 {end_ch} 章，共 {len(skeleton_list)} 章)")
+                # 檢查是否含有有效的骨架標題
+                empty_titles = 0
+                for c in skeleton_list:
+                    title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+                    if not title or title.strip() == "" or title == "待設定標題":
+                        empty_titles += 1
+                
+                if empty_titles > len(skeleton_list) * 0.5:
+                    report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：❌ [骨架未生成] (超過50%章節標題為待設定)")
+                else:
+                    report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：✅ 骨架已建立 (第 {start_ch} 章至第 {end_ch} 章，共 {len(skeleton_list)} 章)")
                 # 剛性檢查章節序號覆蓋度
                 expected_indexes = set(range(start_ch, end_ch + 1))
                 actual_indexes = set()
@@ -2571,7 +2624,7 @@ def generate_validation_report(novel_id):
             else:
                 report_lines.append(f"  - 詳細大綱章節序號連續性檢查 (1 至 {max_expected_ch} 章，由系統 Python 邏輯外部計算)：✅ 100% 連續無缺漏")
                 
-            # 伏筆與轉折硬指標對齊檢查
+            # 伏筆與轉折硬指標對齊檢查（已刪除硬性警告，僅為總監提供當前待審查三章的任務提示）
             blueprint = get_global_foreshadowing_blueprint(novel_id)
             if blueprint and wb_exists:
                 try:
@@ -2581,46 +2634,45 @@ def generate_validation_report(novel_id):
                     foreshadowing_allocations = blueprint.get("foreshadowing_allocations", [])
                     turning_allocations = blueprint.get("turning_allocations", [])
                     
-                    unaligned_warnings = []
+                    # 決定要提示的三章範圍（當前待審查章節及其前後各一章）
+                    ref_ch = next_missing if 'next_missing' in locals() else 1
+                    target_chapters = {ref_ch - 1, ref_ch, ref_ch + 1}
                     
-                    # 檢查伏筆埋設與回收
-                    for idx, seed in enumerate(all_seeds):
-                        if idx < len(foreshadowing_allocations):
-                            P, R = foreshadowing_allocations[idx]
-                            # 檢查第 P 章大綱是否埋設了伏筆
-                            p_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == P), None)
-                            if p_ch:
-                                plant_desc = str(p_ch.get("foreshadowing_plant", "")) + str(p_ch.get("events", ""))
-                                if f"Seed-{idx+1}" not in plant_desc and seed[:5] not in plant_desc:
-                                    unaligned_warnings.append(f"第 {P} 章大綱：應埋設 [Seed-{idx+1}]《{seed}》，但大綱中未提及該線索！")
+                    report_lines.append(f"  - 🎯 當前待審查章節範圍指派任務提示 (第 {ref_ch - 1} 至 {ref_ch + 1} 章)：")
+                    
+                    has_tasks = False
+                    for ch_idx in sorted(list(target_chapters)):
+                        if ch_idx <= 0 or ch_idx > max_expected_ch:
+                            continue
+                        ch_tasks = []
+                        
+                        # 查找伏筆
+                        for idx, seed in enumerate(all_seeds):
+                            if idx < len(foreshadowing_allocations):
+                                P, R = foreshadowing_allocations[idx]
+                                if P == ch_idx:
+                                    ch_tasks.append(f"埋設 [Seed-{idx+1}]《{seed[:40]}...》")
+                                if R == ch_idx:
+                                    ch_tasks.append(f"回收 [Seed-{idx+1}]《{seed[:40]}...》")
                                     
-                            # 檢查第 R 章大綱是否回收了伏筆
-                            r_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == R), None)
-                            if r_ch:
-                                payoff_desc = str(r_ch.get("foreshadowing_payoff", "")) + str(r_ch.get("events", ""))
-                                if f"Seed-{idx+1}" not in payoff_desc and seed[:5] not in payoff_desc:
-                                    unaligned_warnings.append(f"第 {R} 章大綱：應回收 [Seed-{idx+1}]《{seed}》，但大綱中未提及該線索！")
+                        # 查找轉折
+                        for jdx, turn in enumerate(all_turns):
+                            if jdx < len(turning_allocations):
+                                K = turning_allocations[jdx]
+                                if K == ch_idx:
+                                    ch_tasks.append(f"配合 [Turn-{jdx+1}]《{turn[:40]}...》")
                                     
-                    # 檢查轉折點
-                    for jdx, turn in enumerate(all_turns):
-                        if jdx < len(turning_allocations):
-                            K = turning_allocations[jdx]
-                            k_ch = next((ch for ch in chapters_outlines if int(ch.get("chapter_index", 0)) == K), None)
-                            if k_ch:
-                                turn_desc = str(k_ch.get("turning_points", "")) + str(k_ch.get("events", ""))
-                                if turn[:5] not in turn_desc:
-                                    unaligned_warnings.append(f"第 {K} 章大綱：應配合關鍵轉折 [Turn-{jdx+1}]《{turn}》，但大綱中未提及！")
-                                    
-                    if unaligned_warnings:
-                        report_lines.append("  - ⚠️ [線索未對齊警告]：")
-                        for w in unaligned_warnings[:5]:
-                            report_lines.append(f"    * {w}")
-                        if len(unaligned_warnings) > 5:
-                            report_lines.append(f"    * ... 及另外 {len(unaligned_warnings)-5} 項未對齊線索。")
-                    else:
-                        report_lines.append("  - 線索對齊檢查：✅ 所有伏筆與轉折點皆在對應章節大綱中完美對齊")
+                        if ch_tasks:
+                            has_tasks = True
+                            report_lines.append(f"    * 第 {ch_idx} 章：")
+                            for task in ch_tasks:
+                                report_lines.append(f"      - {task}")
+                                
+                    if not has_tasks:
+                        report_lines.append("    * 當前三章範圍內無特定伏筆與轉折點指派任務。")
+                        
                 except Exception as e:
-                    report_lines.append(f"  - ⚠️ 對齊檢查失敗：{e}")
+                    report_lines.append(f"  - ⚠️ 任務提示提取失敗：{e}")
         else:
             report_lines.append("  - 詳細大綱章節序號連續性檢查 (由系統 Python 邏輯外部計算)：⚠️ 尚未規劃篇卷，無法校對大綱。")
     report_lines.append("")

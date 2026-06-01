@@ -171,7 +171,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 } catch (e) {}
             }
 
-            if (typeof onDone === 'function') onDone();
+            if (typeof onDone === 'function') await onDone();
         } catch (err) {
             if (activityTimer) clearTimeout(activityTimer);
 
@@ -193,7 +193,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             if (typeof onError === 'function') {
                 onError(isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`);
             }
-            if (typeof onDone === 'function') onDone();
+            if (typeof onDone === 'function') await onDone();
         }
     }
 

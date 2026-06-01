@@ -3,7 +3,7 @@ export const state = {
     currentNovelId: localStorage.getItem('currentNovelId') || null,
     currentNovelData: null,
     activeTab: localStorage.getItem('activeTab') || 'worldview', // worldview, characters, plot, writer
-    activeChapterIndex: null,
+    activeChapterIndex: 1,
     settingsData: {},
     activeSettingAgent: 'global',
     

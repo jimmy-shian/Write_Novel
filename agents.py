@@ -308,8 +308,19 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
         "relationships": []
     }
     
+    # 僅提取現有角色的名稱與角色定位，節省 Token 並防範衝突
+    existing_names_str = "暫無角色"
+    if existing_chars_json:
+        try:
+            from prompts.prompt_builder import extract_character_names_list
+            names = extract_character_names_list(existing_chars_json)
+            if names:
+                existing_names_str = ", ".join(names)
+        except Exception:
+            pass
+            
     system_prompt = f"""你是一位頂尖的角色設計大師（Character Designer）。
-請根據世界觀背景、現有角色聖經以及新角色首次登場的詳細章節大綱，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
+請根據世界觀背景與新角色首次登場的詳細章節大綱，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
 
 ⚠️【剛性約束項目】：
 1. 輸出格式必須嚴格是 JSON，符合以下角色 Schema：
@@ -320,8 +331,8 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
     user_content = f"""【世界觀背景大綱】
 {worldview_summary}
 
-【現有角色聖經】
-{existing_chars_json}
+【現有已登場角色清單 (避免人設重複或名稱衝突)】
+{existing_names_str}
 
 【新角色【{new_char_name}】登場的第 {chapter_outline.get('chapter_index')} 章詳細大綱】
 {json.dumps(chapter_outline, ensure_ascii=False, indent=2)}
@@ -432,6 +443,55 @@ def filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
     return worldview_text
 
 
+def _get_plot_review_batch_size():
+    """Director plot review cadence. Defaults to 3 chapters per review batch."""
+    raw = os.getenv("PLOT_REVIEW_BATCH_SIZE", "3")
+    try:
+        val = int(raw)
+        return val if val > 0 else 3
+    except Exception:
+        return 3
+
+
+def _normalize_chapter_list(chapters):
+    normalized = []
+    for idx, ch in enumerate(chapters or []):
+        if not isinstance(ch, dict):
+            continue
+        item = dict(ch)
+        try:
+            raw_idx = item.get("chapter_index") or item.get("chapter") or item.get("chapter_number") or item.get("index") or item.get("id") or (idx + 1)
+            item["chapter_index"] = int(raw_idx)
+        except Exception:
+            item["chapter_index"] = idx + 1
+        normalized.append(item)
+    normalized.sort(key=lambda x: x["chapter_index"])
+    return normalized
+
+
+def _is_detailed_outline(chapter):
+    events = chapter.get("events") or chapter.get("scenes")
+    return isinstance(events, list) and len(events) > 0
+
+
+def _collect_volume_skeleton_chapters(novel_id):
+    skeleton_chapters = []
+    for vol in db.get_volumes(novel_id):
+        ch_list = vol.get("chapters_outline")
+        if isinstance(ch_list, list):
+            skeleton_chapters.extend(ch_list)
+    return _normalize_chapter_list(skeleton_chapters)
+
+
+def _skeleton_snapshot(chapter):
+    keep_keys = [
+        "chapter_index", "chapter_title", "brief_title", "title", "name",
+        "chapter_summary", "brief_summary", "summary",
+        "allocated_tasks", "time_setting", "time_span", "scene", "location"
+    ]
+    return {k: chapter.get(k) for k in keep_keys if k in chapter and chapter.get(k) not in (None, "")}
+
+
 def run_plot_planner(novel_id, chapter_index=None, user_prompt=None, planner_directive=None):
     """
     Detailed Outline Stage:
@@ -495,13 +555,17 @@ def run_plot_planner(novel_id, chapter_index=None, user_prompt=None, planner_dir
             else:
                 role_label = "【當前待規劃大綱目標章節】"
                 
-            wv_item = f"{role_label} 第 {c_idx} 章：【{ch.get('brief_title', ch.get('title', ''))}】\n  - 本章骨架概要：{ch.get('brief_summary', ch.get('summary', ''))}\n"
+            title = ch.get("chapter_title") or ch.get("brief_title") or ch.get("title") or ch.get("name") or ""
+            summary = ch.get("chapter_summary") or ch.get("brief_summary") or ch.get("summary") or ""
+            wv_item = f"{role_label} 第 {c_idx} 章：【{title}】\n  - 本章骨架概要：{summary}\n"
             wv_item += f"  - 伏筆任務安排：{json.dumps(ch.get('allocated_tasks', {}), ensure_ascii=False)}\n"
             skeleton_context_list.append(wv_item)
     else:
         for ch in normalized_skeleton_chapters:
             c_idx = ch["chapter_index"]
-            wv_item = f"第 {c_idx} 章：【{ch.get('brief_title', ch.get('title', ''))}】\n  - 本章骨架概要：{ch.get('brief_summary', ch.get('summary', ''))}\n"
+            title = ch.get("chapter_title") or ch.get("brief_title") or ch.get("title") or ch.get("name") or ""
+            summary = ch.get("chapter_summary") or ch.get("brief_summary") or ch.get("summary") or ""
+            wv_item = f"第 {c_idx} 章：【{title}】\n  - 本章骨架概要：{summary}\n"
             wv_item += f"  - 伏筆任務安排：{json.dumps(ch.get('allocated_tasks', {}), ensure_ascii=False)}\n"
             skeleton_context_list.append(wv_item)
             
@@ -511,8 +575,11 @@ def run_plot_planner(novel_id, chapter_index=None, user_prompt=None, planner_dir
     effective_user_prompt = user_prompt
     if chapter_index is not None:
         target_ch = next((ch for ch in normalized_skeleton_chapters if ch.get("chapter_index") == chapter_index), None)
-        brief_title = target_ch.get("brief_title", "") if target_ch else ""
-        brief_summary = target_ch.get("brief_summary", "") if target_ch else ""
+        brief_title = ""
+        brief_summary = ""
+        if target_ch:
+            brief_title = target_ch.get("chapter_title") or target_ch.get("brief_title") or target_ch.get("title") or target_ch.get("name") or ""
+            brief_summary = target_ch.get("chapter_summary") or target_ch.get("brief_summary") or target_ch.get("summary") or ""
         
         chapter_instructions = f"\n\n👉 【請特別注意】：此時你只需且必須為「第 {chapter_index} 章」生成詳細的情節大綱！\n第 {chapter_index} 章暫定標題為：【{brief_title}】，簡易骨架大綱為：{brief_summary}。\n請仔細查看前一章和後一章的骨架上下文，專門為第 {chapter_index} 章生成符合結構的詳細大綱 JSON 欄位（例如 title, chapter_index, events, cliffhanger, characters_active, purpose, time_setting, time_span, foreshadowing_plant, foreshadowing_payoff, turning_points 等）。"
         if user_prompt:
@@ -520,7 +587,7 @@ def run_plot_planner(novel_id, chapter_index=None, user_prompt=None, planner_dir
         else:
             effective_user_prompt = f"請根據簡易骨架大綱，為第 {chapter_index} 章生成高品質的詳細大綱 JSON。{chapter_instructions}"
             
-    messages = build_plot_planner_messages(worldview_text, skeleton_contexts, effective_user_prompt)
+    messages = build_plot_planner_messages(worldview_text, skeleton_contexts, effective_user_prompt, target_chapter_index=chapter_index)
     print("messages:", len(messages), messages)
     db.save_chat_message(novel_id, "user", f"生成詳細章節大綱 (第 {chapter_index if chapter_index is not None else '全書'} 章)。要求: {user_prompt or '依骨架展開'}", message_type="pipeline")
     
@@ -893,51 +960,52 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         vols = db.get_volumes(novel_id)
         plot_text = json.dumps(vols, ensure_ascii=False, indent=2) if vols else "尚無骨架規劃"
     elif current_stage == "plot":
-        # plot: 前後各一章的內容
+        # plot: batch review. For batch size 3 and current chapter 6,
+        # send detailed outlines 4-6 plus skeleton context 3-7.
         plot_data = db.get_stitched_plot(novel_id)
         chapters_outlines = plot_data.get("chapters", []) if plot_data else []
+        normalized_outlines = _normalize_chapter_list(chapters_outlines)
+        detailed_outlines = [ch for ch in normalized_outlines if _is_detailed_outline(ch)]
+        skeleton_outlines = _collect_volume_skeleton_chapters(novel_id)
         
-        normalized_outlines = []
-        for idx, ch in enumerate(chapters_outlines):
-            if not isinstance(ch, dict):
-                continue
-            try:
-                raw_idx = ch.get("chapter_index") or ch.get("chapter") or ch.get("chapter_number") or ch.get("index") or (idx + 1)
-                ch["chapter_index"] = int(raw_idx)
-            except:
-                ch["chapter_index"] = idx + 1
-            normalized_outlines.append(ch)
-        normalized_outlines.sort(key=lambda x: x["chapter_index"])
+        batch_size = _get_plot_review_batch_size()
+        if chapter_index is None:
+            chapter_index = max([ch["chapter_index"] for ch in detailed_outlines], default=1)
         
-        # 💡 核心修復：在總監大綱決策評審階段，提取世界觀大綱（摘要）並僅保留前1、後1及當前章節關聯的伏筆/轉折！
+        detail_start = max(1, chapter_index - batch_size + 1)
+        detail_end = chapter_index
+        skeleton_start = max(1, detail_start - 1)
+        skeleton_end = detail_end + 1
+        
+        detailed_batch = [
+            ch for ch in detailed_outlines
+            if detail_start <= ch["chapter_index"] <= detail_end
+        ]
+        skeleton_context = [
+            _skeleton_snapshot(ch) for ch in skeleton_outlines
+            if skeleton_start <= ch["chapter_index"] <= skeleton_end
+        ]
+        
+        if not skeleton_context:
+            skeleton_context = [
+                _skeleton_snapshot(ch) for ch in normalized_outlines
+                if skeleton_start <= ch["chapter_index"] <= skeleton_end
+            ]
+        
+        review_payload = {
+            "review_batch_size": batch_size,
+            "current_completed_chapter_index": chapter_index,
+            "detailed_outline_context_range": f"第 {detail_start} 章至第 {detail_end} 章",
+            "skeleton_context_range": f"第 {skeleton_start} 章至第 {skeleton_end} 章",
+            "detailed_outlines_generated_for_review": detailed_batch,
+            "skeleton_outlines_for_before_after_context": skeleton_context
+        }
+        plot_text = json.dumps(review_payload, ensure_ascii=False, indent=2)
+        
         worldview_text = extract_worldview_summary(worldview_text)
-        
-        if chapter_index is not None:
-            pre_ch = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
-            curr_ch = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index), None)
-            nxt_ch = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
-            
-            surrounding = []
-            if pre_ch:
-                surrounding.append({"role": "前一章骨架/大綱參考", "data": pre_ch})
-            if curr_ch:
-                surrounding.append({"role": "當前已細化待審大綱", "data": curr_ch})
-            if nxt_ch:
-                surrounding.append({"role": "後一章骨架/大綱參考", "data": nxt_ch})
-            plot_text = json.dumps(surrounding, ensure_ascii=False, indent=2)
-            
-            # 過濾僅保留這三章關聯的伏筆與轉折
-            target_chaps = []
-            if pre_ch: target_chaps.append(pre_ch)
-            if curr_ch: target_chaps.append(curr_ch)
-            if nxt_ch: target_chaps.append(nxt_ch)
-            seed_indices, turn_indices = collect_referenced_indices(target_chaps)
-            worldview_text = filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
-        else:
-            plot_text = json.dumps(normalized_outlines[:3], ensure_ascii=False, indent=2) + "\n...（後續章節大綱已省略）"
-            # Fallback filter for first 3 chapters
-            seed_indices, turn_indices = collect_referenced_indices(normalized_outlines[:3])
-            worldview_text = filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
+        target_chaps = detailed_batch + skeleton_context
+        seed_indices, turn_indices = collect_referenced_indices(target_chaps)
+        worldview_text = filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
             
     elif current_stage == "writer":
         # writer: 該章的完整內容(正文+大綱+角色聖經+伏筆)
@@ -973,18 +1041,27 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         written_chapters_text = prose_content
         
     elif current_stage == "editor":
-        # editor: 該章的完整潤色內容
+        # editor: 該章的完整潤色與比較內容
         target_ch_idx = chapter_index if chapter_index is not None else 1
-        chapter_data = db.get_latest_chapter(novel_id, target_ch_idx)
-        prose_content = chapter_data.get("content", "") if chapter_data else "（無寫作正文內容）"
+        
+        # Get polished (latest) and original (second latest) chapter versions
+        latest_chapter = db.get_latest_chapter(novel_id, target_ch_idx)
+        polished_prose = latest_chapter.get("content", "") if latest_chapter else "（無寫作正文內容）"
+        
+        second_latest = db.get_second_latest_chapter(novel_id, target_ch_idx)
+        original_prose = second_latest.get("content", "") if second_latest else polished_prose # Fallback to polished if no previous version exists
+        
+        edit_instructions = db.get_latest_edit_instructions(novel_id, target_ch_idx)
         
         editor_review_data = {
             "chapter_index": target_ch_idx,
-            "polished_prose_text": prose_content
+            "edit_instructions": edit_instructions,
+            "original_prose": original_prose,
+            "polished_prose": polished_prose
         }
         
         plot_text = json.dumps(editor_review_data, ensure_ascii=False, indent=2)
-        written_chapters_text = prose_content
+        written_chapters_text = polished_prose
         
     else:
         plot_data = db.get_stitched_plot(novel_id)

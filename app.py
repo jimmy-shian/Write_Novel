@@ -488,6 +488,12 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
 def api_get_settings():
     defaults = get_default_config()
     all_agents = ["global", "architect", "character", "volumes", "volume_skeleton", "plot", "writer", "editor", "copilot"]
+    try:
+        plot_review_batch_size = int(os.getenv("PLOT_REVIEW_BATCH_SIZE", "3"))
+        if plot_review_batch_size <= 0:
+            plot_review_batch_size = 3
+    except Exception:
+        plot_review_batch_size = 3
     
     AGENT_DISPLAY_NAMES = {
         "global": "Global 全域 (預設設置)",
@@ -512,7 +518,8 @@ def api_get_settings():
             "top_p": llm_config.get("top_p", defaults["top_p"]),
             "max_tokens": llm_config.get("max_tokens", defaults["max_tokens"]),
             "enable_thinking": llm_config.get("enable_thinking", defaults["enable_thinking"]),
-            "display_name": AGENT_DISPLAY_NAMES.get(agent, agent)
+            "display_name": AGENT_DISPLAY_NAMES.get(agent, agent),
+            "plot_review_batch_size": plot_review_batch_size
         }
     return merged
 

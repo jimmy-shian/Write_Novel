@@ -11,6 +11,52 @@ import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showG
 // Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
 window.state = state;
 
+function getPlotReviewBatchSize() {
+    const raw = state.settingsData?.plot?.plot_review_batch_size
+        ?? state.settingsData?.global?.plot_review_batch_size
+        ?? state.plotReviewBatchSize
+        ?? 3;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
+function isDetailedOutline(outline) {
+    const events = outline?.events || outline?.scenes;
+    return Array.isArray(events) && events.length > 0;
+}
+
+function getDetailedPlotChapterCount() {
+    const chapters = state.currentNovelData?.plot?.chapters || [];
+    return chapters.filter(isDetailedOutline).length;
+}
+
+function getExpectedPlotChapterCount(fallbackChapterIndex) {
+    const vols = state.currentNovelData?.volumes || [];
+    const planned = vols.reduce((sum, v) => {
+        const count = Number.parseInt(v.chapter_count, 10);
+        return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+    }, 0);
+    if (planned > 0) return planned;
+
+    const skeletonMax = vols.reduce((maxIdx, v) => {
+        try {
+            const parsed = typeof v.chapters_outline === 'string' ? JSON.parse(v.chapters_outline) : v.chapters_outline;
+            if (!Array.isArray(parsed)) return maxIdx;
+            return Math.max(maxIdx, ...parsed.map(ch => Number.parseInt(ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id, 10) || 0));
+        } catch (e) {
+            return maxIdx;
+        }
+    }, 0);
+    return skeletonMax || (fallbackChapterIndex + getPlotReviewBatchSize());
+}
+
+function shouldReviewPlotBatch(currentChapterIndex) {
+    const batchSize = getPlotReviewBatchSize();
+    const detailedCount = Math.max(getDetailedPlotChapterCount(), currentChapterIndex);
+    const expectedCount = getExpectedPlotChapterCount(currentChapterIndex);
+    return detailedCount % batchSize === 0 || currentChapterIndex >= expectedCount;
+}
+
 window.toggleThinkingProcessCollapse = function() {
     const body = document.getElementById('chapter-thinking-preview-text');
     const icon = document.querySelector('.thinking-collapse-icon');
@@ -213,9 +259,6 @@ async function executeChapterProseEditFlow(targetChapterIndex, editInstructions)
             virtualTarget,
             async () => {
                 showToast(`第 ${targetChapterIndex} 章正文精細編輯完畢`);
-                if (state.writingBuffer.trim().length > 0) {
-                    await saveProseDirect(targetChapterIndex);
-                }
                 state.currentlyWritingChapterIndex = null;
                 state.writingBuffer = "";
                 await loadNovelDetails(state.currentNovelId);
@@ -386,6 +429,23 @@ async function executeDirectorAction(decision, userPrompt) {
                     showPipelineProgress(false);
                 }
             } else if (target === 'foreshadowing_orchestration' || target === 'foreshadowing_align' || target === '伏筆對齊' || target === '分配伏筆') {
+                const vols = state.currentNovelData?.volumes || [];
+                const hasSkeletons = vols.length > 0 && vols.every(v => {
+                    const outline = v.chapters_outline;
+                    if (!outline) return false;
+                    try {
+                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                        return Array.isArray(parsed) && parsed.length > 0;
+                    } catch (e) {
+                        return false;
+                    }
+                });
+                if (!hasSkeletons) {
+                    updateDirectorMessage('⚠️ 偵測到章節骨架未生成，系統強制引導至骨架生成階段...');
+                    showToast('⚠️ 骨架未生成，已自動引導至骨架生成');
+                    await executeNextMissingStage(userPrompt);
+                    return;
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
@@ -395,6 +455,23 @@ async function executeDirectorAction(decision, userPrompt) {
                 showToast('🎭 開始全局伏筆編織對齊...');
                 await executePipelineStage('foreshadowing_orchestration', userPrompt);
             } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱' || target === '詳細章') {
+                const vols = state.currentNovelData?.volumes || [];
+                const hasSkeletons = vols.length > 0 && vols.every(v => {
+                    const outline = v.chapters_outline;
+                    if (!outline) return false;
+                    try {
+                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                        return Array.isArray(parsed) && parsed.length > 0;
+                    } catch (e) {
+                        return false;
+                    }
+                });
+                if (!hasSkeletons) {
+                    updateDirectorMessage('⚠️ 偵測到章節骨架未生成，系統強制引導至骨架生成階段...');
+                    showToast('⚠️ 骨架未生成，已自動引導至骨架生成');
+                    await executeNextMissingStage(userPrompt);
+                    return;
+                }
                 if (decision.chapter_index) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
                 }
@@ -449,7 +526,7 @@ async function executeDirectorAction(decision, userPrompt) {
         case 'AUTO_REGENERATE': {
             const target = decision.target || decision.regenerateStage || '';
             showToast(`⚡ 總監指示重新生成：${hint || target}`);
-            const enhancedPrompt = hint || userPrompt;
+            const enhancedPrompt = hint ? `【⚠️ 總監修改指示/修正要求】：\n${hint}` : userPrompt;
             if (target.includes('worldview') || target.includes('世界觀')) {
                 updatePipelineStage('worldview', 'running');
                 await executePipelineStage('worldview', enhancedPrompt);
@@ -480,7 +557,7 @@ async function executeDirectorAction(decision, userPrompt) {
             showToast('⚡ 總監指示回頭修改世界觀設定...');
             updatePipelineStage('worldview', 'running');
             const worldviewPrompt = hint 
-                ? `請根據以下指示修改世界觀：\n\n${hint}\n\n現有世界觀：\n${state.currentNovelData?.worldbuilding || ''}`
+                ? `【⚠️ 總監修改指示/世界觀修正要求】：\n${hint}\n\n現有世界觀：\n${state.currentNovelData?.worldbuilding || ''}`
                 : userPrompt;
             await executePipelineStage('worldview', worldviewPrompt);
             break;
@@ -495,14 +572,14 @@ async function executeDirectorAction(decision, userPrompt) {
                 // 合併後繼續重新生成角色
                 updatePipelineStage('characters', 'running');
                 const charPrompt = hint
-                    ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
+                    ? `【⚠️ 總監修改指示/角色設定修正要求】：\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
                     : userPrompt;
                 await executePipelineStage('characters', charPrompt);
             } else {
                 showToast('⚡ 總監指示回頭修改角色設計...');
                 updatePipelineStage('characters', 'running');
                 const charPrompt = hint
-                    ? `請根據以下指示重新設計角色：\n\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
+                    ? `【⚠️ 總監修改指示/角色設定修正要求】：\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
                     : userPrompt;
                 await executePipelineStage('characters', charPrompt);
             }
@@ -513,7 +590,7 @@ async function executeDirectorAction(decision, userPrompt) {
             showToast('⚡ 總監指示回頭修改大綱...');
             updatePipelineStage('plot', 'running');
             const plotPrompt = hint 
-                ? `請根據以下指示重新規劃大綱：\n\n${hint}\n\n現有大綱：\n${state.currentNovelData?.plot_raw || ''}`
+                ? `【⚠️ 總監修改指示/章節大綱修正要求】：\n${hint}\n\n現有大綱：\n${state.currentNovelData?.plot_raw || ''}`
                 : userPrompt;
             await executePipelineStage('plot', plotPrompt);
             break;
@@ -569,83 +646,7 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
 
-        case 'ADD_BRIDGE_CONTENT': {
-            const problematicChapterIndex = parseInt(decision.chapter_index) || 1;
-            const insertAfter = problematicChapterIndex - 1;
-            showToast(`⚡ 總監指示執行【第一級修補】：在第 ${insertAfter} 章後新增橋接大綱與正文...`);
-            updateDirectorMessage(`⚡ 正在增量在第 ${insertAfter} 章後插入橋接大綱骨架...`);
-            appendChatMessage('system', `🩹 **[修補階梯 L1]** 檢測到寫作連貫性有偏差，在第 ${insertAfter} 章後增量新增橋接章節以自然銜接。`);
 
-            // 1. 擴增大綱骨架：增量插入
-            const outlineSuccess = await executeIncrementalUpdate('plot_chapter', {
-                hint: `新增一個橋接章節大綱，起承轉合以完美銜接前文與後續情節（特別是銜接第 ${problematicChapterIndex + 1} 章的事件），確保故事連貫。`,
-                insert_after_index: insertAfter
-            });
-            
-            if (outlineSuccess) {
-                updateDirectorMessage(`⚡ 橋接章節大綱生成成功！正在撰寫第 ${problematicChapterIndex} 章 (新橋接章) 之完整正文...`);
-                // 2. 撰寫該橋接章之正文
-                const writeSuccess = await executeToolCall('write-chapter', { chapter_index: problematicChapterIndex });
-                
-                if (writeSuccess && state.isPipelineRunning) {
-                    updateDirectorMessage(`🔄 橋接正文撰寫完成！即刻啟動 AI 總監對新章節（第 ${problematicChapterIndex} 章）的寫作連貫性二次深度校驗...`);
-                    // 3. 重跑管線以進行內容驗證
-                    setTimeout(() => runPipeline(userPrompt), 2000);
-                }
-            } else {
-                updateDirectorMessage('⚠️ 增量橋接大綱插入失敗。');
-                state.isPipelineRunning = false;
-            }
-            break;
-        }
-
-        case 'MODIFY_CURRENT_CHAPTER': {
-            const targetChapterIndex = parseInt(decision.chapter_index) || 1;
-            const instructions = hint || decision.reason || "請優化微調本章情節，補足邏輯跳躍與前後文連貫性。";
-            showToast(`⚡ 總監指示執行【第二級修補】：調用編輯姬精修第 ${targetChapterIndex} 章正文...`);
-            appendChatMessage('system', `🩹 **[修補階梯 L2]** 總監指示調用編輯姬對第 ${targetChapterIndex} 章正文正篇進行局部微調與情節潤色。`);
-            
-            const editSuccess = await executeChapterProseEditFlow(targetChapterIndex, instructions);
-            if (editSuccess && state.isPipelineRunning) {
-                updateDirectorMessage(`🔄 第 ${targetChapterIndex} 章精修潤色完成，即刻重啟連貫性深度校驗...`);
-                setTimeout(() => runPipeline(userPrompt), 2000);
-            }
-            break;
-        }
-
-        case 'GO_BACK_TO_PREVIOUS_STEP': {
-            const targetChapterIndex = parseInt(decision.chapter_index) || 1;
-            showToast(`⚡ 總監指示執行【第三級修補】：刪除第 ${targetChapterIndex} 章前後 +-3 章大綱與已寫正文，回退大綱重編...`);
-            updateDirectorMessage(`⚡ 正在執行微創自癒協議：刪除第 ${targetChapterIndex} 章前後 +-3 章大綱與正文，平移索引中...`);
-            appendChatMessage('system', `🩹 **[修補階梯 L3]** 多次修補仍不連貫。執行微創自癒協議：徹底刪除第 ${targetChapterIndex} 章前後 +-3 章之大綱與正文，平移後續章節，回退大綱重新擴編。`);
-            
-            try {
-                const res = await fetch(`/api/novels/${state.currentNovelId}/chapters/heal-rollback`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target_chapter_index: targetChapterIndex })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    showToast(`✅ 自癒平移成功！受損區間 [第 ${data.start_del} 章, 第 ${data.end_del} 章] 已清空平移`);
-                    updateDirectorMessage('🔄 局部自癒完成，重啟大綱規劃流程進行增量擴充大綱及正文...');
-                    await loadNovelDetails(state.currentNovelId);
-                    
-                    if (state.isPipelineRunning) {
-                        setTimeout(() => runPipeline(userPrompt), 2000);
-                    }
-                } else {
-                    updateDirectorMessage('⚠️ 自癒退回失敗，停止管線。');
-                    state.isPipelineRunning = false;
-                }
-            } catch (err) {
-                console.error("Heal-rollback failed:", err);
-                updateDirectorMessage(`⚠️ 自癒連線出錯: ${err}`);
-                state.isPipelineRunning = false;
-            }
-            break;
-        }
 
         case 'help_worldview':
         case 'help_characters':
@@ -703,7 +704,16 @@ async function executeNextMissingStage(userPrompt) {
     const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
     const volumes = state.currentNovelData?.volumes || [];
     const hasVolumes = volumes.length > 0;
-    const hasSkeletons = volumes.length > 0 && volumes.every(v => v.chapters_outline);
+    const hasSkeletons = volumes.length > 0 && volumes.every(v => {
+        const outline = v.chapters_outline;
+        if (!outline) return false;
+        try {
+            const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+            return Array.isArray(parsed) && parsed.length > 0;
+        } catch (e) {
+            return false;
+        }
+    });
     const hasPlot = state.currentNovelData?.plot && Array.isArray(state.currentNovelData.plot.chapters) && state.currentNovelData.plot.chapters.length > 0 && state.currentNovelData.plot.chapters.every(isDetailedPlotOutline);
     
     if (!hasWorldview) {
@@ -918,7 +928,7 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                     try { hideAllAgentProcessingIndicators(); } catch(e) {}
                 }
             },
-            () => {
+            async () => {
                 if (hasError) return;
                 // 💡 只有完全走完 SSE 流程，收到 [DONE] 訊號，才算 Absolute Done
                 if (currentRetry > 1) {
@@ -930,7 +940,7 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                 }
                 
                 if (typeof onDone === 'function') {
-                    onDone();
+                    await onDone();
                 }
             }
         );
@@ -2434,18 +2444,28 @@ function openChapterOutlineEditModal(index, chapter) {
         eventsText = chapter.events.map(e => {
             if (typeof e === 'string') return e;
             if (typeof e === 'object' && e !== null) {
-                return `${e.scene || ''}: ${e.action || ''}`;
+                // 🚀 核心修復：相容不同的 API 結構（e.g. scene/action vs scene_index/description vs title/desc）
+                const title = e.scene || e.scene_index || e.title || '';
+                const desc = e.action || e.description || e.content || '';
+                if (title && desc) return `${title}: ${desc}`;
+                return desc || title || JSON.stringify(e);
             }
             return String(e);
         }).join('\n');
     }
     document.getElementById('edit-chapter-events').value = eventsText;
     
-    // 處理 foreshadowing
+    // 處理 foreshadowing（相容 foreshadowing, foreshadowing_plant, foreshadowing_payoff 避免載入空白）
     let foreshadowText = '';
-    if (chapter.foreshadowing && Array.isArray(chapter.foreshadowing)) {
-        foreshadowText = chapter.foreshadowing.map(f => typeof f === 'string' ? f : JSON.stringify(f)).join('\n');
-    }
+    const plants = chapter.foreshadowing_plant || chapter.foreshadowing_plants || [];
+    const payoffs = chapter.foreshadowing_payoff || chapter.foreshadowing_payoffs || [];
+    const oldForeshadow = chapter.foreshadowing || [];
+    const combinedForeshadow = [...new Set([
+        ...(Array.isArray(plants) ? plants : (typeof plants === 'string' ? [plants] : [])),
+        ...(Array.isArray(payoffs) ? payoffs : (typeof payoffs === 'string' ? [payoffs] : [])),
+        ...(Array.isArray(oldForeshadow) ? oldForeshadow : (typeof oldForeshadow === 'string' ? [oldForeshadow] : []))
+    ])];
+    foreshadowText = combinedForeshadow.map(f => typeof f === 'string' ? f : JSON.stringify(f)).join('\n');
     document.getElementById('edit-chapter-foreshadowing').value = foreshadowText;
     
     document.getElementById('edit-chapter-cliffhanger').value = chapter.cliffhanger || '';
@@ -2459,7 +2479,23 @@ function openChapterOutlineEditModal(index, chapter) {
         const plotData = state.currentNovelData.plot;
         if (plotData && plotData.chapters && plotData.chapters[index]) {
             const eventsInput = document.getElementById('edit-chapter-events').value;
-            const eventsArray = eventsInput.split('\n').map(s => s.trim()).filter(s => s);
+            // 🚀 核心修復：保存回 events 時，若原本是物件結構，嘗試還原或轉換以避免型態破壞。
+            // 這裡將輸入字串解析，若有冒號則解析為 { scene_index, description }，與 AI 寫手和資料庫完全對齊
+            const eventsArray = eventsInput.split('\n').map(s => s.trim()).filter(s => s).map((line, idx) => {
+                const colonIdx = line.indexOf(':');
+                if (colonIdx !== -1) {
+                    const title = line.substring(0, colonIdx).trim();
+                    const desc = line.substring(colonIdx + 1).trim();
+                    return {
+                        scene_index: idx + 1,
+                        description: desc || title
+                    };
+                }
+                return {
+                    scene_index: idx + 1,
+                    description: line
+                };
+            });
             
             const foreshadowInput = document.getElementById('edit-chapter-foreshadowing').value;
             const foreshadowArray = foreshadowInput.split('\n').map(s => s.trim()).filter(s => s);
@@ -2474,6 +2510,8 @@ function openChapterOutlineEditModal(index, chapter) {
                 emotional_tone: document.getElementById('edit-chapter-emotional-tone').value,
                 events: eventsArray,
                 foreshadowing: foreshadowArray,
+                foreshadowing_plant: foreshadowArray, // 🚀 剛性修復：寫回植物與回收伏筆欄位，確保通過系統底層校驗
+                foreshadowing_payoff: foreshadowArray,
                 cliffhanger: document.getElementById('edit-chapter-cliffhanger').value
             };
             
@@ -2612,6 +2650,16 @@ async function saveProseDirect(chapterIndex = null) {
         // If we are saving a specific chapter that is NOT the active one (meaning user switched away),
         // and it's not currently writing (it just finished), we should save its writingBuffer or the cached content.
         content = state.writingBuffer || content;
+    }
+    
+    // 💡 剛性修復：若 content 內含有 [START_OF_PROSE] 或 [正文開始]，進行拆分，只保存乾淨的正文
+    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+    for (const sw of specialWords) {
+        const idx = content.indexOf(sw);
+        if (idx !== -1) {
+            content = content.substring(idx + sw.length).trim();
+            break;
+        }
     }
     
     try {
@@ -3105,9 +3153,6 @@ async function executeToolCall(tool, params) {
                         hideAgentProcessingIndicator('writer');
                     },
                     async () => {
-                        if (state.writingBuffer.trim().length > 0) {
-                            await saveProseDirect(chapter_index || 1);
-                        }
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
                         hideAgentProcessingIndicator('writer');
@@ -3281,12 +3326,12 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
             hasError = true;
         },
         // onDone
-        () => {
+        async () => {
             el.aiThinkingStream.classList.add('hidden');
             // Hide Agent processing indicator
             hideAgentProcessingIndicator(tabName);
             if (!hasError && onDoneCallback) {
-                onDoneCallback();
+                await onDoneCallback();
             } else if (hasError && tabName === 'writer') {
                 state.currentlyWritingChapterIndex = null;
                 state.writingBuffer = "";
@@ -4109,6 +4154,9 @@ function runFullPipeline(userPrompt) {
     function startStage3_Plot() {
         addGlowEffect(plotTab, true);
         state.activeTab = 'plot';
+        if (!Number.isFinite(Number.parseInt(state.activeChapterIndex, 10)) || Number.parseInt(state.activeChapterIndex, 10) <= 0) {
+            state.activeChapterIndex = 1;
+        }
         renderActiveTab();
         if (el.editorPlotJson) el.editorPlotJson.value = '';
         showToast("總監批准！正在啟動大綱規劃師 Agent...");
@@ -4133,6 +4181,19 @@ function runFullPipeline(userPrompt) {
             async () => {
                 addSuccessGlow(plotTab);
                 
+                await loadNovelDetails(state.currentNovelId);
+                const currentChIdx = parseInt(state.activeChapterIndex) || 1;
+
+                if (!shouldReviewPlotBatch(currentChIdx)) {
+                    const nextChIdx = currentChIdx + 1;
+                    showToast(`🟢 第 ${currentChIdx} 章大綱完成。批次評估跳過，自動進入第 ${nextChIdx} 章...`);
+                    state.activeChapterIndex = nextChIdx;
+                    setTimeout(() => {
+                        startStage3_Plot();
+                    }, 1000);
+                    return;
+                }
+
                 // 詢問總監是否繼續
                 showToast("大綱完成，正在請求 AI 總監評估...");
                 const director3 = await runDirectorDecision('plot');
@@ -4223,9 +4284,6 @@ function runFullPipeline(userPrompt) {
                 state.writingBuffer = "";
             },
             async () => {
-                if (state.writingBuffer.trim().length > 0) {
-                    await saveProseDirect(1);
-                }
                 state.currentlyWritingChapterIndex = null;
                 state.writingBuffer = "";
                 
@@ -4384,9 +4442,6 @@ async function handleDrawerPromptSubmit() {
             virtualTarget,
             async () => {
                 showToast("本章正文精細編輯完畢");
-                if (state.writingBuffer.trim().length > 0) {
-                    await saveProseDirect(targetChapterIndex);
-                }
                 state.currentlyWritingChapterIndex = null;
                 state.writingBuffer = "";
                 
@@ -4855,10 +4910,6 @@ function setupEventListeners() {
             virtualTarget,
             async () => {
                 showToast(`第 ${targetChapterIndex} 章正文撰寫完畢`);
-                if (state.writingBuffer.trim().length > 0) {
-                    await saveProseDirect(targetChapterIndex);
-                }
-                
                 state.currentlyWritingChapterIndex = null;
                 state.writingBuffer = "";
                 
@@ -5351,6 +5402,9 @@ async function handleGoBack(targetStage, hint = null, volume_index = null, chapt
 function startStage3_Plot(regenerate = false, hint = null) {
     addGlowEffect(plotTab, true);
     state.activeTab = 'plot';
+    if (!Number.isFinite(Number.parseInt(state.activeChapterIndex, 10)) || Number.parseInt(state.activeChapterIndex, 10) <= 0) {
+        state.activeChapterIndex = 1;
+    }
     renderActiveTab();
     
     if (regenerate && state.currentNovelData.plot_raw) {
@@ -5393,6 +5447,18 @@ function startStage3_Plot(regenerate = false, hint = null) {
                 showToast("大綱已重新規劃，正在重新評估...");
                 await reevaluateAfterRegression('plot');
             } else {
+                const currentChIdx = parseInt(state.activeChapterIndex) || 1;
+
+                if (!shouldReviewPlotBatch(currentChIdx)) {
+                    const nextChIdx = currentChIdx + 1;
+                    showToast(`🟢 第 ${currentChIdx} 章大綱完成。批次評估跳過，自動進入第 ${nextChIdx} 章...`);
+                    state.activeChapterIndex = nextChIdx;
+                    setTimeout(() => {
+                        startStage3_Plot(false, null);
+                    }, 1000);
+                    return;
+                }
+
                 // 正常流程：詢問總監是否繼續
                 showToast("大綱完成，正在請求 AI 總監評估...");
                 const director3 = await runDirectorDecision('plot');
@@ -5500,9 +5566,6 @@ function startStage4_Writer(regenerate = false) {
             state.writingBuffer = "";
         },
         async () => {
-            if (state.writingBuffer.trim().length > 0) {
-                await saveProseDirect(targetChapterIndex);
-            }
             state.currentlyWritingChapterIndex = null;
             state.writingBuffer = "";
             

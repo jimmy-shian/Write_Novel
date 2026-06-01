@@ -12,6 +12,150 @@ function escapeBackticks(str) {
     return typeof str === 'string' ? str.replace(/`/g, '\\`') : str;
 }
 
+// Compatible renderer for Foreshadowing Seeds (🌱)
+function formatForeshadowingSeed(item) {
+    if (typeof item === 'string') {
+        return renderMarkdown(item);
+    }
+    if (typeof item === 'object' && item !== null) {
+        const idStr = item.id !== undefined ? `<strong style="color:var(--primary);">[Seed-${item.id}]</strong> ` : '';
+        const stageStr = item.stage ? `<span class="char-pill pill-personality" style="margin-right:6px; font-size:var(--font-3xs); border-radius:4px; padding:1px 4px;">${item.stage}</span>` : '';
+        const nameStr = item.name ? `<strong>${item.name}</strong>: ` : '';
+        let detailStr = item.detail || item.content || item.summary || item.description || item.seed || '';
+        if (item.payoff) {
+            detailStr += ` <span style="color:var(--text-muted); font-size:var(--font-2xs); font-style:italic;">(回收: ${item.payoff})</span>`;
+        }
+        if (!detailStr) {
+            detailStr = JSON.stringify(item);
+        }
+        return `${idStr}${stageStr}${nameStr}${renderMarkdown(detailStr)}`;
+    }
+    return String(item);
+}
+
+// Compatible renderer for Key Turning Points (⚡)
+// 支援字串（舊格式，包含已轉義 HTML）、物件（新格式結構化數據）
+// 以及未轉義的 HTML 字串（新版本 AI 直接輸出的格式）
+function formatKeyTurningPoint(item) {
+    // 安全處理：避免 XSS，同時允許合法 HTML 標籤顯示
+    const safeHtml = (str) => {
+        if (!str) return '';
+        // 只轉義明顯危險的屬性和標籤組合，允許常見格式化標籤
+        return str
+            .replace(/javascript:/gi, '')
+            .replace(/on\w+=/gi, '')
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '');
+    };
+    
+    if (typeof item === 'string') {
+        // 檢測是否包含未轉義的 HTML 標籤（這是新版本 AI 的輸出格式）
+        const hasUnescapedHtml = /<[a-z][\s\S]*>/i.test(item);
+        if (hasUnescapedHtml) {
+            // 包含未轉義 HTML，安全處理後直接渲染
+            return safeHtml(item);
+        }
+        // 純文字或已轉義的 HTML，回退到 Markdown 渲染
+        return renderMarkdown(item);
+    }
+    if (typeof item === 'object' && item !== null) {
+        const idStr = item.id !== undefined ? `<strong style="color:var(--status-unwritten);">[Turn-${item.id}]</strong> ` : '';
+        
+        // 優先使用 trigger（觸發事件）作為主要顯示內容
+        let mainContent = item.trigger || item.name || item.title || '';
+        
+        // 如果有 HTML 內容在 detail/global_impact 中，檢測並安全處理
+        let additionalContent = item.global_impact || item.impact || item.detail || item.summary || item.description || '';
+        
+        // 檢測附加內容是否包含 HTML
+        const hasHtmlInAdditional = /<[a-z][\s\S]*>/i.test(additionalContent);
+        
+        if (mainContent && additionalContent) {
+            // 兩者都有：使用 "觸發事件: 全域影響" 格式
+            if (hasHtmlInAdditional) {
+                return `${idStr}<strong>${safeHtml(mainContent)}</strong>: ${safeHtml(additionalContent)}`;
+            }
+            return `${idStr}<strong>${mainContent}</strong>: ${renderMarkdown(additionalContent)}`;
+        } else if (mainContent) {
+            if (/<[a-z][\s\S]*>/i.test(mainContent)) {
+                return `${idStr}${safeHtml(mainContent)}`;
+            }
+            return `${idStr}${renderMarkdown(mainContent)}`;
+        } else if (additionalContent) {
+            if (hasHtmlInAdditional) {
+                return `${idStr}${safeHtml(additionalContent)}`;
+            }
+            return `${idStr}${renderMarkdown(additionalContent)}`;
+        }
+        
+        // 兩者都為空，安全 stringify
+        return `${idStr}<span style="font-family:monospace;font-size:0.85em;color:var(--text-muted);">${JSON.stringify(item)}</span>`;
+    }
+    return String(item);
+}
+
+// Helper to look up detailed seed description from worldview
+function getSeedDescription(idOrString, worldviewJs) {
+    const idStr = String(idOrString).replace(/[^\d]/g, '');
+    const idNum = parseInt(idStr);
+    if (isNaN(idNum)) {
+        return String(idOrString);
+    }
+    const seeds = worldviewJs?.foreshadowing_seeds || [];
+    for (const seed of seeds) {
+        if (typeof seed === 'object' && seed !== null) {
+            if (parseInt(seed.id) === idNum) {
+                return seed.detail || seed.content || seed.summary || seed.description || seed.seed || JSON.stringify(seed);
+            }
+        } else if (typeof seed === 'string') {
+            const indexMatch = seed.match(/\[Seed-(\d+)\]/i);
+            if (indexMatch && parseInt(indexMatch[1]) === idNum) {
+                return seed.replace(/\[Seed-\d+\]/gi, '').trim();
+            }
+        }
+    }
+    if (idNum > 0 && idNum <= seeds.length) {
+        const fallbackSeed = seeds[idNum - 1];
+        if (typeof fallbackSeed === 'string') {
+            return fallbackSeed.replace(/\[Seed-\d+\]/gi, '').trim();
+        } else if (typeof fallbackSeed === 'object' && fallbackSeed !== null) {
+            return fallbackSeed.detail || fallbackSeed.content || fallbackSeed.summary || fallbackSeed.seed || JSON.stringify(fallbackSeed);
+        }
+    }
+    return `伏筆種子 #${idNum}`;
+}
+
+// Helper to look up detailed turning point description from worldview
+function getTurningPointDescription(idOrString, worldviewJs) {
+    const idStr = String(idOrString).replace(/[^\d]/g, '');
+    const idNum = parseInt(idStr);
+    if (isNaN(idNum)) {
+        return String(idOrString);
+    }
+    const turns = worldviewJs?.key_turning_points || [];
+    for (const turn of turns) {
+        if (typeof turn === 'object' && turn !== null) {
+            if (parseInt(turn.id) === idNum) {
+                return (turn.trigger || turn.name || turn.title || '') + (turn.global_impact ? `: ${turn.global_impact}` : '');
+            }
+        } else if (typeof turn === 'string') {
+            const indexMatch = turn.match(/\[Turn-(\d+)\]/i);
+            if (indexMatch && parseInt(indexMatch[1]) === idNum) {
+                return turn.replace(/\[Turn-\d+\]/gi, '').trim();
+            }
+        }
+    }
+    if (idNum > 0 && idNum <= turns.length) {
+        const fallbackTurn = turns[idNum - 1];
+        if (typeof fallbackTurn === 'string') {
+            return fallbackTurn.replace(/\[Turn-\d+\]/gi, '').trim();
+        } else if (typeof fallbackTurn === 'object' && fallbackTurn !== null) {
+            return (fallbackTurn.trigger || fallbackTurn.name || fallbackTurn.title || '') + (fallbackTurn.global_impact ? `: ${fallbackTurn.global_impact}` : '');
+        }
+    }
+    return `關鍵轉折點 #${idNum}`;
+}
+
 /**
  * 渲染當前激活的 Tab
  */
@@ -168,7 +312,7 @@ export function renderWorldviewSections() {
                 ${seedsList.length > 0 ? `
                     <ul class="worldview-list">
                         ${seedsList.map((item, idx) => `
-                            <li>${renderMarkdown(typeof item === 'string' ? item : JSON.stringify(item))}</li>
+                            <li>${formatForeshadowingSeed(item)}</li>
                         `).join('')}
                     </ul>
                 ` : `
@@ -196,7 +340,7 @@ export function renderWorldviewSections() {
                 ${tpList.length > 0 ? `
                     <ul class="worldview-list">
                         ${tpList.map((item, idx) => `
-                            <li>${renderMarkdown(typeof item === 'string' ? item : JSON.stringify(item))}</li>
+                            <li>${formatKeyTurningPoint(item)}</li>
                         `).join('')}
                     </ul>
                 ` : `
@@ -468,6 +612,7 @@ export function renderPlotTab() {
     const plotData = state.currentNovelData?.plot;
     const chapters = plotData?.chapters || [];
     let volumes = state.currentNovelData?.volumes || [];
+    const worldviewJs = parseWorldviewJSON(state.currentNovelData?.worldbuilding || '');
     
     state.expandedVolumes = state.expandedVolumes || new Set();
     
@@ -859,12 +1004,16 @@ export function renderPlotTab() {
                     
                     if (isSkeletonChapter) {
                         // 💡 修復：增加更多容錯邏輯，嘗試從多個可能的欄位取得標題/概要
-                        const skeletonTitle = chapter.brief_title || chapter.title || chapter.name || '待設定標題';
-                        const skeletonSummary = chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                        const skeletonTitle = chapter.chapter_title || chapter.brief_title || chapter.title || chapter.name || '待設定標題';
+                        const skeletonSummary = chapter.chapter_summary || chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
                         const allocatedTasks = chapter.allocated_tasks || {};
-                        const foreshadowPlants = allocatedTasks.foreshadowing_plants || [];
-                        const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || [];
-                        const turningPoints = allocatedTasks.turning_points || [];
+                        const foreshadowPlants = allocatedTasks.foreshadowing_plants || allocatedTasks.foreshadowing_plant || chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || [];
+                        const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || allocatedTasks.foreshadowing_payoff || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
+                        const turningPoints = allocatedTasks.turning_points || allocatedTasks.turning_point || chapter.turning_points || chapter.turning_point || [];
+                        
+                        const arrSkeletonPlants = Array.isArray(foreshadowPlants) ? foreshadowPlants : (foreshadowPlants ? [foreshadowPlants] : []);
+                        const arrSkeletonPayoffs = Array.isArray(foreshadowPayoffs) ? foreshadowPayoffs : (foreshadowPayoffs ? [foreshadowPayoffs] : []);
+                        const arrSkeletonTurns = Array.isArray(turningPoints) ? turningPoints : (turningPoints ? [turningPoints] : []);
                         
                         return `
                         <div class="chapter-grid-item skeleton-chapter" data-chapter-index="${chapterIndex}" data-index="${globalIdx}" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
@@ -874,26 +1023,41 @@ export function renderPlotTab() {
                             </div>
                             ${skeletonSummary ? `<p style="font-size: var(--font-2xs); color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
                             
-                            ${(foreshadowPlants.length > 0 || foreshadowPayoffs.length > 0 || turningPoints.length > 0) ? `
+                            ${(arrSkeletonPlants.length > 0 || arrSkeletonPayoffs.length > 0 || arrSkeletonTurns.length > 0) ? `
                             <div class="skeleton-tasks" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 8px;">
-                                ${foreshadowPlants.map(seed => `
+                                ${arrSkeletonPlants.map(seed => {
+                                    const desc = getSeedDescription(seed, worldviewJs);
+                                    const cleanId = String(seed).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
+                                    return `
                                     <div class="task-item seed-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #c084fc; line-height: 1.4;">
                                         <span style="flex-shrink: 0; font-size: 1.1em;">🌱</span>
-                                        <span>${seed}</span>
+                                        <span>${idBadge}${desc}</span>
                                     </div>
-                                `).join('')}
-                                ${foreshadowPayoffs.map(pay => `
+                                    `;
+                                }).join('')}
+                                ${arrSkeletonPayoffs.map(pay => {
+                                    const desc = getSeedDescription(pay, worldviewJs);
+                                    const cleanId = String(pay).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
+                                    return `
                                     <div class="task-item payoff-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #fbbf24; line-height: 1.4;">
                                         <span style="flex-shrink: 0; font-size: 1.1em;">💥</span>
-                                        <span>回收: ${pay}</span>
+                                        <span>回收: ${idBadge}${desc}</span>
                                     </div>
-                                `).join('')}
-                                ${turningPoints.map(tp => `
+                                    `;
+                                }).join('')}
+                                ${arrSkeletonTurns.map(tp => {
+                                    const desc = getTurningPointDescription(tp, worldviewJs);
+                                    const cleanId = String(tp).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--status-unwritten);">[Turn-${cleanId}]</strong> ` : '';
+                                    return `
                                     <div class="task-item turning-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #f87171; line-height: 1.4;">
                                         <span style="flex-shrink: 0; font-size: 1.1em;">⚡</span>
-                                        <span>轉折: ${tp}</span>
+                                        <span>轉折: ${idBadge}${desc}</span>
                                     </div>
-                                `).join('')}
+                                    `;
+                                }).join('')}
                             </div>` : ''}
                             
                             <div class="chapter-actions" style="margin-top: 8px; text-align: right;">
@@ -918,7 +1082,15 @@ export function renderPlotTab() {
                             <div class="chapter-grid-label">🎬 核心情節事件流</div>
                             <div class="stepped-events" style="margin-top: 6px;">
                                 ${displayedEvents.map((e, eIdx) => {
-                                    const eventText = typeof e === 'string' ? e : [e.action, e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
+                                    let eventText = '';
+                                    if (typeof e === 'string') {
+                                        eventText = e;
+                                    } else if (typeof e === 'object' && e !== null) {
+                                        eventText = e.description || e.content || e.action || '';
+                                        if (!eventText) {
+                                            eventText = [e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
+                                        }
+                                    }
                                     return `
                                         <div class="stepped-event-item" style="padding-left: 24px; position: relative; margin-bottom: 6px; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary);">
                                             <span style="position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: var(--font-2xs); font-weight: 800;">${eIdx + 1}</span>
@@ -932,19 +1104,59 @@ export function renderPlotTab() {
                     }
 
                     let foreshadowHtml = '';
-                    if (Array.isArray(chapter.foreshadowing) && chapter.foreshadowing.length > 0) {
+                    const microPlants = chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || (chapter.allocated_tasks && chapter.allocated_tasks.foreshadowing_plants) || [];
+                    const microPayoffs = chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || (chapter.allocated_tasks && chapter.allocated_tasks.foreshadowing_payoffs) || [];
+                    const microTurns = chapter.turning_points || chapter.turning_point || (chapter.allocated_tasks && chapter.allocated_tasks.turning_points) || [];
+
+                    const arrPlants = Array.isArray(microPlants) ? microPlants : (microPlants ? [microPlants] : []);
+                    const arrPayoffs = Array.isArray(microPayoffs) ? microPayoffs : (microPayoffs ? [microPayoffs] : []);
+                    const arrTurns = Array.isArray(microTurns) ? microTurns : (microTurns ? [microTurns] : []);
+
+                    if (arrPlants.length > 0 || arrPayoffs.length > 0 || arrTurns.length > 0) {
                         foreshadowHtml = `
-                        <div class="chapter-grid-item grid-col-span-2">
-                            <div class="chapter-grid-label">🌱 伏筆線索種子</div>
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
-                                ${chapter.foreshadowing.map(f => `<span class="badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 600;">${f}</span>`).join('')}
+                        <div class="chapter-grid-item grid-col-span-2" style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 10px; margin-top: 4px;">
+                            <div class="chapter-grid-label" style="margin-bottom: 6px;">🌱 伏筆與轉折任務</div>
+                            <div class="micro-tasks-list" style="display: flex; flex-direction: column; gap: 6px;">
+                                ${arrPlants.map(seed => {
+                                    const desc = getSeedDescription(seed, worldviewJs);
+                                    const cleanId = String(seed).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
+                                    return `
+                                    <div class="task-item seed-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #c084fc; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">🌱</span>
+                                        <span>${idBadge}${desc}</span>
+                                    </div>
+                                    `;
+                                }).join('')}
+                                ${arrPayoffs.map(pay => {
+                                    const desc = getSeedDescription(pay, worldviewJs);
+                                    const cleanId = String(pay).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
+                                    return `
+                                    <div class="task-item payoff-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #fbbf24; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">💥</span>
+                                        <span>回收: ${idBadge}${desc}</span>
+                                    </div>
+                                    `;
+                                }).join('')}
+                                ${arrTurns.map(tp => {
+                                    const desc = getTurningPointDescription(tp, worldviewJs);
+                                    const cleanId = String(tp).replace(/[^\d]/g, '');
+                                    const idBadge = cleanId ? `<strong style="color:var(--status-unwritten);">[Turn-${cleanId}]</strong> ` : '';
+                                    return `
+                                    <div class="task-item turning-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #f87171; line-height: 1.4;">
+                                        <span style="flex-shrink: 0; font-size: 1.1em;">⚡</span>
+                                        <span>轉折: ${idBadge}${desc}</span>
+                                    </div>
+                                    `;
+                                }).join('')}
                             </div>
                         </div>`;
                     }
                     
                     // 💡 修復：優先使用微觀大綱欄位，若無則回退到骨架欄位
-                    const skeletonTitle = chapter.title || chapter.brief_title || chapter.name || '待設定標題';
-                    const skeletonSummary = chapter.summary || chapter.brief_summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                    const skeletonTitle = chapter.title || chapter.chapter_title || chapter.brief_title || chapter.name || '待設定標題';
+                    const skeletonSummary = chapter.summary || chapter.chapter_summary || chapter.brief_summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
                     const cliffhangerHtml = chapter.cliffhanger && chapter.cliffhanger.trim() ? `
                         <div class="chapter-grid-item grid-col-span-2" style="background: rgba(239, 68, 68, 0.03); border-color: rgba(239, 68, 68, 0.15); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 4px;">
                             <div class="chapter-grid-label" style="color: #ef4444;">⚠️ 本章懸念 (Cliffhanger)</div>

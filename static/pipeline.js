@@ -111,6 +111,52 @@ function isShallowOutline(outline) {
     return !(hasSummary && hasExtraDetail);
 }
 
+function getPlotReviewBatchSize() {
+    const raw = state.settingsData?.plot?.plot_review_batch_size
+        ?? state.settingsData?.global?.plot_review_batch_size
+        ?? state.plotReviewBatchSize
+        ?? 3;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
+function isDetailedOutline(outline) {
+    const events = outline?.events || outline?.scenes;
+    return Array.isArray(events) && events.length > 0;
+}
+
+function getDetailedPlotChapterCount() {
+    const chapters = state.currentNovelData?.plot?.chapters || [];
+    return chapters.filter(isDetailedOutline).length;
+}
+
+function getExpectedPlotChapterCount(fallbackChapterIndex) {
+    const vols = state.currentNovelData?.volumes || [];
+    const planned = vols.reduce((sum, v) => {
+        const count = Number.parseInt(v.chapter_count, 10);
+        return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+    }, 0);
+    if (planned > 0) return planned;
+
+    const skeletonMax = vols.reduce((maxIdx, v) => {
+        try {
+            const parsed = typeof v.chapters_outline === 'string' ? JSON.parse(v.chapters_outline) : v.chapters_outline;
+            if (!Array.isArray(parsed)) return maxIdx;
+            return Math.max(maxIdx, ...parsed.map(ch => Number.parseInt(ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id, 10) || 0));
+        } catch (e) {
+            return maxIdx;
+        }
+    }, 0);
+    return skeletonMax || (fallbackChapterIndex + getPlotReviewBatchSize());
+}
+
+function shouldReviewPlotBatch(currentChapterIndex) {
+    const batchSize = getPlotReviewBatchSize();
+    const detailedCount = Math.max(getDetailedPlotChapterCount(), currentChapterIndex);
+    const expectedCount = getExpectedPlotChapterCount(currentChapterIndex);
+    return detailedCount % batchSize === 0 || currentChapterIndex >= expectedCount;
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt) {
     return new Promise((resolve) => {
@@ -139,6 +185,9 @@ export async function executePipelineStage(stage, userPrompt) {
                 agentName = 'Volumes Planner (篇卷結構規劃師)';
                 break;
             case 'plot':
+                if (!Number.isFinite(Number.parseInt(state.activeChapterIndex, 10)) || Number.parseInt(state.activeChapterIndex, 10) <= 0) {
+                    state.activeChapterIndex = 1;
+                }
                 endpoint = '/api/agent/plot-planner';
                 body = { 
                     novel_id: state.currentNovelId, 
@@ -251,14 +300,26 @@ export async function executePipelineStage(stage, userPrompt) {
             },
             async () => {
                 state.currentlyWritingChapterIndex = null;
-                if (stage === 'writer' && state.writingBuffer?.trim()) {
-                    await window.saveProseDirect(state.activeChapterIndex || 1);
-                }
                 if (failed) return;
                 updatePipelineStage(stage, 'done');
                 hideAgentProcessingIndicator(stage);
                 await window.loadNovelDetails(state.currentNovelId);
                 if (state.isPipelineRunning) {
+                    if (stage === 'plot') {
+                        const currentChIdx = parseInt(state.activeChapterIndex) || 1;
+
+                        if (!shouldReviewPlotBatch(currentChIdx)) {
+                            const nextChIdx = currentChIdx + 1;
+                            showToast(`🟢 第 ${currentChIdx} 章大綱完成。批次評估跳過，自動進入第 ${nextChIdx} 章...`);
+                            state.activeChapterIndex = nextChIdx;
+                            setTimeout(async () => {
+                                await executePipelineStage('plot', userPrompt);
+                            }, 1000);
+                            resolve();
+                            return;
+                        }
+                    }
+                    
                     showToast(`${stage} 完成，正在請求 AI 總監評估...`);
                     const nextDecision = await window.runDirectorDecision(stage);
                     await window.executeDirectorAction(nextDecision, userPrompt);
@@ -389,9 +450,6 @@ export async function writeAllChaptersSequentially(userPrompt) {
                 },
                 async () => {
                     state.currentlyWritingChapterIndex = null;
-                    if (state.writingBuffer?.trim()) {
-                        await window.saveProseDirect(chapterIndex);
-                    }
                     hideAgentProcessingIndicator('writer');
                     await window.loadNovelDetails(state.currentNovelId);
                     resolve();
