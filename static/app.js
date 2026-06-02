@@ -544,6 +544,10 @@ async function executeDirectorAction(decision, userPrompt) {
                 await executePipelineStage('foreshadowing_orchestration', enhancedPrompt);
             } else if (target.includes('plot') || target.includes('大綱') || target.includes('詳細章')) {
                 updatePipelineStage('plot', 'running');
+                // 💡 使用 Director 指定的 chapter_index 覆寫 state.activeChapterIndex
+                if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
+                    state.activeChapterIndex = parseInt(decision.chapter_index);
+                }
                 await executePipelineStage('plot', enhancedPrompt);
             } else {
                 // 預設重跑世界觀
@@ -589,8 +593,14 @@ async function executeDirectorAction(decision, userPrompt) {
         case 'GO_BACK_TO_PLOT': {
             showToast('⚡ 總監指示回頭修改大綱...');
             updatePipelineStage('plot', 'running');
+            // 💡 使用 Director 指定的 chapter_index，覆寫 state.activeChapterIndex
+            if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
+                state.activeChapterIndex = parseInt(decision.chapter_index);
+            }
+            // 💡 僅傳遞 hint（總監修正指示），不把整本 plot_raw 塞入 user_prompt
+            // 這樣後端可以自己控制骨架上下文範圍，且不會被超長 context 搞垮
             const plotPrompt = hint 
-                ? `【⚠️ 總監修改指示/章節大綱修正要求】：\n${hint}\n\n現有大綱：\n${state.currentNovelData?.plot_raw || ''}`
+                ? `【⚠️ 總監修改指示/章節大綱修正要求】：\n${hint}\n\n請根據以上指示修正指定章節的大綱。`
                 : userPrompt;
             await executePipelineStage('plot', plotPrompt);
             break;
@@ -3409,7 +3419,7 @@ function cacheDirectorDecisionMessage(content, thinking) {
     state.currentNovelData.chat_messages.push(message);
 }
 
-async function runDirectorDecision(currentStage, providedUserPrompt = null) {
+async function runDirectorDecision(currentStage, providedUserPrompt = null, reviewContext = null) {
     // 總監開始決策時，自動跳轉至總監頁籤 (僅在初始化時觸發 1 次)
     switchToDirectorTab();
     return new Promise((resolve) => {
@@ -3443,15 +3453,46 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null) {
             || (state.currentNovelData?.novel?.pipeline_prompt || '').trim()
             || '';
         
+        // 組織 API 請求體，包含新的評斷上下文參數
+        const requestBody = {
+            current_stage: currentStage,
+            user_prompt: userPrompt,
+            chapter_index: state.activeChapterIndex || 1
+        };
+        
+        // 骨架審查時自動帶入當前卷索引
+        if (currentStage === 'volume_skeleton' && state.activeVolumeIndex) {
+            requestBody.volume_index = state.activeVolumeIndex;
+        }
+        
+        // 若有主動傳入的 reviewContext（角色審查用），則附加
+        if (reviewContext) {
+            if (reviewContext.character_review_mode) {
+                requestBody.character_review_mode = reviewContext.character_review_mode;
+            }
+            if (reviewContext.character_review_hint) {
+                requestBody.character_review_hint = reviewContext.character_review_hint;
+            }
+            if (reviewContext.character_review_target_content) {
+                requestBody.character_review_target_content = reviewContext.character_review_target_content;
+            }
+        }
+        
+        // 角色審查時：嘗試從 state 取得已預存的評斷上下文
+        if (currentStage === 'characters' && state.pendingCharacterReviewContext) {
+            const ctx = state.pendingCharacterReviewContext;
+            if (ctx.character_review_mode) requestBody.character_review_mode = ctx.character_review_mode;
+            if (ctx.character_review_hint) requestBody.character_review_hint = ctx.character_review_hint;
+            if (ctx.character_review_target_content) requestBody.character_review_target_content = ctx.character_review_target_content;
+            // 用完即清除，避免下次污染
+            delete state.pendingCharacterReviewContext;
+        }
+        
         let responseText = "";
         let thinkingText = ""; // 新增此行
         streamAPI(
             '/api/novels/' + state.currentNovelId + '/director-decision',
-            { 
-                current_stage: currentStage, 
-                user_prompt: userPrompt,
-                chapter_index: state.activeChapterIndex || 1
-            },
+            requestBody,
             // onThinking
             (thinkingDelta) => {
                 thinkingText += thinkingDelta; // 新增此行

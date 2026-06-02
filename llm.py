@@ -224,6 +224,27 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     if custom_payload_overrides:
         payload_base.update(custom_payload_overrides)
 
+    # === Debug: 列印 system prompt 和 user prompt ===
+    print("\n" + "=" * 80)
+    print(f"【API 傳送提示詞】Agent: {agent_name} | Model: {config['model']}")
+    print("=" * 80)
+    for i, msg in enumerate(normalized_msgs):
+        role_label = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        print(f"\n--- [{i}] role: {role_label} ---")
+        # 解析 JSON 格式化輸出，處理換行
+        try:
+            parsed = json.loads(content)
+            print(json.dumps(parsed, ensure_ascii=False, indent=2))
+        except (json.JSONDecodeError, TypeError):
+            # 非 JSON 內容，直接顯示，處理換行
+            for line in content.split("\n"):
+                print(line)
+    print("\n" + "=" * 80)
+    print("【API 請求即將發送】")
+    print("=" * 80 + "\n")
+    # ==========================================
+
     max_retries = 10
     fixed_delay = 2.0  # 固定間隔 2 秒，不再使用指數退避
 

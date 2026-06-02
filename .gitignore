@@ -4,3 +4,9 @@ venv/
 __pycache__/
 *.pycscratch/
 simple_test_logging.py
+
+# 排除暫存檔案
+*.tmp
+
+# 排除測試檔案
+test_*.txt

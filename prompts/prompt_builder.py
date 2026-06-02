@@ -343,17 +343,11 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
     system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n"
     
     if mode == "generate":
-        vols_context = ""
-        if existing_vols:
-            vols_context = "\n【現有已規劃篇卷概述】\n"
-            for v in existing_vols:
-                vols_context += f"- 卷 {v['volume_index']}：{v['title']} (大綱: {v['summary']})\n"
-                
         user_content = f"""【世界觀背景】
 {worldview_text}
-{vols_context}
+
 【使用者大綱/要求】
-{user_prompt or "請合理規劃整部作品的篇卷結構。"}
+{user_prompt or "請根據完整世界觀，自行決定全書的卷數(建議10-15卷)、每卷標題、概要與章節數量設定。"}
 
 請為本作品生成符合結構的篇卷 JSON 清單。
 """
@@ -433,7 +427,7 @@ def build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt, 
 """
     
     if target_chapter_index is not None:
-        final_instruction = f"請只輸出第 {target_chapter_index} 章的詳細大綱 JSON；可以回傳單一章節物件，或回傳 chapters 陣列但其中只能包含第 {target_chapter_index} 章，絕對不要生成其他章節。"
+        final_instruction = f"請只輸出第 {target_chapter_index} 章的詳細大綱 JSON，回傳 chapters 陣列但其中只能包含第 {target_chapter_index} 章，絕對不要生成其他章節。"
     else:
         final_instruction = "請為所有章節生成符合結構的詳細大綱 JSON。"
 
@@ -591,7 +585,7 @@ def mask_worldview_seeds_and_turns(worldview_text):
         
     return "".join(new_parts)
 
-def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report):
+def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None):
     """總監決策評判提示詞
     
     根據不同階段傳入對應的審查內容：
@@ -660,11 +654,20 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
  
 {DIRECTOR_COMMON_FOOTER}
 """
+        extra_context = ""
+        if character_review_mode in ("modify", "expand") and character_review_hint:
+            extra_context += f"\n\n【本次修改/新增的總監指示 (Hint)】\n{character_review_hint}"
+        if character_review_mode in ("modify", "expand") and character_review_target_content:
+            extra_context += f"\n\n【被修改/新增角色的完整內容】\n{character_review_target_content}"
+        if character_review_mode == "generate":
+            extra_context = "\n\n【重要】此為世界觀生成後的首次角色生成，請確認角色陣容是否完整且與世界觀設定契合。"
+        
         user_content = f"""【世界觀背景】
 {worldview_text}
  
 【完整角色列表（完整設定）】
 {characters_text}
+{extra_context}
  
 請進行深度評估，決定下一步行動！
 """
@@ -743,13 +746,14 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
 """
     
     elif current_stage == "writer":
-        # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆)
+        # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆+後三章伏筆回收預告)
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作質量，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（正文寫作作家）。
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
+4. ⚠️【後三章伏筆預埋審查】：請特別注意檢查「clue_payoff_upcoming_3_chapters」中預告的後三章即將回收之伏筆，是否已在本章正文中有合理的前置鋪墊與自然埋入。
  
 {stage_criteria}
  

@@ -119,8 +119,8 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     - Mode 'patch': Volume patch/add: passes hint and specifies generating only `[idx]`.
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
+    # generate 模式傳入完整世界觀讓 LLM 自行決定卷數與章數分配
+    worldview_text = wb["content"] if wb else "尚無世界觀設定"
     
     existing_vols = db.get_volumes(novel_id)
     
@@ -927,7 +927,7 @@ def run_copilot_chat(novel_id, user_message):
 # =============================================================================
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
-def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None):
+def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None, volume_index=None, character_review_mode=None, character_review_hint=None, character_review_target_content=None):
     """
     Gateway review after a stage completes. Returns next action:
     CONTINUE, AUTO_REGENERATE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
@@ -959,6 +959,12 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         # volume_skeleton: 完整骨架(每2卷一組)
         vols = db.get_volumes(novel_id)
         plot_text = json.dumps(vols, ensure_ascii=False, indent=2) if vols else "尚無骨架規劃"
+        # 補入目標卷的標題與大綱摘要
+        if volume_index is not None:
+            target_vol = next((v for v in vols if v["volume_index"] == volume_index), None)
+            if target_vol:
+                vol_highlight = f"\n\n【當前審查之目標卷 - 第 {volume_index} 卷】\n標題：{target_vol.get('title', '')}\n卷概要：{target_vol.get('summary', '')}"
+                plot_text += vol_highlight
     elif current_stage == "plot":
         # plot: batch review. For batch size 3 and current chapter 6,
         # send detailed outlines 4-6 plus skeleton context 3-7.
@@ -1029,11 +1035,22 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         chapter_data = db.get_latest_chapter(novel_id, target_ch_idx)
         prose_content = chapter_data.get("content", "") if chapter_data else "（無寫作正文內容）"
         
+        clue_payoff_context = ""
+        next_three_chaps = [ch for ch in normalized_outlines if target_ch_idx < ch["chapter_index"] <= target_ch_idx + 3]
+        payoff_clues = []
+        for ch in next_three_chaps:
+            payoffs = ch.get("foreshadowing_payoff", []) or ch.get("allocated_tasks", {}).get("foreshadowing_payoffs", [])
+            if payoffs:
+                payoff_clues.append(f"第 {ch.get('chapter_index')} 章預計收回的伏筆：{json.dumps(payoffs, ensure_ascii=False)}")
+        if payoff_clues:
+            clue_payoff_context = "\n".join(payoff_clues)
+        
         writer_review_data = {
             "chapter_index": target_ch_idx,
             "chapter_title": curr_ch_outline.get("title", f"第 {target_ch_idx} 章") if curr_ch_outline else f"第 {target_ch_idx} 章",
             "detailed_outline": curr_ch_outline if curr_ch_outline else "（尚未生成詳細大綱）",
             "allocated_tasks_and_clues": curr_ch_outline.get("allocated_tasks", {}) if curr_ch_outline else {},
+            "clue_payoff_upcoming_3_chapters": clue_payoff_context or "（後三章無需回收的伏筆）",
             "prose_text": prose_content
         }
         
@@ -1074,7 +1091,10 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
     
     messages = build_director_decision_messages(
         current_stage, worldview_text, characters_text, plot_text, written_chapters_text, 
-        user_prompt, validation_report
+        user_prompt, validation_report,
+        character_review_mode=character_review_mode,
+        character_review_hint=character_review_hint,
+        character_review_target_content=character_review_target_content
     )
     
     stream = call_llm_stream("copilot", messages)

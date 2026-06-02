@@ -115,6 +115,10 @@ class DirectorDecisionRequest(BaseModel):
     current_stage: str
     user_prompt: Optional[str] = None
     chapter_index: Optional[int] = None
+    volume_index: Optional[int] = None
+    character_review_mode: Optional[str] = None
+    character_review_hint: Optional[str] = None
+    character_review_target_content: Optional[str] = None
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
@@ -462,7 +466,14 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
     return StreamingResponse(
-        agents.run_director_decision(novel_id, payload.current_stage, effective_prompt, chapter_index=payload.chapter_index),
+        agents.run_director_decision(
+            novel_id, payload.current_stage, effective_prompt,
+            chapter_index=payload.chapter_index,
+            volume_index=payload.volume_index,
+            character_review_mode=payload.character_review_mode,
+            character_review_hint=payload.character_review_hint,
+            character_review_target_content=payload.character_review_target_content,
+        ),
         media_type="text/event-stream"
     )
 
