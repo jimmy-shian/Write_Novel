@@ -125,7 +125,7 @@ def build_writer_review_context(novel_id, chapter_index, characters_text):
             "tail": _tail(previous_chapter.get("content", ""), 1200) if previous_chapter else None,
         },
         "current_chapter": {
-            "outline": current_outline or "（尚未生成詳細大綱）",
+            "outline": current_outline or "（尚未生成章節大綱）",
             "allocated_tasks_and_clues": current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {},
             "prose_text": prose,
         },
@@ -156,7 +156,7 @@ def build_editor_review_context(novel_id, chapter_index, characters_text):
     packet = {
         "review_scope": "editor_before_after_comparison",
         "chapter_index": target_idx,
-        "chapter_outline": current_outline or "（尚未生成詳細大綱）",
+        "chapter_outline": current_outline or "（尚未生成章節大綱）",
         "active_character_cards": _filter_active_characters(characters_text, current_outline or {}),
         "original_prose_before_edit": _snippet(original, 1200, 1600),
         "polished_prose_after_edit": polished,

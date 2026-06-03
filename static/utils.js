@@ -455,8 +455,8 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let chapter_index = null;
     let insert_after_index = null;
     
-    // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } ```）
-    const jsonBlockMatch = responseText.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+    // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } 或是 \\\json ... ）
+    const jsonBlockMatch = responseText.match(/(?:```json|\\+json)\s*(\{[\s\S]*?\})\s*(?:```|\\+)/i);
     if (jsonBlockMatch) {
         try {
             const jsonCmd = JSON.parse(jsonBlockMatch[1]);

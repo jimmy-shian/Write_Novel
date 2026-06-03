@@ -151,10 +151,7 @@ function getExpectedPlotChapterCount(fallbackChapterIndex) {
 }
 
 function shouldReviewPlotBatch(currentChapterIndex) {
-    const batchSize = getPlotReviewBatchSize();
-    const detailedCount = Math.max(getDetailedPlotChapterCount(), currentChapterIndex);
-    const expectedCount = getExpectedPlotChapterCount(currentChapterIndex);
-    return detailedCount % batchSize === 0 || currentChapterIndex >= expectedCount;
+    return true;
 }
 
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
@@ -184,20 +181,7 @@ export async function executePipelineStage(stage, userPrompt) {
                 state.activeTab = 'plot';
                 agentName = 'Volumes Planner (篇卷結構規劃師)';
                 break;
-            case 'plot':
-                if (!Number.isFinite(Number.parseInt(state.activeChapterIndex, 10)) || Number.parseInt(state.activeChapterIndex, 10) <= 0) {
-                    state.activeChapterIndex = 1;
-                }
-                endpoint = '/api/agent/plot-planner';
-                body = { 
-                    novel_id: state.currentNovelId, 
-                    chapter_index: state.activeChapterIndex || 1,
-                    user_prompt: userPrompt 
-                };
-                targetTextarea = el.editorPlotJson;
-                state.activeTab = 'plot';
-                agentName = 'Plot Planner (章節劇情規劃師)';
-                break;
+
             case 'volume_skeleton':
                 endpoint = '/api/agent/volume-skeleton';
                 targetTextarea = el.editorPlotJson;
@@ -215,6 +199,13 @@ export async function executePipelineStage(stage, userPrompt) {
                 agentName = 'Chapter Writer (小說正文寫作作家)';
                 // 標記正在寫作此章節
                 state.currentlyWritingChapterIndex = state.activeChapterIndex || 1;
+                break;
+            case 'editor':
+                endpoint = '/api/agent/edit-chapter';
+                body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
+                targetTextarea = el.editorProse;
+                state.activeTab = 'editor';
+                agentName = 'Chapter Editor (小說正文編輯作家)';
                 break;
             default:
                 resolve();
@@ -305,21 +296,7 @@ export async function executePipelineStage(stage, userPrompt) {
                 hideAgentProcessingIndicator(stage);
                 await window.loadNovelDetails(state.currentNovelId);
                 if (state.isPipelineRunning) {
-                    if (stage === 'plot') {
-                        const currentChIdx = parseInt(state.activeChapterIndex) || 1;
 
-                        if (!shouldReviewPlotBatch(currentChIdx)) {
-                            const nextChIdx = currentChIdx + 1;
-                            showToast(`🟢 第 ${currentChIdx} 章大綱完成。批次評估跳過，自動進入第 ${nextChIdx} 章...`);
-                            state.activeChapterIndex = nextChIdx;
-                            setTimeout(async () => {
-                                await executePipelineStage('plot', userPrompt);
-                            }, 1000);
-                            resolve();
-                            return;
-                        }
-                    }
-                    
                     showToast(`${stage} 完成，正在請求 AI 總監評估...`);
                     const nextDecision = await window.runDirectorDecision(stage);
                     await window.executeDirectorAction(nextDecision, userPrompt);
@@ -340,17 +317,6 @@ export async function writeAllChaptersSequentially(userPrompt) {
         return;
     }
 
-    const invalidOutlines = plotChapters.filter(chapter => isPlaceholderOutline(chapter) || isShallowOutline(chapter));
-    const dirtyVolumes = (state.currentNovelData?.volumes || [])
-        .filter(v => Number(v.is_dirty || 0) === 1);
-    if (invalidOutlines.length > 0 || dirtyVolumes.length > 0) {
-        updateDirectorMessage('📋 偵測到髒卷或佔位大綱，先回到 Plot Planner 重新對齊...');
-        showToast('📋 大綱需要回退修復，正在重新規劃後再寫正文');
-        updatePipelineStage('writer', 'pending');
-        updatePipelineStage('plot', 'running');
-        await executePipelineStage('plot', userPrompt);
-        return;
-    }
 
     const totalChapters = plotChapters.length;
     showToast(`📖 共 ${totalChapters} 個大綱節點，開始逐章撰寫...`);
@@ -491,7 +457,6 @@ export async function writeAllChaptersSequentially(userPrompt) {
         updateDirectorMessage('📋 偵測到仍有未規劃大綱的篇卷，即將全自動啟動下一階段大綱規劃與流程...');
         showToast('📋 偵測到未完篇卷，即將開始規劃下一波章節大綱...');
         await window.generateAllVolumeSkeletons(userPrompt);
-        await executePipelineStage('plot', userPrompt);
         return;
     }
     

@@ -160,9 +160,12 @@ function getTurningPointDescription(idOrString, worldviewJs) {
  * 渲染當前激活的 Tab
  */
 export function renderActiveTab() {
+    // Normalize: 'editor' has no dedicated panel/tab, map to 'writer'
+    const activePanel = state.activeTab === 'editor' ? 'writer' : state.activeTab;
+
     // Hide all workpanels, activate correct nav tab
     el.navTabs.forEach(t => {
-        if (t.dataset.tab === state.activeTab) {
+        if (t.dataset.tab === activePanel) {
             t.classList.add('active');
         } else {
             t.classList.remove('active');
@@ -170,7 +173,7 @@ export function renderActiveTab() {
     });
     
     el.workpanels.forEach(p => {
-        if (p.id === `panel-${state.activeTab}`) {
+        if (p.id === `panel-${activePanel}`) {
             p.classList.add('active');
         } else {
             p.classList.remove('active');
@@ -180,10 +183,10 @@ export function renderActiveTab() {
     if (!state.currentNovelData) return;
     
     // Call specific tab renderer
-    if (state.activeTab === 'worldview') renderWorldviewTab();
-    if (state.activeTab === 'characters') renderCharactersTab();
-    if (state.activeTab === 'plot') renderPlotTab();
-    if (state.activeTab === 'writer') renderWriterTab();
+    if (activePanel === 'worldview') renderWorldviewTab();
+    if (activePanel === 'characters') renderCharactersTab();
+    if (activePanel === 'plot') renderPlotTab();
+    if (activePanel === 'writer') renderWriterTab();
 }
 
 /**
@@ -846,26 +849,6 @@ export function renderPlotTab() {
                 const vStart = myRange.start;
                 const volChCount = myRange.count;
                 
-                // 1. 💡 使用動態範圍精確過濾高解像度微觀大綱章節
-                const volMicroChapters = chapters.filter(c => {
-                    const cIdx = parseInt(c.chapter_index);
-                    // 💡 改用範圍區間判定，不再盲目除以 50
-                    const isInVolumeRange = !isNaN(cIdx) && (cIdx >= myRange.start && cIdx <= myRange.end);
-                    if (!isInVolumeRange) return false;
-                    
-                    const hasMicroStructure = Array.isArray(c.events) && c.events.length > 0 ||
-                                              !!c.purpose || !!c.emotional_tone || !!c.cliffhanger;
-                    const hasTitleOrSummary = c.title && c.title.trim() !== '' && c.title !== '待設定標題';
-                    
-                    // 💡 修復：改為「有詳細結構 → 是微觀章節」為主判斷。
-                    // 即使有 brief_title（合併後骨架欄位仍保留），只要有詳細結構欄位就視為微觀大綱。
-                    // 舊邏輯：isSkeleton = has brief_title → 從 microChapters 中排除（錯誤！）
-                    const isDetailedChapter = hasMicroStructure || hasTitleOrSummary;
-                    
-                    return isDetailedChapter;
-                });
-
-                // 2. 💡【Step 1 修復】直接使用 chapters_outline 作為骨架渲染源
                 let outl = [];
                 try {
                     const raw = vol.chapters_outline;
@@ -878,73 +861,28 @@ export function renderPlotTab() {
                 } catch(e) {
                     outl = [];
                 }
-                
-                // 輔助函式：判斷一個章節是否已詳細化（有 events/purpose/cliffhanger 等詳細欄位）
-                function isDetailedChapterObj(ch) {
-                    return (Array.isArray(ch.events) && ch.events.length > 0) ||
-                           !!ch.purpose || !!ch.emotional_tone || !!ch.cliffhanger ||
-                           (ch.title && ch.title !== ch.brief_title && ch.title.trim() !== '' && ch.title !== '待設定標題');
-                }
 
-                // 3. 💡【核心修復點】：建立雙層 Map 緩衝區，進行逐章無縫融合
-                // chapters_outline 可能同時含骨架章節和合併後的詳細章節（兩者都在）
                 const skeletonMap = new Map();
-                const outlineDetailMap = new Map(); // 來自 chapters_outline 的詳細章節
-
                 outl.forEach(ch => {
                     const rawIdx = ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id;
                     const idx = parseInt(rawIdx);
                     if (!isNaN(idx)) {
-                        if (isDetailedChapterObj(ch)) {
-                            // 已詳細化的章節 → 進 outlineDetailMap（優先被 plot.chapters 覆蓋）
-                            outlineDetailMap.set(idx, ch);
-                        } else {
-                            // 純骨架章節（只有 brief_title/brief_summary）→ 進 skeletonMap
-                            skeletonMap.set(idx, ch);
-                        }
+                        skeletonMap.set(idx, ch);
                     }
                 });
 
-                // microMap：優先從 plot.chapters（全局大綱）取，其次從 chapters_outline 的詳細部分取
-                const microMap = new Map();
-                // 先放 chapters_outline 中的詳細章節作底
-                outlineDetailMap.forEach((ch, idx) => {
-                    microMap.set(idx, ch);
-                });
-                // 再用 plot.chapters 覆蓋（plot.chapters 是主要來源，優先級更高）
-                volMicroChapters.forEach(ch => {
-                    const idx = parseInt(ch.chapter_index);
-                    if (!isNaN(idx)) {
-                        microMap.set(idx, ch);
-                    }
-                });
-                
-                // 4. 動態收集本卷需要呈現的所有章節全局序號集合
-                //    優先收集骨架章節（Stage 2），再補足微觀大綱章節（Stage 4）
                 const chapterIdxSet = new Set();
-                
-                // 4.1 收集骨架章節（Stage 2 產出）
                 skeletonMap.forEach((_, idx) => chapterIdxSet.add(idx));
-                
-                // 4.2 收集微觀大綱章節（Stage 4 產出 + chapters_outline 合併的詳細章節）
-                microMap.forEach((_, idx) => chapterIdxSet.add(idx));
-                
-                // 4.3 💡【Step 3 修復】：只有當有實際大綱內容時才填補格子，否則保持乾淨空狀態
-                // 當 outl 為空時，不應該產生 50 個「待設定」的虛擬章節
                 if (outl.length > 0) {
                     for (let i = 0; i < volChCount; i++) {
                         chapterIdxSet.add(vStart + i);
                     }
                 }
 
-                // 將序號由小到大排序（例如 1 ~ 48）
                 const sortedIdxs = Array.from(chapterIdxSet).sort((a, b) => a - b);
 
-                // 5. 🚀 混合陣列組裝：有微觀用微觀，沒微觀用骨架，都沒用空白保底
                 const displayChapters = sortedIdxs.map(idx => {
-                    if (microMap.has(idx)) {
-                        return { ...microMap.get(idx), __renderMode: 'micro' };
-                    } else if (skeletonMap.has(idx)) {
+                    if (skeletonMap.has(idx)) {
                         return { ...skeletonMap.get(idx), __renderMode: 'skeleton' };
                     } else {
                         return { chapter_index: idx, title: '待設定標題', summary: '待設定摘要', __renderMode: 'empty' };
@@ -977,54 +915,65 @@ export function renderPlotTab() {
                     </div>` : displayChapters.map((chapter, chIdx) => {
     
                     const chapterIndex = parseInt(chapter.chapter_index);
-                    // 💡 基於全新的 __renderMode 屬性精確判定單個卡片外觀（需先宣告才能在 chIdxInVol 中使用）
-                    const isSkeletonChapter = chapter.__renderMode === 'skeleton' || chapter.__renderMode === 'empty';
+                    const chIdxInVol = chapterIndex - vStart + 1;
                     
-                    // 💡 修正全局索引查找，防止編輯按鈕點擊錯位 Bug
-                    const globalIdx = chapters.findIndex(c => parseInt(c.chapter_index) === chapterIndex);
-                    
-                    // 💡【核心修復】：對於骨架章節，正確計算卷內序號（使用動態範圍 vStart 計算）
-                    // 如果 chapterIndex 落在本卷範圍內，計算相對章號：chapterIndex - vStart + 1
-                    // 否則使用 displayChapters 陣列索引 + 1（fallback）
-                    let chIdxInVol;
-                    if (isSkeletonChapter) {
-                        if (chapterIndex >= vStart && chapterIndex < vStart + volChCount) {
-                            // chapterIndex 是正確的全局章節號，計算卷內相對編號
-                            chIdxInVol = chapterIndex - vStart + 1;
-                        } else {
-                            // chapterIndex 可能是 LLM 錯誤的局部索引，使用 displayChapters 陣列索引 + 1
-                            chIdxInVol = chIdx + 1;
-                        }
-                    } else {
-                        // 微觀模式保持原本邏輯
-                        chIdxInVol = (((chapterIndex - 1) % 50) + 1);
+                    let globalIdx = -1;
+                    if (window.state.currentNovelData && window.state.currentNovelData.plot && Array.isArray(window.state.currentNovelData.plot.chapters)) {
+                        globalIdx = window.state.currentNovelData.plot.chapters.findIndex(c => parseInt(c.chapter_index || c.chapter || c.chapter_number || c.index || -1) === chapterIndex);
                     }
+
+                    // 💡 基於全新的 __renderMode 屬性精確判定單個卡片外觀（需先宣告才能在 chIdxInVol 中使用）
+                    // 💡 修復：優先使用骨架欄位
+                    const skeletonTitle = chapter.chapter_title || chapter.brief_title || chapter.title || chapter.name || '待設定標題';
+                    const skeletonSummary = chapter.chapter_summary || chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                    const allocatedTasks = chapter.allocated_tasks || {};
+                    const foreshadowPlants = allocatedTasks.foreshadowing_plants || allocatedTasks.foreshadowing_plant || chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || [];
+                    const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || allocatedTasks.foreshadowing_payoff || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
+                    const turningPoints = allocatedTasks.turning_points || allocatedTasks.turning_point || chapter.turning_points || chapter.turning_point || [];
                     
-                    const emotionalToneText = getToneBadge(chapter.emotional_tone);
+                    const skeletonTime = chapter.time_setting || '';
+                    const skeletonTone = chapter.emotional_tone || '';
+                    const skeletonCliff = chapter.cliffhanger || '';
+                    const arrSkeletonChars = Array.isArray(chapter.characters_active) ? chapter.characters_active : (chapter.characters_active ? [chapter.characters_active] : []);
+                    const arrSkeletonEvents = Array.isArray(chapter.events) ? chapter.events : [];
                     
-                    if (isSkeletonChapter) {
-                        // 💡 修復：增加更多容錯邏輯，嘗試從多個可能的欄位取得標題/概要
-                        const skeletonTitle = chapter.chapter_title || chapter.brief_title || chapter.title || chapter.name || '待設定標題';
-                        const skeletonSummary = chapter.chapter_summary || chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
-                        const allocatedTasks = chapter.allocated_tasks || {};
-                        const foreshadowPlants = allocatedTasks.foreshadowing_plants || allocatedTasks.foreshadowing_plant || chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || [];
-                        const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || allocatedTasks.foreshadowing_payoff || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
-                        const turningPoints = allocatedTasks.turning_points || allocatedTasks.turning_point || chapter.turning_points || chapter.turning_point || [];
-                        
-                        const arrSkeletonPlants = Array.isArray(foreshadowPlants) ? foreshadowPlants : (foreshadowPlants ? [foreshadowPlants] : []);
-                        const arrSkeletonPayoffs = Array.isArray(foreshadowPayoffs) ? foreshadowPayoffs : (foreshadowPayoffs ? [foreshadowPayoffs] : []);
-                        const arrSkeletonTurns = Array.isArray(turningPoints) ? turningPoints : (turningPoints ? [turningPoints] : []);
-                        
-                        return `
-                        <div class="chapter-grid-item skeleton-chapter" data-chapter-index="${chapterIndex}" data-index="${globalIdx}" style="border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.01); border-radius: 6px; margin-bottom: 8px;">
-                            <div class="chapter-title-row" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                                <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 700;">🦴 第 ${chIdxInVol} 章</span>
-                                <h3 class="chapter-title" style="margin: 0; font-size: var(--font-2xs); font-weight: 600; color: var(--text-primary);">${skeletonTitle}</h3>
+                    const arrSkeletonPlants = Array.isArray(foreshadowPlants) ? foreshadowPlants : (foreshadowPlants ? [foreshadowPlants] : []);
+                    const arrSkeletonPayoffs = Array.isArray(foreshadowPayoffs) ? foreshadowPayoffs : (foreshadowPayoffs ? [foreshadowPayoffs] : []);
+                    const arrSkeletonTurns = Array.isArray(turningPoints) ? turningPoints : (turningPoints ? [turningPoints] : []);
+                    
+                    return `
+                    <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
+                        <div class="plot-chapter-item skeleton-chapter" data-chapter-index="${chapterIndex}" data-index="${globalIdx}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border-left: 3px solid var(--primary); opacity: 0.85; padding: 12px; background: rgba(255,255,255,0.015); border-radius: 6px; position: relative; transition: all 0.25s;">
+                            <div class="chapter-title-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="chapter-index-badge" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 2px 8px; border-radius: 4px; font-size: var(--font-2xs); font-weight: 700;">🦴 第 ${chIdxInVol} 章 (全局 ${chapterIndex})</span>
+                                    <h3 class="chapter-title" style="margin: 0; font-size: var(--font-sm); font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
+                                </div>
+                                <div class="chapter-card-actions" onclick="event.stopPropagation()">
+                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯骨架" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
+                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${chapterIndex})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
+                                </div>
                             </div>
-                            ${skeletonSummary ? `<p style="font-size: var(--font-2xs); color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5;">${skeletonSummary}</p>` : ''}
+                            
+                            ${skeletonSummary ? `<p style="font-size: var(--font-2xs); color: var(--text-secondary); margin: 0 0 8px 0; line-height: 1.5; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${skeletonSummary}</p>` : ''}
+                            
+                            ${skeletonTime || skeletonTone || skeletonCliff || arrSkeletonChars.length > 0 || arrSkeletonEvents.length > 0 ? `
+                            <div class="skeleton-details" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.05); font-size: var(--font-2xs);">
+                                ${skeletonTone ? `<div style="color: var(--text-secondary);">${getToneBadge(skeletonTone)}</div>` : ''}
+                                ${skeletonTime ? `<div style="color: var(--text-secondary);"><strong style="color:var(--primary);">🕒 時間:</strong> ${skeletonTime}</div>` : ''}
+                                ${arrSkeletonChars.length > 0 ? `<div style="color: var(--text-secondary);"><strong style="color:var(--primary);">👥 活躍角色:</strong> ${arrSkeletonChars.join(', ')}</div>` : ''}
+                                ${arrSkeletonEvents.length > 0 ? `
+                                <div style="color: var(--text-secondary);"><strong style="color:var(--primary);">🎬 事件:</strong>
+                                    <ul style="margin: 4px 0 0 20px; padding: 0; color: var(--text-muted);">
+                                        ${arrSkeletonEvents.map(e => `<li>${typeof e === 'object' ? `[${e.location || '未知'}] ${e.content || ''}` : e}</li>`).join('')}
+                                    </ul>
+                                </div>` : ''}
+                                ${skeletonCliff ? `<div style="color: var(--text-secondary);"><strong style="color:var(--primary);">❓ 懸念:</strong> ${skeletonCliff}</div>` : ''}
+                            </div>
+                            ` : ''}
                             
                             ${(arrSkeletonPlants.length > 0 || arrSkeletonPayoffs.length > 0 || arrSkeletonTurns.length > 0) ? `
-                            <div class="skeleton-tasks" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 8px;">
+                            <div class="skeleton-tasks" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 8px;">
                                 ${arrSkeletonPlants.map(seed => {
                                     const desc = getSeedDescription(seed, worldviewJs);
                                     const cleanId = String(seed).replace(/[^\d]/g, '');
@@ -1059,137 +1008,6 @@ export function renderPlotTab() {
                                     `;
                                 }).join('')}
                             </div>` : ''}
-                            
-                            <div class="chapter-actions" style="margin-top: 8px; text-align: right;">
-                                <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); if(${globalIdx} !== -1) { openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}]) } else { showToast('請先將此章節推進至 Stage 4 細化大綱後再行微觀編輯') }" style="opacity: 0.6; padding: 2px 6px;">✏️</button>
-                            </div>
-                        </div>`;
-                    }
-                    
-                    // 以下保持原本的高解像度微觀大綱卡片渲染 (Prose Mode) 不變
-                    const purposeText = chapter.purpose ? `
-                    <div class="chapter-grid-item">
-                        <div class="chapter-grid-label">🎯 敘事目的</div>
-                        <div class="chapter-grid-value" style="font-weight: 500; color: var(--text-primary);">${chapter.purpose}</div>
-                    </div>` : '';
-                    
-                    let eventsHtml = '';
-                    if (Array.isArray(chapter.events) && chapter.events.length > 0) {
-                        const displayedEvents = chapter.events.slice(0, 4);
-                        const remaining = chapter.events.length - 4;
-                        eventsHtml = `
-                        <div class="chapter-grid-item grid-col-span-2">
-                            <div class="chapter-grid-label">🎬 核心情節事件流</div>
-                            <div class="stepped-events" style="margin-top: 6px;">
-                                ${displayedEvents.map((e, eIdx) => {
-                                    let eventText = '';
-                                    if (typeof e === 'string') {
-                                        eventText = e;
-                                    } else if (typeof e === 'object' && e !== null) {
-                                        eventText = e.description || e.content || e.action || '';
-                                        if (!eventText) {
-                                            eventText = [e.scene, e.consequence].filter(Boolean).join(' ➔ ') || JSON.stringify(e);
-                                        }
-                                    }
-                                    return `
-                                        <div class="stepped-event-item" style="padding-left: 24px; position: relative; margin-bottom: 6px; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary);">
-                                            <span style="position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-size: var(--font-2xs); font-weight: 800;">${eIdx + 1}</span>
-                                            <span style="font-weight: 500; color: var(--text-primary);">${eventText}</span>
-                                        </div>
-                                    `;
-                                }).join('')}
-                                ${remaining > 0 ? `<div style="font-size: var(--font-2xs); color: var(--text-muted); padding-left: 24px; font-style: italic;">+ 還有 ${remaining} 個事件...</div>` : ''}
-                            </div>
-                        </div>`;
-                    }
-
-                    let foreshadowHtml = '';
-                    const microPlants = chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || (chapter.allocated_tasks && chapter.allocated_tasks.foreshadowing_plants) || [];
-                    const microPayoffs = chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || (chapter.allocated_tasks && chapter.allocated_tasks.foreshadowing_payoffs) || [];
-                    const microTurns = chapter.turning_points || chapter.turning_point || (chapter.allocated_tasks && chapter.allocated_tasks.turning_points) || [];
-
-                    const arrPlants = Array.isArray(microPlants) ? microPlants : (microPlants ? [microPlants] : []);
-                    const arrPayoffs = Array.isArray(microPayoffs) ? microPayoffs : (microPayoffs ? [microPayoffs] : []);
-                    const arrTurns = Array.isArray(microTurns) ? microTurns : (microTurns ? [microTurns] : []);
-
-                    if (arrPlants.length > 0 || arrPayoffs.length > 0 || arrTurns.length > 0) {
-                        foreshadowHtml = `
-                        <div class="chapter-grid-item grid-col-span-2" style="border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 10px; margin-top: 4px;">
-                            <div class="chapter-grid-label" style="margin-bottom: 6px;">🌱 伏筆與轉折任務</div>
-                            <div class="micro-tasks-list" style="display: flex; flex-direction: column; gap: 6px;">
-                                ${arrPlants.map(seed => {
-                                    const desc = getSeedDescription(seed, worldviewJs);
-                                    const cleanId = String(seed).replace(/[^\d]/g, '');
-                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
-                                    return `
-                                    <div class="task-item seed-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #c084fc; line-height: 1.4;">
-                                        <span style="flex-shrink: 0; font-size: 1.1em;">🌱</span>
-                                        <span>${idBadge}${desc}</span>
-                                    </div>
-                                    `;
-                                }).join('')}
-                                ${arrPayoffs.map(pay => {
-                                    const desc = getSeedDescription(pay, worldviewJs);
-                                    const cleanId = String(pay).replace(/[^\d]/g, '');
-                                    const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
-                                    return `
-                                    <div class="task-item payoff-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #fbbf24; line-height: 1.4;">
-                                        <span style="flex-shrink: 0; font-size: 1.1em;">💥</span>
-                                        <span>回收: ${idBadge}${desc}</span>
-                                    </div>
-                                    `;
-                                }).join('')}
-                                ${arrTurns.map(tp => {
-                                    const desc = getTurningPointDescription(tp, worldviewJs);
-                                    const cleanId = String(tp).replace(/[^\d]/g, '');
-                                    const idBadge = cleanId ? `<strong style="color:var(--status-unwritten);">[Turn-${cleanId}]</strong> ` : '';
-                                    return `
-                                    <div class="task-item turning-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #f87171; line-height: 1.4;">
-                                        <span style="flex-shrink: 0; font-size: 1.1em;">⚡</span>
-                                        <span>轉折: ${idBadge}${desc}</span>
-                                    </div>
-                                    `;
-                                }).join('')}
-                            </div>
-                        </div>`;
-                    }
-                    
-                    // 💡 修復：優先使用微觀大綱欄位，若無則回退到骨架欄位
-                    const skeletonTitle = chapter.title || chapter.chapter_title || chapter.brief_title || chapter.name || '待設定標題';
-                    const skeletonSummary = chapter.summary || chapter.chapter_summary || chapter.brief_summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
-                    const cliffhangerHtml = chapter.cliffhanger && chapter.cliffhanger.trim() ? `
-                        <div class="chapter-grid-item grid-col-span-2" style="background: rgba(239, 68, 68, 0.03); border-color: rgba(239, 68, 68, 0.15); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 4px;">
-                            <div class="chapter-grid-label" style="color: #ef4444;">⚠️ 本章懸念 (Cliffhanger)</div>
-                            <div class="chapter-grid-value" style="color: var(--text-primary); font-style: italic; font-weight: 500; margin-top: 4px;">🔥 ${chapter.cliffhanger}</div>
-                        </div>` : '';
-
-                    return `
-                    <div class="plot-timeline-node-wrapper" style="margin-bottom: 16px; position: relative;">
-                        <div class="plot-chapter-item" data-index="${globalIdx}" data-chapter-index="${chapterIndex}" onclick="event.stopPropagation(); if(${globalIdx} !== -1) openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" style="cursor: pointer; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.015); padding: 16px; position: relative; transition: all 0.25s;">
-                            <div class="plot-chapter-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <span class="chapter-number" style="font-weight: 800; color: var(--primary); font-size: var(--font-2xs); text-transform: uppercase; letter-spacing: 0.04em;">第 ${chapterIndex} 章</span>
-                                <div class="chapter-card-actions" onclick="event.stopPropagation()">
-                                    <button class="char-action-btn edit-btn" onclick="openChapterOutlineEditModal(${globalIdx}, window.state.currentNovelData.plot.chapters[${globalIdx}])" title="編輯大綱" style="background: none; border: none; cursor: pointer; padding: 4px;">✏️</button>
-                                    <button class="char-action-btn delete-btn" onclick="deletePlotChapter(${chapterIndex})" title="刪除章節" style="background: none; border: none; cursor: pointer; padding: 4px;">🗑️</button>
-                                </div>
-                            </div>
-                            <h3 class="chapter-title" style="margin: 4px 0 8px 0; font-size: var(--font-sm); font-weight: 700; color: var(--text-primary);">${skeletonTitle}</h3>
-                            <div class="chapter-summary" style="font-size: var(--font-2xs); line-height: 1.6; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed rgba(255,255,255,0.03);">${skeletonSummary}</div>
-                            <div class="chapter-layout-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 8px;">
-                                ${purposeText}
-                                <div class="chapter-grid-item">
-                                    <div class="chapter-grid-label">⏰ 時空座標</div>
-                                    <div class="chapter-grid-value">${chapter.time_setting || '待設定'}</div>
-                                </div>
-                                <div class="chapter-grid-item">
-                                    <div class="chapter-grid-label">📍 場景地點</div>
-                                    <div class="chapter-grid-value">${chapter.scene || chapter.scene_setting || '待設定'}</div>
-                                </div>
-                                ${emotionalToneText ? `<div class="chapter-grid-item grid-col-span-2" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;"><div class="chapter-grid-label" style="margin:0;">🎭 情緒基調</div><div>${emotionalToneText}</div></div>` : ''}
-                                ${eventsHtml}
-                                ${foreshadowHtml}
-                                ${cliffhangerHtml}
-                            </div>
                         </div>
                         <div class="timeline-insert-divider">
                             <button class="btn btn-secondary btn-xs insert-btn" onclick="event.stopPropagation(); openManualChapterInsertModal(${chapterIndex})" title="在此章後插入新章節大綱">➕ 插入新章節大綱</button>

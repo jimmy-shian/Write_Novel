@@ -11,7 +11,6 @@ from prompts.prompt_main import (
     VOLUMES_PLANNER_PROMPT,
     VOLUME_SKELETON_PROMPT,
     CHARACTER_DESIGNER_PROMPT,
-    PLOT_PLANNER_PROMPT,
     CHAPTER_WRITER_PROMPT,
     VOLUME_SKELETON_PROMPT_PLUS,
     CHARACTER_DESIGNER_PROMPT_PLUS
@@ -166,81 +165,30 @@ def extract_worldview_summary(worldview_text):
     try:
         parsed = json.loads(worldview_text)
         if isinstance(parsed, dict):
-            # 提取關鍵字段
             summary_parts = []
             
-            # 世界觀設定
-            worldview_content = parsed.get("worldview", "")
-            if worldview_content:
-                # 如果太長，截斷
-                if len(worldview_content) > MAX_WORLDVIEW_SUMMARY_LENGTH:
-                    worldview_content = worldview_content[:MAX_WORLDVIEW_SUMMARY_LENGTH] + "\n...（內容過長已截斷）"
-                summary_parts.append(f"【世界觀設定】\n{worldview_content}")
+            fields_to_extract = {
+                "theme": "【核心主題】",
+                "main_conflict": "【核心衝突】",
+                "worldview": "【世界觀設定】",
+                "macro_outline": "【整體故事大綱】",
+                "multi_act_structure": "【多幕結構】",
+                "progressive_character_plan": "【角色漸進規劃】"
+            }
             
-            # 整體故事大綱
-            macro_outline = parsed.get("macro_outline", "")
-            if macro_outline:
-                if len(macro_outline) > MAX_MACRO_OUTLINE_LENGTH:
-                    macro_outline = macro_outline[:MAX_MACRO_OUTLINE_LENGTH] + "\n...（內容過長已截斷）"
-                summary_parts.append(f"【整體故事大綱】\n{macro_outline}")
-            
-            # 如果有摘要則返回
+            for key, title in fields_to_extract.items():
+                val = parsed.get(key, "")
+                if val:
+                    if isinstance(val, (list, dict)):
+                        val = json.dumps(val, ensure_ascii=False, indent=2)
+                    summary_parts.append(f"{title}\n{val}")
+                
             if summary_parts:
                 return "\n\n".join(summary_parts)
     except json.JSONDecodeError:
-        # JSON 解析失敗，使用純文字解析
         pass
-    
-    # Fallback: 嘗試用文本方式提取
-    # 找 【世界觀設定】 和 【整體故事大綱】 區塊
-    result_parts = []
-    
-    lines = worldview_text.split('\n')
-    current_section = None
-    section_content = []
-    
-    for line in lines:
-        line = line.strip()
-        if '【世界觀設定】' in line:
-            # 保存前一個區塊
-            if current_section == 'worldview' and section_content:
-                content = '\n'.join(section_content)
-                if len(content) > MAX_WORLDVIEW_SUMMARY_LENGTH:
-                    content = content[:MAX_WORLDVIEW_SUMMARY_LENGTH] + "\n...（內容過長已截斷）"
-                result_parts.append(f"【世界觀設定】\n{content}")
-            current_section = 'worldview'
-            section_content = []
-        elif '【整體故事大綱】' in line:
-            if current_section == 'worldview' and section_content:
-                content = '\n'.join(section_content)
-                if len(content) > MAX_WORLDVIEW_SUMMARY_LENGTH:
-                    content = content[:MAX_WORLDVIEW_SUMMARY_LENGTH] + "\n...（內容過長已截斷）"
-                result_parts.append(f"【世界觀設定】\n{content}")
-            current_section = 'macro_outline'
-            section_content = []
-        elif current_section:
-            section_content.append(line)
-    
-    # 保存最後一個區塊
-    if current_section == 'worldview' and section_content:
-        content = '\n'.join(section_content)
-        if len(content) > MAX_WORLDVIEW_SUMMARY_LENGTH:
-            content = content[:MAX_WORLDVIEW_SUMMARY_LENGTH] + "\n...（內容過長已截斷）"
-        result_parts.append(f"【世界觀設定】\n{content}")
-    elif current_section == 'macro_outline' and section_content:
-        content = '\n'.join(section_content)
-        if len(content) > MAX_MACRO_OUTLINE_LENGTH:
-            content = content[:MAX_MACRO_OUTLINE_LENGTH] + "\n...（內容過長已截斷）"
-        result_parts.append(f"【整體故事大綱】\n{content}")
-    
-    if result_parts:
-        return "\n\n".join(result_parts)
-    
-    # 最終 fallback: 返回原始文本的前面部分
-    truncated = worldview_text[:MAX_WORLDVIEW_SUMMARY_LENGTH]
-    if len(worldview_text) > MAX_WORLDVIEW_SUMMARY_LENGTH:
-        truncated += "\n...（內容過長已截斷）"
-    return truncated
+        
+    return worldview_text
 
 def get_json_schema_prompt_snippet(schema_name):
     """取得 JSON 格式綱要說明字串，已徹底移除非法 Python set literal {...} 以防 JSON 序列化失敗。"""
@@ -249,7 +197,6 @@ def get_json_schema_prompt_snippet(schema_name):
         "character": agent_json.CHARACTERS_ROOT_SCHEMA,
         "volumes": {"volumes": [agent_json.VOLUME_SCHEMA]},
         "skeleton": {"volume_index": 1, "chapters_skeleton": [agent_json.CHAPTER_SKELETON_WITH_ALLOC_SCHEMA]},
-        "plot": agent_json.PLOT_ROOT_SCHEMA,
         "writer": agent_json.WRITER_OUTPUT_SCHEMA,
         "editor": agent_json.EDITOR_OUTPUT_SCHEMA
     }
@@ -347,7 +294,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 {worldview_text}
 
 【使用者大綱/要求】
-{user_prompt or "請根據完整世界觀，自行決定全書的卷數(建議10-15卷)、每卷標題、概要與章節數量設定。"}
+{user_prompt or "請根據完整世界觀，自行決定全書的卷數、每卷標題、概要與章節數量設定。"}
 
 請為本作品生成符合結構的篇卷 JSON 清單。
 """
@@ -408,45 +355,6 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
         {"role": "user", "content": user_content}
     ]
 
-def build_plot_planner_messages(worldview_text, skeleton_contexts, user_prompt, target_chapter_index=None):
-    """劇情大綱規劃師提示詞拼接"""
-    # 這裡將任務參數帶入大綱規劃
-    schema_snippet = get_json_schema_prompt_snippet("plot")
-    system_prompt = f"{PLOT_PLANNER_PROMPT.format(seens='對於骨架中指定的 ⚠️【硬性指定埋設伏筆】 與 ⚠️【硬性指定回收伏筆】，你必須在對應章節的 foreshadowing_plant 與 foreshadowing_payoff 欄位中完美承接並展開編織，不得遺漏！', turning_points='對於骨架中指定的 配合指定關鍵轉折點進展，你必須在對應章節的 turning_points 欄位中確實寫入，並在情節中給予充足的戲劇爆發張力！')}\n\n{schema_snippet}\n"
-    
-    # 💡 強力引導大綱 Planner 閱讀骨架中的 allocated_tasks 任務分配，並硬性寫出括弧標記以通過後端剛性檢查
-    system_prompt += """
-⚠️【核心剛性指令：伏筆與轉折任務對齊】
-請仔細檢查輸入的「當前待規劃大綱目標章節」中所附帶的「伏筆任務安排 (allocated_tasks)」，不論它出現在骨架中的哪一個欄位：
-1. 如果該章有指派 of `foreshadowing_plants`（埋設伏筆）任務，你**必須**在該章大綱的情節事件中詳細編織伏筆的埋設場景，並原封不動地在輸出 JSON 的 `foreshadowing_plant` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Seed-X] 或 [伏筆 X] 以利識別，但非硬性強制格式）
-2. 如果該章有指派 of `foreshadowing_payoffs`（回收伏筆）任務，你**必須**在該章大綱的情節事件中編織對應伏筆的因果回收情節，並原封不動地在輸出 JSON 的 `foreshadowing_payoff` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Seed-X] 或 [伏筆 X] 以利識別，但非硬性強制格式）
-3. 如果該章有指派 of `turning_points`（關鍵轉折）任務，你**必須**在該章大綱的情節事件中推動並爆發該轉折點，並原封不動地在輸出 JSON 的 `turning_points` 陣列欄位中登記！（提示：在大綱描述中可視需要標註如 [Turn-Y] 或 [轉折點 Y] 以利識別，但非硬性強制格式）
-這是後端 Python 系統與總監審查的任務對齊紅線，絕對不允許漏掉任何一項指派的線索任務！
-
-4. ⚠️【🔥 絕對禁止重複越界與情節打轉】：你只能在骨架中「明確指派」了該伏筆/轉折任務的特定章節內，進行該任務的觸發與登記！絕對禁止在相鄰或後續的章節大綱（例如沒有指派該轉折的第 247、248 章）中，重複描述或聲稱正在呈現已在前文爆發過的轉折點觸發過程（例如：重複描述全城魔法突破臨界值、魔法潮汐失控暴走）。後續章節必須緊接前文情節「向後推進」，只描述該事件產生的「後續影響/餘波」或「當前章節骨架規定的全新情節」，絕對不可複製貼上、原地打轉或重寫前一章的爆發情節！
-"""
-    
-    if target_chapter_index is not None:
-        final_instruction = f"請只輸出第 {target_chapter_index} 章的詳細大綱 JSON，回傳 chapters 陣列但其中只能包含第 {target_chapter_index} 章，絕對不要生成其他章節。"
-    else:
-        final_instruction = "請為所有章節生成符合結構的詳細大綱 JSON。"
-
-    user_content = f"""【世界觀背景】
-{worldview_text}
-
-【全書簡易章節骨架及前後章上下文對照表】
-{skeleton_contexts}
-
-【使用者微調/額外要求】
-{user_prompt or "請根據簡易骨架大綱，為全書擴充並生成高品質的詳細大綱 JSON 設定。"}
-
-{final_instruction}
-"""
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
-    ]
-
 def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index):
     """正文作家寫作提示詞拼接"""
     system_prompt = CHAPTER_WRITER_PROMPT.format(writing_style=custom_style)
@@ -460,14 +368,14 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 【角色 Bible 聖經】(基本設定)
 {json.dumps(characters_bible_filtered, ensure_ascii=False, indent=2)}
 
-【當前章節 (第 {chapter_index} 章) 詳細大綱】
+【當前章節 (第 {chapter_index} 章) 大綱】
 {json.dumps(current_outline, ensure_ascii=False, indent=2)}
 
 {surrounding_plot}
 {vol_outline_context}
 {clue_payoff_details}
 
-請根據以上豐富的上下文細節，展開本章正文寫作，字數約 2000-3000 字。
+請根據以上豐富的上下文細節，展開本章正文寫作，字數適中。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -593,7 +501,6 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
     - characters: 完整角色列表
     - volumes: 完整卷列表 + 世界觀的 macro_outline
     - volume_skeleton: 完整骨架(每2卷一組) + 世界觀的 macro_outline
-    - plot: 前後各一章的內容 + 世界觀的 macro_outline
     - writer: 該章的完整內容(正文+大綱+角色聖經+伏筆)
     - editor: 該章的完整潤色內容
     """
@@ -715,36 +622,7 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
 請進行深度評估，決定下一步行動！
 """
     
-    elif current_stage == "plot":
-        # 詳細大綱階段：前後各一章的內容 + 世界觀的 macro_outline
-        system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前詳細大綱的創作質量，並決定下一步的最佳動作。
- 
-【審查原則與重要概念澄清】
-1. 當前階段是「current_stage = {current_stage}」（大綱規劃師，用於審核從『骨架大綱』細化展開成『詳細章節大綱』的成果）。
-2. ⚠️ 請分清「骨架大綱 (Skeleton Outline)」與「詳細大綱 (Detailed Outline)」的區別，避免與校驗報告產生誤解：
-   - 骨架大綱：僅包含 chapter_index、brief_title、brief_summary (或 chapter_title, chapter_summary) 以及 allocated_tasks 欄位，缺少具體的 events、scenes、cliffhanger 或 characters_active 等詳細情節大綱欄位。
-   - 詳細大綱：必須包含 events (場景事件流)、scenes (細節場景)、characters_active (活躍角色)、cliffhanger (章末懸念) 等深入細緻情節欄位。
-   - 如果你看到的章節大綱清單只有標題、摘要與分配任務，代表它【只是骨架大綱，並非詳細大綱】。
-3. ⚠️ 【剛性放行與流轉判斷規則 - 🔥 絕對紅線】：
-   - 你**必須且只能**以結尾的《系統底層剛性校驗報告》中「詳細章節大綱層」之進度與狀態作為你做決策的唯一依據！
-   - **流轉規則 A (大綱未全部完成時)**：若底層校驗報告中，詳細大綱層之狀態為「❌ 未完成」（例如：進度為 1/660），此時只要當前已細化的大綱品質合格，你**必須**輸出 `"action": "CONTINUE", "target": "plot"`，且必須將 `"chapter_index"` 設為報告中指出的 `👉 【下一章應生成大綱之目標 chapter_index】` 的整數值（例如：2）！**絕對禁止**在此時將 target 設為 "writer" 或其他值！
-   - **流轉規則 B (大綱已全部完成時)**：若底層校驗報告中，詳細大綱層之狀態已變為「✅ 已完成」，此時你**必須**輸出 `"action": "CONTINUE", "target": "writer"`，且將 `"chapter_index"` 設為 1，正式將專案推進至正文寫作階段！
-4. ⚠️ 【剛性指標直接讀取規則】：由於上下文長度限制，傳遞給你的大綱數據只是截取的部分採樣，絕對禁止你試圖透過統計或解析傳入的大綱字串來自行判斷章節是否齊全或連續！所有章節齊全性、連續性之事實一律以 Python 剛性校驗報告為準！
-5. ⚠️【語意寬容放行提示（🔥重要）】：即使大綱中沒有硬性寫出 [Seed-X] 或 [Turn-Y] 這種字面關鍵字標記，只要故事的「情節與敘事描述」中確實包含且符合該伏筆或轉折點的正確任務設定，此時您也應判定為「對齊正確並准予通過審查」，請直接予以放行（輸出 CONTINUE），不要僅因字面標籤不一致而退回重寫！
- 
-{stage_criteria}
- 
-{DIRECTOR_COMMON_FOOTER}
-"""
-        user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
-{macro_outline}
- 
-【當前已細化大綱及前後章上下文】
-{plot_text}
- 
-請進行深度評估，決定下一步行動！
-"""
-    
+
     elif current_stage == "writer":
         # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆+後三章伏筆回收預告)
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作質量，並決定下一步的最佳動作。
@@ -819,7 +697,7 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
 - 世界觀設定：{worldview_text[:1500] if worldview_text else "（空）"}
 - 角色設定：{characters_text[:1500] if characters_text else "（空）"}
 - 大綱設定：{plot_text[:1500] if plot_text else "（空）"}
-- 正文：{written_chapters_text[:1500] if written_chapters_text else "（空）"}
+- 正文：{written_chapters_text if written_chapters_text else "（空）"}
  
 請進行深度評估，決定下一步行動！
 """
@@ -933,29 +811,3 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
         {"role": "user", "content": user_content}
     ]
 
-def build_incremental_plot_planner_messages(worldview_text, plot_text, insert_after_index, user_hint):
-    """增量大綱更新提示詞拼接"""
-    schema_snippet = get_json_schema_prompt_snippet("plot")
-    system_prompt = f"""你是一位精準的劇情大綱增量修正師。請根據用戶的要求，在指定位置增量插入或修改章節大綱。
-你只需要回傳【本次新增/修改的章節大綱】列表即可，後端會自動完成替換與合併。
-
-{schema_snippet}
-"""
-    user_content = f"""【世界觀背景】
-{worldview_text}
-
-【現有詳細章節大綱】
-{plot_text}
-
-【插入位置】
-- 插入在第 {insert_after_index} 章之後
-
-【使用者修改要求 (user_hint)】
-{user_hint}
-
-請輸出新增的章節大綱 JSON：
-"""
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
-    ]

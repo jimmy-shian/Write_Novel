@@ -13,6 +13,20 @@ import { requestAPI } from './api.js';
 export async function loadSettings() {
     try {
         state.settingsData = await requestAPI('/api/settings');
+        
+        // Dynamically populate model dropdown
+        if (state.settingsData._modelsConfig && el.settingPresetModel) {
+            const selectEl = el.settingPresetModel;
+            selectEl.innerHTML = '<option value="">-- 手動輸入或選擇預設 --</option>';
+            const configObj = state.settingsData._modelsConfig;
+            for (const [id, data] of Object.entries(configObj)) {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = data.name || data.model;
+                selectEl.appendChild(opt);
+            }
+        }
+        
         loadAgentConfigFields(state.activeSettingAgent);
     } catch (e) {
         console.error("Failed to load settings");
@@ -37,7 +51,10 @@ export function loadAgentConfigFields(agentName) {
     
     // Auto-select match preset if it exists
     if (el.settingPresetModel) {
-        const presetModels = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "mistralai/mistral-small-4-119b-2603", "stepfun-ai/step-3.5-flash", "google/gemma-3n-e4b-it", "qwen/qwen3.5-122b-a10b"];
+        let presetModels = [];
+        if (state.settingsData._modelsConfig) {
+            presetModels = Object.keys(state.settingsData._modelsConfig);
+        }
         if (config.model && presetModels.includes(config.model)) {
             el.settingPresetModel.value = config.model;
         } else {

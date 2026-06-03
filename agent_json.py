@@ -63,21 +63,16 @@ WORLDVIEW_APPROVAL_CRITERIA = {
             "description": "宏觀大綱需完整描述故事走向"
         },
         "multi_act_structure": {
-            "min_acts": 5,
-            "max_acts": 10,
-            "description": "多幕結構需5-10幕，每幕需有明確的起承轉合功能與內容描述"
+            "description": "多幕結構需多個幕，每幕需有明確的起承轉合功能與內容描述"
         },
         "progressive_character_plan": {
-            "min_waves": 5,
-            "description": "角色漸進規劃需5波以上，反映角色的階段性登場與成長"
+            "description": "角色漸進規劃需多波以上，反映角色的階段性登場與成長"
         },
         "foreshadowing_seeds": {
-            "min_count": 30,
-            "description": "伏筆種子需至少30個，每個需標明早期埋設點、中期干擾、后期收束"
+            "description": "伏筆種子需數十個，每個需標明早期埋設點、中期干擾、后期收束"
         },
         "key_turning_points": {
-            "min_count": 40,
-            "description": "關鍵轉折點需至少40個，每個需標明觸發條件與全局影響"
+            "description": "關鍵轉折點需數十個，每個需標明觸發條件與全局影響"
         },
         "consistency": {
             "description": "各欄位間需邏輯一致，伏筆與轉折點需相互呼應"
@@ -130,10 +125,7 @@ CHARACTER_APPROVAL_CRITERIA = {
             "description": "name 欄位必須是角色的具體姓名/代號，絕對禁止使用組織職位或社會身份作為姓名"
         },
         "character_count": {
-            "min_protagonist": 1,
-            "min_antagonist": 1,
-            "min_total": 5,
-            "description": "至少需要1位主角、1位反派/宿敵、總計5位以上角色"
+            "description": "需要主角、反派/宿敵、以及多個以上的角色"
         },
         "psychological_depth": {
             "want_min_length": 20,
@@ -150,8 +142,7 @@ CHARACTER_APPROVAL_CRITERIA = {
             "description": "說話風格需具體描述口頭禪、語氣特徵"
         },
         "relationships": {
-            "min_relationships": 2,
-            "description": "每位角色需至少有2段明確的關係設定，含type與evolution"
+            "description": "每位角色需有多段明確的關係設定，含type與evolution"
         },
         "entry_phases": {
             "description": "角色登場階段需明確標註，分布需配合multi_act_structure的波次安排"
@@ -189,9 +180,7 @@ VOLUME_APPROVAL_CRITERIA = {
     "display_name": "篇卷規劃師",
     "criteria": {
         "volume_count": {
-            "min_count": 10,
-            "max_count": 15,
-            "description": "卷數建議10-15卷，需與世界觀的多幕結構呼應"
+            "description": "卷數建議數個篇卷，需與世界觀的多幕結構呼應"
         },
         "required_fields": {
             "per_volume": ["volume_index", "title", "summary", "chapter_count", "factions", "time_timeline", "sequence_context", "applicable_rules"],
@@ -207,9 +196,7 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷概要需描述核心情節與高潮點"
         },
         "chapter_count": {
-            "min_per_volume": 50,
-            "max_per_volume": 200,
-            "description": "每卷章節數需50-200章，保持容量得當"
+            "description": "每卷章節數需適中，保持容量得當"
         },
         "structure_coherence": {
             "description": "卷順序需連續，不可遺漏或斷檔；相鄰卷間需有情節銜接"
@@ -224,7 +211,7 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷需有明確功能定位（起、承、轉、合），卷尾需有適當的高潮或懸念"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀設定與角色清單，生成全書的篇卷結構，包括卷數（建議 10-15 卷）、每卷標題、概要，以及各卷的關鍵事件轉折與主要角色登場安排。",
+    "auto_regenerate_hint": "請根據世界觀設定與角色清單，生成全書的篇卷結構，包括卷數（建議多個篇卷）、每卷標題、概要，以及各卷的關鍵事件轉折與主要角色登場安排。",
     "patch_hint": "請只生成第 {idx} 卷的內容，傳入 hint 指示。"
 }
 
@@ -236,13 +223,37 @@ VOLUME_APPROVAL_CRITERIA = {
 CHAPTER_SKELETON_SCHEMA = {
     "chapter_index": 1,
     "chapter_title": "",
-    "chapter_summary": ""
+    "chapter_summary": "",
+    "time_setting": "",
+    "events": [
+        {
+            "scene_index": 1,
+            "location": "",
+            "characters": [],
+            "content": ""
+        }
+    ],
+    "characters_active": [],
+    "emotional_tone": "",
+    "cliffhanger": ""
 }
 
 CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     "chapter_index": 1,
     "chapter_title": "",
     "chapter_summary": "",
+    "time_setting": "",
+    "events": [
+        {
+            "scene_index": 1,
+            "location": "",
+            "characters": [],
+            "content": ""
+        }
+    ],
+    "characters_active": [],
+    "emotional_tone": "",
+    "cliffhanger": "",
     "volume_index": 1,
     "volume_title": "",
     "allocated_tasks": {
@@ -262,88 +273,20 @@ SKELETON_APPROVAL_CRITERIA = {
         "chapter_completeness": {
             "description": "該卷所有章節骨架必須完整生成，不可缺漏任何一章"
         },
-        "chapter_title": {
-            "min_length": 3,
-            "description": "每章標題需精煉且富有文采"
-        },
-        "chapter_summary": {
-            "min_length": 50,
-            "max_length": 100,
-            "description": "每章摘要需描述本章核心情節里程碑"
-        },
-        "foreshadowing_allocation": {
-            "min_plants": 1,
-            "description": "每章需合理分配伏筆埋設任務，新卷需有伏筆種植"
-        },
-        "turning_point_placement": {
-            "description": "關鍵轉折點需在適當位置，卷尾/高潮章需有轉折安排"
-        },
-        "chapter_sequence": {
-            "description": "章節序號需連續，不可中斷或跳號"
-        },
-        "allocated_tasks_structure": {
-            "foreshadowing_plants": "array of strings",
-            "foreshadowing_payoffs": "array of strings",
-            "turning_points": "array of strings",
-            "description": "每章的allocated_tasks三個陣列需存在，可為空陣列"
-        },
-        "character_exclusion": {
-            "description": "【骨架極簡原則】骨架階段只需專注於基本劇情走向與里程碑進展，絕對不需要管角色登場、角色活躍或人物分配等細節。這些人設細節應留到詳細大綱階段處理。"
-        }
-    },
-    "auto_regenerate_hint": "請根據世界觀與 前後各1卷的大綱，重新生成完整的當前卷骨架。"
-}
-
-
-# =============================================================================
-# 5. plot (大綱規劃師 Plot Planner Agent)
-# =============================================================================
-
-PLOT_CHAPTER_SCHEMA = {
-    "chapter_index": 1,
-    "chapter_title": "",
-    "chapter_summary": "",
-    "scenes": [],
-    "allocated_tasks": {
-        "foreshadowing_plants": [],
-        "foreshadowing_payoffs": [],
-        "turning_points": []
-    }
-}
-
-PLOT_SCENE_SCHEMA = {
-    "scene_index": 1,
-    "location": "",
-    "characters": [],
-    "content": ""
-}
-
-PLOT_ROOT_SCHEMA = {
-    "chapters": []
-}
-
-# 大綱通過標準（總監評判用）
-PLOT_APPROVAL_CRITERIA = {
-    "name": "plot",
-    "display_name": "大綱規劃師",
-    "criteria": {
-        "chapter_completeness": {
-            "description": "所有章節大綱必須完整生成，不可缺漏"
-        },
         "chapter_structure": {
-            "required_fields": ["chapter_index", "title", "chapter_summary", "events", "foreshadowing_plant", "foreshadowing_payoff", "turning_points", "characters_active", "emotional_tone", "cliffhanger"],
-            "description": "每章需具備完整結構，所有欄位不可為空"
+            "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "events", "time_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
+            "description": "每章需具備完整結構，所有欄位不可為空，且 events、allocated_tasks 需包含具體詳細大綱內容"
         },
         "time_setting": {
-            "description": "每章需有清晰的時間設定與與前章的時間跨度"
+            "description": "每章需有清晰的時間設定與前章的時間跨度"
         },
         "events": {
             "min_scenes": 0,
             "max_scenes": 4,
-            "description": "每章需包含0-4個具體場景事件，描述動作衝突與後果"
+            "description": "每章需包含0-4個具體場景事件，描述動作衝突與後果，且 events 內結構必須包含 scene_index, location, characters, content"
         },
         "foreshadowing_sync": {
-            "description": "伏筆種植(foreshadowing_plant)與回收(foreshadowing_payoff)需與骨架分配的allocated_tasks一致"
+            "description": "伏筆種植(foreshadowing_plants)與回收(foreshadowing_payoffs)需與骨架分配的allocated_tasks一致"
         },
         "turning_points_alignment": {
             "description": "turning_points需與世界觀設定的key_turning_points呼應"
@@ -358,11 +301,12 @@ PLOT_APPROVAL_CRITERIA = {
             "description": "每章需有明確的敘事目的，拒絕流水帳"
         },
         "character_presence": {
-            "description": "【角色出場深度規劃】詳細大綱階段必須詳細規劃並產生詳細內容，且要確實安排角色活躍場景以滿足全局人設分佈（例如：確保核心主角與關鍵配角活躍於適當的篇卷與情節，在情節中明確展示角色出場與重要戲劇張力）。"
+            "description": "【角色出場深度規劃】詳細骨架大綱階段必須詳細規劃並產生詳細內容，且要確實安排角色活躍場景以滿足全局人設分佈（例如：確保核心主角與關鍵配角活躍於適當的篇卷與情節，在情節中明確展示角色出場與重要戲劇張力）。"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與 前後各1章的骨架大綱，重新生成完整的當前大綱。"
+    "auto_regenerate_hint": "請根據世界觀與 前後各1章的骨架大綱，重新生成完整的當前卷骨架。"
 }
+
 
 
 # =============================================================================
@@ -420,7 +364,7 @@ WRITER_APPROVAL_CRITERIA = {
             "description": "章末懸念需有效鉤住讀者"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與 前後各1卷的詳細大綱，以及後三章即將收回的伏筆內容，重新生成正文。"
+    "auto_regenerate_hint": "請根據世界觀與前後各1卷的大綱，以及後三章即將收回的伏筆內容，重新生成正文。"
 }
 
 
@@ -479,7 +423,6 @@ APPROVAL_CRITERIA_REGISTRY = {
     "characters": CHARACTER_APPROVAL_CRITERIA,
     "volumes": VOLUME_APPROVAL_CRITERIA,
     "volume_skeleton": SKELETON_APPROVAL_CRITERIA,
-    "plot": PLOT_APPROVAL_CRITERIA,
     "writer": WRITER_APPROVAL_CRITERIA,
     "editor": EDITOR_APPROVAL_CRITERIA,
 }
@@ -490,7 +433,7 @@ def get_approval_criteria(stage_name):
     取得指定階段的通過標準
     
     Args:
-        stage_name: 階段名稱 (worldview, characters, volumes, volume_skeleton, plot, writer, editor)
+        stage_name: 階段名稱 (worldview, characters, volumes, volume_skeleton, writer, editor)
     
     Returns:
         通過標準dict，若無對應階段則返回None
@@ -523,9 +466,9 @@ def format_criteria_for_prompt(stage_name):
         else:
             lines.append(f"- **{key}**: {value}")
     
-    if "auto_regenerate_hint" in criteria:
-        lines.append(f"\n### 重新生成提示：")
-        lines.append(f"{criteria['auto_regenerate_hint']}")
+    # if "auto_regenerate_hint" in criteria:
+    #     lines.append(f"\n### 重新生成提示：")
+    #     lines.append(f"{criteria['auto_regenerate_hint']}")
     
     return "\n".join(lines)
 
@@ -558,17 +501,6 @@ def get_chapter_skeleton_default(chapter_index=1):
     skel["chapter_index"] = chapter_index
     return skel
 
-
-def get_plot_chapter_default(chapter_index=1):
-    """取得大綱章節預設結構"""
-    ch = PLOT_CHAPTER_SCHEMA.copy()
-    ch["chapter_index"] = chapter_index
-    return ch
-
-
-def create_plot_structure(chapters_list):
-    """建立大綱結構"""
-    return {"chapters": chapters_list}
 
 
 def create_characters_structure(characters_list):

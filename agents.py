@@ -21,7 +21,6 @@ from prompts.prompt_builder import (
     build_character_designer_messages,
     build_volumes_planner_messages,
     build_volume_skeleton_planner_messages,
-    build_plot_planner_messages,
     build_chapter_writer_messages,
     build_editor_agent_messages,
     build_copilot_chat_messages,
@@ -29,7 +28,6 @@ from prompts.prompt_builder import (
     build_director_decision_help_messages,
     build_incremental_architect_messages,
     build_incremental_character_messages,
-    build_incremental_plot_planner_messages,
     extract_worldview_summary
 )
 
@@ -334,7 +332,7 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
 【現有已登場角色清單 (避免人設重複或名稱衝突)】
 {existing_names_str}
 
-【新角色【{new_char_name}】登場的第 {chapter_outline.get('chapter_index')} 章詳細大綱】
+【新角色【{new_char_name}】登場的第 {chapter_outline.get('chapter_index')} 章大綱】
 {json.dumps(chapter_outline, ensure_ascii=False, indent=2)}
 
 請為新角色【{new_char_name}】生成高品質的完整角色 JSON 卡片。
@@ -345,112 +343,7 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
     ]
 
 
-# =============================================================================
-# 5. Plot Planner Agent (Detailed Outline)
-# =============================================================================
-def collect_referenced_indices(chapters_list):
-    """
-    從前1、後1及當前大綱或骨架中，動態收集所有被關聯/分配的伏筆與轉折點索引 (1-based)。
-    """
-    seed_indices = set()
-    turn_indices = set()
-    
-    for ch in chapters_list:
-        if not isinstance(ch, dict):
-            continue
-        tasks = ch.get("allocated_tasks", {}) or {}
-        if not isinstance(tasks, dict):
-            if isinstance(tasks, str):
-                try:
-                    tasks = json.loads(tasks)
-                except:
-                    tasks = {}
-            else:
-                tasks = {}
-                
-        # 收集 foreshadowing_plants 和 foreshadowing_payoffs
-        for key in ["foreshadowing_plants", "foreshadowing_payoffs"]:
-            items = tasks.get(key) or []
-            if not isinstance(items, list):
-                items = [items]
-            for item in items:
-                if isinstance(item, int):
-                    seed_indices.add(item)
-                elif isinstance(item, str):
-                    match = re.search(r'(?:Seed|伏筆)?[-_\s]*(\d+)', item, re.IGNORECASE)
-                    if match:
-                        seed_indices.add(int(match.group(1)))
-                        
-        # 收集 turning_points
-        turns = tasks.get("turning_points") or []
-        if not isinstance(turns, list):
-            turns = [turns]
-        for item in turns:
-            if isinstance(item, int):
-                turn_indices.add(item)
-            elif isinstance(item, str):
-                match = re.search(r'(?:Turn|轉折點)?[-_\s]*(\d+)', item, re.IGNORECASE)
-                if match:
-                    turn_indices.add(int(match.group(1)))
-                    
-    return seed_indices, turn_indices
 
-
-def filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices):
-    """
-    解析世界觀文本 JSON，僅保留被指定/分配的伏筆種子與轉折點，其餘過濾移除，避免干擾 LLM。
-    """
-    cleaned = worldview_text.strip()
-    if "<think>" in cleaned:
-        cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
-    
-    # 清理 markdown code blocks
-    if "```" in cleaned:
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.DOTALL)
-        if json_match:
-            cleaned = json_match.group(1).strip()
-        else:
-            first_brace = cleaned.find("{")
-            last_brace = cleaned.rfind("}")
-            if first_brace != -1 and last_brace != -1:
-                cleaned = cleaned[first_brace:last_brace + 1].strip()
-                
-    try:
-        parsed = json.loads(cleaned)
-        if isinstance(parsed, dict):
-            # 篩選 foreshadowing_seeds
-            seeds = parsed.get("foreshadowing_seeds", [])
-            filtered_seeds = []
-            for idx, seed in enumerate(seeds):
-                if (idx + 1) in seed_indices:
-                    filtered_seeds.append(seed)
-            parsed["foreshadowing_seeds"] = filtered_seeds
-            
-            # 篩選 key_turning_points
-            turns = parsed.get("key_turning_points", [])
-            filtered_turns = []
-            for idx, turn in enumerate(turns):
-                if (idx + 1) in turn_indices:
-                    filtered_turns.append(turn)
-            parsed["key_turning_points"] = filtered_turns
-            
-            from db import _convert_obj_to_traditional
-            parsed = _convert_obj_to_traditional(parsed)
-            return json.dumps(parsed, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[WARN] filter_worldview_seeds_and_turns failed: {e}")
-        
-    return worldview_text
-
-
-def _get_plot_review_batch_size():
-    """Director plot review cadence. Defaults to 3 chapters per review batch."""
-    raw = os.getenv("PLOT_REVIEW_BATCH_SIZE", "3")
-    try:
-        val = int(raw)
-        return val if val > 0 else 3
-    except Exception:
-        return 3
 
 
 def _normalize_chapter_list(chapters):
@@ -469,11 +362,6 @@ def _normalize_chapter_list(chapters):
     return normalized
 
 
-def _is_detailed_outline(chapter):
-    events = chapter.get("events") or chapter.get("scenes")
-    return isinstance(events, list) and len(events) > 0
-
-
 def _collect_volume_skeleton_chapters(novel_id):
     skeleton_chapters = []
     for vol in db.get_volumes(novel_id):
@@ -481,214 +369,6 @@ def _collect_volume_skeleton_chapters(novel_id):
         if isinstance(ch_list, list):
             skeleton_chapters.extend(ch_list)
     return _normalize_chapter_list(skeleton_chapters)
-
-
-def _skeleton_snapshot(chapter):
-    keep_keys = [
-        "chapter_index", "chapter_title", "brief_title", "title", "name",
-        "chapter_summary", "brief_summary", "summary",
-        "allocated_tasks", "time_setting", "time_span", "scene", "location"
-    ]
-    return {k: chapter.get(k) for k in keep_keys if k in chapter and chapter.get(k) not in (None, "")}
-
-
-def run_plot_planner(novel_id, chapter_index=None, user_prompt=None, planner_directive=None):
-    """
-    Detailed Outline Stage:
-    Generate detailed chapter outline based on:
-    - worldview summary (or complete worldview if needed)
-    - skeleton outline of preceding & succeeding 1 chapters
-    """
-    wb = db.get_latest_worldbuilding(novel_id)
-    # 使用世界觀摘要
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
-    print("worldview_text:", len(worldview_text), worldview_text[:100] + "...")
-    # Retrieve all volume skeletons to build continuous chapter contexts
-    all_vols = db.get_volumes(novel_id)
-    all_skeleton_chapters = []
-    for v in all_vols:
-        if v.get("chapters_outline"):
-            ch_list = v["chapters_outline"]
-            if isinstance(ch_list, list):
-                all_skeleton_chapters.extend(ch_list)
-                
-    # 💡 核心修復：標準化所有骨架章節的 chapter_index，避免因鍵名不一致導致前後章節比對錯誤
-    normalized_skeleton_chapters = []
-    for idx, ch in enumerate(all_skeleton_chapters):
-        if not isinstance(ch, dict):
-            continue
-        try:
-            raw_idx = ch.get("chapter_index") or ch.get("chapter") or ch.get("chapter_number") or ch.get("index") or ch.get("id") or (idx + 1)
-            ch["chapter_index"] = int(raw_idx)
-        except:
-            ch["chapter_index"] = idx + 1
-        normalized_skeleton_chapters.append(ch)
-            
-    normalized_skeleton_chapters.sort(key=lambda x: x["chapter_index"])
-    
-    if not normalized_skeleton_chapters:
-        normalized_skeleton_chapters = [{"chapter_index": 1, "brief_title": "開篇第一章", "brief_summary": "主角登場與初始世界展現"}]
-        
-    skeleton_context_list = []
-    if chapter_index is not None:
-        try:
-            chapter_index = int(chapter_index)
-        except:
-            chapter_index = None
-            
-    if chapter_index is not None:
-        # 僅篩選當前章節、前一章與後一章進行精細大綱設計，避免大綱資訊膨脹
-        target_indices = {chapter_index - 1, chapter_index, chapter_index + 1}
-        filtered_chapters = [ch for ch in normalized_skeleton_chapters if ch.get("chapter_index") in target_indices]
-        
-        # 💡 核心修復：僅將前1、後1及當前章節關聯的伏筆與轉折過濾保留在 worldview 中，排除其餘無關數據以精簡 context
-        seed_indices, turn_indices = collect_referenced_indices(filtered_chapters)
-        worldview_text = filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
-        
-        for ch in filtered_chapters:
-            c_idx = ch["chapter_index"]
-            role_label = ""
-            if c_idx == chapter_index - 1:
-                role_label = "【前一章骨架參考】"
-            elif c_idx == chapter_index + 1:
-                role_label = "【後一章骨架參考】"
-            else:
-                role_label = "【當前待規劃大綱目標章節】"
-                
-            title = ch.get("chapter_title") or ch.get("brief_title") or ch.get("title") or ch.get("name") or ""
-            summary = ch.get("chapter_summary") or ch.get("brief_summary") or ch.get("summary") or ""
-            wv_item = f"{role_label} 第 {c_idx} 章：【{title}】\n  - 本章骨架概要：{summary}\n"
-            wv_item += f"  - 伏筆任務安排：{json.dumps(ch.get('allocated_tasks', {}), ensure_ascii=False)}\n"
-            skeleton_context_list.append(wv_item)
-    else:
-        for ch in normalized_skeleton_chapters:
-            c_idx = ch["chapter_index"]
-            title = ch.get("chapter_title") or ch.get("brief_title") or ch.get("title") or ch.get("name") or ""
-            summary = ch.get("chapter_summary") or ch.get("brief_summary") or ch.get("summary") or ""
-            wv_item = f"第 {c_idx} 章：【{title}】\n  - 本章骨架概要：{summary}\n"
-            wv_item += f"  - 伏筆任務安排：{json.dumps(ch.get('allocated_tasks', {}), ensure_ascii=False)}\n"
-            skeleton_context_list.append(wv_item)
-            
-    skeleton_contexts = "\n\n".join(skeleton_context_list)
-    
-    # 建立動態精確要求 prompt
-    effective_user_prompt = user_prompt
-    if chapter_index is not None:
-        target_ch = next((ch for ch in normalized_skeleton_chapters if ch.get("chapter_index") == chapter_index), None)
-        brief_title = ""
-        brief_summary = ""
-        if target_ch:
-            brief_title = target_ch.get("chapter_title") or target_ch.get("brief_title") or target_ch.get("title") or target_ch.get("name") or ""
-            brief_summary = target_ch.get("chapter_summary") or target_ch.get("brief_summary") or target_ch.get("summary") or ""
-        
-        chapter_instructions = f"\n\n👉 【請特別注意】：此時你只需且必須為「第 {chapter_index} 章」生成詳細的情節大綱！\n第 {chapter_index} 章暫定標題為：【{brief_title}】，簡易骨架大綱為：{brief_summary}。\n請仔細查看前一章和後一章的骨架上下文，專門為第 {chapter_index} 章生成符合結構的詳細大綱 JSON 欄位（例如 title, chapter_index, events, cliffhanger, characters_active, purpose, time_setting, time_span, foreshadowing_plant, foreshadowing_payoff, turning_points 等）。"
-        if user_prompt:
-            effective_user_prompt = user_prompt + chapter_instructions
-        else:
-            effective_user_prompt = f"請根據簡易骨架大綱，為第 {chapter_index} 章生成高品質的詳細大綱 JSON。{chapter_instructions}"
-            
-    messages = build_plot_planner_messages(worldview_text, skeleton_contexts, effective_user_prompt, target_chapter_index=chapter_index)
-    print("messages:", len(messages), messages)
-    db.save_chat_message(novel_id, "user", f"生成詳細章節大綱 (第 {chapter_index if chapter_index is not None else '全書'} 章)。要求: {user_prompt or '依骨架展開'}", message_type="pipeline")
-    
-    stream = call_llm_stream("plot", messages)
-    accumulated = []
-    for chunk in stream:
-        yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
-    if full_text.strip():
-        from models.parsers import extract_json_block
-        parsed_plot = extract_json_block(full_text)
-        
-        if chapter_index is not None:
-            # 智慧提取單個章節
-            target_ch_outline = None
-            if isinstance(parsed_plot, dict):
-                if "chapters" in parsed_plot and isinstance(parsed_plot["chapters"], list) and len(parsed_plot["chapters"]) > 0:
-                    target_ch_outline = parsed_plot["chapters"][0]
-                elif "chapter_index" in parsed_plot or "title" in parsed_plot or "events" in parsed_plot:
-                    target_ch_outline = parsed_plot
-            elif isinstance(parsed_plot, list) and len(parsed_plot) > 0:
-                target_ch_outline = parsed_plot[0]
-                
-            if target_ch_outline:
-                db.save_single_plot_chapter(novel_id, chapter_index, target_ch_outline)
-                db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章詳細大綱已保存成功！", message_type="pipeline")
-                
-                # 自動補齊大綱中出現但未在角色列表中登記的角色人設
-                try:
-                    active_names = target_ch_outline.get("characters_active", []) or target_ch_outline.get("characters", [])
-                    if isinstance(active_names, str):
-                        active_names = [active_names]
-                    active_names = [str(n).strip() for n in active_names if n]
-                    
-                    char_data = db.get_latest_characters(novel_id)
-                    existing_chars_parsed = char_data.get("parsed_data") if char_data else None
-                    if not existing_chars_parsed or not isinstance(existing_chars_parsed, dict):
-                        existing_chars_parsed = {"characters": []}
-                    existing_chars_list = existing_chars_parsed.get("characters", [])
-                    
-                    existing_names = {c.get("name", "").strip() for c in existing_chars_list if c.get("name")}
-                    
-                    missing_chars = []
-                    for name in active_names:
-                        if not name:
-                            continue
-                        if name not in existing_names and not any(name in en or en in name for en in existing_names):
-                            missing_chars.append(name)
-                            
-                    if missing_chars:
-                        db.save_chat_message(novel_id, "assistant", f"🔍 偵測到第 {chapter_index} 章大綱中出現新登場角色：{', '.join(missing_chars)}。正在呼叫角色 Agent 補齊人設設定...", message_type="pipeline")
-                        
-                        worldview_summary = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
-                        
-                        for missing_name in missing_chars:
-                            char_messages = build_missing_character_designer_messages(
-                                worldview_summary,
-                                json.dumps(existing_chars_parsed, ensure_ascii=False),
-                                missing_name,
-                                target_ch_outline
-                            )
-                            
-                            new_char_card = call_llm_json("character", char_messages)
-                            if new_char_card and isinstance(new_char_card, dict) and new_char_card.get("name"):
-                                existing_chars_list.append(new_char_card)
-                                db.save_chat_message(novel_id, "assistant", f"👤 角色 Agent 已成功為新角色【{missing_name}】補齊人設設定！", message_type="pipeline")
-                            else:
-                                fallback_card = {
-                                    "name": missing_name,
-                                    "role": "登場配角",
-                                    "entry_phase": f"第 {chapter_index} 章",
-                                    "personality": ["待補充"],
-                                    "want": "待補充",
-                                    "need": "待補充",
-                                    "fatal_flaw": "無",
-                                    "motivation": "無",
-                                    "arc": "無",
-                                    "speech_style": "普通",
-                                    "appearance": "普通",
-                                    "background": "待補充",
-                                    "relationships": []
-                                }
-                                existing_chars_list.append(fallback_card)
-                                db.save_chat_message(novel_id, "assistant", f"👤 角色 Agent 為【{missing_name}】生成設定時遇到異常，已使用保底人設模板！", message_type="pipeline")
-                        
-                        db.save_characters(novel_id, {"characters": existing_chars_list})
-                        db.save_chat_message(novel_id, "assistant", f"✅ 角色列表 JSON 已更新完畢！共新增 {len(missing_chars)} 位角色設定。", message_type="pipeline")
-                except Exception as ex:
-                    print(f"[ERROR] Failed to auto-supplement missing characters: {ex}")
-        else:
-            db.save_plot_chapters(novel_id, parsed_plot, clear_chapters=True)
-            db.save_chat_message(novel_id, "assistant", f"詳細大綱已保存成功！", message_type="pipeline")
-
 
 # =============================================================================
 # 6. Chapter Writer Agent
@@ -766,9 +446,9 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     
     surrounding_plot = ""
     if pre_ch_outline:
-        surrounding_plot += f"\n【前一章 (第 {chapter_index - 1} 章) 詳細大綱】\n{json.dumps(pre_ch_outline, ensure_ascii=False, indent=2)}\n"
+        surrounding_plot += f"\n【前一章 (第 {chapter_index - 1} 章) 大綱】\n{json.dumps(pre_ch_outline, ensure_ascii=False, indent=2)}\n"
     if nxt_ch_outline:
-        surrounding_plot += f"\n【後一章 (第 {chapter_index + 1} 章) 詳細大綱】\n{json.dumps(nxt_ch_outline, ensure_ascii=False, indent=2)}\n"
+        surrounding_plot += f"\n【後一章 (第 {chapter_index + 1} 章) 大綱】\n{json.dumps(nxt_ch_outline, ensure_ascii=False, indent=2)}\n"
         
     all_vols = db.get_volumes(novel_id)
     curr_vol_idx = db.get_chapter_volume_index(all_vols, chapter_index)
@@ -966,52 +646,18 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
                 vol_highlight = f"\n\n【當前審查之目標卷 - 第 {volume_index} 卷】\n標題：{target_vol.get('title', '')}\n卷概要：{target_vol.get('summary', '')}"
                 plot_text += vol_highlight
     elif current_stage == "plot":
-        # plot: batch review. For batch size 3 and current chapter 6,
-        # send detailed outlines 4-6 plus skeleton context 3-7.
         plot_data = db.get_stitched_plot(novel_id)
         chapters_outlines = plot_data.get("chapters", []) if plot_data else []
         normalized_outlines = _normalize_chapter_list(chapters_outlines)
-        detailed_outlines = [ch for ch in normalized_outlines if _is_detailed_outline(ch)]
-        skeleton_outlines = _collect_volume_skeleton_chapters(novel_id)
         
-        batch_size = _get_plot_review_batch_size()
         if chapter_index is None:
-            chapter_index = max([ch["chapter_index"] for ch in detailed_outlines], default=1)
-        
-        detail_start = max(1, chapter_index - batch_size + 1)
-        detail_end = chapter_index
-        skeleton_start = max(1, detail_start - 1)
-        skeleton_end = detail_end + 1
-        
-        detailed_batch = [
-            ch for ch in detailed_outlines
-            if detail_start <= ch["chapter_index"] <= detail_end
-        ]
-        skeleton_context = [
-            _skeleton_snapshot(ch) for ch in skeleton_outlines
-            if skeleton_start <= ch["chapter_index"] <= skeleton_end
-        ]
-        
-        if not skeleton_context:
-            skeleton_context = [
-                _skeleton_snapshot(ch) for ch in normalized_outlines
-                if skeleton_start <= ch["chapter_index"] <= skeleton_end
-            ]
+            chapter_index = max([ch["chapter_index"] for ch in normalized_outlines], default=1)
         
         review_payload = {
-            "review_batch_size": batch_size,
-            "current_completed_chapter_index": chapter_index,
-            "detailed_outline_context_range": f"第 {detail_start} 章至第 {detail_end} 章",
-            "skeleton_context_range": f"第 {skeleton_start} 章至第 {skeleton_end} 章",
-            "detailed_outlines_generated_for_review": detailed_batch,
-            "skeleton_outlines_for_before_after_context": skeleton_context
+            "current_chapter_index": chapter_index,
+            "chapters": normalized_outlines
         }
         plot_text = json.dumps(review_payload, ensure_ascii=False, indent=2)
-        
-        worldview_text = extract_worldview_summary(worldview_text)
-        target_chaps = detailed_batch + skeleton_context
-        seed_indices, turn_indices = collect_referenced_indices(target_chaps)
-        worldview_text = filter_worldview_seeds_and_turns(worldview_text, seed_indices, turn_indices)
             
     elif current_stage == "writer":
         # writer: 該章的完整內容(正文+大綱+角色聖經+伏筆)
@@ -1048,7 +694,7 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         writer_review_data = {
             "chapter_index": target_ch_idx,
             "chapter_title": curr_ch_outline.get("title", f"第 {target_ch_idx} 章") if curr_ch_outline else f"第 {target_ch_idx} 章",
-            "detailed_outline": curr_ch_outline if curr_ch_outline else "（尚未生成詳細大綱）",
+            "outline": curr_ch_outline if curr_ch_outline else "（尚未生成章節大綱）",
             "allocated_tasks_and_clues": curr_ch_outline.get("allocated_tasks", {}) if curr_ch_outline else {},
             "clue_payoff_upcoming_3_chapters": clue_payoff_context or "（後三章無需回收的伏筆）",
             "prose_text": prose_content
@@ -1142,7 +788,7 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     elif "character" in help_action:
         target_data = f"【完整角色 Bible 數據】\n{characters_text}"
     elif "plot" in help_action or "volume" in help_action:
-        target_data = f"【完整篇卷與詳細大綱數據】\n{plot_text}"
+        target_data = f"【完整篇卷與大綱數據】\n{plot_text}"
         
     messages = build_director_decision_help_messages(help_reason, target_data)
     
@@ -1256,41 +902,6 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"角色增量更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
-
-def run_incremental_plot_planner(novel_id, insert_after_index, user_hint):
-    """
-    Incremental Plot Stage:
-    Inserts a new detailed outline chapter at position, then auto-merges using patch engine.
-    """
-    wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
-    plot_data = db.get_stitched_plot(novel_id)
-    plot_text = json.dumps(plot_data, ensure_ascii=False, indent=2) if plot_data else "尚無章節大綱"
-    
-    messages = build_incremental_plot_planner_messages(worldview_text, plot_text, insert_after_index, user_hint)
-    
-    db.save_chat_message(novel_id, "user", f"增量大綱更新。插入位置: {insert_after_index}, 要求: {user_hint}", message_type="pipeline")
-    stream = call_llm_stream("plot", messages)
-    accumulated = []
-    for chunk in stream:
-        yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
-    if full_text.strip():
-        from incremental_patch_engine import validate_and_merge_incremental_patch
-        success, version, err = validate_and_merge_incremental_patch(novel_id, "plot", "INSERT", full_text, {"insert_after_index": insert_after_index})
-        if success:
-            db.save_chat_message(novel_id, "assistant", f"詳細大綱增量更新完成 (版本 {version})", message_type="pipeline")
-        else:
-            yield "data: " + json.dumps({"type": "error", "message": f"大綱增量更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
 
 def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):

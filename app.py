@@ -176,7 +176,7 @@ def api_get_novel(novel_id: str):
         
     wb = db.get_latest_worldbuilding(novel_id)
     char = db.get_latest_characters(novel_id)
-    plot_data = db.get_latest_plot_chapters(novel_id)
+    plot_data = db.get_stitched_plot(novel_id)
     written_ch = db.get_all_chapters_latest(novel_id)
     memory = db.get_chat_memory(novel_id, limit=30)
     
@@ -187,9 +187,9 @@ def api_get_novel(novel_id: str):
         "characters": char["parsed_data"] if char else None,
         "characters_raw": char["json_data"] if char else "",
         "characters_version": char["version"] if char else 0,
-        "plot": plot_data["parsed_data"] if plot_data else {"chapters": []},
-        "plot_raw": json.dumps(plot_data["parsed_data"], ensure_ascii=False, indent=2) if plot_data else "{}",
-        "plot_version": plot_data["version"] if plot_data else 0,
+        "plot": plot_data if plot_data else {"chapters": []},
+        "plot_raw": json.dumps(plot_data, ensure_ascii=False, indent=2) if plot_data else "{}",
+        "plot_version": 1,
         "chapters": written_ch,
         "chat_memory": memory,
         "volumes": db.get_volumes(novel_id),
@@ -359,19 +359,7 @@ def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
         media_type="text/event-stream"
     )
 
-@app.post("/api/agent/plot-planner")
-def api_agent_plot_planner(payload: PlotPlannerRequest):
-    if not db.get_novel(payload.novel_id):
-        raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.run_plot_planner(
-            novel_id=payload.novel_id,
-            chapter_index=payload.chapter_index,
-            user_prompt=payload.user_prompt,
-            planner_directive=payload.planner_directive
-        ),
-        media_type="text/event-stream"
-    )
+
 
 @app.post("/api/agent/write-chapter")
 def api_agent_write_chapter(payload: ChapterWriterRequest):
@@ -426,14 +414,7 @@ def api_incremental_character(payload: IncrementalCharacterRequest):
         media_type="text/event-stream"
     )
 
-@app.post("/api/agent/incremental-plot")
-def api_incremental_plot(payload: IncrementalPlotRequest):
-    if not db.get_novel(payload.novel_id):
-        raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.run_incremental_plot_planner(payload.novel_id, payload.insert_after_index, payload.user_hint),
-        media_type="text/event-stream"
-    )
+
 
 @app.post("/api/agent/incremental-skeleton")
 def api_incremental_skeleton(payload: IncrementalSkeletonRequest):
@@ -532,6 +513,15 @@ def api_get_settings():
             "display_name": AGENT_DISPLAY_NAMES.get(agent, agent),
             "plot_review_batch_size": plot_review_batch_size
         }
+
+    try:
+        models_config_str = os.getenv("MODELS_CONFIG", "{}")
+        models_config = json.loads(models_config_str)
+    except Exception:
+        models_config = {}
+    
+    merged["_modelsConfig"] = models_config
+
     return merged
 
 @app.post("/api/settings")
@@ -786,7 +776,7 @@ def api_novel_retrospective(novel_id: str):
     agents_to_call = {
         "Story Architect": ("architect", "你作為故事結構架構師，請針對本次創作的世界觀底層設定，提出心得。列出3-5條避坑金律。"),
         "Character Designer": ("character", "你作為角色設計大師，請針對本次角色人設，提出心得。列出3-5條人物避坑金律。"),
-        "Plot Planner": ("plot", "你作為章節劇情規劃師，請針對本次詳細大綱規劃，提出大綱規劃心得。列出3-5條避坑金律。"),
+        "Plot Planner": ("plot", "你作為章節劇情規劃師，請針對本次大綱規劃，提出大綱規劃心得。列出3-5條避坑金律。"),
         "Chapter Writer": ("writer", "你作為小說正文寫作作家，請針對本章正文寫作，提出心得。列出3-5條正文創作金律。"),
         "Co-pilot Director": ("copilot", "你作為首席創意總監，對整部作品進行評審，總結全局避坑指南與終極創作金律。")
     }

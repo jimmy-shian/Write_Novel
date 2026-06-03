@@ -8,25 +8,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-# --- Nvidia Model Presets ---
-NVIDIA_MODEL_PRESETS = {
-    "google/gemma-3n-e4b-it": {
-        "temperature": 0.20,
-        "top_p": 0.70,
-        "frequency_penalty": 0.00,
-        "presence_penalty": 0.00
-    },
-    "nvidia/nemotron-3-super-120b-a12b": {
-        "chat_template_kwargs": {"enable_thinking": True},
-        "reasoning_budget": 16384
-    },
-    "openai/gpt-oss-120b": {},
-    "minimaxai/minimax-m2.7": {},
-    "mistralai/mistral-small-4-119b-2603": {
-        "reasoning_effort": "high"
-    },
-    "stepfun-ai/step-3.5-flash": {}
-}
+
 
 # --- Agent API Key Mapping from .env ---
 def get_agent_api_key(agent_name):
@@ -197,11 +179,26 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     normalized_msgs = normalize_messages(messages)
     print(f"[LLM PATCH] Normalized {len(messages)} messages to {len(normalized_msgs)} to guarantee alternating roles.")
     
-    if "gpt-oss" in config["model"] and normalized_msgs and normalized_msgs[0]["role"] == "system":
+    model_id = config["model"]
+    try:
+        models_config_str = os.getenv("MODELS_CONFIG", "{}")
+        models_config = json.loads(models_config_str)
+    except Exception:
+        models_config = {}
+
+    preset_overrides = {}
+    actual_model_string = model_id
+
+    if model_id in models_config:
+        model_data = models_config[model_id]
+        actual_model_string = model_data.get("model", model_id)
+        preset_overrides = {k: v for k, v in model_data.items() if k not in ("name", "model")}
+
+    if "gpt-oss" in actual_model_string and normalized_msgs and normalized_msgs[0]["role"] == "system":
         normalized_msgs[0]["content"] = "Reasoning: high\n" + normalized_msgs[0]["content"]
         
     payload_base = {
-        "model": config["model"],
+        "model": actual_model_string,
         "messages": normalized_msgs,
         "max_tokens": int(config["max_tokens"]),
         "temperature": float(config["temperature"]),
@@ -210,23 +207,21 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     }
     
     # 避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
-    if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in config["model"]:
+    if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in actual_model_string:
         payload_base["response_format"] = {"type": "json_object"}
     
     if config["enable_thinking"]:
         payload_base["chat_template_kwargs"] = {"enable_thinking": True}
         
-    # Auto-inject preset parameters if model matches
-    model_name = config["model"]
-    if model_name in NVIDIA_MODEL_PRESETS:
-        payload_base.update(NVIDIA_MODEL_PRESETS[model_name])
+    # Auto-inject preset parameters from MODELS_CONFIG
+    payload_base.update(preset_overrides)
         
     if custom_payload_overrides:
         payload_base.update(custom_payload_overrides)
 
     # === Debug: 列印 system prompt 和 user prompt ===
     print("\n" + "=" * 80)
-    print(f"【API 傳送提示詞】Agent: {agent_name} | Model: {config['model']}")
+    print(f"【API 傳送提示詞】Agent: {agent_name} | Model ID: {model_id} | Resolved Model: {actual_model_string}")
     print("=" * 80)
     for i, msg in enumerate(normalized_msgs):
         role_label = msg.get("role", "unknown")

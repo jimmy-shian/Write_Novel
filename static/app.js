@@ -281,6 +281,41 @@ async function executeDirectorAction(decision, userPrompt) {
     
     updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
+    // 🔴 硬性阻斷門檻：若總監指示進入 writer 但任何卷的骨架尚未完成，強制退回骨架生成
+    const writerActions = ['WRITE_ALL_CHAPTERS'];
+    const isWriterContinue = action === 'CONTINUE' && ['writer', '正文寫作', '寫故事'].includes((decision.target || '').toString().trim().toLowerCase());
+    if (writerActions.includes(action) || isWriterContinue) {
+        const volumes = state.currentNovelData?.volumes || [];
+        const missingSkeletonVols = volumes.filter(vol => {
+            const outline = vol.chapters_outline;
+            if (!outline) return true;
+            try {
+                const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                return !Array.isArray(parsed) || parsed.length === 0;
+            } catch (e) {
+                return true;
+            }
+        });
+        if (missingSkeletonVols.length > 0 && volumes.length > 0) {
+            const missingIdxs = missingSkeletonVols.map(v => v.volume_index || '?');
+            appendChatMessage('system', `🚫 **[系統硬性阻斷]** 總監指示進入正文寫作，但以下卷的骨架尚未完成：卷 ${missingIdxs.join(', ')}。\n⛔ 系統已自動覆寫總監決策，強制退回骨架生成階段。`);
+            showToast(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回骨架生成`);
+            updateDirectorMessage(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回骨架生成階段...`);
+            updatePipelineStage('volume_skeleton', 'running');
+            const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
+            if (state.isPipelineRunning) {
+                if (skeletonSuccess) {
+                    updateDirectorMessage('🔄 骨架補齊完畢，重新評估現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 骨架生成失敗，停止管線。');
+                    state.isPipelineRunning = false;
+                }
+                setTimeout(() => runPipeline(userPrompt), 2000);
+            }
+            return;
+        }
+    }
+    
     switch (action) {
         case 'LOCAL_ALIGN_VOLUME': {
             const volIdx = decision.volume_index || 1;
@@ -395,6 +430,21 @@ async function executeDirectorAction(decision, userPrompt) {
 
         case 'CONTINUE': {
             const target = (decision.target || '').toString().trim().toLowerCase();
+            
+            // 💡 關鍵修復 1：同步更新總監在 CONTINUE 決策中明確指定的章節與卷數索引
+            if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
+                const parsedChIdx = parseInt(decision.chapter_index);
+                if (!isNaN(parsedChIdx) && parsedChIdx > 0) {
+                    state.activeChapterIndex = parsedChIdx;
+                }
+            }
+            if (decision.volume_index !== undefined && decision.volume_index !== null) {
+                const parsedVolIdx = parseInt(decision.volume_index);
+                if (!isNaN(parsedVolIdx) && parsedVolIdx > 0) {
+                    state.activeVolumeIndex = parsedVolIdx;
+                }
+            }
+
             if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
                 updatePipelineStage('worldview', 'running');
                 updateDirectorMessage('🌍 開始生成世界觀設定...');
@@ -428,84 +478,29 @@ async function executeDirectorAction(decision, userPrompt) {
                     state.isPipelineRunning = false;
                     showPipelineProgress(false);
                 }
-            } else if (target === 'foreshadowing_orchestration' || target === 'foreshadowing_align' || target === '伏筆對齊' || target === '分配伏筆') {
-                const vols = state.currentNovelData?.volumes || [];
-                const hasSkeletons = vols.length > 0 && vols.every(v => {
-                    const outline = v.chapters_outline;
-                    if (!outline) return false;
-                    try {
-                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
-                        return Array.isArray(parsed) && parsed.length > 0;
-                    } catch (e) {
-                        return false;
-                    }
-                });
-                if (!hasSkeletons) {
-                    updateDirectorMessage('⚠️ 偵測到章節骨架未生成，系統強制引導至骨架生成階段...');
-                    showToast('⚠️ 骨架未生成，已自動引導至骨架生成');
-                    await executeNextMissingStage(userPrompt);
-                    return;
-                }
-                updatePipelineStage('worldview', 'done');
-                updatePipelineStage('characters', 'done');
-                updatePipelineStage('volumes', 'done');
-                updatePipelineStage('volume_skeleton', 'done');
-                updatePipelineStage('foreshadowing_orchestration', 'running');
-                updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
-                showToast('🎭 開始全局伏筆編織對齊...');
-                await executePipelineStage('foreshadowing_orchestration', userPrompt);
-            } else if (target === 'plot_expansion' || target === 'plot' || target === '章節大綱' || target === '詳細章') {
-                const vols = state.currentNovelData?.volumes || [];
-                const hasSkeletons = vols.length > 0 && vols.every(v => {
-                    const outline = v.chapters_outline;
-                    if (!outline) return false;
-                    try {
-                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
-                        return Array.isArray(parsed) && parsed.length > 0;
-                    } catch (e) {
-                        return false;
-                    }
-                });
-                if (!hasSkeletons) {
-                    updateDirectorMessage('⚠️ 偵測到章節骨架未生成，系統強制引導至骨架生成階段...');
-                    showToast('⚠️ 骨架未生成，已自動引導至骨架生成');
-                    await executeNextMissingStage(userPrompt);
-                    return;
-                }
-                if (decision.chapter_index) {
-                    state.activeChapterIndex = parseInt(decision.chapter_index);
-                }
-                updatePipelineStage('worldview', 'done');
-                updatePipelineStage('characters', 'done');
-                updatePipelineStage('volumes', 'done');
-                updatePipelineStage('volume_skeleton', 'done');
-                updatePipelineStage('foreshadowing_orchestration', 'done');
-                updatePipelineStage('plot', 'running');
-                updateDirectorMessage('📋 開始微觀大綱詳細展開...');
-                showToast('📋 開始微觀大綱詳細展開...');
-                await executePipelineStage('plot', userPrompt);
             } else if (target === 'writer' || target === '正文寫作' || target === '寫故事') {
-                const volumes = state.currentNovelData?.volumes || [];
-                const hasValidOutlines = volumes.every(vol => {
-                    const outline = vol.chapters_outline;
+                const vols = state.currentNovelData?.volumes || [];
+                const hasSkeletons = vols.length > 0 && vols.every(v => {
+                    const outline = v.chapters_outline;
                     if (!outline) return false;
-                    if (typeof outline === 'string') {
-                        try {
-                            const parsed = JSON.parse(outline);
-                            return Array.isArray(parsed) && parsed.length > 0;
-                        } catch (e) {
-                            return false;
-                        }
+                    try {
+                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                        return Array.isArray(parsed) && parsed.length > 0;
+                    } catch (e) {
+                        return false;
                     }
-                    return Array.isArray(outline) && outline.length > 0;
                 });
-                const hasPlot = state.currentNovelData?.plot && Array.isArray(state.currentNovelData.plot.chapters) && state.currentNovelData.plot.chapters.length > 0;
-
-                if ((!hasValidOutlines && volumes.length > 0) || !hasPlot || !state.foreshadowingOrchestrated) {
-                    updateDirectorMessage('⚠️ 偵測到仍需補完伏筆與精細章節大綱，先回到前期準備階段...');
-                    showToast('⚠️ 已強制補完伏筆對齊或詳細章節大綱，避免直接進入寫作');
+                if (!hasSkeletons) {
+                    updateDirectorMessage('⚠️ 偵測到章節骨架未生成，系統強制引導至骨架生成階段...');
+                    showToast('⚠️ 骨架未生成，已自動引導至骨架生成');
                     await executeNextMissingStage(userPrompt);
                     return;
+                }
+
+                // 【核心修復】：如果前一個成功的階段是 editor，代表當前章節已完美收尾
+                // 此時若總監指示繼續前進到寫作階段，我們應該安全遞增 chapter index（除非總監在 decision 中已明確覆寫了一個更大的 index）
+                if (state.activeTab === 'editor') {
+                    showToast(`🎉 前一章審核通過！準備寫作第 ${state.activeChapterIndex} 章...`);
                 }
 
                 updatePipelineStage('worldview', 'done');
@@ -517,6 +512,16 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('writer', 'running');
                 updateDirectorMessage('✍️ 開始撰寫正文...');
                 await executePipelineStage('writer', userPrompt);
+            } else if (target === 'editor') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('volumes', 'done');
+                updatePipelineStage('volume_skeleton', 'done');
+                updatePipelineStage('foreshadowing_orchestration', 'done');
+                updatePipelineStage('plot', 'done');
+                updatePipelineStage('writer', 'running');
+                updateDirectorMessage('✍️ 開始撰寫正文...');
+                await executePipelineStage('editor', userPrompt);
             } else {
                 await executeNextMissingStage(userPrompt);
             }
@@ -539,20 +544,24 @@ async function executeDirectorAction(decision, userPrompt) {
             } else if (target.includes('skeleton') || target.includes('骨架')) {
                 updatePipelineStage('volume_skeleton', 'running');
                 await executePipelineStage('volume_skeleton', enhancedPrompt);
-            } else if (target.includes('foreshadowing') || target.includes('伏筆')) {
-                updatePipelineStage('foreshadowing_orchestration', 'running');
-                await executePipelineStage('foreshadowing_orchestration', enhancedPrompt);
-            } else if (target.includes('plot') || target.includes('大綱') || target.includes('詳細章')) {
-                updatePipelineStage('plot', 'running');
-                // 💡 使用 Director 指定的 chapter_index 覆寫 state.activeChapterIndex
+            } else if (target.includes('writer') || target.includes('寫作') || target.includes('正文')) {
+                updatePipelineStage('writer', 'running');
                 if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
                 }
-                await executePipelineStage('plot', enhancedPrompt);
+                await executePipelineStage('writer', enhancedPrompt);
+            } else if (target.includes('editor') || target.includes('編輯') || target.includes('潤色')) {
+                updatePipelineStage('editor', 'running');
+                if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
+                    state.activeChapterIndex = parseInt(decision.chapter_index);
+                }
+                await executePipelineStage('editor', enhancedPrompt);
             } else {
+                showToast('⚡ 總監指示重新生成，但未明確指定階段已停止流程...');
+                break;
                 // 預設重跑世界觀
-                updatePipelineStage('worldview', 'running');
-                await executePipelineStage('worldview', enhancedPrompt);
+                // updatePipelineStage('worldview', 'running');
+                // await executePipelineStage('worldview', enhancedPrompt);
             }
             break;
         }
@@ -754,15 +763,6 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('foreshadowing_orchestration', 'running');
         updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
         await executePipelineStage('foreshadowing_orchestration', userPrompt);
-    } else if (!hasPlot) {
-        updatePipelineStage('worldview', 'done');
-        updatePipelineStage('characters', 'done');
-        updatePipelineStage('volumes', 'done');
-        updatePipelineStage('volume_skeleton', 'done');
-        updatePipelineStage('foreshadowing_orchestration', 'done');
-        updatePipelineStage('plot', 'running');
-        updateDirectorMessage('📋 開始生成詳細章節大綱...');
-        await executePipelineStage('plot', userPrompt);
     } else {
         // 所有前期準備完成，開始寫作
         updatePipelineStage('worldview', 'done');
@@ -849,33 +849,7 @@ async function executeCharacterAgent() {
     );
 }
 
-/**
- * 執行 Plot Planner Agent
- */
-async function executePlotAgent() {
-    showGeneratingIndicator('plot');
-    
-    streamAPI(
-        `/api/agent/plot-planner`,
-        { novel_id: state.currentNovelId },
-        null,
-        (content) => {
-            el.editorPlotJson.value += content;
-        },
-        (error) => {
-            showToast('大綱生成失敗: ' + error);
-            el.editorPlotJson.disabled = false;
-            updatePipelineStage('plot', 'error');
-        },
-        async () => {
-            el.editorPlotJson.disabled = false;
-            updatePipelineStage('plot', 'done');
-            
-            await loadNovelDetails(state.currentNovelId);
-            await handleDirectorDecision();
-        }
-    );
-}
+
 
 /**
  * 🚀 [新功能] 具備 10 次自動重試與對話框同步紀錄的高級 SSE 守護引擎
@@ -2394,6 +2368,10 @@ function openChapterOutlineEditModal(index, chapter) {
                         <input type="text" id="edit-chapter-time-setting" placeholder="例如：大元三年春・深夜">
                     </div>
                     <div class="form-group">
+                        <label>活躍角色（以逗號分隔）</label>
+                        <input type="text" id="edit-chapter-characters-active" placeholder="例如：李尋歡, 阿飛">
+                    </div>
+                    <div class="form-group">
                         <label>距前章時間跨度</label>
                         <input type="text" id="edit-chapter-time-span" placeholder="例如：三日後、半年後">
                     </div>
@@ -2445,6 +2423,15 @@ function openChapterOutlineEditModal(index, chapter) {
     document.getElementById('edit-chapter-title').value = chapter.title || '';
     document.getElementById('edit-chapter-time-setting').value = chapter.time_setting || '';
     document.getElementById('edit-chapter-time-span').value = chapter.time_span || '';
+    
+    let charsActive = '';
+    if (Array.isArray(chapter.characters_active)) {
+        charsActive = chapter.characters_active.join(', ');
+    } else if (chapter.characters_active) {
+        charsActive = chapter.characters_active;
+    }
+    document.getElementById('edit-chapter-characters-active').value = charsActive;
+    
     document.getElementById('edit-chapter-purpose').value = chapter.purpose || '';
     document.getElementById('edit-chapter-emotional-tone').value = chapter.emotional_tone || '均衡';
     
@@ -2454,11 +2441,11 @@ function openChapterOutlineEditModal(index, chapter) {
         eventsText = chapter.events.map(e => {
             if (typeof e === 'string') return e;
             if (typeof e === 'object' && e !== null) {
-                // 🚀 核心修復：相容不同的 API 結構（e.g. scene/action vs scene_index/description vs title/desc）
                 const title = e.scene || e.scene_index || e.title || '';
+                const location = e.location ? `[${e.location}] ` : '';
                 const desc = e.action || e.description || e.content || '';
-                if (title && desc) return `${title}: ${desc}`;
-                return desc || title || JSON.stringify(e);
+                if (title && desc) return `${title}: ${location}${desc}`;
+                return `${location}${desc}` || title || JSON.stringify(e);
             }
             return String(e);
         }).join('\n');
@@ -2489,26 +2476,35 @@ function openChapterOutlineEditModal(index, chapter) {
         const plotData = state.currentNovelData.plot;
         if (plotData && plotData.chapters && plotData.chapters[index]) {
             const eventsInput = document.getElementById('edit-chapter-events').value;
-            // 🚀 核心修復：保存回 events 時，若原本是物件結構，嘗試還原或轉換以避免型態破壞。
-            // 這裡將輸入字串解析，若有冒號則解析為 { scene_index, description }，與 AI 寫手和資料庫完全對齊
             const eventsArray = eventsInput.split('\n').map(s => s.trim()).filter(s => s).map((line, idx) => {
                 const colonIdx = line.indexOf(':');
+                let desc = line;
                 if (colonIdx !== -1) {
-                    const title = line.substring(0, colonIdx).trim();
-                    const desc = line.substring(colonIdx + 1).trim();
-                    return {
-                        scene_index: idx + 1,
-                        description: desc || title
-                    };
+                    desc = line.substring(colonIdx + 1).trim();
                 }
+                
+                let location = "";
+                if (desc.startsWith('[')) {
+                    const closeBracket = desc.indexOf(']');
+                    if (closeBracket !== -1) {
+                        location = desc.substring(1, closeBracket).trim();
+                        desc = desc.substring(closeBracket + 1).trim();
+                    }
+                }
+                
                 return {
                     scene_index: idx + 1,
-                    description: line
+                    location: location,
+                    characters: [],
+                    content: desc
                 };
             });
             
             const foreshadowInput = document.getElementById('edit-chapter-foreshadowing').value;
             const foreshadowArray = foreshadowInput.split('\n').map(s => s.trim()).filter(s => s);
+            
+            const charsInput = document.getElementById('edit-chapter-characters-active').value;
+            const charsArray = charsInput.split(',').map(s => s.trim()).filter(s => s);
             
             // 更新章節數據，保留所有欄位
             const updatedChapter = {
@@ -2516,11 +2512,12 @@ function openChapterOutlineEditModal(index, chapter) {
                 title: document.getElementById('edit-chapter-title').value,
                 time_setting: document.getElementById('edit-chapter-time-setting').value,
                 time_span: document.getElementById('edit-chapter-time-span').value,
+                characters_active: charsArray,
                 purpose: document.getElementById('edit-chapter-purpose').value,
                 emotional_tone: document.getElementById('edit-chapter-emotional-tone').value,
                 events: eventsArray,
                 foreshadowing: foreshadowArray,
-                foreshadowing_plant: foreshadowArray, // 🚀 剛性修復：寫回植物與回收伏筆欄位，確保通過系統底層校驗
+                foreshadowing_plant: foreshadowArray,
                 foreshadowing_payoff: foreshadowArray,
                 cliffhanger: document.getElementById('edit-chapter-cliffhanger').value
             };
@@ -3059,36 +3056,12 @@ async function executeToolCall(tool, params) {
             });
             
         case 'plot-planner':
-            showToast("📋 執行劇情規劃師（全量生成）...");
-            showAgentProcessingIndicator('plot', 'Plot Planner (全量生成)');
-            return new Promise((resolve) => {
-                el.editorPlotJson.value = '';
-                streamAPI(
-                    '/api/agent/plot-planner',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        chapter_index: params.chapter_index || state.activeChapterIndex || 1,
-                        user_prompt: user_prompt || params.hint 
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (delta) => {
-                        el.editorPlotJson.value += delta;
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (err) => {
-                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
-                        showToast("Error: " + err);
-                        hideAgentProcessingIndicator('plot');
-                    },
-                    async () => {
-                        hideAgentProcessingIndicator('plot');
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
-                    }
-                );
-            });
+            showToast("📋 執行劇情規劃師（全量骨架生成）...");
+            showAgentProcessingIndicator('plot', 'Plot Planner (全量骨架生成)');
+            await window.generateAllVolumeSkeletons(user_prompt || params.hint);
+            hideAgentProcessingIndicator('plot');
+            await loadNovelDetails(state.currentNovelId);
+            return true;
             
         case 'write-chapter':
             showToast(`✍️ 執行章節寫手（第 ${chapter_index} 章）...`);
@@ -3248,36 +3221,11 @@ async function executeAutoRegenerate(target, params) {
         case 'plot':
         case '章節大綱':
             showToast("🔄 重新生成章節大綱...");
-            showAgentProcessingIndicator('plot', 'Plot Planner (重新生成)');
-            return new Promise((resolve) => {
-                el.editorPlotJson.value = '';
-                const prompt = hint || "請重新規劃章節大綱";
-                streamAPI(
-                    '/api/agent/plot-planner',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        chapter_index: state.activeChapterIndex || 1,
-                        user_prompt: prompt 
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (delta) => {
-                        el.editorPlotJson.value += delta;
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (err) => {
-                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
-                        showToast("Error: " + err);
-                        hideAgentProcessingIndicator('plot');
-                    },
-                    async () => {
-                        hideAgentProcessingIndicator('plot');
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
-                    }
-                );
-            });
+            showAgentProcessingIndicator('plot', 'Plot Planner (重新生成骨架)');
+            await window.generateAllVolumeSkeletons(hint || "請重新規劃章節大綱");
+            hideAgentProcessingIndicator('plot');
+            await loadNovelDetails(state.currentNovelId);
+            return true;
             
         default:
             showToast(`⚠️ 不支援的重新生成目標: ${target}`);
@@ -3816,539 +3764,6 @@ function checkStageHasContent(stage) {
     }
 }
 
-// 增強現有內容（不重新生成，只是補充）
-function enhanceExistingContent(stage) {
-    return new Promise((resolve) => {
-        const data = state.currentNovelData;
-        let enhancePrompt = '';
-        
-        switch (stage) {
-            case 'worldview':
-                enhancePrompt = `請基於以下現有的世界觀設定，進行補充與強化，使其更加完善：\n\n${data.worldbuilding}\n\n請以 JSON 格式輸出更新後的世界觀。`;
-                streamAPI(
-                    '/api/agent/story-architect',
-                    { novel_id: state.currentNovelId, user_prompt: enhancePrompt },
-                    () => {},
-                    (delta) => {
-                        if (el.editorWorldview) {
-                            el.editorWorldview.value += delta;
-                            window.smartScrollToBottom(el.editorWorldview, false);
-                        }
-                    },
-                    (msg) => showToast(`Error: ${msg}`),
-                    async () => {
-                        showToast("世界觀加強完成");
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve();
-                    }
-                );
-                break;
-                
-            case 'characters':
-                enhancePrompt = `請基於以下現有的角色設定，進行補充與強化：\n\n${data.characters_raw}\n\n請以 JSON 格式輸出更新後的角色設定。`;
-                streamAPI(
-                    '/api/agent/character-designer',
-                    { novel_id: state.currentNovelId, user_prompt: enhancePrompt },
-                    () => {},
-                    (delta) => {
-                        if (el.editorCharactersJson) {
-                            el.editorCharactersJson.value += delta;
-                            window.smartScrollToBottom(el.editorCharactersJson, false);
-                        }
-                    },
-                    (msg) => showToast(`Error: ${msg}`),
-                    async () => {
-                        showToast("角色加強完成");
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve();
-                    }
-                );
-                break;
-                
-            case 'plot':
-                enhancePrompt = `請基於以下現有的大綱，進行補充與優化：\n\n${data.plot_raw}\n\n請以 JSON 格式輸出更新後的大綱。`;
-                streamAPI(
-                    '/api/agent/plot-planner',
-                    { novel_id: state.currentNovelId, user_prompt: enhancePrompt },
-                    () => {},
-                    (delta) => {
-                        if (el.editorPlotJson) {
-                            el.editorPlotJson.value += delta;
-                            window.smartScrollToBottom(el.editorPlotJson, false);
-                        }
-                    },
-                    (msg) => showToast(`Error: ${msg}`),
-                    async () => {
-                        showToast("大綱加強完成");
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve();
-                    }
-                );
-                break;
-                
-            default:
-                resolve();
-        }
-    });
-}
-
-function runFullPipeline(userPrompt) {
-    if (!state.currentNovelId) return;
-    
-    // 保存用戶輸入的 prompt 到後端（非阻塞）
-    savePipelinePrompt(userPrompt).catch(() => {});
-    
-    // 設定分階段模式
-    state.isPipelineRunning = true;
-    state.currentPipelineStageIndex = 0;
-    
-    // 添加工作中的發光效果到各分頁標題
-    const worldviewTab = document.querySelector('[data-tab="worldview"]');
-    const charactersTab = document.querySelector('[data-tab="characters"]');
-    const plotTab = document.querySelector('[data-tab="plot"]');
-    const writerTab = document.querySelector('[data-tab="writer"]');
-    
-    function addGlowEffect(tab, isWorking) {
-        if (tab) {
-            if (isWorking) {
-                tab.style.boxShadow = '0 0 20px var(--primary-glow), 0 0 40px var(--primary-glow)';
-                tab.style.borderColor = 'var(--primary)';
-                tab.style.background = 'rgba(0, 113, 227, 0.08)';
-            } else {
-                tab.style.boxShadow = '';
-                tab.style.borderColor = '';
-                tab.style.background = '';
-            }
-        }
-    }
-    
-    function addSuccessGlow(tab) {
-        if (tab) {
-            tab.style.boxShadow = '0 0 20px rgba(52, 199, 89, 0.3), 0 0 40px rgba(52, 199, 89, 0.2)';
-            tab.style.borderColor = 'var(--status-written)';
-            tab.style.background = 'rgba(52, 199, 89, 0.08)';
-        }
-    }
-    
-    function clearAllGlows() {
-        [worldviewTab, charactersTab, plotTab, writerTab].forEach(tab => {
-            if (tab) {
-                tab.style.boxShadow = '';
-                tab.style.borderColor = '';
-                tab.style.background = '';
-            }
-        });
-    }
-    
-    // 初始化 Director 評估模式：讓 Director 判斷每個階段該加強、重新生成還是跳過
-    
-    // 首先詢問 Director 對整體進度的評估
-    showToast("🎬 AI 總監正在評估當前進度...");
-    
-    runDirectorDecision('init').then(async (directorInit) => {
-        // Director 初始化評估完成，開始執行流程
-        // 根據 Director 的判斷來決定世界觀階段
-        
-        if (directorInit.action === 'AUTO_REGENERATE' || directorInit.regenerate) {
-            // Director 指示需要重新生成或擴充
-            showToast(`⚡ 總監指示：${directorInit.hint || '需要重新擴充世界觀'}`);
-            state.activeTab = 'worldview';
-            renderActiveTab();
-            if (el.editorWorldview) el.editorWorldview.value = state.currentNovelData.worldbuilding || '';
-            
-            // 構建擴充 prompt
-            const enhancePrompt = directorInit.hint || `請擴充並深化以下世界觀設定，確保包含：
-1. 力量體系詳解（命燈、燃壽修行、等級）
-2. 世界運行規則（永夜封印、妖魔、社會結構）
-3. 核心衝突錨點（打破封印的收益與風險）
-4. 燈火城邦與荒原的文化差異
-5. 守夜人組織的內部權力結構
-6. 永夜起源與古神的具體設定
-
-現有世界觀：\n${state.currentNovelData.worldbuilding || ''}`;
-            
-            streamAPI(
-                '/api/agent/story-architect',
-                { novel_id: state.currentNovelId, user_prompt: enhancePrompt },
-                () => {},
-                (delta) => {
-                    if (el.editorWorldview) {
-                        el.editorWorldview.value = delta;
-                        el.editorWorldview.scrollTop = el.editorWorldview.scrollHeight;
-                    }
-                },
-                (msg) => showToast(`Error: ${msg}`),
-                async () => {
-                    addSuccessGlow(worldviewTab);
-                    await loadNovelDetails(state.currentNovelId);
-                    // 繼續角色階段
-                    startStage2_Characters();
-                }
-            );
-        } else if (directorInit.action === 'CONTINUE' || directorInit.continue) {
-            // Director 指示可以繼續
-            if (checkStageHasContent('worldview')) {
-                // 有內容，Director 指示繼續，跳到角色階段
-                showToast("✅ 總監評估：世界觀無需修改，直接進入角色設計");
-                startStage2_Characters();
-            } else {
-                // 無內容，開始世界觀生成
-                state.activeTab = 'worldview';
-                renderActiveTab();
-                if (el.editorWorldview) el.editorWorldview.value = '';
-                startStage1_Worldview();
-            }
-        } else {
-            // Director 要求等待用戶確認
-            showToast("⏸️ 總監要求確認，請查看右側聊天區的總監評估");
-            state.isPipelineRunning = false;
-            return;
-        }
-    });
-    
-    // 處理角色階段（由 Director 決策驅動）
-    function handleCharactersStage() {
-        // 詢問 Director 對角色階段的判斷
-        showToast("🎬 AI 總監正在評估角色設計...");
-        
-        runDirectorDecision('characters').then(async (directorChars) => {
-            if (directorChars.action === 'AUTO_REGENERATE' || directorChars.regenerate) {
-                // 需要重新生成角色
-                showToast(`⚡ 總監指示：${directorChars.hint || '需要重新設計角色'}`);
-                startStage2_Characters();
-            } else if (directorChars.action === 'CONTINUE' || directorChars.continue) {
-                // 可以繼續
-                if (checkStageHasContent('characters')) {
-                    showToast("✅ 總監評估：角色設定無需修改，直接進入大綱規劃");
-                    startStage3_Plot();
-                } else {
-                    startStage2_Characters();
-                }
-            } else {
-                showToast("⏸️ 總監要求確認，請查看右側聊天區的總監評估");
-                state.isPipelineRunning = false;
-            }
-        });
-    }
-    
-    // STAGE 1: 世界觀生成
-    function startStage1_Worldview() {
-        showToast("正在啟動世界觀架構師 Agent...");
-        
-        streamAPI(
-            '/api/agent/story-architect',
-            { novel_id: state.currentNovelId, user_prompt: userPrompt },
-            () => {},
-            (delta) => {
-                if (el.editorWorldview) {
-                    el.editorWorldview.value += delta;
-                    el.editorWorldview.scrollTop = el.editorWorldview.scrollHeight;
-                }
-            },
-            (msg) => {
-                showToast(`Story Architect Error: ${msg}`);
-            },
-            async () => {
-                addSuccessGlow(worldviewTab);
-                
-                // 詢問總監是否繼續
-                showToast("世界觀完成，正在請求 AI 總監評估...");
-                const director1 = await runDirectorDecision('worldview');
-                
-                // 處理導演的執行指令
-                if (director1.action === 'WAIT_USER' || director1.shouldPause) {
-                    addSuccessGlow(worldviewTab);
-                    showToast("⏸️ 總監要求用戶確認，請查看反饋後再繼續");
-                    state.isPipelineRunning = false;
-                    return;
-                }
-                
-                if (director1.action === 'AUTO_REGENERATE' || director1.regenerate) {
-                    // 導演指示重跑/擴充當前階段
-                    showToast("⚡ 導演指示重跑世界觀，正在執行擴充...");
-                    addGlowEffect(worldviewTab, true);
-                    // 根據導演的提示（HINT）構建擴充 prompt
-                    const regeneratePrompt = director1.hint || `請擴充並深化以下世界觀設定，確保包含：
-1. 力量體系詳解（命燈、燃壽修行、等級）
-2. 世界運行規則（永夜封印、妖魔、社會結構）
-3. 核心衝突錨點（打破封印的收益與風險）
-
-現有世界觀：\n${state.currentNovelData.worldbuilding}`;
-                    
-                    streamAPI(
-                        '/api/agent/story-architect',
-                        { novel_id: state.currentNovelId, user_prompt: regeneratePrompt },
-                        () => {},
-                        (delta) => {
-                            if (el.editorWorldview) {
-                                el.editorWorldview.value = delta;
-                                el.editorWorldview.scrollTop = el.editorWorldview.scrollHeight;
-                            }
-                        },
-                        (msg) => showToast(`Error: ${msg}`),
-                        async () => {
-                            showToast("世界觀擴充完成，正在重新評估...");
-                            // 重新保存並繼續
-                            await loadNovelDetails(state.currentNovelId);
-                            // 繼續角色階段
-                            startStage2_Characters();
-                        }
-                    );
-                    return;
-                }
-                
-                if (!director1.continue) {
-                    addSuccessGlow(worldviewTab);
-                    showToast("⏸️ 總監建議暫停，請查看反饋後再繼續");
-                    state.isPipelineRunning = false;
-                    return;
-                }
-                
-                // 繼續角色階段
-                startStage2_Characters();
-            }
-        );
-    }
-    
-    // STAGE 2: 角色設計
-    function startStage2_Characters(regenerateStage = null, hint = null) {
-        addGlowEffect(charactersTab, true);
-        state.activeTab = 'characters';
-        renderActiveTab();
-        
-        // 如果是回頭重新設計，先加載現有內容
-        if (regenerateStage === 'characters' && state.currentNovelData.characters_raw) {
-            if (el.editorCharactersJson) el.editorCharactersJson.value = state.currentNovelData.characters_raw;
-        } else if (el.editorCharactersJson) {
-            el.editorCharactersJson.value = '';
-        }
-        
-        showToast("總監批准！正在啟動角色設計大師 Agent...");
-        
-        // 構建 prompt，如果是回頭修改，需要包含現有角色和修改指示
-        let characterPrompt = userPrompt;
-        if (regenerateStage === 'characters' && hint) {
-            characterPrompt = `請根據以下指示重新設計角色：\n\n${hint}\n\n---\n\n現有角色設定：\n${state.currentNovelData.characters_raw || '尚無角色'}\n\n請嚴格以 JSON 格式輸出更新後的角色設定。`;
-        }
-        
-        streamAPI(
-            '/api/agent/character-designer',
-            { novel_id: state.currentNovelId, user_prompt: characterPrompt },
-            () => {},
-            (delta) => {
-                if (el.editorCharactersJson) {
-                    el.editorCharactersJson.value += delta;
-                    el.editorCharactersJson.scrollTop = el.editorCharactersJson.scrollHeight;
-                }
-            },
-            (msg) => {
-                showToast(`Character Designer Error: ${msg}`);
-            },
-            async () => {
-                addSuccessGlow(charactersTab);
-                
-                // 重新載入以確保資料同步
-                await loadNovelDetails(state.currentNovelId);
-                
-                // 如果是從後續階段回頭修改，需要重新評估角色
-                if (regenerateStage === 'characters') {
-                    showToast("角色已重新設計，正在重新評估...");
-                    // 繼續流程，詢問總監對大綱的影響
-                    await reevaluateAfterRegression('characters');
-                } else {
-                    // 正常流程：詢問總監是否繼續
-                    showToast("角色完成，正在請求 AI 總監評估...");
-                    const director2 = await runDirectorDecision('characters');
-                    
-                    if (director2.action === 'GO_BACK_TO_WORLDVIEW') {
-                        // 總監指示回到世界觀重新設計
-                        showToast("⚡ 總監指示：需要回頭修改世界觀設定");
-                        await handleGoBack('worldview', director2.hint, director2.volume_index, director2.chapter_index);
-                        return;
-                    }
-                    
-                    if (director2.action === 'GO_BACK_TO_CHARACTERS') {
-                        // 總監指示重新設計角色
-                        showToast("⚡ 總監指示：需要重新設計角色");
-                        startStage2_Characters('characters', director2.hint);
-                        return;
-                    }
-                    
-                    if (!director2.continue) {
-                        addSuccessGlow(charactersTab);
-                        showToast("⏸️ 總監建議暫停，請查看反饋後再繼續");
-                        state.isPipelineRunning = false;
-                        return;
-                    }
-                    // 補齊骨架與伏筆的生命週期
-                    await window.generateAllVolumeSkeletons(userPrompt);
-                    await executePipelineStage('foreshadowing_orchestration', userPrompt);
-                    startStage3_Plot();
-                    
-                    // 繼續大綱階段
-                }
-            }
-        );
-    }
-    
-    // STAGE 3: 章節大綱
-    function startStage3_Plot() {
-        addGlowEffect(plotTab, true);
-        state.activeTab = 'plot';
-        if (!Number.isFinite(Number.parseInt(state.activeChapterIndex, 10)) || Number.parseInt(state.activeChapterIndex, 10) <= 0) {
-            state.activeChapterIndex = 1;
-        }
-        renderActiveTab();
-        if (el.editorPlotJson) el.editorPlotJson.value = '';
-        showToast("總監批准！正在啟動大綱規劃師 Agent...");
-        
-        streamAPI(
-            '/api/agent/plot-planner',
-            { 
-                novel_id: state.currentNovelId, 
-                chapter_index: state.activeChapterIndex || 1,
-                user_prompt: userPrompt 
-            },
-            () => {},
-            (delta) => {
-                if (el.editorPlotJson) {
-                    el.editorPlotJson.value += delta;
-                    el.editorPlotJson.scrollTop = el.editorPlotJson.scrollHeight;
-                }
-            },
-            (msg) => {
-                showToast(`Plot Planner Error: ${msg}`);
-            },
-            async () => {
-                addSuccessGlow(plotTab);
-                
-                await loadNovelDetails(state.currentNovelId);
-                const currentChIdx = parseInt(state.activeChapterIndex) || 1;
-
-                if (!shouldReviewPlotBatch(currentChIdx)) {
-                    const nextChIdx = currentChIdx + 1;
-                    showToast(`🟢 第 ${currentChIdx} 章大綱完成。批次評估跳過，自動進入第 ${nextChIdx} 章...`);
-                    state.activeChapterIndex = nextChIdx;
-                    setTimeout(() => {
-                        startStage3_Plot();
-                    }, 1000);
-                    return;
-                }
-
-                // 詢問總監是否繼續
-                showToast("大綱完成，正在請求 AI 總監評估...");
-                const director3 = await runDirectorDecision('plot');
-                
-                if (!director3.continue) {
-                    addSuccessGlow(plotTab);
-                    showToast("⏸️ 總監建議暫停，請查看反饋後再繼續");
-                    state.isPipelineRunning = false;
-                    return;
-                }
-                
-                // 繼續寫作階段
-                startStage4_Writer();
-            }
-        );
-    }
-    
-    // STAGE 4: 正文寫作
-    function startStage4_Writer() {
-        addGlowEffect(writerTab, true);
-        state.activeTab = 'writer';
-        renderActiveTab();
-        showToast("總監批准！正在啟動小說作家 Agent 撰寫第一章...");
-        
-        state.activeChapterIndex = 1;
-        state.currentlyWritingChapterIndex = 1;
-        state.writingBuffer = "";
-        if (el.editorProse) el.editorProse.value = '';
-        
-        const virtualTarget = {
-            get value() { return state.writingBuffer; },
-            set value(val) {
-                state.writingBuffer = val;
-                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    let proseVal = val;
-                    let thinkingVal = "";
-                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                    let splitIndex = -1;
-                    for (const sw of specialWords) {
-                        const idx = val.indexOf(sw);
-                        if (idx !== -1) {
-                            splitIndex = idx;
-                            thinkingVal = val.substring(0, idx).trim();
-                            proseVal = val.substring(idx + sw.length).trim();
-                            break;
-                        }
-                    }
-                    if (splitIndex === -1) {
-                        thinkingVal = val;
-                        proseVal = "";
-                    }
-                    
-                    if (el.editorProse) {
-                        el.editorProse.value = proseVal;
-                        window.smartScrollToBottom(el.editorProse, false);
-                    }
-                    
-                    // Update thinking preview real-time
-                    const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
-                    const thinkingPreview = document.getElementById('chapter-thinking-preview');
-                    if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
-                        thinkingPreview.classList.remove('hidden');
-                        thinkingPreviewText.textContent = thinkingVal;
-                    }
-                }
-            },
-            get scrollTop() { return el.editorProse ? el.editorProse.scrollTop : 0; },
-            set scrollTop(val) {
-                if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    if (el.editorProse) {
-                        el.editorProse.scrollTop = val;
-                    }
-                }
-            },
-            get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
-        };
-
-        streamAPI(
-            '/api/agent/write-chapter',
-            { novel_id: state.currentNovelId, chapter_index: 1 },
-            () => {},
-            (delta) => {
-                virtualTarget.value += delta;
-            },
-            (msg) => {
-                showToast(`Chapter Writer Error: ${msg}`);
-                state.currentlyWritingChapterIndex = null;
-                state.writingBuffer = "";
-            },
-            async () => {
-                state.currentlyWritingChapterIndex = null;
-                state.writingBuffer = "";
-                
-                addSuccessGlow(writerTab);
-                
-                // 詢問總監是否繼續
-                showToast("第一章完成，正在請求 AI 總監評估...");
-                const director4 = await runDirectorDecision('writer');
-                
-                // 最終完成
-                showToast("🎉 聯動工作流執行完畢！");
-                state.isPipelineRunning = false;
-                
-                // 移除所有發光效果
-                setTimeout(clearAllGlows, 3000);
-                
-                // Reload novel details and select first chapter
-                await loadNovelDetails(state.currentNovelId);
-                selectWriterChapter(1);
-            }
-        );
-    }
-}
-
 async function savePipelinePrompt(prompt) {
     if (!state.currentNovelId) return;
     try {
@@ -4404,23 +3819,6 @@ async function handleDrawerPromptSubmit() {
                 await loadNovelDetails(state.currentNovelId);
             },
             { tabName: 'characters', agentName: '角色設計大師 (Character Designer)' }
-        );
-    }
-    
-    if (state.activeDrawerAction === 'plot') {
-        startAgentStream(
-            '/api/agent/plot-planner',
-            { 
-                novel_id: state.currentNovelId, 
-                chapter_index: state.activeChapterIndex || 1,
-                user_prompt: userPrompt 
-            },
-            el.editorPlotJson,
-            async () => {
-                showToast("章節大綱拆分完畢");
-                await loadNovelDetails(state.currentNovelId);
-            },
-            { tabName: 'plot', agentName: '章節劇情規劃師 (Plot Planner)' }
         );
     }
     
@@ -5055,7 +4453,7 @@ function setupEventListeners() {
                 if (decisionResult) {
                     let action = decisionResult.action;
                     let target = decisionResult.target;
-                    const validStages = ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer', 'editor'];
+                    const validStages = ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'writer', 'editor'];
                     
                     if (action === 'TRIGGER_AGENT' || validStages.includes(String(action).toLowerCase())) {
                         if (validStages.includes(String(action).toLowerCase()) && !target) {
@@ -5094,7 +4492,7 @@ function setupEventListeners() {
                                 } else if (target === 'editor') {
                                     const activeCh = chIdx || state.activeChapterIndex || 1;
                                     await executeChapterProseEditFlow(activeCh, hint || '請精修正文');
-                                } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot'].includes(target)) {
+                                } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration'].includes(target)) {
                                     await executePipelineStage(target, hint || '請根據總監指示更新');
                                 } else {
                                     console.warn('Unknown TRIGGER_AGENT target:', target);
