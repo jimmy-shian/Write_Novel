@@ -56,17 +56,17 @@ WORLDVIEW_APPROVAL_CRITERIA = {
         },
         "worldview": {
             "min_length": 300,
-            "description": "世界觀需包含地理、力量體系、社會結構、氛圍等要素"
+            "description": "宏大的世界觀需包含地理、力量體系、社會結構、氛圍等要素"
         },
         "macro_outline": {
             "min_length": 200,
-            "description": "宏觀大綱需完整描述故事走向"
+            "description": "宏觀的大綱需完整描述故事走向"
         },
         "multi_act_structure": {
-            "description": "多幕結構需多個幕，每幕需有明確的起承轉合功能與內容描述"
+            "description": "多幕結構需數十個幕，每幕需有明確的起承轉合功能與內容描述"
         },
         "progressive_character_plan": {
-            "description": "角色漸進規劃需多波以上，反映角色的階段性登場與成長"
+            "description": "角色漸進規劃需數十波以上，反映角色的階段性登場與成長"
         },
         "foreshadowing_seeds": {
             "description": "伏筆種子需數十個，每個需標明早期埋設點、中期干擾、后期收束"
@@ -180,7 +180,7 @@ VOLUME_APPROVAL_CRITERIA = {
     "display_name": "篇卷規劃師",
     "criteria": {
         "volume_count": {
-            "description": "卷數建議數個篇卷，需與世界觀的多幕結構呼應"
+            "description": "卷數建議超過8個篇卷，需與世界觀的多幕結構呼應"
         },
         "required_fields": {
             "per_volume": ["volume_index", "title", "summary", "chapter_count", "factions", "time_timeline", "sequence_context", "applicable_rules"],
@@ -225,6 +225,7 @@ CHAPTER_SKELETON_SCHEMA = {
     "chapter_title": "",
     "chapter_summary": "",
     "time_setting": "",
+    "scene_setting": "",
     "events": [
         {
             "scene_index": 1,
@@ -243,6 +244,7 @@ CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     "chapter_title": "",
     "chapter_summary": "",
     "time_setting": "",
+    "scene_setting": "",
     "events": [
         {
             "scene_index": 1,
@@ -271,10 +273,10 @@ SKELETON_APPROVAL_CRITERIA = {
     "display_name": "篇卷骨架規劃師",
     "criteria": {
         "chapter_completeness": {
-            "description": "該卷所有章節骨架必須完整生成，不可缺漏任何一章"
+            "description": "必須確保【全書所有卷】的章節骨架都已生成完畢。請仔細檢查底層剛性校驗報告，若報告指出還有其他卷（如卷4, 5等）尚未完成骨架，則嚴禁放行進入 writer 階段，必須維持在 volume_skeleton 階段繼續生成缺失的骨架。"
         },
         "chapter_structure": {
-            "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "events", "time_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
+            "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "events", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
             "description": "每章需具備完整結構，所有欄位不可為空，且 events、allocated_tasks 需包含具體詳細大綱內容"
         },
         "time_setting": {
