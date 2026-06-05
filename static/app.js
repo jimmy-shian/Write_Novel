@@ -3499,8 +3499,45 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 directorResponseContainer.classList.add('director-response');
                 
                 cacheDirectorDecisionMessage(responseText, thinkingText);
-                const decisionResult = parseDirectorDecisionText(responseText, currentStage);
+                let decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
+                
+                // 【自動補正 volume_index / chapter_index】
+                // 若 AI 總監回傳了 target 但缺少必要的索引，呼叫後端純計算補正端點
+                const targetNormalized = (decisionResult.target || '').toLowerCase();
+                const needsVolumeIdx = (targetNormalized.includes('skeleton') || targetNormalized === 'volume_skeleton');
+                const needsChapterIdx = (targetNormalized === 'writer' || targetNormalized === 'editor');
+                const missingVolumeIdx = needsVolumeIdx && (decisionResult.volume_index === null || decisionResult.volume_index === undefined);
+                const missingChapterIdx = needsChapterIdx && (decisionResult.chapter_index === null || decisionResult.chapter_index === undefined);
+                
+                if ((missingVolumeIdx || missingChapterIdx) && state.currentNovelId && decisionResult.target) {
+                    try {
+                        const resolveResp = await fetch(
+                            `/api/novels/${state.currentNovelId}/director-decision/resolve-missing-index`,
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ target: decisionResult.target, action: decisionResult.action })
+                            }
+                        );
+                        if (resolveResp.ok) {
+                            const resolveData = await resolveResp.json();
+                            if (missingVolumeIdx && resolveData.resolved_volume_index !== null) {
+                                decisionResult = { ...decisionResult, volume_index: resolveData.resolved_volume_index };
+                                appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 volume_index，系統自動補正為第 ${resolveData.resolved_volume_index} 卷。`);
+                            }
+                            if (missingChapterIdx && resolveData.resolved_chapter_index !== null) {
+                                decisionResult = { ...decisionResult, chapter_index: resolveData.resolved_chapter_index };
+                                if (resolveData.resolved_volume_index !== null) {
+                                    decisionResult = { ...decisionResult, volume_index: resolveData.resolved_volume_index };
+                                }
+                                appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 chapter_index，系統自動補正為第 ${resolveData.resolved_chapter_index} 章。`);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[AutoResolve] Failed to resolve missing index:', e);
+                    }
+                }
                 
                 // 顯示解析結果的 Toast
                 const actionLabels = {
@@ -5683,112 +5720,7 @@ window.deleteVolume = async function(volIdx) {
  * @param {string} userPrompt - 用戶的創作需求 prompt
  * @returns {Promise<boolean>} - 是否全部成功
  */
-async function generateAllVolumeSkeletons(userPrompt) {
-    if (!state.currentNovelId) {
-        showToast('請先選擇或建立一個小說專案');
-        return false;
-    }
-    
-    // 從當前載入的 novelData 中獲取卷列表
-    const volumes = state.currentNovelData?.volumes || [];
-    
-    if (volumes.length === 0) {
-        updateDirectorMessage('⚠️ 警告：系統中尚未規劃任何篇卷！正在從世界觀設定中自動檢測卷數...');
-        // 嘗試從 worldbuilding 中解析卷數與章節數
-        const wbContent = state.currentNovelData?.worldbuilding || '';
-        let defaultVolumes = 5;
-        let volData = [];
-        
-        try {
-            let cleanWb = wbContent.trim();
-            if (cleanWb.includes('```')) {
-                const match = cleanWb.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-                if (match) cleanWb = match[1].strip ? match[1].strip() : match[1];
-            }
-            const parsed = JSON.parse(cleanWb);
-            if (parsed && Array.isArray(parsed.volumes)) {
-                volData = parsed.volumes;
-                defaultVolumes = volData.length;
-            } else if (parsed && Array.isArray(parsed.multi_act_structure)) {
-                defaultVolumes = parsed.multi_act_structure.length;
-                volData = parsed.multi_act_structure.map((act, idx) => ({
-                    volume_index: idx + 1,
-                    title: act.title || `第 ${idx + 1} 卷`,
-                    summary: act.content || `本卷概要...`,
-                    chapter_count: 20
-                }));
-            }
-        } catch (e) {
-            console.warn("Failed to parse worldview for initial volumes:", e);
-        }
-        
-        updateDirectorMessage(`📚 將基於世界觀設定自動生成 ${defaultVolumes} 卷的簡易章節骨架...`);
-        
-        // 為缺失的卷創建預設設定
-        for (let i = 1; i <= defaultVolumes; i++) {
-            const predefined = volData[i - 1] || {};
-            try {
-                await requestAPI(`/api/novels/${state.currentNovelId}/volumes/${i}`, 'POST', {
-                    title: predefined.title || `第 ${i} 卷`,
-                    summary: predefined.summary || predefined.content || `本卷的全新大綱概要描述...`,
-                    factions: predefined.factions ? (Array.isArray(predefined.factions) ? predefined.factions.join(', ') : String(predefined.factions)) : `全域勢力`,
-                    chapter_count: predefined.chapter_count || 20
-                });
-            } catch (e) {
-                console.warn(`Volume ${i} creation failed:`, e);
-            }
-        }
-        
-        // 重新載入以獲取更新後的卷列表
-        await loadNovelDetails(state.currentNovelId);
-    }
-    
-    // 再次獲取卷列表
-    const finalVolumes = state.currentNovelData?.volumes || [];
-    const totalVolumes = finalVolumes.length;
-    
-    if (totalVolumes === 0) {
-        showToast('⚠️ 無法確定篇卷數量，請手動在「大綱」頁面新增篇卷');
-        return false;
-    }
-    
-    updateDirectorMessage(`📚 開始自動生成全書 ${totalVolumes} 卷的簡易章節骨架...`);
-    showToast(`🏗️ Stage 2 啟動：即將為 ${totalVolumes} 卷生成宏觀骨架...`);
-    
-    let successCount = 0;
-    let failCount = 0;
-    
-    // 依序遍歷所有卷（非並發，控制併發數量）
-    for (let volIdx = 1; volIdx <= totalVolumes; volIdx++) {
-        if (!state.isPipelineRunning) {
-            showToast('⏸️ 管線已被暫停');
-            break;
-        }
-        
-        updateDirectorMessage(`⏳ 正在全自動催生第 ${volIdx} / ${totalVolumes} 卷的簡易章節骨架...`);
-        window.updateAgentStreamOutput('plot', `\n--- [管線自動化] 開始生成第 ${volIdx} 卷簡易骨架 ---\n`);
-        
-        const volSkeletonResult = await window.runVolumeSkeletonPlannerDirect(volIdx);
-        
-        if (volSkeletonResult) {
-            successCount++;
-        } else {
-            failCount++;
-            window.updateAgentStreamOutput('plot', `\n  ⚠️ 第 ${volIdx} 卷骨架生成失敗或被跳過\n`);
-        }
-    }
-    
-    // 全部卷骨架生成完畢後的回饋
-    if (state.isPipelineRunning) {
-        updateDirectorMessage(`✅ Stage 2 完成：${successCount}/${totalVolumes} 卷骨架生成完畢${failCount > 0 ? `（${failCount} 卷失敗）` : ''}`);
-        showToast(`🏗️ Stage 2 完成：${successCount} 卷宏觀骨架已生成`);
-        
-        // 刷新數據以確保下一階段能看到最新的骨架數據
-        await loadNovelDetails(state.currentNovelId);
-    }
-    
-    return successCount > 0;
-}
+
 
 /**
  * 📖 單卷骨架生成封裝函數（用於管線自動化）
@@ -5797,19 +5729,20 @@ async function generateAllVolumeSkeletons(userPrompt) {
  * @param {number} volumeIndex - 要生成骨架的卷索引（從 1 開始）
  * @returns {Promise<boolean>} - 是否成功
  */
-window.runVolumeSkeletonPlannerDirect = function(volumeIndex) {
+window.runVolumeSkeletonPlannerDirect = function(volumeIndex, userPrompt = null) {
     return new Promise((resolve, reject) => {
         // 標記當前正在處理的卷
         state.activeVolumeIndex = volumeIndex;
         
         window.updateAgentStreamOutput('plot', `\n--- [管線自動化] 開始生成第 ${volumeIndex} 卷簡易骨架 ---\n`);
         
+        let hasError = false;
         streamAPI(
             '/api/agent/volume-skeleton',
             { 
                 novel_id: state.currentNovelId, 
                 volume_index: volumeIndex,
-                user_prompt: null // 可選，讓用戶傳入自訂提示
+                user_prompt: userPrompt // 可選，讓用戶/總監傳入自訂提示
             },
             null, // onThinking - volume skeleton 通常不需要思考過程
             (delta) => {
