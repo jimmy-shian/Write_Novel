@@ -530,14 +530,23 @@ def delete_novel(novel_id):
     conn.close()
 
 # --- VOLUMES (篇卷) HELPERS ---
-def save_volumes(novel_id, volumes_list, clear_downstream=False):
+def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=None):
+    """
+    target_vol_idx: 若指定（patch 模式），則只 upsert 該卷，其餘卷保留不被刪除。
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
-    if clear_downstream:
-        cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
+    if target_vol_idx is not None:
+        cursor.execute(
+            "DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?",
+            (novel_id, target_vol_idx)
+        )
+    else:
+        cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
+        if clear_downstream:
+            cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+            cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
+            cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
     for idx, vol in enumerate(volumes_list):
         volume_index = vol.get("volume_index", idx + 1)
         title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
@@ -560,7 +569,7 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False):
             applicable_rules = _to_traditional(applicable_rules)
             
         cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
+            "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules)
         )
@@ -2417,7 +2426,7 @@ def detect_current_stage(novel_id):
     return "editor"
 
 
-def generate_validation_report(novel_id):
+def generate_validation_report(novel_id, current_stage=None, active_volume_index=None, active_chapter_index=None):
     """
     用 Python 硬碼（Hardcoded）計算的客觀指標報告，避免 AI 通靈。
     進行嚴格的資料完整性與邏輯一致性檢查，並產出易於被 AI 總監解析的剛性指標報告。
@@ -2540,11 +2549,10 @@ def generate_validation_report(novel_id):
                 if duplicate_indexes:
                     report_lines.append(f"      - ⚠️ [大綱骨架重複] 重複章節：{duplicate_indexes}")
         
-        # 🔴 剛性阻斷摘要：明確標記是否所有卷骨架皆已完成
         if missing_skeleton_vols:
-            report_lines.append(f"  - 🚫🚫🚫 [BLOCKING / 硬性阻斷] 以下卷的骨架尚未完成：卷 {missing_skeleton_vols}。")
-            report_lines.append(f"    ⛔ 絕對禁止放行至 writer 或後續階段！必須先補齊所有卷的骨架！")
-            report_lines.append(f"    ⛔ 你必須輸出 action=CONTINUE, target=volume_skeleton 或 action=GO_BACK_TO_SKELETON_EXPANSION 來補齊缺失骨架。")
+            report_lines.append(f"  - 🚫🚫🚫 [硬性阻斷] 以下卷的骨架尚未完成：卷 {missing_skeleton_vols}。")
+            first_missing_vol = missing_skeleton_vols[0]
+            report_lines.append(f"  - 卷生成骨架的優先順序為：從第一卷開始依序生成，請優先完成遺失的卷 {missing_skeleton_vols} 的骨架規劃。")
         else:
             report_lines.append(f"  - ✅ [全卷骨架完整性檢查] 所有 {len(vols)} 卷骨架均已建立，允許進入後續階段。")
     report_lines.append("")
@@ -2587,31 +2595,54 @@ def generate_validation_report(novel_id):
     # 5. 正文寫作 (Prose Chapters)
     written_ch = get_all_chapters_latest(novel_id)
     report_lines.append("【5. 正文寫作與完稿層】")
-    if not written_ch:
-        report_lines.append("  - 狀態：❌ 未完成 (尚未寫作任何正文章節)")
+    if vols:
+        expected_chapters_count = sum(_get_clean_chapter_count(v) for v in vols)
     else:
-        report_lines.append(f"  - 正文已寫作章節數：共 {len(written_ch)} 章")
+        all_indexes = [int(ch["chapter_index"]) for ch in written_ch if ch.get("chapter_index") is not None]
+        expected_chapters_count = max(all_indexes) if all_indexes else 1
+
+    # 剛性篩選已完成且非髒資料/保底/占位符，且在當前篇卷規劃章節範圍內的章節
+    valid_written_ch = []
+    for ch in written_ch:
+        ch_idx = ch.get("chapter_index")
+        if ch_idx is not None:
+            try:
+                ch_idx_int = int(ch_idx)
+                if ch_idx_int > expected_chapters_count or ch_idx_int < 1:
+                    continue
+            except:
+                continue
+        content = ch.get("content") or ""
+        is_placeholder = "保底" in content or "占位" in content or len(content.strip()) < 100
+        is_dirty = ch.get("is_dirty") == 1 or ch.get("is_dirty") is True
+        if not is_placeholder and not is_dirty:
+            valid_written_ch.append(ch)
+            
+    if not valid_written_ch:
+        report_lines.append("  - 狀態：❌ 未完成 (尚未寫作任何有效正文章節)")
+
+    else:
+        report_lines.append(f"  - 正文已寫作有效章節數：共 {len(valid_written_ch)} 章 (總紀錄數: {len(written_ch)} 章)")
         
-        # 連續性檢查
-        written_indexes = sorted([int(ch["chapter_index"]) for ch in written_ch])
-        expected_chapters_count = sum(_get_clean_chapter_count(v) for v in vols) if vols else max(written_indexes)
+        # 連續性檢查與缺漏檢測
+        written_indexes = sorted([int(ch["chapter_index"]) for ch in valid_written_ch])
         
-        # 找出斷檔/未寫的章節
+        # 找出所有未寫的章節（在總規劃範圍內）
         unwritten_chapters = []
-        for i in range(1, max(written_indexes) + 1):
+        for i in range(1, expected_chapters_count + 1):
             if i not in written_indexes:
                 unwritten_chapters.append(i)
                 
         # 計算進度百分比
-        progress_pct = (len(written_ch) / expected_chapters_count) * 100 if expected_chapters_count > 0 else 0
-        report_lines.append(f"  - 全書專案正文完成進度：{progress_pct:.2f}% ({len(written_ch)}/{expected_chapters_count} 章)")
+        progress_pct = (len(valid_written_ch) / expected_chapters_count) * 100 if expected_chapters_count > 0 else 0
+        report_lines.append(f"  - 全書專案正文完成進度：{progress_pct:.2f}% ({len(valid_written_ch)}/{expected_chapters_count} 章)")
         
         if unwritten_chapters:
-            report_lines.append(f"  - ⚠️ [正文章節序號不連續 / 斷檔，由系統 Python 邏輯外部計算]：")
+            earliest_missing_chapter = min(unwritten_chapters)
+            report_lines.append(f"  - 🚫 [進度缺漏 / 斷檔] 檢測到最早缺漏/未寫作的章節為：第 {earliest_missing_chapter} 章")
             report_lines.append(f"    * 以下章節已被跳過/尚未寫作：{unwritten_chapters}")
-            report_lines.append("    * 警告：正文序號不連續，可能導致劇情前言不搭後語！")
         else:
-            report_lines.append(f"  - 正文章節序號連續性檢查 (1 至 {max(written_indexes)} 章，由系統 Python 邏輯外部計算)：✅ 正文順序推進，無中斷斷檔。")
+            report_lines.append(f"  - 正文章節序號連續性檢查 (1 至 {expected_chapters_count} 章，由系統 Python 邏輯外部計算)：✅ 正文順序推進，無中斷斷檔且已全部完工。")
             
     report_lines.append("=" * 60)
     return "\n".join(report_lines)

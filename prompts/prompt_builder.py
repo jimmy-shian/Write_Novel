@@ -493,7 +493,7 @@ def mask_worldview_seeds_and_turns(worldview_text):
         
     return "".join(new_parts)
 
-def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None):
+def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None, chapter_index=None):
     """總監決策評判提示詞
     
     根據不同階段傳入對應的審查內容：
@@ -667,6 +667,14 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
  
 {DIRECTOR_COMMON_FOOTER}
 """
+        extra_guideline = ""
+        current_ch = chapter_index if chapter_index is not None else 1
+        if suggested_next_chapter is not None:
+            # 檢查是否為非常規（如補寫、補充缺漏章節）
+            is_supplementary = (suggested_next_chapter != current_ch + 1)
+            supp_msg = "（⚠️ 此為補充/填補缺漏章節）" if is_supplementary else ""
+            extra_guideline = f"\n\n💡【編輯姬審核後前往下一章指引】{supp_msg}：當前審查的章節為第 {current_ch} 章。本系統建議的下一章計畫前往：第 {suggested_next_chapter} 章。若此章為補齊先前缺漏的章節或繼續推展，請優先在 JSON 決策中將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`，以利全自動管線能無縫銜接到正確的章節位置。"
+
         user_content = f"""【世界觀背景】
 {worldview_text}
  
@@ -674,7 +682,7 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
 {plot_text}
  
 【潤色後正文（完整內容）】
-{written_chapters_text}
+{written_chapters_text}{extra_guideline}
  
 請進行深度評估，決定下一步行動！
 """
@@ -702,6 +710,12 @@ def build_director_decision_messages(current_stage, worldview_text, characters_t
 請進行深度評估，決定下一步行動！
 """
     
+    if suggested_next_chapter is not None:
+        if current_stage in ("writer", "editor"):
+            system_prompt += f"\n\n💡【系統寫作計畫指引】：若本次審核放行並準備繼續正文寫作，系統建請下一章前往：第 {suggested_next_chapter} 章（這可能是一般的順序下一章，或是為了補齊斷檔/缺漏的章節）。請在輸出 JSON 決策時，優先將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`。\n"
+        elif current_stage == "volume_skeleton":
+            system_prompt += f"\n\n💡【系統寫作計畫指引】：若剛性校驗報告確認【所有卷】的骨架皆已完全生成且無缺漏，準備放行進入正文寫作階段時，系統建請從第 {suggested_next_chapter} 章開始寫作。請在決策放行且 target 為 writer 時，將 `chapter_index` 設為 {suggested_next_chapter}。\n"
+
     system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
     return [

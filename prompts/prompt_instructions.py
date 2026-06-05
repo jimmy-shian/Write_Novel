@@ -44,8 +44,8 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
   "target": "characters",
   "hint": "在此欄位中填寫給該 Agent 的具體、精準的改寫/生成指示。請將使用者的對話要求改寫並融入此欄位作為指令",
   "reason": "詳細寫下你的創意考量。",
-  "volume_index": null,
-  "chapter_index": null
+  "volume_index": null, // 若目標 Agent 需要指定特定卷數，填寫對應整數（例如：1），否則填 null
+  "chapter_index": null // 若目標 Agent 需要指定特定章節數，填寫對應整數（例如：1），否則填 null
 }}
 ```
 
@@ -56,25 +56,24 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
   "target": null,
   "hint": "",
   "reason": "單純與用戶聊天答疑",
-  "volume_index": null,
-  "chapter_index": null
+  "volume_index": null, // 如果要針對特定卷操作，請填入整數（例如：3），否則填 null
+  "chapter_index": null // 如果要針對特定章操作，請填入整數（例如：1），否則填 null
 }}
 ```
 """
 
 # 總監評斷下一步行動的提示詞，適用於 plot_review、writer_review、editor_review 等階段
 DIRECTOR_COMMON_FOOTER = """
-【如果是 init 階段(初始階段)，請判斷有完成的是哪些，接下來該往哪個步驟進行】
+【如果是 init 階段(初始階段)，請判斷有完成的是哪些步驟，接下來該往哪個步驟進行】
 
 ## 可用的 ACTION 指令（嚴格選擇一個）
 
 | ACTION | 用途 | 必要欄位 |
 |--------|------|----------|
-| `CONTINUE` | 當前階段品質合格，繼續下一階段 | `target`（下一階段名稱） |
+| `CONTINUE` | 當前目標品質合格，繼續下一階段或【同階段的下一卷/下一章】 | `target`（目標階段名稱）, `volume_index`, `chapter_index` |
 | `AUTO_REGENERATE` | 當前階段品質不足，需要重新生成 | `target`（要重跑的階段）, `hint` (要修改的細項描述), `volume_index`（若與特定卷相關，填入整數；否則填 null）, `chapter_index`（若與特定章相關，填入整數；否則填 null） |
 | `GO_BACK_TO_WORLDVIEW` | 發現世界觀重大缺失（大綱方向/風格 和設定不符） | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
 | `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失 (角色列表為空) | `hint`（具體要修改的角色內容） |
-| `WRITE_ALL_CHAPTERS` | 大綱已就緒，開始自動撰寫所有章節正文 | 無 |
 | `GO_BACK_TO_SKELETON_EXPANSION` | 發現序號中斷或空殼卷，退回至骨架增生 (volume_skeleton) 重新生成大綱骨架 | 無 |
 | `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
 | `FINISH` | 全部正文寫作任務完成100% | 無 |
@@ -86,17 +85,26 @@ DIRECTOR_COMMON_FOOTER = """
 ## ⚠️ 【重要評估邊界與管線相依性規則】(🔥 嚴格遵守)
 1. **創作黃金階段依序推進**：世界觀 (`worldview`) -> 角色 (`characters`) -> 篇卷 (`volumes`) -> 章節骨架 (`volume_skeleton`) -> 正文寫作 (`writer`) -> 編輯姬精修 (`editor`)。
 2. **禁止超前審查（絕對紅線）**：當前評估階段由 `current_stage` 參數給定。如果 `current_stage` 是 `worldview`、`characters`、`volumes` 或 `volume_skeleton`，後續的正文 (`chapters`) 本來就應該是空的！你**絕對禁止**因為正文為空而給出回退指令！這會導致管線死鎖！
-3. **合格即放行**：只要當前 `current_stage` 的內容品質合格，你**必須**輸出 `action: "CONTINUE"`，並將 `target` 設為下一個順序階段。例如：
-   - 當 `current_stage` 為 `worldview`，合格後 `target` 應為 `characters`。
+3. **全局/階段性推進規則（🔥 核心修正）**：
+   在決定輸出 `action: "CONTINUE"` 時，必須遵循以下精準導向：
+   - 當 `current_stage` 為 `worldview`，合格後 `target`應為 `characters`。
    - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `volumes`。
-   - 當 `current_stage` 為 `volumes`，合格後 `target` 應為 `volume_skeleton`。
-   - 當 `current_stage` 為 `volume_skeleton`，合格後 `target` 應為 `writer`。
-   - 當 `current_stage` 為 `writer`，合格後 `target` 應為 `editor`。
-   - 當 `current_stage` 為 `editor`，合格後，若正文寫作未完成100%，`target` 應為 `writer`，並增加 `chapter_index`。
+   - 當 `current_stage` 為 `volumes`，合格後 `target` 應為 `volume_skeleton`，且 `volume_index` 設為 `1`。
+   - 🔥 **當 `current_stage` 為 `volume_skeleton` 時（卷骨架遞進邏輯）**：
+     - 若目前「僅完成第 N 卷」的骨架且品質合格，但小說總共有更多卷尚未生成骨架：`target` **必須保持為 `volume_skeleton`**，並將 `volume_index` 設為 `N+1`（遞進到下一卷骨架生成），此時 `chapter_index` 必須為 `null`。**嚴格禁止直接跳到 `writer`**！
+     - 只有當【系統底層剛性校驗報告】或上下文確認【所有篇卷（全書）】的骨架都已 100% 生成完畢，`target` 才能設為 `writer`，此時 `volume_index` 設為 `1`，`chapter_index` 設為 `1`。
+     - 🔥🔥 **【`volume_index` 絕對不可為 null 的紅線】**：當 `target = "volume_skeleton"` 時（不論 action 是 `CONTINUE` 還是 `AUTO_REGENERATE`），`volume_index` **必須填寫明確的整數**，指定要生成/重新生成的是【第幾卷】的骨架。**絕對禁止填寫 `null`**！你必須從「系統底層剛性校驗報告」中找出缺失/需重跑的卷號，填入正確的整數！
+   - 當 `current_stage` 為 `writer`，當前章節合格後，`target` 應為 `editor`（去精修當前章）。
+   - 當 `current_stage` 為 `editor`，當前章節潤色合格後：若全書正文未完成 100%，`target` 應回到 `writer`，並將 `chapter_index` 遞增（進入下一章寫作）。
 4. **增量/局部修改優先原則**：
    - 如果當前 `characters` 設計中大部分極佳，只有少數特定角色設定需要微調，優先選擇 `INCREMENTAL_MODIFY_CHARACTER` 或 `INCREMENTAL_MODIFY_CHARACTER_FULL` 而非全量重新跑。
    - 如果當前角色庫有缺漏需補充新人物，優先選擇 `INCREMENTAL_APPEND_CHARACTER`。
    - 如果當前 `volume_skeleton` 絕大部分合格，只有個別卷骨架需要調整，優先選擇 `INCREMENTAL_MODIFY_SKELETON`。
+5. **⚠️ 嚴格禁止跨階段遺漏 (致命紅線)**：若「系統底層剛性校驗報告」明確指出當前階段還有「尚未完成」、「缺失」或「未生成」的內容（例如：報告顯示卷 4, 5, 6 的骨架尚未完成），你**絕對禁止**給出 `CONTINUE` 進入下一個全新階段（如 `writer`）！你必須留在當前階段完成它。
+6. **🎯 準確傳遞進度參數 (`volume_index` 與 `chapter_index`)（注意輸出）**：
+   - 當 `target` 為 `volume_skeleton` 時：**必須**透過 `volume_index` 指定當前要處理或接下來要生成的卷數（整數，**不可為 `null`**！）。在進度為volume_index時，若報告顯示「第 X 卷骨架缺失」，`volume_index` 必須填寫 `X`。此時 `chapter_index` **必須嚴格填寫 `null`**（骨架階段不存在章節寫作）。
+   - 當 `target` 為 `writer` 或 `editor` 時：**必須**同時指定 `volume_index`（哪一卷）與 `chapter_index`（哪一章）。絕對不可填寫 null！
+   - 其他與特定卷章微關的階段（如 `worldview`, `characters`, `volumes`），則兩者皆填入 `null`。
 
 ## 回應格式（嚴格遵守，否則解析出錯）
 請用繁體中文提供簡潔的評估分析，然後在末尾輸出 JSON 指令區塊：
@@ -114,14 +122,13 @@ DIRECTOR_COMMON_FOOTER = """
 然後必須在回應最後輸出以下 JSON 區塊（系統靠此解析）：
 
 ```json
-{{
+{
   "action": "CONTINUE",
   "target": "characters",
   "hint": "",
   "reason": "決策原因說明。",
-  "volume_index": null(在需要指定卷或章的情況下填入具體數字 writer、editor 階段需要),
-  "chapter_index": null(在需要指定卷或章的情況下填入具體數字 writer、editor 階段需要)
-}}
+  "volume_index": null, // 如果要針對特定卷操作，請填入整數（例如：3），否則填 null
+  "chapter_index": null // 如果要針對特定章操作，請填入整數（例如：1），否則填 null
+}
 ```
-
 """
