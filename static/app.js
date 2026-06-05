@@ -4241,6 +4241,29 @@ function setupEventListeners() {
     });
     
     // 6. AGENTS PIPELINE TRIGGERS
+    const btnExportNovel = document.getElementById('btn-export-novel');
+    if (btnExportNovel) {
+        btnExportNovel.addEventListener('click', async () => {
+            if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
+            
+            const format = await window.showCustomDialog({
+                title: "📦 匯出小說",
+                message: "請選擇您要匯出的格式：\nTXT: 純文字格式，適合閱讀正文。\nMarkdown: 包含世界觀、角色設定的格式化文件。",
+                type: 'options',
+                options: [
+                    { value: 'txt', text: '匯出為 TXT 檔' },
+                    { value: 'markdown', text: '匯出為 Markdown 檔' }
+                ]
+            });
+            
+            if (format) {
+                showToast(`正在準備匯出 ${format.toUpperCase()} 檔...`);
+                // Trigger download via window.location
+                window.location.href = `/api/novels/${state.currentNovelId}/export?format=${format}`;
+            }
+        });
+    }
+
     const btnPipelineExecute = document.getElementById('btn-pipeline-execute');
     if (btnPipelineExecute) {
         btnPipelineExecute.addEventListener('click', () => {
@@ -5102,7 +5125,7 @@ window.showCustomDialog = function({ title, message, type = 'alert', defaultValu
                 btn.style.borderRadius = '8px';
                 btn.style.border = '1px solid rgba(255,255,255,0.08)';
                 btn.style.background = 'rgba(255,255,255,0.03)';
-                btn.style.color = '#fff';
+                btn.style.color = '#525252';
                 btn.style.cursor = 'pointer';
                 btn.style.transition = 'all 0.2s';
                 btn.innerHTML = opt.text;
