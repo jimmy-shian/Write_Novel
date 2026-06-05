@@ -7,7 +7,7 @@ import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWor
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators, switchToDirectorTab, switchToStreamTab } from './agentProcessing.js';
-import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage, writeAllChaptersSequentially } from './pipeline.js';
+import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage } from './pipeline.js';
 // Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
 window.state = state;
 
@@ -632,16 +632,7 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
         
-        case 'WRITE_ALL_CHAPTERS': {
-            updatePipelineStage('worldview', 'done');
-            updatePipelineStage('characters', 'done');
-            updatePipelineStage('plot', 'done');
-            updatePipelineStage('writer', 'running');
-            updateDirectorMessage('✍️ 開始自動撰寫所有章節正文...');
-            showToast('🚀 總監批准！開始自動撰寫全書章節...');
-            await writeAllChaptersSequentially(userPrompt);
-            break;
-        }
+
         
         case 'WAIT_USER': {
             showToast('⏸️ 總監要求用戶確認，請查看右側聊天區的總監評估');
@@ -802,7 +793,7 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('plot', 'done');
         updatePipelineStage('writer', 'running');
         updateDirectorMessage('✍️ 前期準備完成，開始撰寫正文...');
-        await writeAllChaptersSequentially(userPrompt);
+        await executePipelineStage('writer', userPrompt);
     }
 }
 
@@ -890,7 +881,7 @@ async function executeCharacterAgent() {
  * @param {function} onDone - 成功完成回呼
  * @param {number} maxRetries - 最大重試次數（預設 10 次）
  */
-window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10) {
+window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 3) {
     let currentRetry = 0;
     
     // 透過閉包鎖定內部執行邏輯
@@ -2837,10 +2828,8 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('worldview');
                     },
-                    async () => {
-                        showToast("伏筆種子新增完成");
+                    async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -2872,9 +2861,8 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('worldview');
                     },
-                    async () => {
+                    async (success) => {
                         showToast("多幕式結構更新完成");
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
@@ -2908,10 +2896,8 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('characters');
                     },
-                    async () => {
-                        showToast("角色更新完成");
+                    async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -2944,10 +2930,9 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('characters');
                     },
-                    async () => {
-                        showToast("新角色新增完成");
+                    async (success) => {
+                        if (success) showToast("新角色新增完成");
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -2979,10 +2964,9 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('plot');
                     },
-                    async () => {
-                        showToast("新章節插入完成");
+                    async (success) => {
+                        if (success) showToast("新章節插入完成");
                         hideAgentProcessingIndicator('plot');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -3011,13 +2995,18 @@ async function executeIncrementalUpdate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('volume_skeleton', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('volume_skeleton');
                     },
-                    async () => {
-                        showToast("卷骨架更新完成");
+                    async (success) => {
+                        if (success) {
+                            showToast("卷骨架更新完成");
+                        }
                         hideAgentProcessingIndicator('volume_skeleton');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
+                    },
+                    (msg) => {
+                        window.updateAgentStreamOutput('volume_skeleton', `\n${msg}`);
+                        showToast(msg);
                     }
                 );
             });
@@ -3053,9 +3042,8 @@ async function executeToolCall(tool, params) {
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('worldview');
                     },
-                    async () => {
+                    async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -3081,9 +3069,8 @@ async function executeToolCall(tool, params) {
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('characters');
                     },
-                    async () => {
+                    async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -3172,9 +3159,8 @@ async function executeToolCall(tool, params) {
                         showToast("Error: " + err);
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
-                        hideAgentProcessingIndicator('writer');
                     },
-                    async () => {
+                    async (success) => {
                         state.currentlyWritingChapterIndex = null;
                         state.writingBuffer = "";
                         hideAgentProcessingIndicator('writer');
@@ -3217,9 +3203,8 @@ async function executeAutoRegenerate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('worldview');
                     },
-                    async () => {
+                    async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -3247,9 +3232,8 @@ async function executeAutoRegenerate(target, params) {
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
-                        hideAgentProcessingIndicator('characters');
                     },
-                    async () => {
+                    async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
                         resolve(true);
@@ -3258,13 +3242,15 @@ async function executeAutoRegenerate(target, params) {
             });
             
         case 'plot':
-        case '章節大綱':
+        case '章節大綱': {
             showToast("🔄 重新生成章節大綱...");
             showAgentProcessingIndicator('plot', 'Plot Planner (重新生成骨架)');
-            await window.generateAllVolumeSkeletons(hint || "請重新規劃章節大綱");
+            const regenVolIdx = params.volume_index || state.activeVolumeIndex || 1;
+            await window.runVolumeSkeletonPlannerDirect(regenVolIdx, hint || "請重新規劃章節大綱");
             hideAgentProcessingIndicator('plot');
             await loadNovelDetails(state.currentNovelId);
             return true;
+        }
             
         default:
             showToast(`⚠️ 不支援的重新生成目標: ${target}`);
@@ -5815,15 +5801,22 @@ window.runVolumeSkeletonPlannerDirect = function(volumeIndex, userPrompt = null)
                 console.error(`Volume ${volumeIndex} skeleton failed:`, error);
                 window.updateAgentStreamOutput('plot', `\n[Error: ${error}]\n`);
                 showToast(`⚠️ 第 ${volumeIndex} 卷骨架生成失敗: ${error}`);
-                resolve(false); // 容錯，允許繼續或由總監救援
+                hasError = true;
+                // do not resolve yet, let onDone handle cleanup
             },
             async () => {
+                if (hasError) {
+                    window.updateAgentStreamOutput('plot', `\n❌ 第 ${volumeIndex} 卷骨架生成被中止。\n`);
+                    hideAgentProcessingIndicator('plot');
+                    resolve(false);
+                    return;
+                }
                 window.updateAgentStreamOutput('plot', `\n✓ 第 ${volumeIndex} 卷骨架保存完畢。\n`);
                 showToast(`✅ 第 ${volumeIndex} 卷骨架生成完畢`);
                 
                 // 刷新該卷的數據
                 await loadNovelDetails(state.currentNovelId);
-                
+                hideAgentProcessingIndicator('plot');
                 resolve(true);
             }
         );
@@ -5875,7 +5868,7 @@ window.runForeshadowingOrchestratorDirect = function() {
 // ==========================================
 // 暴露給全局的管線控制函數
 // ==========================================
-window.generateAllVolumeSkeletons = generateAllVolumeSkeletons;
+
 
 
 

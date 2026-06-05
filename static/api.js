@@ -38,11 +38,13 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onThinking - AI 思考中回呼（可選）
  * @param {function} onContent - 內容片段回呼
  * @param {function|null} onError - 錯誤回呼（可選）
- * @param {function|null} onDone - 完成回呼（可選）
+ * @param {function|null} onDone - 完成回呼（可選），會收到一個布林參數 success
+ * @param {function|null} onRetrying - 重試中回呼（可選）
  */
 export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying) {
     const MAX_RETRIES = 1;
     let attempt = 0;
+    let streamHadFinalError = false;
 
     // Trigger start callback
     if (typeof window.onStreamAPIStart === 'function') {
@@ -59,7 +61,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const STALL_TIMEOUT = 10000; // 90 seconds stall timeout
+        const STALL_TIMEOUT = 30000; // 30 秒（原 10 秒，避免後端重試等待時觸發前端 abort）
 
         function resetActivityTimer() {
             if (activityTimer) clearTimeout(activityTimer);
@@ -90,6 +92,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
+            let localHadError = false;
             
             while (true) {
                 const { value, done } = await reader.read();
@@ -154,6 +157,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         } else if (parsed.type === 'content') {
                             if (typeof onContent === 'function') onContent(parsed.delta);
                         } else if (parsed.type === 'error') {
+                            localHadError = true;
+                            streamHadFinalError = true;
                             if (typeof onError === 'function') onError(parsed.message);
                         } else if (parsed.type === 'retrying') {
                             if (typeof onRetrying === 'function') onRetrying(parsed.message);
@@ -173,7 +178,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 } catch (e) {}
             }
 
-            if (typeof onDone === 'function') await onDone();
+            // 傳遞 success 狀態給 onDone（讓前端可以區分成功/失敗）
+            if (typeof onDone === 'function') await onDone(!localHadError);
         } catch (err) {
             if (activityTimer) clearTimeout(activityTimer);
 
@@ -193,10 +199,12 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 } catch (e) {}
             }
 
+            streamHadFinalError = true;
             if (typeof onError === 'function') {
                 onError(isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`);
             }
-            if (typeof onDone === 'function') await onDone();
+            // 錯誤時也以 success=false 調用 onDone，確保 Promise 能結束
+            if (typeof onDone === 'function') await onDone(false);
         }
     }
 
