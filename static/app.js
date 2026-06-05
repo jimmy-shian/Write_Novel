@@ -464,18 +464,13 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
                 updatePipelineStage('volume_skeleton', 'running');
-                updateDirectorMessage('🏗️ 生成全書各卷章大綱骨架...');
-                showToast('🏗️ 生成全書各卷章大綱骨架...');
-                const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
-                if (skeletonSuccess && state.isPipelineRunning) {
-                    updateDirectorMessage('🔍 骨架生成完成，請總監評估下一步...');
-                    const nextDecision = await runDirectorDecision('volume_skeleton', userPrompt);
-                    await executeDirectorAction(nextDecision, userPrompt);
-                } else if (!skeletonSuccess) {
-                    updateDirectorMessage('⚠️ 骨架生成失敗，已停止管線。');
-                    state.isPipelineRunning = false;
-                    showPipelineProgress(false);
-                }
+                
+                const volIdx = decision?.volume_index || state.activeVolumeIndex || 1;
+                state.activeVolumeIndex = volIdx;
+                
+                updateDirectorMessage(`🏗️ 生成第 ${volIdx} 卷大綱骨架...`);
+                showToast(`🏗️ 生成第 ${volIdx} 卷大綱骨架...`);
+                await executePipelineStage('volume_skeleton', userPrompt, decision);
             } else if (target === 'writer' || target === '正文寫作' || target === '寫故事') {
                 const vols = state.currentNovelData?.volumes || [];
                 const hasSkeletons = vols.length > 0 && vols.every(v => {
@@ -497,6 +492,9 @@ async function executeDirectorAction(decision, userPrompt) {
 
                 // 【核心修復】：如果前一個成功的階段是 editor，代表當前章節已完美收尾
                 // 此時若總監指示繼續前進到寫作階段，我們應該安全遞增 chapter index（除非總監在 decision 中已明確覆寫了一個更大的 index）
+                if (decision?.chapter_index) {
+                    state.activeChapterIndex = parseInt(decision.chapter_index);
+                }
                 if (state.activeTab === 'editor') {
                     showToast(`🎉 前一章審核通過！準備寫作第 ${state.activeChapterIndex} 章...`);
                 }
@@ -3072,13 +3070,16 @@ async function executeToolCall(tool, params) {
                 );
             });
             
-        case 'plot-planner':
-            showToast("📋 執行劇情規劃師（全量骨架生成）...");
-            showAgentProcessingIndicator('plot', 'Plot Planner (全量骨架生成)');
-            await window.generateAllVolumeSkeletons(user_prompt || params.hint);
+        case 'plot-planner': {
+            showToast("📋 執行劇情規劃師...");
+            showAgentProcessingIndicator('plot', 'Plot Planner');
+            const vols = state.currentNovelData?.volumes || [];
+            const firstVol = vols[0]?.volume_index || 1;
+            await window.runVolumeSkeletonPlannerDirect(firstVol, user_prompt || params.hint);
             hideAgentProcessingIndicator('plot');
             await loadNovelDetails(state.currentNovelId);
             return true;
+        }
             
         case 'write-chapter':
             showToast(`✍️ 執行章節寫手（第 ${chapter_index} 章）...`);
