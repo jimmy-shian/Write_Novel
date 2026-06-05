@@ -465,14 +465,102 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
         raise HTTPException(status_code=404, detail="Novel not found")
         
     return StreamingResponse(
-        agents.run_director_decision_help(
+        agents.safe_generator_wrapper(agents.run_director_decision_help(
             novel_id=novel_id,
             current_stage=payload.current_stage,
             help_action=payload.help_action,
             help_reason=payload.help_reason
-        ),
+        )),
         media_type="text/event-stream"
     )
+
+
+class ResolveMissingIndexPayload(BaseModel):
+    target: str  # 目標階段，如 "volume_skeleton", "writer", "editor"
+    action: Optional[str] = None  # 例如 "CONTINUE" / "AUTO_REGENERATE"
+
+@app.post("/api/novels/{novel_id}/director-decision/resolve-missing-index")
+def api_resolve_missing_index(novel_id: str, payload: ResolveMissingIndexPayload):
+    """
+    純 Python 計算補正端點（不呼叫 AI）。
+    當 AI 總監的 JSON 缺少 volume_index 或 chapter_index 時，前端可呼叫此端點，
+    由後端根據資料庫現有資料，自動計算出正確的 volume_index / chapter_index。
+    """
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    
+    target = (payload.target or "").strip().lower()
+    resolved_volume_index = None
+    resolved_chapter_index = None
+    
+    if "skeleton" in target or target == "volume_skeleton":
+        # 找出第一個缺失骨架的卷
+        vols = db.get_volumes(novel_id)
+        for v in sorted(vols, key=lambda x: x.get("volume_index", 0)):
+            outline = v.get("chapters_outline")
+            if not outline:
+                resolved_volume_index = v["volume_index"]
+                break
+            try:
+                parsed = outline if isinstance(outline, list) else json.loads(outline or "[]")
+                if not isinstance(parsed, list) or len(parsed) == 0:
+                    resolved_volume_index = v["volume_index"]
+                    break
+            except Exception:
+                resolved_volume_index = v["volume_index"]
+                break
+        
+        # 若所有卷均有骨架，回傳最後一卷 + 1（或錯誤）
+        if resolved_volume_index is None and vols:
+            resolved_volume_index = max(v.get("volume_index", 1) for v in vols)
+    
+    elif target in ("writer", "editor"):
+        # 找出最早未寫的章節
+        vols = db.get_volumes(novel_id)
+        total_planned = sum(
+            int(v.get("chapter_count") or 0)
+            for v in vols
+            if str(v.get("chapter_count", "")).isdigit()
+        ) or 50
+        
+        written_chs = db.get_all_chapters_latest(novel_id)
+        written_idx = set()
+        for ch in written_chs:
+            c_idx = ch.get("chapter_index")
+            if c_idx:
+                try:
+                    content = ch.get("content", "")
+                    is_placeholder = "保底" in content or "占位" in content or len(content.strip()) < 100
+                    if not is_placeholder:
+                        written_idx.add(int(c_idx))
+                except Exception:
+                    pass
+        
+        for i in range(1, total_planned + 1):
+            if i not in written_idx:
+                resolved_chapter_index = i
+                break
+        
+        if resolved_chapter_index is None:
+            resolved_chapter_index = total_planned
+        
+        # 同時計算 volume_index
+        if vols:
+            for v in sorted(vols, key=lambda x: x.get("volume_index", 0)):
+                start_ch, end_ch = db.get_volume_chapter_range(vols, v["volume_index"])
+                if start_ch <= resolved_chapter_index <= end_ch:
+                    resolved_volume_index = v["volume_index"]
+                    break
+    
+    return {
+        "status": "success",
+        "target": target,
+        "resolved_volume_index": resolved_volume_index,
+        "resolved_chapter_index": resolved_chapter_index,
+        "message": f"已補正 volume_index={resolved_volume_index}, chapter_index={resolved_chapter_index}"
+    }
+
 
 
 # --- SYSTEM SETTINGS CONTROLS ---
@@ -706,13 +794,26 @@ def api_export_novel(novel_id: str, format: str = "txt"):
         content += f"風格基調：{style}\n"
         content += "=========================================\n\n"
         
+        # Build chapter titles mapping from plot
+        chapter_titles = {}
+        if plot and plot.get("parsed_data") and "chapters" in plot["parsed_data"]:
+            for c in plot["parsed_data"]["chapters"]:
+                if "chapter_index" in c:
+                    chapter_titles[c["chapter_index"]] = c.get("chapter_title", "").strip()
+
         if not chapters:
             content += "（正文尚無章節內容）\n"
         else:
             sorted_ch = sorted(chapters, key=lambda x: x.get("chapter_index", 0))
             for ch in sorted_ch:
                 idx = ch.get("chapter_index", 0)
-                ch_title = f"第 {idx} 章：{ch.get('synopsis', '') or ''}"
+                real_title = chapter_titles.get(idx, "")
+                
+                if real_title and real_title != f"第 {idx} 章" and real_title != f"第{idx}章":
+                    ch_title = f"第 {idx} 章：{real_title}"
+                else:
+                    ch_title = f"第 {idx} 章"
+                    
                 content += f"【{ch_title}】\n\n"
                 content += f"{ch.get('content', '')}\n\n"
                 content += "-----------------------------------------\n\n"
