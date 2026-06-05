@@ -10,6 +10,9 @@ All prompt construction is delegated to prompts.prompt_builder.
 import json
 import os
 import re
+import traceback
+import asyncio
+from functools import partial
 import db
 from llm import call_llm_stream
 from models.client import call_llm_sync, call_llm_json
@@ -30,6 +33,42 @@ from prompts.prompt_builder import (
     build_incremental_character_messages,
     extract_worldview_summary
 )
+
+
+async def safe_generator_wrapper(gen):
+    """
+    Async wrapper around a sync generator.
+    - Detects client disconnect (asyncio.CancelledError) and closes the generator cleanly.
+    - Prevents exceptions from propagating after data has been yielded.
+    - If it raises before yielding anything, re-raises so FastAPI can send a proper error response.
+    """
+    loop = asyncio.get_running_loop()
+    has_yielded = False
+    sentinel = object()
+    try:
+        while True:
+            chunk = await loop.run_in_executor(None, partial(next, gen, sentinel))
+            if chunk is sentinel:
+                break
+            has_yielded = True
+            yield chunk
+    except asyncio.CancelledError:
+        print("[SAFE_WRAPPER] Client disconnected, stopping generator.")
+        try:
+            gen.close()
+        except (ValueError, RuntimeError):
+            pass
+    except Exception as e:
+        print(f"[SAFE_WRAPPER] Generator raised: {e}")
+        traceback.print_exc()
+        if has_yielded:
+            yield "data: " + json.dumps({
+                "type": "error",
+                "message": f"伺服器內部錯誤（串流後處理失敗）: {str(e)}"
+            }, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        else:
+            raise
 
 
 # =============================================================================
@@ -147,13 +186,8 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
         
         if vols_list:
             if mode == "patch" and target_vol_idx is not None:
-                # Merge the patched volume into existing volumes
-                merged_vols = {v["volume_index"]: v for v in existing_vols}
-                for pv in vols_list:
-                    pv_idx = pv.get("volume_index", target_vol_idx)
-                    pv["volume_index"] = pv_idx
-                    merged_vols[pv_idx] = pv
-                db.save_volumes(novel_id, list(merged_vols.values()), clear_downstream=False)
+                # Patch mode: upsert only the target volume, preserve all others
+                db.save_volumes(novel_id, vols_list, clear_downstream=False, target_vol_idx=target_vol_idx)
             else:
                 db.save_volumes(novel_id, vols_list, clear_downstream=True)
             
@@ -177,6 +211,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
     - outline of preceding & succeeding 1 volumes
     - pre-calculated use/retrieval operations of clues/turns for this volume
     """
+    volume_index = int(volume_index)
     wb = db.get_latest_worldbuilding(novel_id)
     # 只傳入世界觀摘要
     worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
@@ -607,7 +642,7 @@ def run_copilot_chat(novel_id, user_message):
 # =============================================================================
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
-def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None, volume_index=None, character_review_mode=None, character_review_hint=None, character_review_target_content=None):
+def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None, volume_index=None, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None):
     """
     Gateway review after a stage completes. Returns next action:
     CONTINUE, AUTO_REGENERATE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
@@ -733,14 +768,21 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         written_chapters_text = f"已完成正文章節數：{len(written_ch)} 章"
         
     # 生成 Python 剛性指標檢查報告
-    validation_report = db.generate_validation_report(novel_id)
+    validation_report = db.generate_validation_report(
+        novel_id, 
+        current_stage=current_stage, 
+        active_volume_index=volume_index, 
+        active_chapter_index=chapter_index
+    )
     
     messages = build_director_decision_messages(
         current_stage, worldview_text, characters_text, plot_text, written_chapters_text, 
         user_prompt, validation_report,
         character_review_mode=character_review_mode,
         character_review_hint=character_review_hint,
-        character_review_target_content=character_review_target_content
+        character_review_target_content=character_review_target_content,
+        suggested_next_chapter=suggested_next_chapter,
+        chapter_index=chapter_index
     )
     
     stream = call_llm_stream("copilot", messages)
@@ -909,6 +951,7 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
     Incremental Volume Skeleton Stage:
     Updates a specific volume's skeleton based on user hint, then auto-merges and updates the DB.
     """
+    volume_index = int(volume_index)
     wb = db.get_latest_worldbuilding(novel_id)
     worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
     
