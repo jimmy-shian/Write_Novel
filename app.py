@@ -119,6 +119,7 @@ class DirectorDecisionRequest(BaseModel):
     character_review_mode: Optional[str] = None
     character_review_hint: Optional[str] = None
     character_review_target_content: Optional[str] = None
+    suggested_next_chapter: Optional[int] = None
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
@@ -447,14 +448,15 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
     return StreamingResponse(
-        agents.run_director_decision(
+        agents.safe_generator_wrapper(agents.run_director_decision(
             novel_id, payload.current_stage, effective_prompt,
             chapter_index=payload.chapter_index,
             volume_index=payload.volume_index,
             character_review_mode=payload.character_review_mode,
             character_review_hint=payload.character_review_hint,
             character_review_target_content=payload.character_review_target_content,
-        ),
+            suggested_next_chapter=payload.suggested_next_chapter,
+        )),
         media_type="text/event-stream"
     )
 
@@ -838,13 +840,27 @@ def api_export_novel(novel_id: str, format: str = "txt"):
         content += "---\n\n"
         content += "## 📝 小說完整正文\n\n"
         
+        # Build chapter titles mapping from plot
+        chapter_titles = {}
+        if plot and plot.get("parsed_data") and "chapters" in plot["parsed_data"]:
+            for c in plot["parsed_data"]["chapters"]:
+                if "chapter_index" in c:
+                    chapter_titles[c["chapter_index"]] = c.get("chapter_title", "").strip()
+        
         if not chapters:
             content += "*尚未撰寫任何章節*\n\n"
         else:
             sorted_ch = sorted(chapters, key=lambda x: x.get("chapter_index", 0))
             for ch in sorted_ch:
                 idx = ch.get("chapter_index", 0)
-                content += f"### 第 {idx} 章：{ch.get('synopsis', '') or ''}\n\n"
+                real_title = chapter_titles.get(idx, "")
+                
+                if real_title and real_title != f"第 {idx} 章" and real_title != f"第{idx}章":
+                    ch_title = f"第 {idx} 章：{real_title}"
+                else:
+                    ch_title = f"第 {idx} 章"
+                    
+                content += f"### {ch_title}\n\n"
                 content += f"{ch.get('content', '')}\n\n"
                 
         filename = f"{title}_小說設定與全書正文.md"

@@ -895,7 +895,8 @@ export function renderPlotTab() {
                 const totalChaptersCount = displayChapters.length || parseInt(vol.chapter_count) || 50;
                 const writtenChaptersCount = chapters.filter(c => {
                     const cIdx = parseInt(c.chapter_index);
-                    if (Math.floor((cIdx - 1) / 50) + 1 !== volIdx) return false;
+                    const range = volRanges[volIdx] || { start: (volIdx - 1) * 50 + 1, end: volIdx * 50 };
+                    if (cIdx < range.start || cIdx > range.end) return false;
                     const existing = state.currentNovelData?.chapters?.find(ec => parseInt(ec.chapter_index) === cIdx);
                     return !!(existing && existing.content && existing.content.trim());
                 }).length;

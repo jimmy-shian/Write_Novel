@@ -509,6 +509,9 @@ async function executeDirectorAction(decision, userPrompt) {
                 updateDirectorMessage('✍️ 開始撰寫正文...');
                 await executePipelineStage('writer', userPrompt);
             } else if (target === 'editor') {
+                if (decision?.chapter_index) {
+                    state.activeChapterIndex = parseInt(decision.chapter_index);
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
@@ -539,19 +542,37 @@ async function executeDirectorAction(decision, userPrompt) {
                 await executePipelineStage('volumes', enhancedPrompt);
             } else if (target.includes('skeleton') || target.includes('骨架')) {
                 updatePipelineStage('volume_skeleton', 'running');
-                await executePipelineStage('volume_skeleton', enhancedPrompt);
+                if (decision.volume_index !== undefined && decision.volume_index !== null) {
+                    state.activeVolumeIndex = parseInt(decision.volume_index);
+                } else {
+                    // 【自動補正】AI 總監未回傳 volume_index，自動從 volumes 找出第一個缺失骨架的卷
+                    const allVols = state.currentNovelData?.volumes || [];
+                    const firstMissingVol = allVols.find(vol => {
+                        const outline = vol.chapters_outline;
+                        if (!outline) return true;
+                        try {
+                            const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                            return !Array.isArray(parsed) || parsed.length === 0;
+                        } catch (e) { return true; }
+                    });
+                    const fallbackVolIdx = firstMissingVol?.volume_index || state.activeVolumeIndex || 1;
+                    state.activeVolumeIndex = fallbackVolIdx;
+                    decision = { ...decision, volume_index: fallbackVolIdx };
+                    appendChatMessage('system', `⚠️ **[系統補正]** 總監未指定卷索引，系統自動定位到第一個缺失骨架的卷：第 ${fallbackVolIdx} 卷。`);
+                }
+                await executePipelineStage('volume_skeleton', enhancedPrompt, decision);
             } else if (target.includes('writer') || target.includes('寫作') || target.includes('正文')) {
                 updatePipelineStage('writer', 'running');
                 if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
                 }
-                await executePipelineStage('writer', enhancedPrompt);
+                await executePipelineStage('writer', enhancedPrompt, decision);
             } else if (target.includes('editor') || target.includes('編輯') || target.includes('潤色')) {
                 updatePipelineStage('editor', 'running');
                 if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
                 }
-                await executePipelineStage('editor', enhancedPrompt);
+                await executePipelineStage('editor', enhancedPrompt, decision);
             } else {
                 showToast('⚡ 總監指示重新生成，但未明確指定階段已停止流程...');
                 break;
@@ -3425,6 +3446,47 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             user_prompt: userPrompt,
             chapter_index: state.activeChapterIndex || 1
         };
+        
+        // 計算建議的下一章（用於處理缺漏或補充章節）
+        const currentIdx = state.activeChapterIndex || 1;
+        const chapters = state.currentNovelData?.chapters || [];
+        const writtenIndexes = new Set(
+            chapters
+                .filter(c => {
+                    const content = c.content || '';
+                    const isPlaceholder = content.includes('保底') || 
+                                          content.includes('占位') || 
+                                          content.trim().length < 100;
+                    const isDirty = c.is_dirty === 1 || c.is_dirty === true;
+                    return !isPlaceholder && !isDirty;
+                })
+                .map(c => Number(c.chapter_index))
+        );
+        
+        // 假定在 writer / editor 階段時，當前正在評估的章節已經寫完/編輯完
+        if (currentStage === 'writer' || currentStage === 'editor') {
+            writtenIndexes.add(currentIdx);
+        }
+        
+        const vols = state.currentNovelData?.volumes || [];
+        const totalPlanned = vols.reduce((sum, v) => {
+            const count = Number.parseInt(v.chapter_count, 10);
+            return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+        }, 0) || 50;
+        
+        let earliestMissing = null;
+        for (let i = 1; i <= totalPlanned; i++) {
+            if (!writtenIndexes.has(i)) {
+                earliestMissing = i;
+                break;
+            }
+        }
+        
+        if (earliestMissing !== null) {
+            requestBody.suggested_next_chapter = earliestMissing;
+        } else {
+            requestBody.suggested_next_chapter = Math.min(currentIdx + 1, totalPlanned);
+        }
         
         // 骨架審查時自動帶入當前卷索引
         if (currentStage === 'volume_skeleton' && state.activeVolumeIndex) {
