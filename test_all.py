@@ -359,19 +359,19 @@ class TestAINovelFactory(unittest.TestCase):
         
         # 4. Save volumes -> stage should advance to "volume_skeleton"
         volumes_list = [
-            {"volume_index": 1, "title": "第一卷", "summary": "開篇卷", "chapter_count": 10}
+            {"volume_index": 1, "title": "第一卷", "summary": "開篇卷", "chapter_count": 1}
         ]
         db.save_volumes(self.novel_id, volumes_list)
         stage = db.detect_current_stage(self.novel_id)
         self.assertEqual(stage, "volume_skeleton")
         
-        # 5. Save volume skeleton outline -> stage should advance to "plot"
+        # 5. Save volume skeleton outline -> stage should advance to "writer"
         skeleton_outline = [
             {"chapter_index": 1, "brief_title": "第1章", "brief_summary": "介紹"}
         ]
         db.update_volume_outline(self.novel_id, 1, skeleton_outline)
         stage = db.detect_current_stage(self.novel_id)
-        self.assertEqual(stage, "plot")
+        self.assertEqual(stage, "writer")
         
         # 6. Generate validation report and check format
         report = db.generate_validation_report(self.novel_id)
