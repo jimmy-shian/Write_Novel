@@ -263,7 +263,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
             if attempt > 1:
                 yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
                 yield "data: " + json.dumps({
-                    "type": "error",
+                    "type": "retrying",
                     "message": f"⚠️ [系統防禦重試] API 呼叫異常或輸出格式有誤。正在進行第 {attempt}/{max_retries} 次自動重試... (等待 {fixed_delay:.1f} 秒)"
                 }, ensure_ascii=False) + "\n\n"
                 

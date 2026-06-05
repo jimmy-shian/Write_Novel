@@ -40,7 +40,7 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onError - 錯誤回呼（可選）
  * @param {function|null} onDone - 完成回呼（可選）
  */
-export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone) {
+export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying) {
     const MAX_RETRIES = 1;
     let attempt = 0;
 
@@ -155,6 +155,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                             if (typeof onContent === 'function') onContent(parsed.delta);
                         } else if (parsed.type === 'error') {
                             if (typeof onError === 'function') onError(parsed.message);
+                        } else if (parsed.type === 'retrying') {
+                            if (typeof onRetrying === 'function') onRetrying(parsed.message);
                         }
                     } catch (e) {
                         // 忽略 JSON 解析錯誤（部分 chunk）
