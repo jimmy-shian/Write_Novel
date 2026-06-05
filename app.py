@@ -312,7 +312,7 @@ def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_story_architect(novel_id, user_prompt),
+        agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt)),
         media_type="text/event-stream"
     )
 
@@ -321,13 +321,13 @@ def api_agent_character_designer(payload: CharacterDesignerRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_character_designer(
+        agents.safe_generator_wrapper(agents.run_character_designer(
             novel_id=payload.novel_id,
             user_prompt=payload.user_prompt,
             hint=payload.hint,
             mode=payload.mode,
             target_char_index=payload.target_char_index
-        ),
+        )),
         media_type="text/event-stream"
     )
 
@@ -336,13 +336,13 @@ def api_agent_volumes_planner(payload: VolumesPlannerRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_volumes_planner(
+        agents.safe_generator_wrapper(agents.run_volumes_planner(
             novel_id=payload.novel_id,
             user_prompt=payload.user_prompt,
             hint=payload.hint,
             mode=payload.mode,
             target_vol_idx=payload.target_vol_idx
-        ),
+        )),
         media_type="text/event-stream"
     )
 
@@ -351,11 +351,11 @@ def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_volume_skeleton_planner(
+        agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
             novel_id=payload.novel_id,
             volume_index=payload.volume_index,
             user_prompt=payload.user_prompt
-        ),
+        )),
         media_type="text/event-stream"
     )
 
@@ -366,11 +366,11 @@ def api_agent_write_chapter(payload: ChapterWriterRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_chapter_writer(
+        agents.safe_generator_wrapper(agents.run_chapter_writer(
             novel_id=payload.novel_id,
             chapter_index=payload.chapter_index,
             custom_style=payload.custom_style
-        ),
+        )),
         media_type="text/event-stream"
     )
 
@@ -379,11 +379,11 @@ def api_agent_edit_chapter(payload: EditorAgentRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_editor_agent(
+        agents.safe_generator_wrapper(agents.run_editor_agent(
             novel_id=payload.novel_id,
             chapter_index=payload.chapter_index,
             edit_instructions=payload.edit_instructions
-        ),
+        )),
         media_type="text/event-stream"
     )
 
@@ -392,7 +392,7 @@ def api_agent_copilot_chat(payload: CopilotChatRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_copilot_chat(payload.novel_id, payload.user_message),
+        agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message)),
         media_type="text/event-stream"
     )
 
@@ -401,7 +401,7 @@ def api_incremental_architect(payload: IncrementalArchitectRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_incremental_architect(payload.novel_id, payload.target_section, payload.user_hint),
+        agents.safe_generator_wrapper(agents.run_incremental_architect(payload.novel_id, payload.target_section, payload.user_hint)),
         media_type="text/event-stream"
     )
 
@@ -410,7 +410,7 @@ def api_incremental_character(payload: IncrementalCharacterRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_incremental_character_designer(payload.novel_id, payload.target_char_index, payload.field_name, payload.user_hint),
+        agents.safe_generator_wrapper(agents.run_incremental_character_designer(payload.novel_id, payload.target_char_index, payload.field_name, payload.user_hint)),
         media_type="text/event-stream"
     )
 
@@ -421,7 +421,7 @@ def api_incremental_skeleton(payload: IncrementalSkeletonRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     return StreamingResponse(
-        agents.run_incremental_volume_skeleton(payload.novel_id, payload.volume_index, payload.user_hint),
+        agents.safe_generator_wrapper(agents.run_incremental_volume_skeleton(payload.novel_id, payload.volume_index, payload.user_hint)),
         media_type="text/event-stream"
     )
 
