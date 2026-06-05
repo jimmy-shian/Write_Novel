@@ -531,7 +531,8 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     // 3) 最後回退：關鍵字啟發式（當 AI 完全不遵循格式時）
     if (!action) {
         if (responseText.includes('WRITE_ALL_CHAPTERS') || responseText.includes('開始寫作所有章節')) {
-            action = 'WRITE_ALL_CHAPTERS';
+            action = 'CONTINUE';
+            target = 'writer';
         } else if (responseText.includes('FINISH') || responseText.includes('全部完成')) {
             action = 'FINISH';
         } else if (responseText.includes('繼續') && !responseText.includes('暫停')) {
@@ -542,7 +543,7 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     }
     
     return { 
-        continue: action === 'CONTINUE' || action === 'WRITE_ALL_CHAPTERS' || action === 'LOCAL_ALIGN_VOLUME' || action === 'INCREMENTAL_INSERT_PLOT',
+        continue: action === 'CONTINUE' || action === 'LOCAL_ALIGN_VOLUME' || action === 'INCREMENTAL_INSERT_PLOT',
         response: responseText,
         shouldPause: action === 'WAIT_USER',
         action: action,
