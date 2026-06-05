@@ -282,9 +282,8 @@ async function executeDirectorAction(decision, userPrompt) {
     updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
     // 🔴 硬性阻斷門檻：若總監指示進入 writer 但任何卷的骨架尚未完成，強制退回骨架生成
-    const writerActions = ['WRITE_ALL_CHAPTERS'];
-    const isWriterContinue = action === 'CONTINUE' && ['writer', '正文寫作', '寫故事'].includes((decision.target || '').toString().trim().toLowerCase());
-    if (writerActions.includes(action) || isWriterContinue) {
+    const isWriterContinue = (action === 'CONTINUE' && ['writer', '正文寫作', '寫故事'].includes((decision.target || '').toString().trim().toLowerCase())) || action === 'WRITE_ALL_CHAPTERS';
+    if (isWriterContinue) {
         const volumes = state.currentNovelData?.volumes || [];
         const missingSkeletonVols = volumes.filter(vol => {
             const outline = vol.chapters_outline;
@@ -300,18 +299,17 @@ async function executeDirectorAction(decision, userPrompt) {
             const missingIdxs = missingSkeletonVols.map(v => v.volume_index || '?');
             appendChatMessage('system', `🚫 **[系統硬性阻斷]** 總監指示進入正文寫作，但以下卷的骨架尚未完成：卷 ${missingIdxs.join(', ')}。\n⛔ 系統已自動覆寫總監決策，強制退回骨架生成階段。`);
             showToast(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回骨架生成`);
-            updateDirectorMessage(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回骨架生成階段...`);
-            updatePipelineStage('volume_skeleton', 'running');
-            const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
-            if (state.isPipelineRunning) {
-                if (skeletonSuccess) {
-                    updateDirectorMessage('🔄 骨架補齊完畢，重新評估現狀中...');
-                } else {
-                    updateDirectorMessage('⚠️ 骨架生成失敗，停止管線。');
-                    state.isPipelineRunning = false;
-                }
-                setTimeout(() => runPipeline(userPrompt), 2000);
-            }
+            updateDirectorMessage(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回第 ${missingIdxs[0]} 卷骨架生成階段...`);
+            
+            const firstMissingVol = missingSkeletonVols[0].volume_index;
+            state.activeVolumeIndex = firstMissingVol;
+            const fakeDecision = {
+                action: 'CONTINUE',
+                target: 'volume_skeleton',
+                volume_index: firstMissingVol,
+                hint: `請為第 ${firstMissingVol} 卷生成簡易章節骨架大綱`
+            };
+            setTimeout(() => executeDirectorAction(fakeDecision, userPrompt), 1000);
             return;
         }
     }
@@ -648,20 +646,32 @@ async function executeDirectorAction(decision, userPrompt) {
         
         case 'GO_BACK_TO_SKELETON_EXPANSION': {
             showToast('⚡ 總監指示退回骨架增生階段重新補齊骨架...');
-            updatePipelineStage('plot', 'running');
+            updatePipelineStage('volume_skeleton', 'running');
             updateDirectorMessage('⚡ 正在退回骨架增生，重新生成簡易章節骨架...');
-            appendChatMessage('system', '🔄 **[骨架自癒]** 總監檢測到章節缺漏/不連續，已退回至骨架增生階段重跑骨架。');
+            appendChatMessage('system', '🔄 **[骨架自癒]** 總監檢測到章節缺漏/不連續，已退回至骨架增生階段。');
             
-            const skeletonSuccess = await generateAllVolumeSkeletons(userPrompt);
-            if (state.isPipelineRunning) {
-                if (skeletonSuccess) {
-                    updateDirectorMessage('🔄 骨架重新生成完畢，重新評估現狀中...');
-                } else {
-                    updateDirectorMessage('⚠️ 骨架生成失敗，停止管線。');
-                    state.isPipelineRunning = false;
-                }
-                setTimeout(() => runPipeline(userPrompt), 2000);
+            let targetVolIndex = decision.volume_index;
+            if (targetVolIndex === undefined || targetVolIndex === null) {
+                const vols = state.currentNovelData?.volumes || [];
+                targetVolIndex = vols.find(vol => {
+                    const outline = vol.chapters_outline;
+                    if (!outline) return true;
+                    try {
+                        const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                        return !Array.isArray(parsed) || parsed.length === 0;
+                    } catch (e) { return true; }
+                })?.volume_index || 1;
             }
+            targetVolIndex = parseInt(targetVolIndex);
+            
+            state.activeVolumeIndex = targetVolIndex;
+            const fakeDecision = {
+                action: 'CONTINUE',
+                target: 'volume_skeleton',
+                volume_index: targetVolIndex,
+                hint: hint || '請重新規劃簡易骨架大綱'
+            };
+            await executeDirectorAction(fakeDecision, userPrompt);
             break;
         }
 
