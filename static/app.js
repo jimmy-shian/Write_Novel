@@ -2368,6 +2368,10 @@ function openChapterOutlineEditModal(index, chapter) {
                         <input type="text" id="edit-chapter-time-setting" placeholder="例如：大元三年春・深夜">
                     </div>
                     <div class="form-group">
+                        <label>故事內場景設定</label>
+                        <input type="text" id="edit-chapter-scene-setting" placeholder="例如：青雲宗後山林地、研究中心三號實驗室">
+                    </div>
+                    <div class="form-group">
                         <label>活躍角色（以逗號分隔）</label>
                         <input type="text" id="edit-chapter-characters-active" placeholder="例如：李尋歡, 阿飛">
                     </div>
@@ -2422,6 +2426,7 @@ function openChapterOutlineEditModal(index, chapter) {
     // 填充當前值
     document.getElementById('edit-chapter-title').value = chapter.title || '';
     document.getElementById('edit-chapter-time-setting').value = chapter.time_setting || '';
+    document.getElementById('edit-chapter-scene-setting').value = chapter.scene_setting || chapter.scene || '';
     document.getElementById('edit-chapter-time-span').value = chapter.time_span || '';
     
     let charsActive = '';
@@ -2511,6 +2516,8 @@ function openChapterOutlineEditModal(index, chapter) {
                 ...plotData.chapters[index],
                 title: document.getElementById('edit-chapter-title').value,
                 time_setting: document.getElementById('edit-chapter-time-setting').value,
+                scene_setting: document.getElementById('edit-chapter-scene-setting').value,
+                scene: document.getElementById('edit-chapter-scene-setting').value,
                 time_span: document.getElementById('edit-chapter-time-span').value,
                 characters_active: charsArray,
                 purpose: document.getElementById('edit-chapter-purpose').value,
