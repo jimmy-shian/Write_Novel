@@ -41,7 +41,7 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onDone - 完成回呼（可選）
  */
 export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone) {
-    const MAX_RETRIES = 2;
+    const MAX_RETRIES = 1;
     let attempt = 0;
 
     // Trigger start callback
@@ -59,7 +59,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const STALL_TIMEOUT = 120000; // 120 seconds stall timeout (thinking models may take >60s to start)
+        const STALL_TIMEOUT = 10000; // 90 seconds stall timeout
 
         function resetActivityTimer() {
             if (activityTimer) clearTimeout(activityTimer);
@@ -176,7 +176,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             if (activityTimer) clearTimeout(activityTimer);
 
             const isAborted = err.name === 'AbortError';
-            if ((isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || err.message.includes('HTTP 錯誤 5')) && attempt <= MAX_RETRIES) {
+            const isServerError = err.message.includes('HTTP 錯誤 5');
+            if ((isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || isServerError) && attempt <= MAX_RETRIES) {
                 console.warn(`[streamAPI] Attempt ${attempt} failed or aborted (${err.message}). Retrying in 3 seconds...`);
                 // Wait 3 seconds before retrying
                 await new Promise(r => setTimeout(r, 3000));

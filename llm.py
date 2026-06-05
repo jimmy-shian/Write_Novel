@@ -240,10 +240,20 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     print("=" * 80 + "\n")
     # ==========================================
 
-    max_retries = 10
-    fixed_delay = 2.0  # 固定間隔 2 秒，不再使用指數退避
+    max_retries = 3
+    fixed_delay = 2.0  # 固定間隔 2 秒
+    overall_start = time.time()
+    max_total_time = 300  # 所有重試加總最多等 5 分鐘
 
     for attempt in range(1, max_retries + 1):
+        if time.time() - overall_start > max_total_time:
+            print(f"[LLM] Total execution time exceeded {max_total_time}s, aborting.")
+            yield "data: " + json.dumps({
+                "type": "error",
+                "message": f"總執行時間超過 {max_total_time} 秒上限，已中止。"
+            }, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+            return
         accumulated_content = []
         has_yielded_anything = False
         in_think_block = False
@@ -269,7 +279,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                 headers=headers,
                 json=payload_base,
                 stream=True,
-                timeout=300
+                timeout=180
             )
             
             if response.status_code != 200:
@@ -281,91 +291,99 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                     error_msg = error_text
                 raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
                 
-            for line in response.iter_lines():
-                if not line:
-                    continue
+            try:
+                line_iter = response.iter_lines()
+            except Exception as e:
+                print(f"[LLM] Failed to create line iterator: {e}")
+                raise
+            
+            for line in line_iter:
+                try:
+                    if not line:
+                        continue
+                        
+                    decoded_line = line.decode("utf-8").strip()
                     
-                decoded_line = line.decode("utf-8").strip()
-                
-                if decoded_line.startswith("data:"):
+                    if not decoded_line.startswith("data:"):
+                        continue
+                        
                     data_str = decoded_line[5:].strip()
                     
                     if data_str == "[DONE]":
                         break
                         
-                    try:
-                        data_json = json.loads(data_str)
-                        choices = data_json.get("choices", [])
-                        if not choices:
-                            continue
-                            
-                        delta = choices[0].get("delta", {})
+                    data_json = json.loads(data_str)
+                    choices = data_json.get("choices", [])
+                    if not choices:
+                        continue
                         
-                        # Check for reasoning fields (Nvidia/Nemotron reasoning stream fields)
-                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                        content = delta.get("content") or ""
+                    delta = choices[0].get("delta", {})
+                    
+                    # Check for reasoning fields (Nvidia/Nemotron reasoning stream fields)
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    content = delta.get("content") or ""
+                    
+                    if reasoning:
+                        has_yielded_anything = True
+                        yield "data: " + json.dumps({
+                            "type": "thinking",
+                            "delta": reasoning
+                        }, ensure_ascii=False) + "\n\n"
+                        continue
                         
-                        if reasoning:
-                            has_yielded_anything = True
-                            yield "data: " + json.dumps({
-                                "type": "thinking",
-                                "delta": reasoning
-                            }, ensure_ascii=False) + "\n\n"
-                            continue
-                            
-                        if content:
-                            has_yielded_anything = True
-                            
-                            # Detect inline think blocks (some models use <think> tags)
-                            think_start = "<think>"
-                            think_end = "</think>"
-                            
-                            if think_start in content:
-                                in_think_block = True
-                                parts = content.split(think_start)
-                                if parts[0]:
-                                    accumulated_content.append(parts[0])
-                                    yield "data: " + json.dumps({
-                                        "type": "content",
-                                        "delta": parts[0]
-                                    }, ensure_ascii=False) + "\n\n"
-                                if len(parts) > 1 and parts[1]:
-                                    yield "data: " + json.dumps({
-                                        "type": "thinking",
-                                        "delta": parts[1]
-                                    }, ensure_ascii=False) + "\n\n"
-                                continue
-                                
-                            if think_end in content:
-                                in_think_block = False
-                                parts = content.split(think_end)
-                                if parts[0]:
-                                    yield "data: " + json.dumps({
-                                        "type": "thinking",
-                                        "delta": parts[0]
-                                    }, ensure_ascii=False) + "\n\n"
-                                if len(parts) > 1 and parts[1]:
-                                    accumulated_content.append(parts[1])
-                                    yield "data: " + json.dumps({
-                                        "type": "content",
-                                        "delta": parts[1]
-                                    }, ensure_ascii=False) + "\n\n"
-                                continue
-                                
-                            if in_think_block:
-                                yield "data: " + json.dumps({
-                                    "type": "thinking",
-                                    "delta": content
-                                }, ensure_ascii=False) + "\n\n"
-                            else:
-                                accumulated_content.append(content)
+                    if content:
+                        has_yielded_anything = True
+                        
+                        # Detect inline think blocks (some models use <think> tags)
+                        think_start = "<think>"
+                        think_end = "</think>"
+                        
+                        if think_start in content:
+                            in_think_block = True
+                            parts = content.split(think_start)
+                            if parts[0]:
+                                accumulated_content.append(parts[0])
                                 yield "data: " + json.dumps({
                                     "type": "content",
-                                    "delta": content
+                                    "delta": parts[0]
                                 }, ensure_ascii=False) + "\n\n"
-                                
-                    except Exception as e:
-                        continue
+                            if len(parts) > 1 and parts[1]:
+                                yield "data: " + json.dumps({
+                                    "type": "thinking",
+                                    "delta": parts[1]
+                                }, ensure_ascii=False) + "\n\n"
+                            continue
+                            
+                        if think_end in content:
+                            in_think_block = False
+                            parts = content.split(think_end)
+                            if parts[0]:
+                                yield "data: " + json.dumps({
+                                    "type": "thinking",
+                                    "delta": parts[0]
+                                }, ensure_ascii=False) + "\n\n"
+                            if len(parts) > 1 and parts[1]:
+                                accumulated_content.append(parts[1])
+                                yield "data: " + json.dumps({
+                                    "type": "content",
+                                    "delta": parts[1]
+                                }, ensure_ascii=False) + "\n\n"
+                            continue
+                            
+                        if in_think_block:
+                            yield "data: " + json.dumps({
+                                "type": "thinking",
+                                "delta": content
+                            }, ensure_ascii=False) + "\n\n"
+                        else:
+                            accumulated_content.append(content)
+                            yield "data: " + json.dumps({
+                                "type": "content",
+                                "delta": content
+                            }, ensure_ascii=False) + "\n\n"
+                except Exception as e:
+                    print(f"[LLM] Line processing error (non-fatal): {e}")
+                    continue
             
             # --- Validations ---
             full_text = "".join(accumulated_content)
