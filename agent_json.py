@@ -78,7 +78,6 @@ WORLDVIEW_APPROVAL_CRITERIA = {
             "description": "各欄位間需邏輯一致，伏筆與轉折點需相互呼應"
         }
     },
-    "auto_regenerate_hint": "請根據使用者提供的劇情設定，重新生成完整的世界觀架構。"
 }
 
 
@@ -151,7 +150,6 @@ CHARACTER_APPROVAL_CRITERIA = {
             "description": "角色設定需與世界觀保持一致，關係網需邏輯連貫"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與角色清單，生成/擴充完整的角色設計。",
     "incremental_hint": "請根據 hint 內容，新增或修改指定的角色。",
     "modify_with_full_content_hint": "請根據 hint 內容，並傳入該角色的完整內容，進行局部修改。"
 }
@@ -180,7 +178,7 @@ VOLUME_APPROVAL_CRITERIA = {
     "display_name": "篇卷規劃師",
     "criteria": {
         "volume_count": {
-            "description": "卷數建議超過8個篇卷，需與世界觀的多幕結構呼應"
+            "description": "整部小說必須且至少規劃 8 卷以上（>= 8 卷）"
         },
         "required_fields": {
             "per_volume": ["volume_index", "title", "summary", "chapter_count", "factions", "time_timeline", "sequence_context", "applicable_rules"],
@@ -196,7 +194,7 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷概要需描述核心情節與高潮點"
         },
         "chapter_count": {
-            "description": "每卷章節數需適中，保持容量得當"
+            "description": "每卷章節數量（chapter_count）最多不得超過 50 章，且最好落在 45 章左右（例如 42 至 48 章之間）"
         },
         "structure_coherence": {
             "description": "卷順序需連續，不可遺漏或斷檔；相鄰卷間需有情節銜接"
@@ -211,7 +209,6 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷需有明確功能定位（起、承、轉、合），卷尾需有適當的高潮或懸念"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀設定與角色清單，生成全書的篇卷結構，包括卷數（建議多個篇卷）、每卷標題、概要，以及各卷的關鍵事件轉折與主要角色登場安排。",
     "patch_hint": "請只生成第 {idx} 卷的內容，傳入 hint 指示。"
 }
 
@@ -306,7 +303,6 @@ SKELETON_APPROVAL_CRITERIA = {
             "description": "【角色出場深度規劃】詳細骨架大綱階段必須詳細規劃並產生詳細內容，且要確實安排角色活躍場景以滿足全局人設分佈（例如：確保核心主角與關鍵配角活躍於適當的篇卷與情節，在情節中明確展示角色出場與重要戲劇張力）。"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與 前後各1章的骨架大綱，重新生成完整的當前卷骨架。"
 }
 
 
@@ -366,7 +362,6 @@ WRITER_APPROVAL_CRITERIA = {
             "description": "章末懸念需有效鉤住讀者"
         }
     },
-    "auto_regenerate_hint": "請根據世界觀與前後各1卷的大綱，以及後三章即將收回的伏筆內容，重新生成正文。"
 }
 
 
@@ -412,7 +407,6 @@ EDITOR_APPROVAL_CRITERIA = {
             "description": "需修正語法錯誤、改善句式多樣性、消除冗詞"
         }
     },
-    "auto_regenerate_hint": "請根據編輯指示，重新潤色本章正文。"
 }
 
 

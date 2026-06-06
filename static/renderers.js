@@ -1586,7 +1586,6 @@ export function renderChatMessages() {
                 if (parsed && parsed.action && parsed.action !== 'FINISH') {
                     const actionLabels = {
                         'CONTINUE': '繼續下一階段',
-                        'AUTO_REGENERATE': '重新生成',
                         'GO_BACK_TO_WORLDVIEW': '回退到世界觀',
                         'GO_BACK_TO_CHARACTERS': '回退到角色',
                         'GO_BACK_TO_PLOT': '回退到大綱',
@@ -1599,7 +1598,6 @@ export function renderChatMessages() {
                         <div class="chat-action-buttons">
                             <button class="btn-chat-action" data-action="accept" title="執行總監建議的動作">✅ 接受總監決策${parsed.action ? ` (${actionLabels[parsed.action] || parsed.action})` : ''}</button>
                             <button class="btn-chat-action" data-action="continue">▶️ 強制繼續下一階段</button>
-                            <button class="btn-chat-action" data-action="regen">🔄 重新生成此階段</button>
                             <button class="btn-chat-action" data-action="pause">⏸️ 暫停並手動修改</button>
                         </div>
                     `;

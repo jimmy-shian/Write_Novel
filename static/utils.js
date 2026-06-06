@@ -505,10 +505,12 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     
     // 2.5) 額外解析：如果 AI 直接輸出原始 JSON 物件，嘗試從整體字串中解析第一個 JSON 對象
     if (!action) {
-        const rawJsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (rawJsonMatch) {
+        const firstBrace = responseText.indexOf('{');
+        const lastBrace = responseText.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+            const rawJsonCandidate = responseText.slice(firstBrace, lastBrace + 1);
             try {
-                const rawJson = JSON.parse(rawJsonMatch[0]);
+                const rawJson = JSON.parse(rawJsonCandidate);
                 action = (rawJson.action || '').toUpperCase() || action;
                 target = rawJson.target || target;
                 hint = rawJson.hint || rawJson.reason || hint;
@@ -550,11 +552,30 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         target: target,
         hint: hint,
         reason: reason,
-        regenerate: action === 'AUTO_REGENERATE',
-        regenerateStage: action === 'AUTO_REGENERATE' ? (target || currentStage) : null,
+        regenerate: false,
+        regenerateStage: null,
         volume_index: volume_index,
         chapter_index: chapter_index,
         insert_after_index: insert_after_index
     };
+}
+
+// Throttled markdown rendering to prevent UI freezing during fast streams
+const pendingRenders = new Map();
+export function throttledRenderMarkdown(element, markdownText) {
+    if (!element) return;
+    pendingRenders.set(element, markdownText);
+    if (pendingRenders.size === 1) {
+        requestAnimationFrame(() => {
+            for (const [el, txt] of pendingRenders.entries()) {
+                try {
+                    el.innerHTML = renderMarkdown(txt);
+                } catch (e) {
+                    console.error("Failed to render markdown", e);
+                }
+            }
+            pendingRenders.clear();
+        });
+    }
 }
 

@@ -383,6 +383,45 @@ class TestAINovelFactory(unittest.TestCase):
         self.assertIn("[主角A] (主角) ✅ 完美完整", report)
         self.assertIn("卷 1《第一卷》：✅ 骨架已建立", report)
 
+    # --- 11. Volume and Chapter Hard Constraints Tests ---
+    def test_volume_and_chapter_constraints(self):
+        import unittest.mock as mock
+        
+        wv_content = json.dumps({
+            "theme": "主線",
+            "main_conflict": "對立",
+            "worldview": "規則",
+            "macro_outline": "故事大綱",
+            "multi_act_structure": [],
+            "progressive_character_plan": [],
+            "foreshadowing_seeds": ["伏筆種子1"],
+            "key_turning_points": ["轉折點1"]
+        }, ensure_ascii=False)
+        db.save_worldbuilding(self.novel_id, wv_content)
+        
+        mock_raw_output = {
+            "volumes": [
+                {"volume_index": 1, "title": "第一卷", "summary": "概要1", "chapter_count": 100},
+                {"volume_index": 2, "title": "第二卷", "summary": "概要2", "chapter_count": 0},
+                {"volume_index": 3, "title": "第三卷", "summary": "概要3", "chapter_count": 42}
+            ]
+        }
+        
+        mock_stream = [
+            f"data: {json.dumps({'type': 'content', 'delta': json.dumps(mock_raw_output, ensure_ascii=False)}, ensure_ascii=False)}"
+        ]
+        
+        with mock.patch("agents.call_llm_stream", return_value=mock_stream):
+            list(agents.run_volumes_planner(self.novel_id, mode="generate"))
+            
+        vols = db.get_volumes(self.novel_id)
+        self.assertEqual(len(vols), 8)
+        self.assertEqual(vols[0]["chapter_count"], 45)
+        self.assertEqual(vols[1]["chapter_count"], 45)
+        self.assertEqual(vols[2]["chapter_count"], 42)
+        self.assertEqual(vols[3]["chapter_count"], 45)
+        self.assertEqual(vols[7]["volume_index"], 8)
+
 
 if __name__ == "__main__":
     unittest.main()

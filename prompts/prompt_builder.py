@@ -398,28 +398,27 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
         {"role": "user", "content": user_content}
     ]
 
-def build_copilot_chat_messages(worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None):
+def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None):
     """Copilot 創意決策總監聊天提示詞"""
     if not validation_report:
         validation_report = "底層校驗一切正常。全階段架構完備。"
-    written_chapters_text = "未進入正文寫作"
     
-    # 對角色聖經進行基本設定篩選
-    characters_filtered = extract_character_basic(characters_text)
+    from diagnostics import diagnose_all_phases
+    diags = diagnose_all_phases(novel_id)
     
     # 填充 CO_PILOT_ORCHESTRATOR_PROMPT
     system_prompt = CO_PILOT_ORCHESTRATOR_PROMPT.format(
-        worldview=worldview_text[:300] + "...",
-        characters=json.dumps(characters_filtered, ensure_ascii=False)[:300] + "...",
-        plot=plot_text[:300] + "...",
-        written_chapters=written_chapters_text,
+        worldview=diags["worldview"],
+        characters=diags["characters"],
+        plot=diags["plot"],
+        written_chapters=diags["written_chapters"],
         validation_report=validation_report
     )
     
     user_content = f"""【當前專案狀態】
-- 世界觀：{worldview_text[:300]}...
-- 角色 Bible：{json.dumps(characters_filtered, ensure_ascii=False)[:300]}...
-- 大綱概要：{plot_text[:300]}...
+- 世界觀：{diags["worldview"]}
+- 角色 Bible：{diags["characters"]}
+- 大綱概要：{diags["plot"]}
 
 【最近對話歷史】
 {history_context}
@@ -427,7 +426,7 @@ def build_copilot_chat_messages(worldview_text, characters_text, plot_text, hist
 【使用者最新輸入】
 {user_message}
 
-請以總監身份給出精彩回覆，並在末尾推薦對應的 Flow 狀態 JSON 區塊。
+請以總監身份給出專業回覆意見，並在末尾推薦對應的 Flow 狀態 JSON 區塊。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -493,7 +492,9 @@ def mask_worldview_seeds_and_turns(worldview_text):
         
     return "".join(new_parts)
 
-def build_director_decision_messages(current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None, chapter_index=None):
+def build_director_decision_messages(novel_id, current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None, chapter_index=None):
+    from diagnostics import diagnose_all_phases
+    diags = diagnose_all_phases(novel_id)
     """總監決策評判提示詞
     
     根據不同階段傳入對應的審查內容：

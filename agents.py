@@ -185,11 +185,43 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
         vols_list = parsed_vols.get("volumes", []) if isinstance(parsed_vols, dict) else (parsed_vols if isinstance(parsed_vols, list) else [])
         
         if vols_list:
+            # Programmatic Adjustment & Constraints Check
+            adjusted_vols = []
+            for i, vol in enumerate(vols_list):
+                try:
+                    ch_count = int(vol.get("chapter_count", 45))
+                except:
+                    ch_count = 45
+                if ch_count <= 0 or ch_count > 50:
+                    ch_count = 45
+                vol["chapter_count"] = ch_count
+                
+                try:
+                    vol_idx = int(vol.get("volume_index", i + 1))
+                except:
+                    vol_idx = i + 1
+                vol["volume_index"] = vol_idx
+                adjusted_vols.append(vol)
+
+            if mode != "patch" and len(adjusted_vols) < 8:
+                while len(adjusted_vols) < 8:
+                    new_idx = len(adjusted_vols) + 1
+                    adjusted_vols.append({
+                        "volume_index": new_idx,
+                        "title": f"第 {new_idx} 卷",
+                        "summary": f"第 {new_idx} 卷情節大綱，承接前文，故事在此階段逐步走向新的衝突與起伏。",
+                        "factions": [],
+                        "chapter_count": 45,
+                        "time_timeline": "",
+                        "sequence_context": "",
+                        "applicable_rules": []
+                    })
+            
             if mode == "patch" and target_vol_idx is not None:
                 # Patch mode: upsert only the target volume, preserve all others
-                db.save_volumes(novel_id, vols_list, clear_downstream=False, target_vol_idx=target_vol_idx)
+                db.save_volumes(novel_id, adjusted_vols, clear_downstream=False, target_vol_idx=target_vol_idx)
             else:
-                db.save_volumes(novel_id, vols_list, clear_downstream=True)
+                db.save_volumes(novel_id, adjusted_vols, clear_downstream=True)
             
             # 預計算全局伏筆與轉折藍圖
             try:
@@ -612,7 +644,7 @@ def run_copilot_chat(novel_id, user_message):
     validation_report = db.generate_validation_report(novel_id)
 
     messages = build_copilot_chat_messages(
-        worldview_text, characters_text, plot_text, history_context, user_message, 
+        novel_id, worldview_text, characters_text, plot_text, history_context, user_message, 
         validation_report=validation_report
     )
     
@@ -645,7 +677,7 @@ def run_copilot_chat(novel_id, user_message):
 def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None, volume_index=None, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None):
     """
     Gateway review after a stage completes. Returns next action:
-    CONTINUE, AUTO_REGENERATE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
+    CONTINUE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
     """
     if not current_stage or current_stage == "init":
         current_stage = db.detect_current_stage(novel_id)
@@ -763,7 +795,37 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         
     else:
         plot_data = db.get_stitched_plot(novel_id)
-        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+        if not plot_data:
+            plot_text = "尚無章節大綱"
+        else:
+            chapters = plot_data.get("chapters", [])
+
+            indexes = sorted(
+                int(ch["chapter_index"])
+                for ch in chapters
+                if ch.get("chapter_index") is not None
+            )
+
+            if indexes:
+                existing = set(indexes)
+
+                missing = [
+                    i
+                    for i in range(indexes[0], indexes[-1] + 1)
+                    if i not in existing
+                ]
+
+                plot_text = f"""
+        大綱檢查報告
+        -------------
+        總章節數：{len(indexes)}
+        章節範圍：{indexes[0]} ~ {indexes[-1]}
+        缺失章節數：{len(missing)}
+        缺失章節：{missing[:30] if missing else "無"}
+        """
+            else:
+                plot_text = "尚無章節大綱"
+
         written_ch = db.get_all_chapters_latest(novel_id)
         written_chapters_text = f"已完成正文章節數：{len(written_ch)} 章"
         
@@ -776,7 +838,7 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
     )
     
     messages = build_director_decision_messages(
-        current_stage, worldview_text, characters_text, plot_text, written_chapters_text, 
+        novel_id, current_stage, worldview_text, characters_text, plot_text, written_chapters_text, 
         user_prompt, validation_report,
         character_review_mode=character_review_mode,
         character_review_hint=character_review_hint,

@@ -479,7 +479,7 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
 
 class ResolveMissingIndexPayload(BaseModel):
     target: str  # 目標階段，如 "volume_skeleton", "writer", "editor"
-    action: Optional[str] = None  # 例如 "CONTINUE" / "AUTO_REGENERATE"
+    action: Optional[str] = None  # 例如 "CONTINUE"
 
 @app.post("/api/novels/{novel_id}/director-decision/resolve-missing-index")
 def api_resolve_missing_index(novel_id: str, payload: ResolveMissingIndexPayload):

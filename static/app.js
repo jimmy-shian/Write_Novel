@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI, streamAPI } from './api.js';
-import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText } from './utils.js';
+import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown } from './utils.js';
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage, applySubSectionVisibility, getSubSectionCount } from './renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
@@ -3517,7 +3517,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                     thinkingPre.textContent += thinkingDelta;
                 }
                 if (streamTarget && !responseText.trim()) {
-                    streamTarget.innerHTML = renderMarkdown(thinkingText);
+                    throttledRenderMarkdown(streamTarget, thinkingText);
                 }
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
                 window.updateAgentStreamOutput('director', thinkingDelta, 'thinking');
@@ -3526,7 +3526,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             (delta) => {
                 responseText += delta;
                 // 寫入聊天區的 Markdown 渲染
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
                 // 同時寫入 stream-output-terminal 終端
                 window.updateAgentStreamOutput('director', delta, 'content');
@@ -3534,7 +3534,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             // onError
             (err) => {
                 responseText += `\n[總監連線錯誤: ${err}]`;
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
@@ -3699,14 +3699,14 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
             // onContent
             (delta) => {
                 responseText += delta;
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
                 window.updateAgentStreamOutput('director', delta, 'content');
             },
             // onError
             (err) => {
                 responseText += `\n[總監連線錯誤: ${err}]`;
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
@@ -4560,14 +4560,14 @@ function setupEventListeners() {
             // onContent
             (delta) => {
                 responseText += delta;
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
                 window.updateAgentStreamOutput('copilot', delta, 'content');
             },
             // onError
             (err) => {
                 responseText += `\n[Director connection lost: ${err}]`;
-                streamTarget.innerHTML = renderMarkdown(responseText);
+                throttledRenderMarkdown(streamTarget, responseText);
             },
             // onDone
             async () => {

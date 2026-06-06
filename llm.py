@@ -147,8 +147,9 @@ def normalize_messages(messages):
 
 def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     """
-    Calls the LLM API using standard streaming with a robust 10-retry guarding engine.
-    Applies exponential backoff with jitter.
+    Calls the LLM API using standard streaming.
+    On JSON validation failure for structured agents (architect, character, plot, volumes, volume_skeleton),
+    automatically redirects the conversation + error to the director (copilot) agent.
     Yields custom SSE formatted chunks:
     - {"type": "thinking", "delta": "..."}
     - {"type": "content", "delta": "..."}
@@ -240,171 +241,166 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     print("=" * 80 + "\n")
     # ==========================================
 
-    max_retries = 3
-    fixed_delay = 2.0  # 固定間隔 2 秒
-    overall_start = time.time()
-    max_total_time = 300  # 所有重試加總最多等 5 分鐘
-
-    for attempt in range(1, max_retries + 1):
-        if time.time() - overall_start > max_total_time:
-            print(f"[LLM] Total execution time exceeded {max_total_time}s, aborting.")
-            yield "data: " + json.dumps({
-                "type": "error",
-                "message": f"總執行時間超過 {max_total_time} 秒上限，已中止。"
-            }, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-            return
-        accumulated_content = []
-        has_yielded_anything = False
-        in_think_block = False
+    accumulated_content = []
+    has_yielded_anything = False
+    in_think_block = False
+    
+    try:
+        base_url = config["base_url"].rstrip("/")
+        if not base_url.endswith("/chat/completions"):
+            base_url += "/chat/completions"
         
-        try:
-            # If this is not the first attempt, yield a reset and retry notification
-            if attempt > 1:
-                yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({
-                    "type": "retrying",
-                    "message": f"⚠️ [系統防禦重試] API 呼叫異常或輸出格式有誤。正在進行第 {attempt}/{max_retries} 次自動重試... (等待 {fixed_delay:.1f} 秒)"
-                }, ensure_ascii=False) + "\n\n"
-                
-                # 固定間隔 2 秒
-                time.sleep(fixed_delay)
-                
-            base_url = config["base_url"].rstrip("/")
-            if not base_url.endswith("/chat/completions"):
-                base_url += "/chat/completions"
-            
-            response = requests.post(
-                base_url,
-                headers=headers,
-                json=payload_base,
-                stream=True,
-                timeout=180
-            )
-            
-            if response.status_code != 200:
-                error_text = response.text
-                try:
-                    err_json = response.json()
-                    error_msg = err_json.get("error", {}).get("message", error_text)
-                except:
-                    error_msg = error_text
-                raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
-                
+        response = requests.post(
+            base_url,
+            headers=headers,
+            json=payload_base,
+            stream=True,
+            timeout=180
+        )
+        
+        if response.status_code != 200:
+            error_text = response.text
             try:
-                line_iter = response.iter_lines()
-            except Exception as e:
-                print(f"[LLM] Failed to create line iterator: {e}")
-                raise
+                err_json = response.json()
+                error_msg = err_json.get("error", {}).get("message", error_text)
+            except:
+                error_msg = error_text
+            raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
             
-            for line in line_iter:
-                try:
-                    if not line:
-                        continue
-                        
-                    decoded_line = line.decode("utf-8").strip()
+        try:
+            line_iter = response.iter_lines()
+        except Exception as e:
+            print(f"[LLM] Failed to create line iterator: {e}")
+            raise
+        
+        for line in line_iter:
+            try:
+                if not line:
+                    continue
                     
-                    if not decoded_line.startswith("data:"):
-                        continue
-                        
-                    data_str = decoded_line[5:].strip()
+                decoded_line = line.decode("utf-8").strip()
+                
+                if not decoded_line.startswith("data:"):
+                    continue
                     
-                    if data_str == "[DONE]":
-                        break
-                        
-                    data_json = json.loads(data_str)
-                    choices = data_json.get("choices", [])
-                    if not choices:
-                        continue
-                        
-                    delta = choices[0].get("delta", {})
+                data_str = decoded_line[5:].strip()
+                
+                if data_str == "[DONE]":
+                    break
                     
-                    # Check for reasoning fields (Nvidia/Nemotron reasoning stream fields)
-                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-                    content = delta.get("content") or ""
+                data_json = json.loads(data_str)
+                choices = data_json.get("choices", [])
+                if not choices:
+                    continue
                     
-                    if reasoning:
-                        has_yielded_anything = True
-                        yield "data: " + json.dumps({
-                            "type": "thinking",
-                            "delta": reasoning
-                        }, ensure_ascii=False) + "\n\n"
-                        continue
-                        
-                    if content:
-                        has_yielded_anything = True
-                        
-                        # Detect inline think blocks (some models use <think> tags)
-                        think_start = "<think>"
-                        think_end = "</think>"
-                        
-                        if think_start in content:
-                            in_think_block = True
-                            parts = content.split(think_start)
-                            if parts[0]:
-                                accumulated_content.append(parts[0])
-                                yield "data: " + json.dumps({
-                                    "type": "content",
-                                    "delta": parts[0]
-                                }, ensure_ascii=False) + "\n\n"
-                            if len(parts) > 1 and parts[1]:
-                                yield "data: " + json.dumps({
-                                    "type": "thinking",
-                                    "delta": parts[1]
-                                }, ensure_ascii=False) + "\n\n"
-                            continue
-                            
-                        if think_end in content:
-                            in_think_block = False
-                            parts = content.split(think_end)
-                            if parts[0]:
-                                yield "data: " + json.dumps({
-                                    "type": "thinking",
-                                    "delta": parts[0]
-                                }, ensure_ascii=False) + "\n\n"
-                            if len(parts) > 1 and parts[1]:
-                                accumulated_content.append(parts[1])
-                                yield "data: " + json.dumps({
-                                    "type": "content",
-                                    "delta": parts[1]
-                                }, ensure_ascii=False) + "\n\n"
-                            continue
-                            
-                        if in_think_block:
-                            yield "data: " + json.dumps({
-                                "type": "thinking",
-                                "delta": content
-                            }, ensure_ascii=False) + "\n\n"
-                        else:
-                            accumulated_content.append(content)
+                delta = choices[0].get("delta", {})
+                
+                # Check for reasoning fields (Nvidia/Nemotron reasoning stream fields)
+                reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                content = delta.get("content") or ""
+                
+                if reasoning:
+                    has_yielded_anything = True
+                    yield "data: " + json.dumps({
+                        "type": "thinking",
+                        "delta": reasoning
+                    }, ensure_ascii=False) + "\n\n"
+                    continue
+                    
+                if content:
+                    has_yielded_anything = True
+                    
+                    # Detect inline think blocks (some models use <think> tags)
+                    think_start = "<think>"
+                    think_end = "</think>"
+                    
+                    if think_start in content:
+                        in_think_block = True
+                        parts = content.split(think_start)
+                        if parts[0]:
+                            accumulated_content.append(parts[0])
                             yield "data: " + json.dumps({
                                 "type": "content",
-                                "delta": content
+                                "delta": parts[0]
                             }, ensure_ascii=False) + "\n\n"
-                except Exception as e:
-                    print(f"[LLM] Line processing error (non-fatal): {e}")
-                    continue
+                        if len(parts) > 1 and parts[1]:
+                            yield "data: " + json.dumps({
+                                "type": "thinking",
+                                "delta": parts[1]
+                            }, ensure_ascii=False) + "\n\n"
+                        continue
+                        
+                    if think_end in content:
+                        in_think_block = False
+                        parts = content.split(think_end)
+                        if parts[0]:
+                            yield "data: " + json.dumps({
+                                "type": "thinking",
+                                "delta": parts[0]
+                            }, ensure_ascii=False) + "\n\n"
+                        if len(parts) > 1 and parts[1]:
+                            accumulated_content.append(parts[1])
+                            yield "data: " + json.dumps({
+                                "type": "content",
+                                "delta": parts[1]
+                            }, ensure_ascii=False) + "\n\n"
+                        continue
+                        
+                    if in_think_block:
+                        yield "data: " + json.dumps({
+                            "type": "thinking",
+                            "delta": content
+                        }, ensure_ascii=False) + "\n\n"
+                    else:
+                        accumulated_content.append(content)
+                        yield "data: " + json.dumps({
+                            "type": "content",
+                            "delta": content
+                        }, ensure_ascii=False) + "\n\n"
+            except Exception as e:
+                print(f"[LLM] Line processing error (non-fatal): {e}")
+                continue
+        
+        # --- Validations ---
+        full_text = "".join(accumulated_content)
+        
+        # If JSON is expected, validate it
+        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+            parsed_json = extract_json_block(full_text)
+            if not parsed_json or len(parsed_json) == 0:
+                raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
+                
+        # If we reached here, the call succeeded!
+        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        return
+        
+    except Exception as e:
+        print(f"[AGENT ERROR] Agent '{agent_name}' failed: {e}")
+        
+        # For JSON-structural agents, redirect to director (copilot) with error context
+        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+            error_msg = str(e)
+            failed_output = "".join(accumulated_content)
+            director_content = f"【系統通知】代理人「{agent_name}」在執行創作任務時發生錯誤。錯誤訊息：\n{error_msg}"
+            if failed_output.strip():
+                director_content += f"\n\n【該代理人的失敗輸出】\n{failed_output[:2000]}"
+            director_content += f"\n\n以下是該代理人的完整對話紀錄。請你（創意總監）根據這些資訊判斷下一步該如何處理。"
             
-            # --- Validations ---
-            full_text = "".join(accumulated_content)
+            director_msgs = [{"role": "system", "content": director_content}]
+            director_msgs.extend(normalized_msgs)
             
-            # If JSON is expected, validate it
-            if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
-                parsed_json = extract_json_block(full_text)
-                if not parsed_json or len(parsed_json) == 0:
-                    raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
-                    
-            # If we reached here, the call succeeded!
-            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+            yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({
+                "type": "retrying",
+                "message": f"⚠️ 代理人「{agent_name}」輸出格式異常，正在轉呈創意總監代理判斷與處理..."
+            }, ensure_ascii=False) + "\n\n"
+            
+            yield from call_llm_stream("copilot", director_msgs)
             return
-            
-        except Exception as e:
-            print(f"[RETRY ENGINE] Attempt {attempt}/{max_retries} failed for agent '{agent_name}'. Error: {e}")
-            if attempt == max_retries:
-                # Last attempt failed, yield the final error
-                yield "data: " + json.dumps({
-                    "type": "error",
-                    "message": f"API 呼叫在重試 {max_retries} 次後依然失敗。錯誤訊息: {str(e)}"
-                }, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-                return
+        
+        # For other agents, yield error
+        yield "data: " + json.dumps({
+            "type": "error",
+            "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"
+        }, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
