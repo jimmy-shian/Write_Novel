@@ -719,6 +719,10 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 
     system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
+    # 統一在 user_content 尾端附加額外的 user_prompt，確保大綱、寫作或編輯階段也能接收此提示 (包括錯誤自癒報告)
+    if user_prompt and user_prompt.strip() and "【使用者原始需求】" not in user_content:
+        user_content += f"\n\n【使用者指示 / 系統錯誤自癒回報（請優先滿足此要求）】\n{user_prompt.strip()}"
+    
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}

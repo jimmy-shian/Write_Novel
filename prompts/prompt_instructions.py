@@ -93,8 +93,9 @@ DIRECTOR_COMMON_FOOTER = """
      - 若目前「僅完成第 N 卷」的骨架且品質合格，但小說總共有更多卷尚未生成骨架：`target` **必須保持為 `volume_skeleton`**，並將 `volume_index` 設為 `N+1`（遞進到下一卷骨架生成），此時 `chapter_index` 必須為 `null`。**嚴格禁止直接跳到 `writer`**！
      - 只有當【系統底層剛性校驗報告】或上下文確認【所有篇卷（全書）】的骨架都已 100% 生成完畢，`target` 才能設為 `writer`，此時 `volume_index` 設為 `1`，`chapter_index` 設為 `1`。
      - 🔥🔥 **【`volume_index` 絕對不可為 null 的紅線】**：當 `target = "volume_skeleton"` 時（當 action 是 `CONTINUE` 時），`volume_index` **必須填寫明確的整數**，指定要生成/重新生成的是【第幾卷】的骨架。**絕對禁止填寫 `null`**！你必須從「系統底層剛性校驗報告」中找出缺失/需重跑的卷號，填入正確的整數！
-   - 當 `current_stage` 為 `writer`，當前章節合格後，`target` 應為 `editor`（去精修當前章）。
-   - 當 `current_stage` 為 `editor`，當前章節潤色合格後：若全書正文未完成 100%，`target` 應回到 `writer`，並將 `chapter_index` 遞增（進入下一章寫作）。
+    - 當 `current_stage` 為 `writer`，當前章節合格後，`target` 應為 `editor`（去精修當前章），此時 `chapter_index` 必須保持為當前章的序號（例如：當前寫完第 37 章且合格，`target` 必須設為 `editor`，`chapter_index` 必須為 37。絕對禁止設為尚未寫作的下一章，如 38！因為該章尚無正文，編輯姬將因找不到內容而報錯崩潰）。
+    - 當 `current_stage` 為 `editor`，當前章節潤色合格後：若全書正文未完成 100%，`target` 應回到 `writer`，並將 `chapter_index` 遞增（進入下一章寫作，例如：第 37 章編輯精修完畢且合格，`target` 設為 `writer`，`chapter_index` 設為 38）。
+    - ⚠️【無正文禁止編輯】：你絕對禁止對任何尚未寫作（無正文內容）的章節指定 `target: "editor"`！如果不確定或該章尚未寫作，應優先使用 `target: "writer"` 進行寫作。
 4. **增量/局部修改優先原則**：
    - 如果當前 `characters` 設計中大部分極佳，只有少數特定角色設定需要微調，優先選擇 `INCREMENTAL_MODIFY_CHARACTER` 或 `INCREMENTAL_MODIFY_CHARACTER_FULL` 而非全量重新跑。
    - 如果當前角色庫有缺漏需補充新人物，優先選擇 `INCREMENTAL_APPEND_CHARACTER`。

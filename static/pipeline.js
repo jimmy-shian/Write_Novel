@@ -288,13 +288,28 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
             },
             (msg) => {
                 failed = true;
+                const wasRunning = state.isPipelineRunning;
                 state.isPipelineRunning = false;
                 state.currentlyWritingChapterIndex = null;
                 window.updateAgentStreamOutput(stage, `\n[Error: ${msg}]`);
                 showToast(`${stage} Agent 執行失敗: ${msg}`);
                 updatePipelineStage(stage, 'error');
                 hideAgentProcessingIndicator(stage);
-                resolve();
+                
+                if (wasRunning) {
+                    // 啟用總監自癒容錯機制，將錯誤反饋給總監
+                    showToast("⚠️ 偵測到管線執行錯誤，正在請求總監進行決策自癒修正...");
+                    setTimeout(async () => {
+                        state.isPipelineRunning = true;
+                        showPipelineProgress(true);
+                        const errorPrompt = `【⚠️ 系統錯誤自癒回報】：\n在執行「${stage}」階段（目標章節：第 ${state.activeChapterIndex || 1} 章 / 目標卷：第 ${state.activeVolumeIndex || 1} 卷）時，底層 Agent 發生錯誤崩潰。\n錯誤訊息：${msg}\n\n這通常是由於目標章節尚未寫作（例如在無正文的情況下調用 editor），或者大綱中缺少對應的骨架。\n請仔細審視上述「系統底層剛性校驗報告」並分析本錯誤，然後修正你的下一步決策 JSON，切勿重複相同的錯誤指令！`;
+                        const nextDecision = await window.runDirectorDecision(stage, errorPrompt);
+                        await window.executeDirectorAction(nextDecision, userPrompt);
+                        resolve();
+                    }, 3000);
+                } else {
+                    resolve();
+                }
             },
             async () => {
                 state.currentlyWritingChapterIndex = null;

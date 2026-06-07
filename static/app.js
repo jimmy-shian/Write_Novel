@@ -3553,7 +3553,37 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 
                 // 【自動補正 volume_index / chapter_index】
                 // 若 AI 總監回傳了 target 但缺少必要的索引，呼叫後端純計算補正端點
-                const targetNormalized = (decisionResult.target || '').toLowerCase();
+                let targetNormalized = (decisionResult.target || '').toLowerCase();
+                
+                // 【校正與自癒：防止編輯無正文的章節而崩潰】
+                if (targetNormalized === 'editor' && decisionResult.chapter_index) {
+                    const chIdx = Number(decisionResult.chapter_index);
+                    const curChapters = state.currentNovelData?.chapters || [];
+                    const curWritten = new Set(
+                        curChapters
+                            .filter(c => {
+                                const content = c.content || '';
+                                return content.trim().length >= 100 && !content.includes('保底') && !content.includes('占位');
+                            })
+                            .map(c => Number(c.chapter_index))
+                    );
+                    
+                    if (!curWritten.has(chIdx)) {
+                        if (curWritten.has(chIdx - 1)) {
+                            // 前一章已寫，說明總監寫錯了索引，應為編輯前一章
+                            decisionResult.chapter_index = chIdx - 1;
+                            appendChatMessage('system', `🔧 **[索引修正]** 總監指引編輯第 ${chIdx} 章，但該章尚無正文。系統自動校正為編輯已完稿的第 ${chIdx - 1} 章。`);
+                            showToast(`🔧 自動校正：編輯第 ${chIdx} 章 -> 第 ${chIdx - 1} 章`);
+                        } else {
+                            // 根本沒有這個章節的內容，變更為寫作第 chIdx 章
+                            decisionResult.target = 'writer';
+                            targetNormalized = 'writer';
+                            appendChatMessage('system', `🔧 **[階段修正]** 總監指引編輯第 ${chIdx} 章，但該章及前章均無正文。系統自動重導向為寫作第 ${chIdx} 章。`);
+                            showToast(`🔧 自動校正：編輯 -> 寫作第 ${chIdx} 章`);
+                        }
+                    }
+                }
+                
                 const needsVolumeIdx = (targetNormalized.includes('skeleton') || targetNormalized === 'volume_skeleton');
                 const needsChapterIdx = (targetNormalized === 'writer' || targetNormalized === 'editor');
                 const missingVolumeIdx = needsVolumeIdx && (decisionResult.volume_index === null || decisionResult.volume_index === undefined);
