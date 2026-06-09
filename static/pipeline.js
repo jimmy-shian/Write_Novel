@@ -154,29 +154,54 @@ function shouldReviewPlotBatch(currentChapterIndex) {
     return true;
 }
 
+function buildDirectorDrivenPrompt(basePrompt, decision = null) {
+    const originalPrompt = (basePrompt || '').trim();
+    if (!decision) {
+        return originalPrompt;
+    }
+
+    const agentPrompt = (decision.agent_prompt || decision.hint || '').trim();
+    const agentContext = (decision.agent_context || '').trim();
+    const userIntentSummary = (decision.user_intent_summary || '').trim();
+    const sections = [];
+
+    if (agentPrompt) {
+        sections.push(`【總監指定任務】\n${agentPrompt}`);
+    }
+    if (agentContext) {
+        sections.push(`【總監指定素材】\n${agentContext}`);
+    }
+    if (userIntentSummary) {
+        sections.push(`【總監理解的作者目標】\n${userIntentSummary}`);
+    }
+
+    return sections.join('\n\n').trim() || originalPrompt;
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt, decision = null) {
     return new Promise((resolve) => {
         let endpoint, body, targetTextarea;
         let agentName = '';
+        const directorDrivenPrompt = buildDirectorDrivenPrompt(userPrompt, decision);
         switch (stage) {
             case 'worldview':
                 endpoint = '/api/agent/story-architect';
-                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
                 targetTextarea = el.editorWorldview;
                 state.activeTab = 'worldview';
                 agentName = 'Story Architect (故事結構架構師)';
                 break;
             case 'characters':
                 endpoint = '/api/agent/character-designer';
-                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
                 targetTextarea = el.editorCharactersJson;
                 state.activeTab = 'characters';
                 agentName = 'Character Designer (角色設計大師)';
                 break;
             case 'volumes':
                 endpoint = '/api/agent/volumes-planner';
-                body = { novel_id: state.currentNovelId, user_prompt: userPrompt };
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
                 agentName = 'Volumes Planner (篇卷結構規劃師)';
@@ -191,7 +216,7 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
                 body = { 
                     novel_id: state.currentNovelId, 
                     volume_index: volIdx, 
-                    user_prompt: hint || userPrompt 
+                    user_prompt: buildDirectorDrivenPrompt(hint || userPrompt, decision)
                 };
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
@@ -200,7 +225,11 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
             }
             case 'writer':
                 endpoint = '/api/agent/write-chapter';
-                body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
+                body = {
+                    novel_id: state.currentNovelId,
+                    chapter_index: state.activeChapterIndex || 1,
+                    user_prompt: directorDrivenPrompt || undefined
+                };
                 targetTextarea = el.editorProse;
                 state.activeTab = 'writer';
                 agentName = 'Chapter Writer (小說正文寫作作家)';
@@ -209,7 +238,11 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
                 break;
             case 'editor':
                 endpoint = '/api/agent/edit-chapter';
-                body = { novel_id: state.currentNovelId, chapter_index: state.activeChapterIndex || 1 };
+                body = {
+                    novel_id: state.currentNovelId,
+                    chapter_index: state.activeChapterIndex || 1,
+                    edit_instructions: directorDrivenPrompt || undefined
+                };
                 targetTextarea = el.editorProse;
                 state.activeTab = 'editor';
                 agentName = 'Chapter Editor (小說正文編輯作家)';
