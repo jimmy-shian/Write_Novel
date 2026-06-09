@@ -21,9 +21,11 @@ function formatForeshadowingSeed(item) {
         const idStr = item.id !== undefined ? `<strong style="color:var(--primary);">[Seed-${item.id}]</strong> ` : '';
         const stageStr = item.stage ? `<span class="char-pill pill-personality" style="margin-right:6px; font-size:var(--font-3xs); border-radius:4px; padding:1px 4px;">${item.stage}</span>` : '';
         const nameStr = item.name ? `<strong>${item.name}</strong>: ` : '';
-        let detailStr = item.detail || item.content || item.summary || item.description || item.seed || '';
+        const raw = item.detail || item.content || item.summary || item.description || item.seed || '';
+        let detailStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
         if (item.payoff) {
-            detailStr += ` <span style="color:var(--text-muted); font-size:var(--font-2xs); font-style:italic;">(回收: ${item.payoff})</span>`;
+            const payoffStr = typeof item.payoff === 'string' ? item.payoff : JSON.stringify(item.payoff);
+            detailStr += ` <span style="color:var(--text-muted); font-size:var(--font-2xs); font-style:italic;">(回收: ${payoffStr})</span>`;
         }
         if (!detailStr) {
             detailStr = JSON.stringify(item);
@@ -60,12 +62,13 @@ function formatKeyTurningPoint(item) {
     }
     if (typeof item === 'object' && item !== null) {
         const idStr = item.id !== undefined ? `<strong style="color:var(--status-unwritten);">[Turn-${item.id}]</strong> ` : '';
+        const toStr = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? JSON.stringify(v) : String(v));
         
         // 優先使用 trigger（觸發事件）作為主要顯示內容
-        let mainContent = item.trigger || item.name || item.title || '';
+        let mainContent = toStr(item.trigger || item.name || item.title || '');
         
         // 如果有 HTML 內容在 detail/global_impact 中，檢測並安全處理
-        let additionalContent = item.global_impact || item.impact || item.detail || item.summary || item.description || '';
+        let additionalContent = toStr(item.global_impact || item.impact || item.detail || item.summary || item.description || '');
         
         // 檢測附加內容是否包含 HTML
         const hasHtmlInAdditional = /<[a-z][\s\S]*>/i.test(additionalContent);
@@ -96,6 +99,20 @@ function formatKeyTurningPoint(item) {
 
 // Helper to look up detailed seed description from worldview
 function getSeedDescription(idOrString, worldviewJs) {
+    if (typeof idOrString === 'object' && idOrString !== null) {
+        const id = parseInt(idOrString.id);
+        if (!isNaN(id)) {
+            const seeds = worldviewJs?.foreshadowing_seeds || [];
+            for (const seed of seeds) {
+                if (typeof seed === 'object' && seed !== null && parseInt(seed.id) === id) {
+                    const val = seed.detail || seed.content || seed.summary || seed.description || seed.seed;
+                    return typeof val === 'string' ? val : JSON.stringify(seed);
+                }
+            }
+            return `伏筆種子 #${id}`;
+        }
+        return JSON.stringify(idOrString);
+    }
     const idStr = String(idOrString).replace(/[^\d]/g, '');
     const idNum = parseInt(idStr);
     if (isNaN(idNum)) {
@@ -105,7 +122,8 @@ function getSeedDescription(idOrString, worldviewJs) {
     for (const seed of seeds) {
         if (typeof seed === 'object' && seed !== null) {
             if (parseInt(seed.id) === idNum) {
-                return seed.detail || seed.content || seed.summary || seed.description || seed.seed || JSON.stringify(seed);
+                const val = seed.detail || seed.content || seed.summary || seed.description || seed.seed;
+                return typeof val === 'string' ? val : JSON.stringify(seed);
             }
         } else if (typeof seed === 'string') {
             const indexMatch = seed.match(/\[Seed-(\d+)\]/i);
@@ -119,7 +137,8 @@ function getSeedDescription(idOrString, worldviewJs) {
         if (typeof fallbackSeed === 'string') {
             return fallbackSeed.replace(/\[Seed-\d+\]/gi, '').trim();
         } else if (typeof fallbackSeed === 'object' && fallbackSeed !== null) {
-            return fallbackSeed.detail || fallbackSeed.content || fallbackSeed.summary || fallbackSeed.seed || JSON.stringify(fallbackSeed);
+            const val = fallbackSeed.detail || fallbackSeed.content || fallbackSeed.summary || fallbackSeed.seed;
+            return typeof val === 'string' ? val : JSON.stringify(fallbackSeed);
         }
     }
     return `伏筆種子 #${idNum}`;
@@ -127,6 +146,22 @@ function getSeedDescription(idOrString, worldviewJs) {
 
 // Helper to look up detailed turning point description from worldview
 function getTurningPointDescription(idOrString, worldviewJs) {
+    const safeStr = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? JSON.stringify(v) : String(v));
+    if (typeof idOrString === 'object' && idOrString !== null) {
+        const id = parseInt(idOrString.id);
+        if (!isNaN(id)) {
+            const turns = worldviewJs?.key_turning_points || [];
+            for (const turn of turns) {
+                if (typeof turn === 'object' && turn !== null && parseInt(turn.id) === id) {
+                    const trigger = safeStr(turn.trigger || turn.name || turn.title || '');
+                    const impact = turn.global_impact ? safeStr(turn.global_impact) : '';
+                    return impact ? `${trigger}: ${impact}` : trigger;
+                }
+            }
+            return `關鍵轉折點 #${id}`;
+        }
+        return JSON.stringify(idOrString);
+    }
     const idStr = String(idOrString).replace(/[^\d]/g, '');
     const idNum = parseInt(idStr);
     if (isNaN(idNum)) {
@@ -136,7 +171,9 @@ function getTurningPointDescription(idOrString, worldviewJs) {
     for (const turn of turns) {
         if (typeof turn === 'object' && turn !== null) {
             if (parseInt(turn.id) === idNum) {
-                return (turn.trigger || turn.name || turn.title || '') + (turn.global_impact ? `: ${turn.global_impact}` : '');
+                const trigger = safeStr(turn.trigger || turn.name || turn.title || '');
+                const impact = turn.global_impact ? safeStr(turn.global_impact) : '';
+                return impact ? `${trigger}: ${impact}` : trigger;
             }
         } else if (typeof turn === 'string') {
             const indexMatch = turn.match(/\[Turn-(\d+)\]/i);
@@ -150,7 +187,9 @@ function getTurningPointDescription(idOrString, worldviewJs) {
         if (typeof fallbackTurn === 'string') {
             return fallbackTurn.replace(/\[Turn-\d+\]/gi, '').trim();
         } else if (typeof fallbackTurn === 'object' && fallbackTurn !== null) {
-            return (fallbackTurn.trigger || fallbackTurn.name || fallbackTurn.title || '') + (fallbackTurn.global_impact ? `: ${fallbackTurn.global_impact}` : '');
+            const trigger = safeStr(fallbackTurn.trigger || fallbackTurn.name || fallbackTurn.title || '');
+            const impact = fallbackTurn.global_impact ? safeStr(fallbackTurn.global_impact) : '';
+            return impact ? `${trigger}: ${impact}` : trigger;
         }
     }
     return `關鍵轉折點 #${idNum}`;
@@ -1464,7 +1503,7 @@ export function selectWriterChapter(chapterIndex) {
                 foreshadowHtml = `
                 <div class="insp-item">
                     <span class="insp-label">🌱 伏筆線索</span>
-                    <p class="insp-val foreshadows" style="font-size:0.8rem; color:#10b981; font-weight:500;">🌱 ${plotChapter.foreshadowing.join(' | ')}</p>
+                    <p class="insp-val foreshadows" style="font-size:0.8rem; color:#10b981; font-weight:500;">🌱 ${plotChapter.foreshadowing.map(f => typeof f === 'string' ? f : JSON.stringify(f)).join(' | ')}</p>
                 </div>`;
             }
             
