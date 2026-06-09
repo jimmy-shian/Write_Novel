@@ -175,7 +175,8 @@ async function runPipeline(pipelinePrompt = '') {
     // 重置所有階段狀態
     updatePipelineStage('worldview', 'pending');
     updatePipelineStage('characters', 'pending');
-    updatePipelineStage('plot', 'pending');
+    updatePipelineStage('volumes', 'pending');
+    updatePipelineStage('volume_skeleton', 'pending');
     updatePipelineStage('writer', 'pending');
     
     try {
@@ -318,7 +319,7 @@ async function executeDirectorAction(decision, userPrompt) {
         case 'LOCAL_ALIGN_VOLUME': {
             const volIdx = decision.volume_index || 1;
             showToast(`⚡ 總監指示執行第 ${volIdx} 卷大綱的 JIT 微創校準對齊...`);
-            updatePipelineStage('plot', 'running');
+            updatePipelineStage('volume_skeleton', 'running');
             updateDirectorMessage(`⚡ 正在對齊第 ${volIdx} 卷大綱...`);
             
             const success = await window.alignVolume(volIdx);
@@ -334,24 +335,7 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
         
-        case 'INCREMENTAL_INSERT_PLOT': {
-            const insertIdx = decision.insert_after_index ?? 0;
-            const enhancedPrompt = hint || '在指定位置補足缺失伏筆';
-            showToast(`⚡ 總監指示在第 ${insertIdx + 1} 章後增量補設伏筆...`);
-            updatePipelineStage('plot', 'running');
-            updateDirectorMessage(`⚡ 正在增量插入第 ${insertIdx + 1} 章後的大綱...`);
-            
-            await executeIncrementalUpdate('plot_chapter', {
-                hint: enhancedPrompt,
-                insert_after_index: insertIdx
-            });
-            
-            if (state.isPipelineRunning) {
-                updateDirectorMessage('🔄 增量大綱插入完成，重新評估創作現狀中...');
-                setTimeout(() => runPipeline(userPrompt), 2000);
-            }
-            break;
-        }
+
 
         case 'INCREMENTAL_MODIFY_CHARACTER': {
             const charIdx = decision.target_char_index ?? null;
@@ -446,19 +430,19 @@ async function executeDirectorAction(decision, userPrompt) {
             if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
                 updatePipelineStage('worldview', 'running');
                 updateDirectorMessage('🌍 開始生成世界觀設定...');
-                await executePipelineStage('worldview', userPrompt);
+                await executePipelineStage('worldview', userPrompt, decision);
             } else if (target === 'characters' || target === '角色設計') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'running');
                 updateDirectorMessage('👥 開始生成角色設定...');
-                await executePipelineStage('characters', userPrompt);
+                await executePipelineStage('characters', userPrompt, decision);
             } else if (target === 'volumes' || target === '篇卷規劃' || target === '卷設定') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'running');
                 updateDirectorMessage('📚 開始規劃全書篇卷結構...');
                 showToast('📚 開始規劃全書篇卷結構...');
-                await executePipelineStage('volumes', userPrompt);
+                await executePipelineStage('volumes', userPrompt, decision);
             } else if (target === 'macro_skeleton' || target === 'volume_skeleton' || target === '宏觀骨架' || target === '骨架') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
@@ -503,11 +487,10 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
                 updatePipelineStage('volume_skeleton', 'done');
-                updatePipelineStage('foreshadowing_orchestration', 'done');
-                updatePipelineStage('plot', 'done');
+
                 updatePipelineStage('writer', 'running');
                 updateDirectorMessage('✍️ 開始撰寫正文...');
-                await executePipelineStage('writer', userPrompt);
+                await executePipelineStage('writer', userPrompt, decision);
             } else if (target === 'editor') {
                 if (decision?.chapter_index) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
@@ -516,11 +499,10 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('volumes', 'done');
                 updatePipelineStage('volume_skeleton', 'done');
-                updatePipelineStage('foreshadowing_orchestration', 'done');
-                updatePipelineStage('plot', 'done');
+
                 updatePipelineStage('writer', 'running');
-                updateDirectorMessage('✍️ 開始撰寫正文...');
-                await executePipelineStage('editor', userPrompt);
+                updateDirectorMessage('✏️ 開始精修正文...');
+                await executePipelineStage('editor', userPrompt, decision);
             } else {
                 await executeNextMissingStage(userPrompt);
             }
@@ -533,13 +515,13 @@ async function executeDirectorAction(decision, userPrompt) {
             const enhancedPrompt = hint ? `【⚠️ 總監修改指示/修正要求】：\n${hint}` : userPrompt;
             if (target.includes('worldview') || target.includes('世界觀')) {
                 updatePipelineStage('worldview', 'running');
-                await executePipelineStage('worldview', enhancedPrompt);
+                await executePipelineStage('worldview', enhancedPrompt, decision);
             } else if (target.includes('character') || target.includes('角色')) {
                 updatePipelineStage('characters', 'running');
-                await executePipelineStage('characters', enhancedPrompt);
+                await executePipelineStage('characters', enhancedPrompt, decision);
             } else if (target.includes('volume') || target.includes('卷')) {
                 updatePipelineStage('volumes', 'running');
-                await executePipelineStage('volumes', enhancedPrompt);
+                await executePipelineStage('volumes', enhancedPrompt, decision);
             } else if (target.includes('skeleton') || target.includes('骨架')) {
                 updatePipelineStage('volume_skeleton', 'running');
                 if (decision.volume_index !== undefined && decision.volume_index !== null) {
@@ -589,7 +571,7 @@ async function executeDirectorAction(decision, userPrompt) {
             const worldviewPrompt = hint 
                 ? `【⚠️ 總監修改指示/世界觀修正要求】：\n${hint}\n\n現有世界觀：\n${state.currentNovelData?.worldbuilding || ''}`
                 : userPrompt;
-            await executePipelineStage('worldview', worldviewPrompt);
+            await executePipelineStage('worldview', worldviewPrompt, decision);
             break;
         }
         
@@ -604,33 +586,19 @@ async function executeDirectorAction(decision, userPrompt) {
                 const charPrompt = hint
                     ? `【⚠️ 總監修改指示/角色設定修正要求】：\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
                     : userPrompt;
-                await executePipelineStage('characters', charPrompt);
+                await executePipelineStage('characters', charPrompt, decision);
             } else {
                 showToast('⚡ 總監指示回頭修改角色設計...');
                 updatePipelineStage('characters', 'running');
                 const charPrompt = hint
                     ? `【⚠️ 總監修改指示/角色設定修正要求】：\n${hint}\n\n現有角色設定：\n${state.currentNovelData?.characters_raw || ''}`
                     : userPrompt;
-                await executePipelineStage('characters', charPrompt);
+                await executePipelineStage('characters', charPrompt, decision);
             }
             break;
         }
         
-        case 'GO_BACK_TO_PLOT': {
-            showToast('⚡ 總監指示回頭修改大綱...');
-            updatePipelineStage('plot', 'running');
-            // 💡 使用 Director 指定的 chapter_index，覆寫 state.activeChapterIndex
-            if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
-                state.activeChapterIndex = parseInt(decision.chapter_index);
-            }
-            // 💡 僅傳遞 hint（總監修正指示），不把整本 plot_raw 塞入 user_prompt
-            // 這樣後端可以自己控制骨架上下文範圍，且不會被超長 context 搞垮
-            const plotPrompt = hint 
-                ? `【⚠️ 總監修改指示/章節大綱修正要求】：\n${hint}\n\n請根據以上指示修正指定章節的大綱。`
-                : userPrompt;
-            await executePipelineStage('plot', plotPrompt);
-            break;
-        }
+
         
 
         
@@ -646,7 +614,8 @@ async function executeDirectorAction(decision, userPrompt) {
             updateDirectorMessage('✅ 全部任務已完成');
             updatePipelineStage('worldview', 'done');
             updatePipelineStage('characters', 'done');
-            updatePipelineStage('plot', 'done');
+            updatePipelineStage('volumes', 'done');
+            updatePipelineStage('volume_skeleton', 'done');
             updatePipelineStage('writer', 'done');
             state.isPipelineRunning = false;
             setTimeout(() => showPipelineProgress(false), 3000);
@@ -789,8 +758,7 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('characters', 'done');
         updatePipelineStage('volumes', 'done');
         updatePipelineStage('volume_skeleton', 'done');
-        updatePipelineStage('foreshadowing_orchestration', 'done');
-        updatePipelineStage('plot', 'done');
+
         updatePipelineStage('writer', 'running');
         updateDirectorMessage('✍️ 前期準備完成，開始撰寫正文...');
         await executePipelineStage('writer', userPrompt);
@@ -2940,39 +2908,7 @@ async function executeIncrementalUpdate(target, params) {
                 );
             });
             
-        case 'plot_chapter':
-            // 在指定位置插入新章節大綱
-            showToast("📝 增量插入新章節大綱...");
-            showAgentProcessingIndicator('plot', 'Plot Planner (增量插入章節大綱)');
-            return new Promise((resolve) => {
-                streamAPI(
-                    '/api/agent/incremental-plot',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        insert_after_index: insert_after_index ?? 0,
-                        user_hint: user_hint || params.hint || '插入新章節'
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (delta) => {
-                        if (el.editorPlotJson) {
-                            el.editorPlotJson.value += delta;
-                        }
-                        window.updateAgentStreamOutput('plot', delta);
-                    },
-                    (err) => {
-                        window.updateAgentStreamOutput('plot', `\n[Error: ${err}]`);
-                        showToast("Error: " + err);
-                    },
-                    async (success) => {
-                        if (success) showToast("新章節插入完成");
-                        hideAgentProcessingIndicator('plot');
-                        await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
-                    }
-                );
-            });
+
             
         case 'volume_skeleton':
             // 增量更新卷骨架
@@ -3392,6 +3328,20 @@ function cacheDirectorDecisionMessage(content, thinking) {
     state.currentNovelData.chat_messages.push(message);
 }
 
+function buildDirectorExtraContext(reviewContext = null) {
+    const parts = [];
+    if (reviewContext?.extra_context) {
+        parts.push(`【呼叫端補充說明】\n${String(reviewContext.extra_context).trim()}`);
+    }
+    if (reviewContext?.agent_context) {
+        parts.push(`【呼叫端指定素材】\n${String(reviewContext.agent_context).trim()}`);
+    }
+    if (reviewContext?.summary_context) {
+        parts.push(`【呼叫端補充摘要】\n${String(reviewContext.summary_context).trim()}`);
+    }
+    return parts.join('\n\n');
+}
+
 async function runDirectorDecision(currentStage, providedUserPrompt = null, reviewContext = null) {
     // 總監開始決策時，自動跳轉至總監頁籤 (僅在初始化時觸發 1 次)
     switchToDirectorTab();
@@ -3430,7 +3380,8 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
         const requestBody = {
             current_stage: currentStage,
             user_prompt: userPrompt,
-            chapter_index: state.activeChapterIndex || 1
+            chapter_index: state.activeChapterIndex || 1,
+            extra_context: buildDirectorExtraContext(reviewContext)
         };
         
         // 計算建議的下一章（用於處理缺漏或補充章節）
@@ -3952,6 +3903,24 @@ async function handleDrawerPromptSubmit() {
                 await loadNovelDetails(state.currentNovelId);
             },
             { tabName: 'characters', agentName: '角色設計大師 (Character Designer)' }
+        );
+    }
+    
+    if (state.activeDrawerAction === 'plot') {
+        const volIdx = state.activeVolumeIdx || state.activeVolumeIndex || 1;
+        startAgentStream(
+            '/api/agent/volume-skeleton',
+            { 
+                novel_id: state.currentNovelId, 
+                volume_index: volIdx, 
+                user_prompt: userPrompt 
+            },
+            el.editorPlotJson,
+            async () => {
+                showToast(`第 ${volIdx} 卷骨架大綱生成完畢`);
+                await loadNovelDetails(state.currentNovelId);
+            },
+            { tabName: 'plot', agentName: `骨架大綱規劃師 (Volume ${volIdx} Skeleton)` }
         );
     }
     
@@ -4624,18 +4593,19 @@ function setupEventListeners() {
                             showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
                             
                             // Check if state.isAutoExecuteMode is true
-                            if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer'].includes(target)) {
+                            if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer', 'editor'].includes(target)) {
                                 showToast(`🚀 [一鍵流程] 將從「${target}」階段開始向後自動執行...`);
                                 state.isPipelineRunning = true;
                                 showPipelineProgress(true);
                                 
                                 await executeDirectorAction({
+                                    ...decisionResult,
                                     action: 'CONTINUE',
                                     target: target,
                                     hint: hint,
                                     volume_index: volIdx,
                                     chapter_index: chIdx
-                                }, hint || '請根據總監指示繼續創作');
+                                }, decisionResult.agent_prompt || hint || '請根據總監指示繼續創作');
                             } else {
                                 showToast(`⚡ [非一鍵流程] 僅執行「${target}」單一步驟，執行完成後將停止。`);
                                 state.isPipelineRunning = false;
@@ -4644,12 +4614,13 @@ function setupEventListeners() {
                                 if (target === 'writer') {
                                     const activeCh = chIdx || state.activeChapterIndex || 1;
                                     state.activeChapterIndex = activeCh;
-                                    await executePipelineStage('writer', hint || '請撰寫正文');
+                                    await executePipelineStage('writer', decisionResult.agent_prompt || hint || '請撰寫正文', decisionResult);
                                 } else if (target === 'editor') {
                                     const activeCh = chIdx || state.activeChapterIndex || 1;
-                                    await executeChapterProseEditFlow(activeCh, hint || '請精修正文');
+                                    state.activeChapterIndex = activeCh;
+                                    await executePipelineStage('editor', decisionResult.agent_prompt || hint || '請精修正文', decisionResult);
                                 } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration'].includes(target)) {
-                                    await executePipelineStage(target, hint || '請根據總監指示更新');
+                                    await executePipelineStage(target, decisionResult.agent_prompt || hint || '請根據總監指示更新', decisionResult);
                                 } else {
                                     console.warn('Unknown TRIGGER_AGENT target:', target);
                                 }
@@ -4861,35 +4832,45 @@ async function reevaluateAfterRegression(modifiedStage) {
             showToast("⚡ 世界觀變更影響角色設定，需要重新設計...");
             startStage2_Characters('characters', directorReview.hint);
         } else if (directorReview.continue) {
-            // 角色設定不受影響，繼續大綱
-            startStage3_Plot();
+            // 角色設定不受影響，重新運行管線前進
+            runPipeline(userPrompt);
         } else {
             // 需要用戶確認
             showToast("⏸️ 請查看總監評估，確認是否需要其他調整");
         }
     } else if (modifiedStage === 'characters') {
-        // 角色修改後，需要重新檢查大綱
+        // 角色修改後，需要重新檢查大綱骨架
         const directorReview = await runDirectorDecision('characters_review');
         
         if (directorReview.action === 'GO_BACK_TO_CHARACTERS') {
             showToast("⚡ 角色變更需要進一步調整...");
             startStage2_Characters('characters', directorReview.hint);
-        } else if (directorReview.action === 'GO_BACK_TO_PLOT') {
+        } else if (directorReview.action === 'GO_BACK_TO_SKELETON_EXPANSION' || directorReview.action === 'GO_BACK_TO_PLOT') {
             showToast("⚡ 角色變更影響大綱，需要重新規劃...");
-            startStage3_Plot(true, directorReview.hint);
+            const fakeDecision = {
+                action: 'GO_BACK_TO_SKELETON_EXPANSION',
+                volume_index: 1,
+                hint: directorReview.hint || '角色設定變更，請重新生成大綱骨架'
+            };
+            await executeDirectorAction(fakeDecision, userPrompt);
         } else if (directorReview.continue) {
             // 大綱不受影響，繼續寫作
             startStage4_Writer();
         } else {
             showToast("⏸️ 請查看總監評估");
         }
-    } else if (modifiedStage === 'plot') {
-        // 大綱修改後，需要重新檢查正文
-        const directorReview = await runDirectorDecision('plot_review');
+    } else if (modifiedStage === 'volume_skeleton' || modifiedStage === 'plot') {
+        // 大綱骨架修改後，需要重新檢查正文
+        const directorReview = await runDirectorDecision('volume_skeleton_review');
         
-        if (directorReview.action === 'GO_BACK_TO_PLOT') {
-            showToast("⚡ 大綱需要進一步調整...");
-            startStage3_Plot(true, directorReview.hint);
+        if (directorReview.action === 'GO_BACK_TO_SKELETON_EXPANSION' || directorReview.action === 'GO_BACK_TO_PLOT') {
+            showToast("⚡ 大綱骨架需要進一步調整...");
+            const fakeDecision = {
+                action: 'GO_BACK_TO_SKELETON_EXPANSION',
+                volume_index: 1,
+                hint: directorReview.hint || '請重新規劃大綱骨架'
+            };
+            await executeDirectorAction(fakeDecision, userPrompt);
         } else if (directorReview.action === 'GO_BACK_TO_WRITER') {
             showToast("⚡ 大綱變更需要重新撰寫部分章節...");
             startStage4_Writer(true);
