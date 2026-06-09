@@ -451,6 +451,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let target = null;
     let hint = '';
     let reason = '';
+    let agent_prompt = '';
+    let agent_context = '';
+    let user_intent_summary = '';
     let volume_index = null;
     let chapter_index = null;
     let insert_after_index = null;
@@ -464,6 +467,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             target = jsonCmd.target || null;
             hint = jsonCmd.hint || jsonCmd.reason || '';
             reason = jsonCmd.reason || '';
+            agent_prompt = jsonCmd.agent_prompt || '';
+            agent_context = jsonCmd.agent_context || '';
+            user_intent_summary = jsonCmd.user_intent_summary || '';
             
             if (jsonCmd.volume_index !== undefined && jsonCmd.volume_index !== null) {
                 volume_index = parseInt(jsonCmd.volume_index);
@@ -515,6 +521,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
                 target = rawJson.target || target;
                 hint = rawJson.hint || rawJson.reason || hint;
                 reason = rawJson.reason || reason;
+                agent_prompt = rawJson.agent_prompt || agent_prompt;
+                agent_context = rawJson.agent_context || agent_context;
+                user_intent_summary = rawJson.user_intent_summary || user_intent_summary;
                 if (rawJson.volume_index !== undefined && rawJson.volume_index !== null) {
                     volume_index = parseInt(rawJson.volume_index);
                 }
@@ -556,7 +565,10 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         regenerateStage: null,
         volume_index: volume_index,
         chapter_index: chapter_index,
-        insert_after_index: insert_after_index
+        insert_after_index: insert_after_index,
+        agent_prompt: agent_prompt,
+        agent_context: agent_context,
+        user_intent_summary: user_intent_summary
     };
 }
 
@@ -578,4 +590,3 @@ export function throttledRenderMarkdown(element, markdownText) {
         });
     }
 }
-
