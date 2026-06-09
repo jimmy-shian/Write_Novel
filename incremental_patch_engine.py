@@ -4,7 +4,78 @@ import re
 import sys
 import db
 
-ALLOWED_CHARACTER_FIELDS = {"name", "identity", "personality", "appearance", "background", "arc", "relationships"}
+ALLOWED_CHARACTER_FIELDS = {
+    "name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw",
+    "motivation", "arc", "speech_style", "appearance", "background", "relationships"
+}
+CHARACTER_FIELD_ALIASES = {
+    "identity": "role",
+    "backstory": "background",
+}
+
+def normalize_character_field_name(field_name):
+    if not field_name:
+        return field_name
+    return CHARACTER_FIELD_ALIASES.get(str(field_name).strip(), str(field_name).strip())
+
+def deep_merge_dict(base, patch):
+    if not isinstance(base, dict):
+        base = {}
+    if not isinstance(patch, dict):
+        return patch
+    merged = dict(base)
+    for key, value in patch.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+def _extract_character_patch(payload, char_index=None):
+    """
+    Normalize common LLM variants into a single character patch dict:
+    - {"character": {...}}
+    - {"characters": [{...}]} as either a one-item patch or a full list
+    - {"patch": {...}}
+    - a raw {...} character patch
+    """
+    if isinstance(payload, list):
+        if char_index is not None and len(payload) > int(char_index):
+            return payload[int(char_index)]
+        return payload[0] if payload else {}
+    if not isinstance(payload, dict):
+        return payload
+    for key in ("patch", "character", "updated_character", "modified_character"):
+        if isinstance(payload.get(key), dict):
+            return payload[key]
+    if isinstance(payload.get("characters"), list):
+        chars = payload["characters"]
+        if char_index is not None and len(chars) > int(char_index):
+            return chars[int(char_index)]
+        return chars[0] if chars else {}
+    return payload
+
+def _extract_field_value(payload, field_name):
+    if not isinstance(payload, dict):
+        return payload
+    if field_name in payload:
+        return payload[field_name]
+    for alias, canonical in CHARACTER_FIELD_ALIASES.items():
+        if canonical == field_name and alias in payload:
+            return payload[alias]
+    for key in ("value", "new_value", "updated_value"):
+        if key in payload:
+            return payload[key]
+    char_patch = _extract_character_patch(payload)
+    if isinstance(char_patch, dict) and field_name in char_patch:
+        return char_patch[field_name]
+    if isinstance(char_patch, dict):
+        for alias, canonical in CHARACTER_FIELD_ALIASES.items():
+            if canonical == field_name and alias in char_patch:
+                return char_patch[alias]
+    return payload
 
 def clean_json_text(text):
     """
@@ -142,8 +213,9 @@ def validate_incremental_payload(target_section, payload, action="PATCH", extra_
                     return False, "Each appended character must have a non-empty 'name' field"
             return True, ""
         elif action == "PATCH":
-            if extra_params and "field_name" in extra_params:
-                field_name = extra_params["field_name"]
+            if extra_params and extra_params.get("field_name"):
+                field_name = normalize_character_field_name(extra_params["field_name"])
+                extra_params["field_name"] = field_name
                 if field_name not in ALLOWED_CHARACTER_FIELDS:
                     return False, f"Field '{field_name}' is not in character fields whitelist"
             if isinstance(data, list):
@@ -269,13 +341,14 @@ def merge_incremental_payload(novel_id, target_section, action, payload, extra_p
             if extra_params and "char_index" in extra_params:
                 c_idx = int(extra_params["char_index"])
                 if c_idx < len(current_chars["characters"]):
-                    if "field_name" in extra_params:
-                        fname = extra_params["field_name"]
-                        new_val = payload.get(fname, payload) if isinstance(payload, dict) else payload
+                    if extra_params.get("field_name"):
+                        fname = normalize_character_field_name(extra_params["field_name"])
+                        new_val = _extract_field_value(payload, fname)
                         current_chars["characters"][c_idx][fname] = new_val
                     else:
-                        new_char = payload.get("characters", [payload])[0] if isinstance(payload, dict) else (payload[0] if isinstance(payload, list) else payload)
-                        current_chars["characters"][c_idx] = new_char
+                        char_patch = _extract_character_patch(payload, c_idx)
+                        if isinstance(char_patch, dict):
+                            current_chars["characters"][c_idx] = deep_merge_dict(current_chars["characters"][c_idx], char_patch)
                 return current_chars
             else:
                 # Whole characters replace (e.g. revision)
@@ -601,7 +674,11 @@ def validate_and_merge_incremental_patch(novel_id, target_section, action, paylo
         return False, None, "Merge operation failed"
         
     # 4. Post-merge validation
-    is_valid_merge, errors = post_merge_validation(merged_data, target_section, original_data)
+    # Character PATCH may intentionally rename a character. The generic "missing
+    # core name" guard is useful for full regeneration, but it blocks legitimate
+    # targeted edits, so skip the original-name comparison for PATCH merges.
+    validation_original = None if (target_section == "characters" and action == "PATCH") else original_data
+    is_valid_merge, errors = post_merge_validation(merged_data, target_section, validation_original)
     if not is_valid_merge:
         return False, None, f"Post-merge validation failed: {', '.join(errors)}"
         

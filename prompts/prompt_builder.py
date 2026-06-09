@@ -6,6 +6,7 @@ Prompt Builder (隔離的提示詞構建與拼接層)
 
 import json
 import agent_json
+from agent_json import CHARACTER_BASIC_FIELDS
 from prompts.prompt_main import (
     STORY_ARCHITECT_PROMPT,
     VOLUMES_PLANNER_PROMPT,
@@ -33,16 +34,7 @@ MAX_MACRO_OUTLINE_LENGTH = 999999       # 徹底砍掉大綱長度限制
 # --- 角色基本設定輔助函數 ---
 # 定義角色只需要傳入的基本欄位，過濾掉冗長的背景故事等欄位
 # 核心欄位：name 和 personality 是必留的，其他可以過濾
-CHARACTER_BASIC_FIELDS = [
-    "name",
-    "role", 
-    "entry_phase",
-    "personality",
-    "want",
-    "need",
-    "fatal_flaw",
-    "speech_style"
-]
+# CHARACTER_BASIC_FIELDS 定義在 agent_json.py 中，供各模組統一引用
 
 MAX_CHARACTERS_SUMMARY_LENGTH = 999999  # 徹底砍掉角色摘要長度限制
 
@@ -203,6 +195,7 @@ def get_json_schema_prompt_snippet(schema_name):
     schema = schema_map.get(schema_name, {})
     return f"\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
 
+
 def build_story_architect_messages(genre, style, user_prompt):
     """世界觀架構師提示詞拼接"""
     # 這裡的 STORY_ARCHITECT_PROMPT 包含了 generate_style
@@ -355,13 +348,20 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
         {"role": "user", "content": user_content}
     ]
 
-def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index):
+def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index, user_prompt=None):
     """正文作家寫作提示詞拼接"""
     system_prompt = CHAPTER_WRITER_PROMPT.format(writing_style=custom_style)
     
     # 對角色 Bible 進行基本設定篩選，避免過長導致 API 失敗
     characters_bible_filtered = extract_character_basic(characters_bible)
     
+    extra_prompt_block = ""
+    if user_prompt and str(user_prompt).strip():
+        extra_prompt_block = f"""
+【本章額外創作指令】
+{str(user_prompt).strip()}
+"""
+
     user_content = f"""【世界觀背景】
 {worldview_text}
 
@@ -374,6 +374,7 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 {surrounding_plot}
 {vol_outline_context}
 {clue_payoff_details}
+{extra_prompt_block}
 
 請根據以上豐富的上下文細節，展開本章正文寫作，字數適中。
 """
@@ -398,6 +399,64 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
         {"role": "user", "content": user_content}
     ]
 
+def simplify_plot_data_for_copilot(plot_text):
+    if not plot_text or not isinstance(plot_text, str) or plot_text.startswith("尚無"):
+        return plot_text
+    try:
+        data = json.loads(plot_text)
+        if isinstance(data, dict):
+            if "volumes" in data:
+                vols = data["volumes"]
+                simplified_vols = []
+                for v in vols:
+                    v_copy = dict(v)
+                    if "chapters_outline" in v_copy:
+                        if isinstance(v_copy["chapters_outline"], list):
+                            v_copy["chapters_outline"] = f"已生成 {len(v_copy['chapters_outline'])} 章骨架大綱"
+                        else:
+                            v_copy["chapters_outline"] = "尚未生成骨架"
+                    simplified_vols.append(v_copy)
+                return json.dumps({"volumes": simplified_vols}, ensure_ascii=False, indent=2)
+            elif "chapters" in data:
+                chapters = data["chapters"]
+                simplified_chapters = []
+                for ch in chapters:
+                    if isinstance(ch, dict):
+                        simplified_ch = {
+                            "chapter_index": ch.get("chapter_index") or ch.get("chapter") or ch.get("index"),
+                            "chapter_title": ch.get("chapter_title") or ch.get("title") or ch.get("brief_title") or "未命名章節",
+                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or ch.get("brief_summary") or "（尚無摘要說明）"
+                        }
+                        simplified_chapters.append(simplified_ch)
+                return json.dumps({"chapters": simplified_chapters}, ensure_ascii=False, indent=2)
+        elif isinstance(data, list):
+            if data and "volume_index" in data[0]:
+                simplified_vols = []
+                for v in data:
+                    v_copy = dict(v)
+                    if "chapters_outline" in v_copy:
+                        if isinstance(v_copy["chapters_outline"], list):
+                            v_copy["chapters_outline"] = f"已生成 {len(v_copy['chapters_outline'])} 章骨架大綱"
+                        else:
+                            v_copy["chapters_outline"] = "尚未生成骨架"
+                    simplified_vols.append(v_copy)
+                return json.dumps(simplified_vols, ensure_ascii=False, indent=2)
+            else:
+                simplified_chapters = []
+                for ch in data:
+                    if isinstance(ch, dict):
+                        simplified_ch = {
+                            "chapter_index": ch.get("chapter_index") or ch.get("chapter") or ch.get("index"),
+                            "chapter_title": ch.get("chapter_title") or ch.get("title") or ch.get("brief_title") or "未命名章節",
+                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or ch.get("brief_summary") or "（尚無摘要說明）"
+                        }
+                        simplified_chapters.append(simplified_ch)
+                return json.dumps(simplified_chapters, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[WARN] Failed to simplify plot data for copilot: {e}")
+    return plot_text
+
+
 def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None):
     """Copilot 創意決策總監聊天提示詞"""
     if not validation_report:
@@ -415,7 +474,25 @@ def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_
         validation_report=validation_report
     )
     
-    user_content = f"""【當前專案狀態】
+    # Filter/simplify the inputs to keep context token count safe but provide actual content
+    worldview_summary = worldview_text
+    
+    characters_filtered = extract_character_basic(characters_text)
+    characters_summary = json.dumps(characters_filtered, ensure_ascii=False, indent=2) if isinstance(characters_filtered, dict) else str(characters_filtered)
+    
+    plot_summary = simplify_plot_data_for_copilot(plot_text)
+    
+    user_content = f"""【當前專案實際設定與大綱內容】
+- 【世界觀主題與設定】：
+{worldview_summary}
+
+- 【角色 Bible 聖經（基本人設）】：
+{characters_summary}
+
+- 【全書篇卷與大綱（簡化版）】：
+{plot_summary}
+
+【目前系統診斷狀態】
 - 世界觀：{diags["worldview"]}
 - 角色 Bible：{diags["characters"]}
 - 大綱概要：{diags["plot"]}
@@ -492,7 +569,22 @@ def mask_worldview_seeds_and_turns(worldview_text):
         
     return "".join(new_parts)
 
-def build_director_decision_messages(novel_id, current_stage, worldview_text, characters_text, plot_text, written_chapters_text, user_prompt, validation_report, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None, chapter_index=None):
+def build_director_decision_messages(
+    novel_id,
+    current_stage,
+    worldview_text,
+    characters_text,
+    plot_text,
+    written_chapters_text,
+    user_prompt,
+    validation_report,
+    character_review_mode=None,
+    character_review_hint=None,
+    character_review_target_content=None,
+    suggested_next_chapter=None,
+    chapter_index=None,
+    director_context_block=None
+):
     from diagnostics import diagnose_all_phases
     diags = diagnose_all_phases(novel_id)
     """總監決策評判提示詞
@@ -525,7 +617,7 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
     # 總監評斷世界觀時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
     if current_stage != "worldview":
         worldview_text = mask_worldview_seeds_and_turns(worldview_text)
-    
+
     # 根據 current_stage 構建不同的審查內容
     if current_stage == "worldview":
         # 世界觀階段：只傳世界觀完整內容 + 評斷提示詞
@@ -562,20 +654,20 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        extra_context = ""
+        character_extra_context = ""
         if character_review_mode in ("modify", "expand") and character_review_hint:
-            extra_context += f"\n\n【本次修改/新增的總監指示 (Hint)】\n{character_review_hint}"
+            character_extra_context += f"\n\n【本次修改/新增的總監指示 (Hint)】\n{character_review_hint}"
         if character_review_mode in ("modify", "expand") and character_review_target_content:
-            extra_context += f"\n\n【被修改/新增角色的完整內容】\n{character_review_target_content}"
+            character_extra_context += f"\n\n【被修改/新增角色的完整內容】\n{character_review_target_content}"
         if character_review_mode == "generate":
-            extra_context = "\n\n【重要】此為世界觀生成後的首次角色生成，請確認角色陣容是否完整且與世界觀設定契合。"
+            character_extra_context = "\n\n【重要】此為世界觀生成後的首次角色生成，請確認角色陣容是否完整且與世界觀設定契合。"
         
         user_content = f"""【世界觀背景】
 {worldview_text}
  
 【完整角色列表（完整設定）】
 {characters_text}
-{extra_context}
+{character_extra_context}
  
 請進行深度評估，決定下一步行動！
 """
@@ -633,6 +725,7 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
 4. ⚠️【後三章伏筆預埋審查】：請特別注意檢查「clue_payoff_upcoming_3_chapters」中預告的後三章即將回收之伏筆，是否已在本章正文中有合理的前置鋪墊與自然埋入。
+5. 角色聖經的配角欄位缺失不是 writer 階段阻斷理由；除非主角資料缺失已明顯造成正文無法寫作，否則不得改派角色修補，應繼續 writer/editor 流程。
  
 {stage_criteria}
  
@@ -663,6 +756,7 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 1. 當前階段是「current_stage = {current_stage}」（編輯姬）。
 2. 檢查潤色後是否比原版有明顯提升。
 3. 確認角色人設、大綱走向、伏筆完整性是否保持。
+4. 角色聖經的配角欄位缺失不是 editor 階段阻斷理由；若本章正文與大綱可正常審核，應放行到下一章 writer。
  
 {stage_criteria}
  
@@ -711,6 +805,17 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 請進行深度評估，決定下一步行動！
 """
     
+    if current_stage in ("volumes", "volume_skeleton", "writer", "editor"):
+        system_prompt += """
+
+## 伏筆/轉折審核紅線
+1. 伏筆與轉折的硬性位置，以 Python 預計算分配表與章節大綱 allocated_tasks 為唯一依據。
+2. 世界觀 foreshadowing_seeds / key_turning_points 內的 act、stage、volume、chapter 等欄位，只是早期草稿參考，不得當成本階段硬性任務。
+3. 你不得在審核時臨時發明新的伏筆/轉折義務，也不得要求 Agent 隨意新增未分配的伏筆。
+4. 若某章/某卷沒有被分配 plant、payoff 或 turning point，請只做一般品質審核，不得因「應該有伏筆感」而退回。
+5. 若要退回修改，必須引用分配表中的 seed_id / turn_id、指定章節與缺失位置。
+"""
+
     if suggested_next_chapter is not None:
         if current_stage in ("writer", "editor"):
             system_prompt += f"\n\n💡【系統寫作計畫指引】：若本次審核放行並準備繼續正文寫作，系統建請下一章前往：第 {suggested_next_chapter} 章（這可能是一般的順序下一章，或是為了補齊斷檔/缺漏的章節）。請在輸出 JSON 決策時，優先將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`。\n"
@@ -719,6 +824,9 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 
     system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
+    if director_context_block:
+        user_content += f"\n\n{director_context_block}"
+
     # 統一在 user_content 尾端附加額外的 user_prompt，確保大綱、寫作或編輯階段也能接收此提示 (包括錯誤自癒報告)
     if user_prompt and user_prompt.strip() and "【使用者原始需求】" not in user_content:
         user_content += f"\n\n【使用者指示 / 系統錯誤自癒回報（請優先滿足此要求）】\n{user_prompt.strip()}"
@@ -731,7 +839,7 @@ def build_director_decision_messages(novel_id, current_stage, worldview_text, ch
 def build_director_decision_help_messages(help_reason, target_data):
     """總監調閱輔助決策提示詞"""
     system_prompt = """你是一位極度嚴格的小說創作總監。你剛剛調閱了完整的詳細板塊數據。
-請在仔細審閱調閱數據後，給出最深刻、最犀利的洞察反饋，並決定下一步的實質決策 action (如 CONTINUE, GO_BACK_TO_plot, MODIFY_CURRENT_CHAPTER 等)。
+請在仔細審閱調閱數據後，給出最深刻、最犀利的洞察反饋，並決定下一步的實質決策 action (如 CONTINUE, GO_BACK_TO_SKELETON_EXPANSION, MODIFY_CURRENT_CHAPTER 等)。
 
 請直接輸出【審閱反饋】，並在最後輸出 JSON 指令區塊。
 """
@@ -774,7 +882,52 @@ def build_incremental_architect_messages(target_section, worldview_text, user_hi
 
 def build_incremental_character_messages(worldview_text, existing_chars_json, target_char_content, target_char_index, field_name, user_hint):
     """增量角色修改提示詞拼接"""
-    schema_snippet = get_json_schema_prompt_snippet("character")
+    if field_name:
+        patch_schema = {
+            field_name: "只填此欄位的新值；可以是字串、陣列或物件，依原欄位型別決定"
+        }
+    elif target_char_index is not None:
+        patch_schema = {
+            "character": {
+                "name": "只有需要修改名稱時才填",
+                "role": "可省略未修改欄位",
+                "personality": ["可只回傳被修改欄位"],
+                "want": "可省略",
+                "need": "可省略",
+                "fatal_flaw": "可省略",
+                "motivation": "可省略",
+                "arc": "可省略",
+                "speech_style": "可省略",
+                "appearance": "可省略",
+                "background": "可省略",
+                "relationships": []
+            }
+        }
+    else:
+        patch_schema = {
+            "characters": [
+                {
+                    "name": "新角色具體姓名/代號",
+                    "role": "",
+                    "entry_phase": "",
+                    "personality": [],
+                    "want": "",
+                    "need": "",
+                    "fatal_flaw": "",
+                    "motivation": "",
+                    "arc": "",
+                    "speech_style": "",
+                    "appearance": "",
+                    "background": "",
+                    "relationships": []
+                }
+            ]
+        }
+    schema_snippet = (
+        "\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this incremental patch schema. "
+        "Wrap in ```json ... ``` codeblock]\n"
+        f"{json.dumps(patch_schema, ensure_ascii=False, indent=2)}\n"
+    )
     
     if target_char_index is not None:
         if field_name:
@@ -782,12 +935,14 @@ def build_incremental_character_messages(worldview_text, existing_chars_json, ta
             system_prompt = INCREMENTAL_CHARACTER_PROMPT.format(
                 existing_worldbuilding=worldview_text,
                 existing_characters=existing_chars_json + "\n" + target_char_content,
-                user_hint=f"請修改角色索引 {target_char_index} 的 {field_name} 欄位。具體修改要求：{user_hint}"
+                user_hint=f"請只修改角色索引 {target_char_index} 的 `{field_name}` 欄位。具體修改要求：{user_hint}\n\n輸出只能包含 `{field_name}` 或 `value/new_value`，不得輸出其他未修改角色。"
             )
         else:
             # Modify full character design
-            system_prompt = CHARACTER_DESIGNER_PROMPT_PLUS.format(
-                hints=f"修改角色索引 {target_char_index} 的完整角色設定。要求：{user_hint}\n現有角色聖經：\n{existing_chars_json}\n被修改角色原設定：\n{target_char_content}"
+            system_prompt = INCREMENTAL_CHARACTER_PROMPT.format(
+                existing_worldbuilding=worldview_text,
+                existing_characters=existing_chars_json + "\n" + target_char_content,
+                user_hint=f"請局部修正角色索引 {target_char_index}。要求：{user_hint}\n\n只輸出本角色被修改欄位的 patch；未修改欄位請省略，後端會與原角色深度合併。不得回傳完整角色列表。"
             )
     else:
         # Append mode
@@ -808,7 +963,28 @@ def build_incremental_character_messages(worldview_text, existing_chars_json, ta
 
 def build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint):
     """卷骨架增量修正提示詞拼接"""
-    schema_snippet = get_json_schema_prompt_snippet("skeleton")
+    patch_schema = {
+        "volume_index": volume_index,
+        "chapters_skeleton": [
+            {
+                "chapter_index": "必填：要修改的絕對章節序號",
+                "chapter_title": "可省略未修改欄位",
+                "chapter_summary": "可省略未修改欄位",
+                "time_setting": "可省略未修改欄位",
+                "scene_setting": "可省略未修改欄位",
+                "events": "若修改事件，回傳完整的新 events 陣列",
+                "characters_active": "可省略未修改欄位",
+                "emotional_tone": "可省略未修改欄位",
+                "cliffhanger": "可省略未修改欄位",
+                "allocated_tasks": "除非明確要求修改伏筆/轉折，否則省略"
+            }
+        ]
+    }
+    schema_snippet = (
+        "\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this incremental skeleton patch schema. "
+        "Wrap in ```json ... ``` codeblock]\n"
+        f"{json.dumps(patch_schema, ensure_ascii=False, indent=2)}\n"
+    )
     system_prompt = VOLUME_SKELETON_PROMPT_PLUS.format(hints=user_hint) + f"\n\n{schema_snippet}"
     
     user_content = f"""【世界觀背景】
@@ -824,6 +1000,7 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
 {user_hint}
 
 請僅針對第 {volume_index} 卷的章節大綱骨架進行修改，並回傳格式完全合法的 chapters_skeleton JSON。
+只回傳被修改或新增補全的章節物件；每個物件必須包含 chapter_index。未修改章節不要回傳，未修改欄位請省略，後端會按 chapter_index 深度合併。
 """
     return [
         {"role": "system", "content": system_prompt},

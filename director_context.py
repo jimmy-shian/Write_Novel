@@ -10,6 +10,191 @@ import json
 import db
 
 
+def build_director_conversation_context(novel_id, limit=1):
+    """Return the latest chat memory slice used by Director decisions."""
+    memory = db.get_chat_memory(novel_id, limit=max(limit * 8, 8))
+    if not memory:
+        return ""
+
+    role_labels = {
+        "user": "作者",
+        "assistant": "協作總監",
+        "director": "流程總監",
+    }
+    lines = []
+    for item in memory:
+        if item.get("role") == "director" or item.get("message_type") in ("director", "pipeline"):
+            continue
+        role = role_labels.get(item.get("role"), item.get("role", "未知"))
+        content = (item.get("content") or "").strip()
+        thinking = (item.get("thinking") or "").strip()
+        if content:
+            lines.append(f"[{role}] {content}")
+        if thinking:
+            lines.append(f"[{role}思考摘錄] {thinking[:400]}")
+        if len(lines) >= limit:
+            break
+    return "\n\n".join(lines)
+
+
+def build_director_context_block(conversation_context=None, summary_context=None, extra_context=None):
+    """Compose optional Director input sections in one backend-owned place."""
+    sections = []
+    if conversation_context and str(conversation_context).strip():
+        sections.append(f"【最近對話內容（僅前 1 則）】\n{str(conversation_context).strip()}")
+    if summary_context and str(summary_context).strip():
+        sections.append(f"【本輪精簡結果】\n{str(summary_context).strip()}")
+    if extra_context and str(extra_context).strip():
+        sections.append(f"【補充上下文 / 指定素材】\n{str(extra_context).strip()}")
+    return "\n\n".join(sections)
+
+
+def _allocated_foreshadowing_status(allocated_tasks):
+    if not isinstance(allocated_tasks, dict):
+        allocated_tasks = {}
+
+    plants = allocated_tasks.get("foreshadowing_plants") or []
+    payoffs = allocated_tasks.get("foreshadowing_payoffs") or []
+    turns = allocated_tasks.get("turning_points") or []
+    return {
+        "source_of_truth": "current_chapter.outline.allocated_tasks",
+        "worldview_seed_act_metadata_is_reference_only": True,
+        "director_rule": "Only require foreshadowing in this chapter when allocated_tasks explicitly assigns plants, payoffs, or turning_points. Do not infer a chapter obligation from worldview seed act/stage metadata.",
+        "has_required_foreshadowing_task": bool(plants or payoffs or turns),
+        "plants_count": len(plants) if isinstance(plants, list) else 1,
+        "payoffs_count": len(payoffs) if isinstance(payoffs, list) else 1,
+        "turning_points_count": len(turns) if isinstance(turns, list) else 1,
+    }
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _seed_label(seed, idx):
+    if isinstance(seed, dict):
+        for key in ("name", "title", "summary", "description", "content", "seed"):
+            value = seed.get(key)
+            if value:
+                return str(value)
+        return json.dumps(seed, ensure_ascii=False)
+    return str(seed)
+
+
+def _chapter_volume_index(volumes, chapter_index):
+    try:
+        return db.get_chapter_volume_index(volumes, int(chapter_index))
+    except Exception:
+        return None
+
+
+def _chapters_for_volume(volumes, volume_index):
+    if volume_index is None:
+        return None
+    try:
+        start_ch, end_ch = db.get_volume_chapter_range(volumes, int(volume_index))
+        return {"start_chapter": start_ch, "end_chapter": end_ch}
+    except Exception:
+        return None
+
+
+def build_foreshadowing_allocation_context(novel_id, scope="all", volume_index=None, chapter_index=None, window=3):
+    """Return the deterministic foreshadowing/turning allocation table used by Director reviews."""
+    volumes = db.get_volumes(novel_id)
+    wb = db.get_latest_worldbuilding(novel_id)
+    worldview = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    seeds = _as_list(worldview.get("foreshadowing_seeds"))
+    turns = _as_list(worldview.get("key_turning_points"))
+    blueprint = db.get_global_foreshadowing_blueprint(novel_id)
+
+    seed_allocations = blueprint.get("foreshadowing_allocations", []) or []
+    turn_allocations = blueprint.get("turning_allocations", []) or []
+
+    target_volume = int(volume_index) if volume_index is not None else None
+    target_chapter = int(chapter_index) if chapter_index is not None else None
+    chapter_min = chapter_max = None
+    if scope == "chapter" and target_chapter is not None:
+        chapter_min = max(1, target_chapter - int(window or 0))
+        chapter_max = target_chapter + int(window or 0)
+    elif target_volume is not None:
+        vol_range = _chapters_for_volume(volumes, target_volume)
+        if vol_range:
+            chapter_min = vol_range["start_chapter"]
+            chapter_max = vol_range["end_chapter"]
+
+    def in_scope(*chapters):
+        if chapter_min is None or chapter_max is None:
+            return True
+        for chapter in chapters:
+            try:
+                ch = int(chapter)
+            except Exception:
+                continue
+            if chapter_min <= ch <= chapter_max:
+                return True
+        return False
+
+    foreshadowing_rows = []
+    for idx, seed in enumerate(seeds):
+        if idx >= len(seed_allocations):
+            continue
+        try:
+            plant_ch, payoff_ch = seed_allocations[idx]
+        except Exception:
+            continue
+        if not in_scope(plant_ch, payoff_ch):
+            continue
+        foreshadowing_rows.append({
+            "seed_id": f"Seed-{idx + 1}",
+            "seed": _seed_label(seed, idx),
+            "plant_chapter": int(plant_ch),
+            "plant_volume": _chapter_volume_index(volumes, plant_ch),
+            "payoff_chapter": int(payoff_ch),
+            "payoff_volume": _chapter_volume_index(volumes, payoff_ch),
+            "review_rule": "Only require this seed in a chapter when that chapter is plant_chapter or payoff_chapter, or when the chapter outline allocated_tasks explicitly includes it.",
+        })
+
+    turning_rows = []
+    for idx, turn in enumerate(turns):
+        if idx >= len(turn_allocations):
+            continue
+        try:
+            turn_ch = int(turn_allocations[idx])
+        except Exception:
+            continue
+        if not in_scope(turn_ch):
+            continue
+        turning_rows.append({
+            "turn_id": f"Turn-{idx + 1}",
+            "turn": _seed_label(turn, idx),
+            "chapter": turn_ch,
+            "volume": _chapter_volume_index(volumes, turn_ch),
+            "review_rule": "Only require this turning point in its assigned chapter, or when the chapter outline allocated_tasks explicitly includes it.",
+        })
+
+    packet = {
+        "source_of_truth": "Python deterministic foreshadowing_blueprint plus chapter outline allocated_tasks",
+        "scope": scope,
+        "target_volume_index": target_volume,
+        "target_chapter_index": target_chapter,
+        "chapter_scope": {"start_chapter": chapter_min, "end_chapter": chapter_max} if chapter_min is not None else "all",
+        "total_chapters": blueprint.get("T"),
+        "director_review_rules": [
+            "Worldview seed act/stage/chapter/volume metadata is draft reference only, never a hard obligation.",
+            "Do not invent new foreshadowing or turning-point obligations during review.",
+            "For volume_skeleton review, verify assigned rows appear in the matching chapter allocated_tasks.",
+            "For writer/editor review, judge only the current chapter's allocated_tasks plus nearby assigned rows for continuity.",
+        ],
+        "foreshadowing_allocation_table": foreshadowing_rows,
+        "turning_point_allocation_table": turning_rows,
+    }
+    return packet
+
+
 def split_generated_prose(text):
     """Return (thinking, prose) for writer output that uses a prose marker."""
     if not text:
@@ -112,9 +297,17 @@ def build_writer_review_context(novel_id, chapter_index, characters_text):
     curr_vol_idx = db.get_chapter_volume_index(vols, target_idx) if vols else None
     curr_vol = next((v for v in vols if int(v.get("volume_index", 0)) == int(curr_vol_idx or 0)), None)
 
+    allocated_tasks = current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
+
     packet = {
         "review_scope": "writer_chapter_continuity_and_outline_compliance",
         "chapter_index": target_idx,
+        "foreshadowing_turning_allocation_context": build_foreshadowing_allocation_context(
+            novel_id,
+            scope="chapter",
+            chapter_index=target_idx,
+            window=3,
+        ),
         "current_volume": {
             "volume_index": curr_vol_idx,
             "title": curr_vol.get("title") if curr_vol else None,
@@ -126,7 +319,8 @@ def build_writer_review_context(novel_id, chapter_index, characters_text):
         },
         "current_chapter": {
             "outline": current_outline or "（尚未生成章節大綱）",
-            "allocated_tasks_and_clues": current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {},
+            "allocated_tasks_and_clues": allocated_tasks,
+            "foreshadowing_review_policy": _allocated_foreshadowing_status(allocated_tasks),
             "prose_text": prose,
         },
         "next_chapter_reference": {
@@ -156,7 +350,17 @@ def build_editor_review_context(novel_id, chapter_index, characters_text):
     packet = {
         "review_scope": "editor_before_after_comparison",
         "chapter_index": target_idx,
+        "foreshadowing_turning_allocation_context": build_foreshadowing_allocation_context(
+            novel_id,
+            scope="chapter",
+            chapter_index=target_idx,
+            window=3,
+        ),
         "chapter_outline": current_outline or "（尚未生成章節大綱）",
+        "allocated_tasks_and_clues": current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {},
+        "foreshadowing_review_policy": _allocated_foreshadowing_status(
+            current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
+        ),
         "active_character_cards": _filter_active_characters(characters_text, current_outline or {}),
         "original_prose_before_edit": _snippet(original, 1200, 1600),
         "polished_prose_after_edit": polished,

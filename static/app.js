@@ -278,7 +278,11 @@ async function executeChapterProseEditFlow(targetChapterIndex, editInstructions)
  */
 async function executeDirectorAction(decision, userPrompt) {
     const action = decision.action;
-    const hint = decision.hint || '';
+    const hint = [
+        decision.hint,
+        decision.agent_prompt,
+        decision.agent_context
+    ].filter(part => part && String(part).trim()).join('\n\n');
     
     updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
