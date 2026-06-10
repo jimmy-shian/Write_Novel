@@ -101,6 +101,7 @@ class ChapterWriterRequest(BaseModel):
     novel_id: str
     chapter_index: int
     custom_style: Optional[str] = "Classic Modernism"
+    user_prompt: Optional[str] = None
 
 class EditorAgentRequest(BaseModel):
     novel_id: str
@@ -120,6 +121,9 @@ class DirectorDecisionRequest(BaseModel):
     character_review_hint: Optional[str] = None
     character_review_target_content: Optional[str] = None
     suggested_next_chapter: Optional[int] = None
+    conversation_context: Optional[str] = None
+    summary_context: Optional[str] = None
+    extra_context: Optional[str] = None
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
@@ -370,7 +374,8 @@ def api_agent_write_chapter(payload: ChapterWriterRequest):
         agents.safe_generator_wrapper(agents.run_chapter_writer(
             novel_id=payload.novel_id,
             chapter_index=payload.chapter_index,
-            custom_style=payload.custom_style
+            custom_style=payload.custom_style,
+            user_prompt=payload.user_prompt
         )),
         media_type="text/event-stream"
     )
@@ -456,6 +461,9 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
             character_review_hint=payload.character_review_hint,
             character_review_target_content=payload.character_review_target_content,
             suggested_next_chapter=payload.suggested_next_chapter,
+            conversation_context=payload.conversation_context,
+            summary_context=payload.summary_context,
+            extra_context=payload.extra_context,
         )),
         media_type="text/event-stream"
     )

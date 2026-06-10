@@ -738,11 +738,30 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         if ch_idx is not None:
             merged_map[int(ch_idx)] = ch
             
+    def _deep_merge_chapter(base, patch):
+        if not isinstance(base, dict):
+            base = {}
+        if not isinstance(patch, dict):
+            return base
+        merged = dict(base)
+        for key, value in patch.items():
+            if value is None:
+                continue
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = _deep_merge_chapter(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
     # 💡 3. 用新生成的高解像度微觀章節精確覆蓋或插入緩衝區
     for nc in cleaned_node_chapters:
         ch_idx = nc.get("chapter_index")
         if ch_idx is not None:
-            merged_map[int(ch_idx)] = nc
+            ch_idx_int = int(ch_idx)
+            if ch_idx_int in merged_map:
+                merged_map[ch_idx_int] = _deep_merge_chapter(merged_map[ch_idx_int], nc)
+            else:
+                merged_map[ch_idx_int] = nc
             
     # 重新轉回列表並依章節序號由小到大排序
     merged_chapters = list(merged_map.values())

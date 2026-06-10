@@ -14,6 +14,8 @@ import traceback
 import asyncio
 from functools import partial
 import db
+import diagnostics
+import director_context
 from llm import call_llm_stream
 from models.client import call_llm_sync, call_llm_json
 
@@ -428,6 +430,25 @@ def _normalize_chapter_list(chapters):
     normalized.sort(key=lambda x: x["chapter_index"])
     return normalized
 
+def _extract_incremental_skeleton_chapters(parsed):
+    if isinstance(parsed, list):
+        return parsed
+    if not isinstance(parsed, dict):
+        return []
+    for key in ("chapters_skeleton", "chapter_patches", "chapters", "patches"):
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+    for key in ("chapter", "chapter_patch", "skeleton"):
+        value = parsed.get(key)
+        if isinstance(value, dict):
+            return [value]
+    if parsed.get("chapter_index") is not None:
+        return [parsed]
+    return []
+
 
 def _collect_volume_skeleton_chapters(novel_id):
     skeleton_chapters = []
@@ -440,7 +461,7 @@ def _collect_volume_skeleton_chapters(novel_id):
 # =============================================================================
 # 6. Chapter Writer Agent
 # =============================================================================
-def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"):
+def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None):
     """
     Writing Stage:
     Generate prose based on:
@@ -541,10 +562,16 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
 
     messages = build_chapter_writer_messages(
         worldview_text, characters_bible, current_outline, surrounding_plot,
-        vol_outline_context, clue_payoff_details, custom_style, chapter_index
+        vol_outline_context, clue_payoff_details, custom_style, chapter_index,
+        user_prompt=user_prompt
     )
     
-    db.save_chat_message(novel_id, "user", f"開始寫作第 {chapter_index} 章。風格: {custom_style}", message_type="pipeline")
+    db.save_chat_message(
+        novel_id,
+        "user",
+        f"開始寫作第 {chapter_index} 章。風格: {custom_style}。指示: {user_prompt or '無額外指示'}",
+        message_type="pipeline"
+    )
     
     stream = call_llm_stream("writer", messages)
     accumulated = []
@@ -625,7 +652,7 @@ def run_copilot_chat(novel_id, user_message):
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
     
     # 透過 Python 動態偵測階段，修復先前 current_stage 未定義 Bug
-    current_stage = db.detect_current_stage(novel_id)
+    current_stage = diagnostics.detect_current_stage(novel_id)
     
     if current_stage == "volumes":
         vols = db.get_volumes(novel_id)
@@ -641,7 +668,7 @@ def run_copilot_chat(novel_id, user_message):
         history_context += f"【{h['role']}】：{h['content']}\n"
 
     # 生成 Python 剛性指標檢查報告
-    validation_report = db.generate_validation_report(novel_id)
+    validation_report = diagnostics.generate_validation_report(novel_id)
 
     messages = build_copilot_chat_messages(
         novel_id, worldview_text, characters_text, plot_text, history_context, user_message, 
@@ -674,13 +701,26 @@ def run_copilot_chat(novel_id, user_message):
 # =============================================================================
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
-def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=None, volume_index=None, character_review_mode=None, character_review_hint=None, character_review_target_content=None, suggested_next_chapter=None):
+def run_director_decision(
+    novel_id,
+    current_stage,
+    user_prompt,
+    chapter_index=None,
+    volume_index=None,
+    character_review_mode=None,
+    character_review_hint=None,
+    character_review_target_content=None,
+    suggested_next_chapter=None,
+    conversation_context=None,
+    summary_context=None,
+    extra_context=None
+):
     """
     Gateway review after a stage completes. Returns next action:
     CONTINUE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
     """
     if not current_stage or current_stage == "init":
-        current_stage = db.detect_current_stage(novel_id)
+        current_stage = diagnostics.detect_current_stage(novel_id)
     wb = db.get_latest_worldbuilding(novel_id)
     worldview_text = wb["content"] if wb else "尚無世界觀設定"
     char_data = db.get_latest_characters(novel_id)
@@ -701,97 +741,81 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         plot_text = "角色審查階段"
     elif current_stage == "volumes":
         vols = db.get_volumes(novel_id)
-        plot_text = json.dumps(vols, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
+        simplified_vols = []
+        for v in vols:
+            v_copy = dict(v)
+            if "chapters_outline" in v_copy:
+                if isinstance(v_copy["chapters_outline"], list):
+                    v_copy["chapters_outline"] = f"已生成 {len(v_copy['chapters_outline'])} 章骨架大綱"
+                else:
+                    v_copy["chapters_outline"] = "尚未生成骨架"
+            simplified_vols.append(v_copy)
+        plot_text = json.dumps(simplified_vols, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
+        allocation_context = director_context.build_foreshadowing_allocation_context(
+            novel_id,
+            scope="all",
+        )
+        plot_text += "\n\n【Python 預計算伏筆/轉折分配總表（總監審核唯一依據）】\n"
+        plot_text += json.dumps(allocation_context, ensure_ascii=False, indent=2)
     elif current_stage == "volume_skeleton":
         # volume_skeleton: 完整骨架(每2卷一組)
         vols = db.get_volumes(novel_id)
-        plot_text = json.dumps(vols, ensure_ascii=False, indent=2) if vols else "尚無骨架規劃"
+        
+        # 決定當前活躍/待審查的卷索引
+        active_vol_idx = volume_index
+        if active_vol_idx is None:
+            # 尋找第一個缺失骨架的卷
+            for v in vols:
+                if not v.get("chapters_outline"):
+                    active_vol_idx = v.get("volume_index")
+                    break
+            if active_vol_idx is None and vols:
+                active_vol_idx = vols[-1].get("volume_index")
+                
+        simplified_vols = []
+        for v in vols:
+            v_copy = dict(v)
+            v_idx = v_copy.get("volume_index")
+            # 只有當前活躍卷才展開章節骨架的簡化說明，其餘已完成的卷只傳遞概要以節省 Token
+            if v_idx == active_vol_idx:
+                if "chapters_outline" in v_copy and isinstance(v_copy["chapters_outline"], list):
+                    simplified_chapters = []
+                    for ch in v_copy["chapters_outline"]:
+                        if isinstance(ch, dict):
+                            simplified_ch = {
+                                "chapter_index": ch.get("chapter_index"),
+                                "chapter_title": ch.get("chapter_title") or ch.get("title") or "未命名章節",
+                                "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or "（尚無摘要說明）"
+                            }
+                            simplified_chapters.append(simplified_ch)
+                    v_copy["chapters_outline"] = simplified_chapters
+            else:
+                if "chapters_outline" in v_copy:
+                    if isinstance(v_copy["chapters_outline"], list):
+                        v_copy["chapters_outline"] = f"已生成 {len(v_copy['chapters_outline'])} 章骨架大綱"
+                    else:
+                        v_copy["chapters_outline"] = "尚未生成骨架"
+            simplified_vols.append(v_copy)
+            
+        plot_text = json.dumps(simplified_vols, ensure_ascii=False, indent=2) if vols else "尚無骨架規劃"
         # 補入目標卷的標題與大綱摘要
         if volume_index is not None:
             target_vol = next((v for v in vols if v["volume_index"] == volume_index), None)
             if target_vol:
                 vol_highlight = f"\n\n【當前審查之目標卷 - 第 {volume_index} 卷】\n標題：{target_vol.get('title', '')}\n卷概要：{target_vol.get('summary', '')}"
                 plot_text += vol_highlight
-    elif current_stage == "plot":
-        plot_data = db.get_stitched_plot(novel_id)
-        chapters_outlines = plot_data.get("chapters", []) if plot_data else []
-        normalized_outlines = _normalize_chapter_list(chapters_outlines)
-        
-        if chapter_index is None:
-            chapter_index = max([ch["chapter_index"] for ch in normalized_outlines], default=1)
-        
-        review_payload = {
-            "current_chapter_index": chapter_index,
-            "chapters": normalized_outlines
-        }
-        plot_text = json.dumps(review_payload, ensure_ascii=False, indent=2)
-            
+        allocation_context = director_context.build_foreshadowing_allocation_context(
+            novel_id,
+            scope="volume",
+            volume_index=active_vol_idx,
+        )
+        plot_text += "\n\n【Python 預計算本卷伏筆/轉折分配表（總監審核唯一依據）】\n"
+        plot_text += json.dumps(allocation_context, ensure_ascii=False, indent=2)
     elif current_stage == "writer":
-        # writer: 該章的完整內容(正文+大綱+角色聖經+伏筆)
-        plot_data = db.get_stitched_plot(novel_id)
-        chapters_outlines = plot_data.get("chapters", []) if plot_data else []
-        
-        normalized_outlines = []
-        for idx, ch in enumerate(chapters_outlines):
-            if not isinstance(ch, dict):
-                continue
-            try:
-                raw_idx = ch.get("chapter_index") or ch.get("chapter") or ch.get("chapter_number") or ch.get("index") or (idx + 1)
-                ch["chapter_index"] = int(raw_idx)
-            except:
-                ch["chapter_index"] = idx + 1
-            normalized_outlines.append(ch)
-            
-        target_ch_idx = chapter_index if chapter_index is not None else 1
-        curr_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == target_ch_idx), None)
-        
-        chapter_data = db.get_latest_chapter(novel_id, target_ch_idx)
-        prose_content = chapter_data.get("content", "") if chapter_data else "（無寫作正文內容）"
-        
-        clue_payoff_context = ""
-        next_three_chaps = [ch for ch in normalized_outlines if target_ch_idx < ch["chapter_index"] <= target_ch_idx + 3]
-        payoff_clues = []
-        for ch in next_three_chaps:
-            payoffs = ch.get("foreshadowing_payoff", []) or ch.get("allocated_tasks", {}).get("foreshadowing_payoffs", [])
-            if payoffs:
-                payoff_clues.append(f"第 {ch.get('chapter_index')} 章預計收回的伏筆：{json.dumps(payoffs, ensure_ascii=False)}")
-        if payoff_clues:
-            clue_payoff_context = "\n".join(payoff_clues)
-        
-        writer_review_data = {
-            "chapter_index": target_ch_idx,
-            "chapter_title": curr_ch_outline.get("title", f"第 {target_ch_idx} 章") if curr_ch_outline else f"第 {target_ch_idx} 章",
-            "outline": curr_ch_outline if curr_ch_outline else "（尚未生成章節大綱）",
-            "allocated_tasks_and_clues": curr_ch_outline.get("allocated_tasks", {}) if curr_ch_outline else {},
-            "clue_payoff_upcoming_3_chapters": clue_payoff_context or "（後三章無需回收的伏筆）",
-            "prose_text": prose_content
-        }
-        
-        plot_text = json.dumps(writer_review_data, ensure_ascii=False, indent=2)
-        written_chapters_text = prose_content
+        plot_text, written_chapters_text = director_context.build_writer_review_context(novel_id, chapter_index, characters_text)
         
     elif current_stage == "editor":
-        # editor: 該章的完整潤色與比較內容
-        target_ch_idx = chapter_index if chapter_index is not None else 1
-        
-        # Get polished (latest) and original (second latest) chapter versions
-        latest_chapter = db.get_latest_chapter(novel_id, target_ch_idx)
-        polished_prose = latest_chapter.get("content", "") if latest_chapter else "（無寫作正文內容）"
-        
-        second_latest = db.get_second_latest_chapter(novel_id, target_ch_idx)
-        original_prose = second_latest.get("content", "") if second_latest else polished_prose # Fallback to polished if no previous version exists
-        
-        edit_instructions = db.get_latest_edit_instructions(novel_id, target_ch_idx)
-        
-        editor_review_data = {
-            "chapter_index": target_ch_idx,
-            "edit_instructions": edit_instructions,
-            "original_prose": original_prose,
-            "polished_prose": polished_prose
-        }
-        
-        plot_text = json.dumps(editor_review_data, ensure_ascii=False, indent=2)
-        written_chapters_text = polished_prose
+        plot_text, written_chapters_text = director_context.build_editor_review_context(novel_id, chapter_index, characters_text)
         
     else:
         plot_data = db.get_stitched_plot(novel_id)
@@ -830,11 +854,19 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         written_chapters_text = f"已完成正文章節數：{len(written_ch)} 章"
         
     # 生成 Python 剛性指標檢查報告
-    validation_report = db.generate_validation_report(
+    validation_report = diagnostics.generate_validation_report(
         novel_id, 
         current_stage=current_stage, 
         active_volume_index=volume_index, 
         active_chapter_index=chapter_index
+    )
+
+    if not conversation_context:
+        conversation_context = director_context.build_director_conversation_context(novel_id, limit=1)
+    director_context_block = director_context.build_director_context_block(
+        conversation_context=conversation_context,
+        summary_context=summary_context,
+        extra_context=extra_context
     )
     
     messages = build_director_decision_messages(
@@ -844,7 +876,8 @@ def run_director_decision(novel_id, current_stage, user_prompt, chapter_index=No
         character_review_hint=character_review_hint,
         character_review_target_content=character_review_target_content,
         suggested_next_chapter=suggested_next_chapter,
-        chapter_index=chapter_index
+        chapter_index=chapter_index,
+        director_context_block=director_context_block
     )
     
     stream = call_llm_stream("copilot", messages)
@@ -874,7 +907,7 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     If Director wants to retrieve full details (like help_worldview, help_plot) mid-stream.
     """
     if not current_stage or current_stage == "init":
-        current_stage = db.detect_current_stage(novel_id)
+        current_stage = diagnostics.detect_current_stage(novel_id)
     wb = db.get_latest_worldbuilding(novel_id)
     worldview_text = wb["content"] if wb else "尚無世界觀設定"  # 這裡需要完整內容因為是調閱
     char_data = db.get_latest_characters(novel_id)
@@ -965,21 +998,27 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     existing_chars_json = char_data["json_data"] if char_data else "{'characters': []}"
     
     target_char_content = ""
+    normalized_target_index = target_char_index
     if target_char_index is not None:
         try:
             parsed = json.loads(existing_chars_json)
             chars_list = parsed.get("characters", [])
-            if 0 <= target_char_index < len(chars_list):
-                target_char_content = f"\n【待修改角色的完整原內容】\n{json.dumps(chars_list[target_char_index], ensure_ascii=False, indent=2)}"
+            raw_idx = int(target_char_index)
+            if 0 <= raw_idx < len(chars_list):
+                normalized_target_index = raw_idx
+            elif 1 <= raw_idx <= len(chars_list):
+                normalized_target_index = raw_idx - 1
+            if 0 <= normalized_target_index < len(chars_list):
+                target_char_content = f"\n【待修改角色的完整原內容】\n{json.dumps(chars_list[normalized_target_index], ensure_ascii=False, indent=2)}"
         except:
             pass
             
     messages = build_incremental_character_messages(
-        worldview_text, existing_chars_json, target_char_content, target_char_index, field_name, user_hint
+        worldview_text, existing_chars_json, target_char_content, normalized_target_index, field_name, user_hint
     )
     
-    action = "PATCH" if target_char_index is not None else "APPEND"
-    db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {target_char_index if target_char_index is not None else '新增'}, 要求: {user_hint}", message_type="pipeline")
+    action = "PATCH" if normalized_target_index is not None else "APPEND"
+    db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {normalized_target_index if normalized_target_index is not None else '新增'}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("character", messages)
     accumulated = []
     for chunk in stream:
@@ -996,8 +1035,8 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     if full_text.strip():
         from incremental_patch_engine import validate_and_merge_incremental_patch
         extra = {}
-        if target_char_index is not None:
-            extra["char_index"] = target_char_index
+        if normalized_target_index is not None:
+            extra["char_index"] = normalized_target_index
         if field_name:
             extra["field_name"] = field_name
         success, version, err = validate_and_merge_incremental_patch(novel_id, "characters", action, full_text, extra)
@@ -1044,11 +1083,13 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
     if full_text.strip():
         from models.parsers import extract_json_block
         parsed = extract_json_block(full_text)
-        chapters_skeleton = parsed.get("chapters_skeleton", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        chapters_skeleton = _extract_incremental_skeleton_chapters(parsed)
         
         if chapters_skeleton:
             db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
             db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架增量更新完成", message_type="pipeline")
+        else:
+            yield "data: " + json.dumps({"type": "error", "message": "卷骨架增量更新失敗: 未解析到含 chapter_index 的 chapters_skeleton patch"}, ensure_ascii=False) + "\n\n"
 
 
 def run_global_foreshadowing_precompute(novel_id):

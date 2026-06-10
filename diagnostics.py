@@ -3,6 +3,104 @@
 剛性評估與診斷模組 (Rigid Evaluation & Diagnostics Module)
 """
 import json
+from agent_json import CHARACTER_BASIC_FIELDS
+
+
+WORLDVIEW_SEED_REFERENCE_KEYS = {
+    "act",
+    "stage",
+    "wave",
+    "phase",
+    "suggested_act",
+    "suggested_stage",
+    "chapter",
+    "chapter_index",
+    "volume",
+    "volume_index",
+}
+
+
+def _format_worldview_seed_for_report(seed):
+    """Keep seed meaning, but strip draft placement metadata from validation text."""
+    if isinstance(seed, dict):
+        filtered = {k: v for k, v in seed.items() if k not in WORLDVIEW_SEED_REFERENCE_KEYS}
+        stripped = {k: seed.get(k) for k in seed.keys() if k in WORLDVIEW_SEED_REFERENCE_KEYS}
+        text = json.dumps(filtered or seed, ensure_ascii=False)
+        if stripped:
+            return f"{text}（已忽略草稿定位欄位：{', '.join(str(k) for k in stripped.keys())}）"
+        return text
+    return str(seed)
+
+
+def _normalize_outlines(plot_data):
+    chapters = plot_data.get("chapters", []) if isinstance(plot_data, dict) else []
+    normalized = []
+    for idx, chapter in enumerate(chapters):
+        if not isinstance(chapter, dict):
+            continue
+        item = dict(chapter)
+        try:
+            raw_idx = item.get("chapter_index") or item.get("chapter") or item.get("chapter_number") or item.get("index") or (idx + 1)
+            item["chapter_index"] = int(raw_idx)
+        except Exception:
+            item["chapter_index"] = idx + 1
+        normalized.append(item)
+    normalized.sort(key=lambda item: item["chapter_index"])
+    return normalized
+
+
+def _is_primary_protagonist(character, index):
+    if index == 0:
+        return True
+    role = str(character.get("role", "")).lower()
+    tags = character.get("tags", []) or character.get("labels", [])
+    if isinstance(tags, str):
+        tags = [tags]
+    tag_text = " ".join(str(tag).lower() for tag in tags)
+    return any(mark in role or mark in tag_text for mark in ("主角", "protagonist", "男主", "女主"))
+
+
+def _character_missing_fields(character):
+    core_check_fields = [f for f in CHARACTER_BASIC_FIELDS if f not in ("name", "role", "entry_phase", "relationships")]
+    return [field for field in core_check_fields if not character.get(field)]
+
+
+def _append_active_chapter_task_report(report_lines, novel_id, active_chapter_index):
+    if not active_chapter_index:
+        return
+
+    try:
+        import db
+        target_idx = int(active_chapter_index)
+        plot_data = db.get_stitched_plot(novel_id)
+        outlines = _normalize_outlines(plot_data or {})
+        current_outline = next((ch for ch in outlines if ch["chapter_index"] == target_idx), None)
+        allocated = current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
+        if not isinstance(allocated, dict):
+            allocated = {}
+
+        plants = allocated.get("foreshadowing_plants") or []
+        payoffs = allocated.get("foreshadowing_payoffs") or []
+        turns = allocated.get("turning_points") or []
+        has_tasks = bool(plants or payoffs or turns)
+
+        report_lines.append("")
+        report_lines.append("【6. 當前章節伏筆任務來源判定】")
+        report_lines.append(f"  - 當前審查章節：第 {target_idx} 章")
+        report_lines.append("  - 判定規則：章節是否需要埋設/回收伏筆，以卷生成後演算法寫入章節大綱的 allocated_tasks 為準。")
+        report_lines.append("  - 注意：世界觀 foreshadowing_seeds 內的 act/stage/chapter/volume 等欄位，只是 LLM 初稿定位參考，不是本章硬性任務。")
+        if not has_tasks:
+            report_lines.append(f"  - 第 {target_idx} 章演算法指定伏筆/轉折任務：無。總監不得因世界觀 seed 的 act/stage metadata 要求本章補埋伏筆。")
+            return
+
+        report_lines.append(f"  - 第 {target_idx} 章演算法指定任務：有")
+        report_lines.append(f"    * foreshadowing_plants：{json.dumps(plants, ensure_ascii=False)}")
+        report_lines.append(f"    * foreshadowing_payoffs：{json.dumps(payoffs, ensure_ascii=False)}")
+        report_lines.append(f"    * turning_points：{json.dumps(turns, ensure_ascii=False)}")
+    except Exception as exc:
+        report_lines.append("")
+        report_lines.append(f"【6. 當前章節伏筆任務來源判定】⚠️ 無法解析：{exc}")
+
 
 def diagnose_worldview(worldview_text):
     """
@@ -57,22 +155,19 @@ def diagnose_characters(characters_data):
     if not chars_list:
         return "角色有0個，欄位不完整"
 
-    missing_info = []
-    for c in chars_list:
+    protagonist_missing = []
+    for idx, c in enumerate(chars_list):
         if not isinstance(c, dict):
             continue
-        name = c.get("name", "未命名")
-        missing_fields = []
-        for f in ["personality", "want", "need", "fatal_flaw"]:
-            if not c.get(f):
-                missing_fields.append(f)
+        if not _is_primary_protagonist(c, idx):
+            continue
+        missing_fields = _character_missing_fields(c)
         if missing_fields:
-            missing_info.append(name)
+            protagonist_missing.append(f"{c.get('name', '未命名')} 缺少 {', '.join(missing_fields)}")
 
-    if missing_info:
-        return f"角色有{len(chars_list)}個，欄位不完整(缺少：{', '.join(missing_info)} 的關鍵設定)"
-    else:
-        return f"角色有{len(chars_list)}個，欄位完整"
+    if protagonist_missing:
+        return f"角色有{len(chars_list)}個；主角欄位可補：{'; '.join(protagonist_missing)}；配角欄位缺失不列為阻斷"
+    return f"角色有{len(chars_list)}個；主角核心欄位足夠，配角欄位缺失不列為阻斷"
 
 
 def diagnose_volumes_and_skeletons(volumes):
@@ -214,7 +309,7 @@ def diagnose_all_phases(novel_id):
     char_data = db.get_latest_characters(novel_id)
     characters_json = char_data["json_data"] if char_data else ""
     
-    current_stage = db.detect_current_stage(novel_id)
+    current_stage = detect_current_stage(novel_id)
     vols = db.get_volumes(novel_id)
     
     if current_stage == "volumes":
@@ -247,7 +342,7 @@ def diagnose_all_phases(novel_id):
 
 def detect_current_stage(novel_id):
     """
-    根據資料庫進度動態偵測當前創作階段 (worldview -> characters -> volumes -> volume_skeleton -> plot -> writer -> editor)
+    根據資料庫進度動態偵測當前創作階段 (worldview -> characters -> volumes -> volume_skeleton -> writer -> editor)
     """
     import db
     wb = db.get_latest_worldbuilding(novel_id)
@@ -330,8 +425,9 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             seeds = parsed_wb.get("foreshadowing_seeds", [])
             turns = parsed_wb.get("key_turning_points", [])
             report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
+            report_lines.append("    * 說明：seed 內的 act/stage/chapter/volume 等欄位只作為早期草稿定位參考；實際章節埋設/回收以卷骨架生成後的 allocated_tasks 為唯一依據。")
             for i, s in enumerate(seeds):
-                report_lines.append(f"    * [Seed-{i+1}] {s}")
+                report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
             report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
             for j, t in enumerate(turns):
                 report_lines.append(f"    * [Turn-{j+1}] {t}")
@@ -351,18 +447,23 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             parsed_char = char.get("parsed_data") or json.loads(char["json_data"])
             chars_list = parsed_char.get("characters", [])
             report_lines.append(f"  - 登記角色總數：共 {len(chars_list)} 位")
+            report_lines.append("  - 檢查規則：只標示主角/第一主角的欄位缺失；配角或臨時角色欄位缺失不作為流程阻斷。")
+            if current_stage in ("writer", "editor"):
+                report_lines.append("  - 當前為正文/編輯階段：角色可補欄位不得觸發 INCREMENTAL_MODIFY_CHARACTER；若正文品質通過，應繼續 editor 或下一章 writer。")
+            ignored_count = 0
             for idx, c in enumerate(chars_list):
                 name = c.get("name", "未命名")
                 role = c.get("role", "未設定")
-                # 欄位完整度檢查
-                missing_fields = []
-                for f in ["personality", "want", "need", "fatal_flaw"]:
-                    if not c.get(f):
-                        missing_fields.append(f)
+                if not _is_primary_protagonist(c, idx):
+                    ignored_count += 1
+                    continue
+                missing_fields = _character_missing_fields(c)
                 if missing_fields:
-                    report_lines.append(f"    * 角色 [{name}] ({role}) ⚠️ [欄位缺失]：缺少 {', '.join(missing_fields)}")
+                    report_lines.append(f"    * 主角 [{name}] ({role}) ⚠️ [可補欄位，非阻斷]：缺少 {', '.join(missing_fields)}")
                 else:
-                    report_lines.append(f"    * 角色 [{name}] ({role}) ✅ 完美完整")
+                    report_lines.append(f"    * 主角 [{name}] ({role}) ✅ 核心欄位足夠")
+            if ignored_count:
+                report_lines.append(f"    * 其餘 {ignored_count} 位配角/支線角色：不檢查非必要欄位，不作為流程阻斷。")
         except Exception as e:
             report_lines.append("  - 狀態：⚠️ 角色聖經非標準 JSON 格式，無法解析。")
     report_lines.append("")
@@ -517,6 +618,9 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
         else:
             report_lines.append(f"  - 正文章節序號連續性檢查 (1 至 {expected_chapters_count} 章，由系統 Python 邏輯外部計算)：✅ 正文順序推進，無中斷斷檔且已全部完工。")
             
+    if current_stage in ("writer", "editor") or active_chapter_index is not None:
+        _append_active_chapter_task_report(report_lines, novel_id, active_chapter_index)
+
     report_lines.append("=" * 60)
     return "\n".join(report_lines)
 

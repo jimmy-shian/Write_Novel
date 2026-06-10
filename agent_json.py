@@ -111,6 +111,25 @@ CHARACTERS_ROOT_SCHEMA = {
     "characters": []
 }
 
+# --- 寫作 agent 角色設定傳遞過濾清單 ---
+# 用於 writer agent 章節寫作時，extract_character_basic() 只保留這些欄位
+# 也供 diagnostics.py 等模組統一引用，避免各處硬編碼
+CHARACTER_BASIC_FIELDS = [
+    "name",
+    "role",
+    "entry_phase",
+    "personality",
+    "want",
+    "need",
+    "fatal_flaw",
+    "speech_style",
+    "appearance",
+    "motivation",
+    "arc",
+    "background",
+    "relationships"
+]
+
 # 角色通過標準（總監評判用）
 CHARACTER_APPROVAL_CRITERIA = {
     "name": "characters",
