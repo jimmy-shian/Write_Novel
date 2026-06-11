@@ -29,10 +29,67 @@ export async function loadNovels() {
     try {
         el.currentNovelTitle.textContent = "載入中...";
         const data = await requestAPI(`/api/novels/${novelId}`);
+        const isProjectSwitch = state.currentNovelId !== novelId;
+        const isDefaultIndex = state.activeChapterIndex === 1 || !state.activeChapterIndex;
         state.currentNovelId = novelId;
         // 持久化保存當前選中的小說
         localStorage.setItem('currentNovelId', novelId);
         state.currentNovelData = data;
+        
+        if (isProjectSwitch || isDefaultIndex) {
+            const chapters = data.chapters || [];
+            const writtenIndexes = new Set(
+                chapters
+                    .filter(c => {
+                        const content = c.content || '';
+                        const isPlaceholder = content.includes('保底') || 
+                                              content.includes('占位') || 
+                                              content.trim().length < 100;
+                        const isDirty = c.is_dirty === 1 || c.is_dirty === true;
+                        return !isPlaceholder && !isDirty;
+                    })
+                    .map(c => Number(c.chapter_index))
+            );
+            
+            const vols = data.volumes || [];
+            const totalPlanned = vols.reduce((sum, v) => {
+                const count = Number.parseInt(v.chapter_count, 10);
+                return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+            }, 0) || 50;
+            
+            let earliestMissing = null;
+            for (let i = 1; i <= totalPlanned; i++) {
+                if (!writtenIndexes.has(i)) {
+                    earliestMissing = i;
+                    break;
+                }
+            }
+            
+            if (earliestMissing !== null) {
+                state.activeChapterIndex = earliestMissing;
+                // 同步更新 activeVolumeIndex
+                if (typeof window.getChapterVolumeIndexJS === 'function') {
+                    const matchedVol = window.getChapterVolumeIndexJS(earliestMissing);
+                    if (matchedVol) {
+                        state.activeVolumeIndex = matchedVol;
+                    }
+                } else {
+                    let startCh = 1;
+                    const sortedVols = [...vols].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
+                    for (let i = 0; i < sortedVols.length; i++) {
+                        const v = sortedVols[i];
+                        const count = parseInt(v.chapter_count) || 50;
+                        const endCh = startCh + count - 1;
+                        if (earliestMissing >= startCh && earliestMissing <= endCh) {
+                            state.activeVolumeIndex = parseInt(v.volume_index);
+                            break;
+                        }
+                        startCh = endCh + 1;
+                    }
+                }
+                console.log(`[Lifecycle] Auto-initialized activeChapterIndex to earliest missing: ${earliestMissing}`);
+            }
+        }
         
         // Update header UI
         el.currentNovelTitle.textContent = data.novel.title;

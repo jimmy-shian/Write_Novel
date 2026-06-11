@@ -183,6 +183,59 @@ async function runPipeline(pipelinePrompt = '') {
         // 先刷新數據（確保能讀到 DB 內的 pipeline_prompt）
         await loadNovelDetails(state.currentNovelId);
 
+        // 🚀 在啟動管道時，自動將 activeChapterIndex 定位到最早未完成的章節，避免重啟後誤判為第 1 章
+        const chapters = state.currentNovelData?.chapters || [];
+        const writtenIndexes = new Set(
+            chapters
+                .filter(c => {
+                    const content = c.content || '';
+                    const isPlaceholder = content.includes('保底') || 
+                                          content.includes('占位') || 
+                                          content.trim().length < 100;
+                    const isDirty = c.is_dirty === 1 || c.is_dirty === true;
+                    return !isPlaceholder && !isDirty;
+                })
+                .map(c => Number(c.chapter_index))
+        );
+        const vols = state.currentNovelData?.volumes || [];
+        const totalPlanned = vols.reduce((sum, v) => {
+            const count = Number.parseInt(v.chapter_count, 10);
+            return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+        }, 0) || 50;
+        
+        let earliestMissing = null;
+        for (let i = 1; i <= totalPlanned; i++) {
+            if (!writtenIndexes.has(i)) {
+                earliestMissing = i;
+                break;
+            }
+        }
+        
+        if (earliestMissing !== null) {
+            state.activeChapterIndex = earliestMissing;
+            console.log(`[Pipeline] Auto-aligned activeChapterIndex to earliest missing: ${earliestMissing}`);
+            // 同步更新 activeVolumeIndex 確保與該章節吻合
+            if (typeof window.getChapterVolumeIndexJS === 'function') {
+                const matchedVol = window.getChapterVolumeIndexJS(earliestMissing);
+                if (matchedVol) {
+                    state.activeVolumeIndex = matchedVol;
+                }
+            } else {
+                let startCh = 1;
+                const sortedVols = [...vols].sort((a, b) => (parseInt(a.volume_index) || 0) - (parseInt(b.volume_index) || 0));
+                for (let i = 0; i < sortedVols.length; i++) {
+                    const v = sortedVols[i];
+                    const count = parseInt(v.chapter_count) || 50;
+                    const endCh = startCh + count - 1;
+                    if (earliestMissing >= startCh && earliestMissing <= endCh) {
+                        state.activeVolumeIndex = parseInt(v.volume_index);
+                        break;
+                    }
+                    startCh = endCh + 1;
+                }
+            }
+        }
+
         // Single Source of Truth：pipeline prompt 以「使用者剛輸入」→ state.pipelinePrompt → DB pipeline_prompt 為優先序
         const userPrompt =
             (pipelinePrompt || '').trim() ||
