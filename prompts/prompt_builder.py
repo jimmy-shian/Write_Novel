@@ -597,6 +597,26 @@ def build_director_decision_messages(
     - writer: 該章的完整內容(正文+大綱+角色聖經+伏筆)
     - editor: 該章的完整潤色內容
     """
+    import db
+    novel = db.get_novel(novel_id)
+    pipeline_prompt = (novel.get("pipeline_prompt") or "").strip() if novel else ""
+    user_prompt_clean = (user_prompt or "").strip()
+    is_only_bg = (not user_prompt_clean) or (user_prompt_clean == pipeline_prompt)
+
+    # Prepare prompt blocks
+    bg_prompt_block = f"""【使用者建書初期原始需求（僅作為整體背景與大綱風格參考，非當前修改指令）】
+{pipeline_prompt}"""
+
+    if is_only_bg:
+        active_instruction_block = ""
+        worldview_user_prompt_section = bg_prompt_block
+        default_user_prompt_section = bg_prompt_block
+    else:
+        active_instruction_block = f"""【當前步驟修改指示 / 系統錯誤自癒回報（請優先滿足此要求）】
+{user_prompt_clean}"""
+        worldview_user_prompt_section = f"{active_instruction_block}\n\n{bg_prompt_block}"
+        default_user_prompt_section = f"{active_instruction_block}\n\n{bg_prompt_block}"
+
     # 取得該階段的通過標準
     from agent_json import format_criteria_for_prompt
     stage_criteria = format_criteria_for_prompt(current_stage)
@@ -632,8 +652,7 @@ def build_director_decision_messages(
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        user_content = f"""【使用者原始需求】
-{user_prompt}
+        user_content = f"""{worldview_user_prompt_section}
  
 【完整世界觀設定】
 {worldview_text}
@@ -662,7 +681,9 @@ def build_director_decision_messages(
         if character_review_mode == "generate":
             character_extra_context = "\n\n【重要】此為世界觀生成後的首次角色生成，請確認角色陣容是否完整且與世界觀設定契合。"
         
-        user_content = f"""【世界觀背景】
+        user_content = f"""{default_user_prompt_section}
+ 
+【世界觀背景】
 {worldview_text}
  
 【完整角色列表（完整設定）】
@@ -685,7 +706,9 @@ def build_director_decision_messages(
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
+        user_content = f"""{default_user_prompt_section}
+ 
+【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
  
 【完整篇卷列表（完整設定）】
@@ -706,7 +729,9 @@ def build_director_decision_messages(
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        user_content = f"""【世界觀的整體故事大綱 (macro_outline)】
+        user_content = f"""{default_user_prompt_section}
+ 
+【世界觀的整體故事大綱 (macro_outline)】
 {macro_outline}
  
 【完整卷骨架列表（完整設定）】
@@ -733,7 +758,9 @@ def build_director_decision_messages(
 """
         # 對角色聖經進行基本設定篩選
         characters_filtered = extract_character_basic(characters_text)
-        user_content = f"""【世界觀背景】
+        user_content = f"""{default_user_prompt_section}
+ 
+【世界觀背景】
 {worldview_text}
  
 【角色 Bible 聖經（基本設定）】
@@ -770,7 +797,9 @@ def build_director_decision_messages(
             supp_msg = "（⚠️ 此為補充/填補缺漏章節）" if is_supplementary else ""
             extra_guideline = f"\n\n💡【編輯姬審核後前往下一章指引】{supp_msg}：當前審查的章節為第 {current_ch} 章。本系統建議的下一章計畫前往：第 {suggested_next_chapter} 章。若此章為補齊先前缺漏的章節或繼續推展，請優先在 JSON 決策中將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`，以利全自動管線能無縫銜接到正確的章節位置。"
 
-        user_content = f"""【世界觀背景】
+        user_content = f"""{default_user_prompt_section}
+ 
+【世界觀背景】
 {worldview_text}
  
 【原章節大綱】
@@ -793,8 +822,7 @@ def build_director_decision_messages(
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        user_content = f"""【創作主軸需求】
-{user_prompt}
+        user_content = f"""{default_user_prompt_section}
  
 【當前各板塊數據】
 - 世界觀設定：{worldview_text[:1500] if worldview_text else "（空）"}
@@ -827,9 +855,13 @@ def build_director_decision_messages(
     if director_context_block:
         user_content += f"\n\n{director_context_block}"
 
-    # 統一在 user_content 尾端附加額外的 user_prompt，確保大綱、寫作或編輯階段也能接收此提示 (包括錯誤自癒報告)
-    if user_prompt and user_prompt.strip() and "【使用者原始需求】" not in user_content:
-        user_content += f"\n\n【使用者指示 / 系統錯誤自癒回報（請優先滿足此要求）】\n{user_prompt.strip()}"
+    # 統一在 user_content 尾端附加額外的說明
+    if not is_only_bg:
+        if "【當前步驟修改指示" not in user_content:
+            user_content += f"\n\n{active_instruction_block}"
+    else:
+        if "【使用者建書初期原始需求" not in user_content:
+            user_content += f"\n\n{bg_prompt_block}"
     
     return [
         {"role": "system", "content": system_prompt},

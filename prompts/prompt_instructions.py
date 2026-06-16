@@ -105,6 +105,12 @@ DIRECTOR_COMMON_FOOTER = """
    在決定輸出 `action: "CONTINUE"` 時，必須遵循以下精準導向：
    - 當 `current_stage` 為 `worldview`，合格後 `target`應為 `characters`。
    - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `volumes`。
+   - 🔄 **【回退與中斷恢復規則 (🔥 核心規則)】**：
+     - 當前階段（`current_stage`）若為 `worldview` 或 `characters`，且其內容已合格時：
+       - 你必須優先檢查「系統底層剛性校驗報告」中是否已經建立了【篇卷骨架】與【正文進度】。
+       - 如果報告顯示篇卷骨架已建立/完整（例如報告中寫著：`✅ 所有 N 卷骨架均已建立，允許進入後續階段`），且已有正文完成進度（非 0%）：
+         - **絕對禁止**再次設定 `target = "volumes"` 或 `target = "volume_skeleton"`，因為這會導致重跑/重寫現有大綱與骨架！
+         - 你必須直接將 `target` 設為 `writer`（或若當前章節已有正文則設為 `editor`），並將 `chapter_index` 設為報告中指出的「最早缺漏/未寫作的章節」（或 suggested_next_chapter），將 `volume_index` 設為該章節所屬的卷號，以恢復先前的正文寫作進度！
    - 當 `current_stage` 為 `volumes`，合格後 `target` 應為 `volume_skeleton`，且 `volume_index` 設為 `1`。
    - 🔥 **當 `current_stage` 為 `volume_skeleton` 時（卷骨架遞進邏輯）**：
      - 若目前「僅完成第 N 卷」的骨架且品質合格，但小說總共有更多卷尚未生成骨架：`target` **必須保持為 `volume_skeleton`**，並將 `volume_index` 設為 `N+1`（遞進到下一卷骨架生成），此時 `chapter_index` 必須為 `null`。**嚴格禁止直接跳到 `writer`**！

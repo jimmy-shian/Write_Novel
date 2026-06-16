@@ -349,6 +349,9 @@ class TestAINovelFactory(unittest.TestCase):
                     "fatal_flaw": "衝動",
                     "motivation": "復仇",
                     "arc": "無",
+                    "speech_style": "沉穩",
+                    "appearance": "精神",
+                    "background": "普通",
                     "relationships": []
                 }
             ]
@@ -380,7 +383,7 @@ class TestAINovelFactory(unittest.TestCase):
         self.assertIn("【2. 角色聖經層】", report)
         self.assertIn("【3. 篇卷規劃與骨架大綱層】", report)
         self.assertIn("[Seed-1] 伏筆種子1", report)
-        self.assertIn("[主角A] (主角) ✅ 完美完整", report)
+        self.assertIn("[主角A] (主角) ✅ 核心欄位足夠", report)
         self.assertIn("卷 1《第一卷》：✅ 骨架已建立", report)
 
     # --- 11. Volume and Chapter Hard Constraints Tests ---
