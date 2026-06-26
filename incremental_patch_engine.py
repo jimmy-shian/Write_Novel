@@ -165,7 +165,7 @@ def validate_incremental_payload(target_section, payload, action="PATCH", extra_
         return True, ""
         
     elif target_section in ["foreshadowing_seeds", "key_turning_points"]:
-        # Should be list or string
+        # Should be list of strings or dicts
         if isinstance(payload, dict):
             items = payload.get(target_section, [])
         else:
@@ -173,8 +173,8 @@ def validate_incremental_payload(target_section, payload, action="PATCH", extra_
         if not isinstance(items, list):
             items = [items]
         for it in items:
-            if not isinstance(it, str):
-                return False, f"Each item in {target_section} must be a string, got {type(it)}"
+            if not isinstance(it, (str, dict)):
+                return False, f"Each item in {target_section} must be a string or dict, got {type(it)}"
         return True, ""
         
     elif target_section in ["multi_act_structure", "progressive_character_plan"]:
@@ -280,7 +280,7 @@ def merge_incremental_payload(novel_id, target_section, action, payload, extra_p
             if target_section not in current_json or not isinstance(current_json[target_section], list):
                 current_json[target_section] = []
             for x in new_items:
-                if isinstance(x, str) and x not in current_json[target_section]:
+                if isinstance(x, (str, dict)) and x not in current_json[target_section]:
                     current_json[target_section].append(x)
             return current_json
             
@@ -449,16 +449,16 @@ def post_merge_validation(merged_data, target_section, original_data=None):
                 errors.append("foreshadowing_seeds must be a list")
             else:
                 for idx, seed in enumerate(merged_data["foreshadowing_seeds"]):
-                    if not isinstance(seed, str):
-                        errors.append(f"foreshadowing_seed at {idx} is not a string")
+                    if not isinstance(seed, (str, dict)):
+                        errors.append(f"foreshadowing_seed at {idx} is not a string or dict")
                         
         if "key_turning_points" in merged_data:
             if not isinstance(merged_data["key_turning_points"], list):
                 errors.append("key_turning_points must be a list")
             else:
                 for idx, pt in enumerate(merged_data["key_turning_points"]):
-                    if not isinstance(pt, str):
-                        errors.append(f"key_turning_point at {idx} is not a string")
+                    if not isinstance(pt, (str, dict)):
+                        errors.append(f"key_turning_point at {idx} is not a string or dict")
                         
         if "volumes" in merged_data:
             vols = merged_data["volumes"]

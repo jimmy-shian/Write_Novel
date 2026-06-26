@@ -3,6 +3,13 @@
 剛性評估與診斷模組 (Rigid Evaluation & Diagnostics Module)
 """
 import json
+
+MIN_FORESHADOWING_SEEDS = 50
+MIN_KEY_TURNING_POINTS = 50
+MIN_VOLUME_COUNT = 10
+MAX_VOLUME_COUNT = 20
+MIN_CHAPTERS_PER_VOLUME = 40
+MAX_CHAPTERS_PER_VOLUME = 50
 from agent_json import CHARACTER_BASIC_FIELDS
 
 
@@ -132,8 +139,10 @@ def diagnose_worldview(worldview_text):
     turns = parsed.get("key_turning_points", [])
 
     is_complete = bool(theme and main_conflict and worldview_desc and macro_outline)
-    status_str = "世界觀完整" if is_complete else "世界觀不完整"
-    return f"{status_str}、伏筆數量{len(seeds)}個、轉折{len(turns)}個"
+    quantity_ok = len(seeds) >= MIN_FORESHADOWING_SEEDS and len(turns) >= MIN_KEY_TURNING_POINTS
+    status_str = "世界觀完整" if is_complete and quantity_ok else "世界觀不完整"
+    quantity_note = "" if quantity_ok else f"（不足：伏筆至少{MIN_FORESHADOWING_SEEDS}個、轉折至少{MIN_KEY_TURNING_POINTS}個）"
+    return f"{status_str}、伏筆數量{len(seeds)}個、轉折{len(turns)}個{quantity_note}"
 
 
 def diagnose_characters(characters_data):
@@ -176,6 +185,19 @@ def diagnose_volumes_and_skeletons(volumes):
     """
     if not volumes:
         return "第1卷缺漏"
+    if len(volumes) < MIN_VOLUME_COUNT or len(volumes) > MAX_VOLUME_COUNT:
+        return f"篇卷數量不合規，共{len(volumes)}卷；需為{MIN_VOLUME_COUNT}-{MAX_VOLUME_COUNT}卷"
+
+    bad_chapter_counts = []
+    for v in volumes:
+        try:
+            ch_count = int(v.get("chapter_count", 0))
+        except Exception:
+            ch_count = 0
+        if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
+            bad_chapter_counts.append(f"卷{v.get('volume_index')}={ch_count}章")
+    if bad_chapter_counts:
+        return f"篇卷章節數不合規；每卷需{MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME}章；{', '.join(bad_chapter_counts[:10])}"
 
     missing_skeleton_vols = []
     for v in volumes:
@@ -342,7 +364,7 @@ def diagnose_all_phases(novel_id):
 
 def detect_current_stage(novel_id):
     """
-    根據資料庫進度動態偵測當前創作階段 (worldview -> characters -> volumes -> volume_skeleton -> writer -> editor)
+    根據資料庫進度動態偵測當前創作階段 (worldview -> characters -> foreshadowing -> volumes -> volume_skeleton -> writer -> editor)
     """
     import db
     wb = db.get_latest_worldbuilding(novel_id)
@@ -353,9 +375,28 @@ def detect_current_stage(novel_id):
     if not char or not char["json_data"] or char["json_data"] == "{'characters': []}":
         return "characters"
         
+    # 偵測是否已生成伏筆與轉折
+    try:
+        parsed_wb = db.parse_worldview_to_json(wb["content"])
+        seeds = parsed_wb.get("foreshadowing_seeds", [])
+        turns = parsed_wb.get("key_turning_points", [])
+        if (not seeds or not turns or
+            len(seeds) < MIN_FORESHADOWING_SEEDS or
+            len(turns) < MIN_KEY_TURNING_POINTS):
+            return "foreshadowing"
+    except Exception as e:
+        print(f"[STAGE DETECT ERROR] Failed to parse worldview JSON: {e}")
+        return "foreshadowing"
+
     vols = db.get_volumes(novel_id)
     if not vols:
         return "volumes"
+    if len(vols) < MIN_VOLUME_COUNT or len(vols) > MAX_VOLUME_COUNT:
+        return "volumes"
+    for v in vols:
+        ch_count = db._get_clean_chapter_count(v)
+        if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
+            return "volumes"
         
     # 如果有任何一卷尚未規劃簡易骨架大綱，則為 volume_skeleton 階段
     has_all_skeletons = True
@@ -415,24 +456,43 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
     report_lines.append("【1. 世界觀與核心設定層】")
     if not wb_exists:
         report_lines.append("  - 狀態：❌ 未完成 (世界觀為空)")
-        report_lines.append("  - 伏筆種子：0 個")
-        report_lines.append("  - 關鍵轉折點：0 個")
     else:
         report_lines.append("  - 狀態：✅ 已建立")
-        # 嘗試解析
+        try:
+            parsed_wb = db.parse_worldview_to_json(wb["content"])
+            report_lines.append(f"  - 核心主題 (theme)：{parsed_wb.get('theme', '未設定')[:100]}...")
+            report_lines.append(f"  - 核心衝突 (main_conflict)：{parsed_wb.get('main_conflict', '未設定')[:100]}...")
+        except Exception as e:
+            report_lines.append(f"  - 狀態：⚠️ 世界觀非標準 JSON 格式：{e}")
+    report_lines.append("")
+
+    # 1.5. 伏筆與轉折編織層
+    report_lines.append("【1.5. 伏筆與轉折編織層】")
+    if not wb_exists:
+        report_lines.append("  - 狀態：❌ 未完成 (世界觀為空，無法編織伏筆)")
+    else:
         try:
             parsed_wb = db.parse_worldview_to_json(wb["content"])
             seeds = parsed_wb.get("foreshadowing_seeds", [])
             turns = parsed_wb.get("key_turning_points", [])
-            report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
-            report_lines.append("    * 說明：seed 內的 act/stage/chapter/volume 等欄位只作為早期草稿定位參考；實際章節埋設/回收以卷骨架生成後的 allocated_tasks 為唯一依據。")
-            for i, s in enumerate(seeds):
-                report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
-            report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
-            for j, t in enumerate(turns):
-                report_lines.append(f"    * [Turn-{j+1}] {t}")
+            if (not seeds or not turns or
+                len(seeds) < MIN_FORESHADOWING_SEEDS or
+                len(turns) < MIN_KEY_TURNING_POINTS):
+                report_lines.append(f"  - 狀態：❌ 未完成 (伏筆/轉折數量不足；需要伏筆至少 {MIN_FORESHADOWING_SEEDS} 個、轉折至少 {MIN_KEY_TURNING_POINTS} 個)")
+            else:
+                report_lines.append("  - 狀態：✅ 已建立")
+                report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
+                for i, s in enumerate(seeds):
+                    report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
+                report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
+                for j, t in enumerate(turns):
+                    if isinstance(t, dict):
+                        tp_name = t.get("turning_point_name") or t.get("name") or "未命名轉折"
+                        report_lines.append(f"    * [Turn-{j+1}] {tp_name}")
+                    else:
+                        report_lines.append(f"    * [Turn-{j+1}] {t}")
         except Exception as e:
-            report_lines.append(f"  - 狀態：⚠️ 世界觀非標準 JSON 格式，無法解析伏筆種子：{e}")
+            report_lines.append(f"  - 狀態：⚠️ 無法解析伏筆與轉折：{e}")
     report_lines.append("")
     
     # 2. 角色聖經
@@ -476,6 +536,8 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
         report_lines.append("  - 狀態：❌ 未完成 (尚未規劃篇卷)")
     else:
         report_lines.append(f"  - 篇卷規劃總數：共 {len(vols)} 卷")
+        if len(vols) < MIN_VOLUME_COUNT or len(vols) > MAX_VOLUME_COUNT:
+            report_lines.append(f"  - 🚫 [篇卷數量不合規] 需要 {MIN_VOLUME_COUNT}-{MAX_VOLUME_COUNT} 卷，目前 {len(vols)} 卷。")
         total_planned_chapters = sum(db._get_clean_chapter_count(v) for v in vols)
         report_lines.append(f"  - 章節骨架總規劃數：共 {total_planned_chapters} 章")
         
@@ -483,6 +545,9 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
         for v in vols:
             vol_idx = v["volume_index"]
             vol_title = v["title"]
+            ch_count = db._get_clean_chapter_count(v)
+            if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
+                report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：🚫 [每卷章節數不合規] 需要 {MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME} 章，目前 {ch_count} 章")
             start_ch, end_ch = db.get_volume_chapter_range(vols, vol_idx)
             
             skeleton_list = v.get("chapters_outline")

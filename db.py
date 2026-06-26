@@ -763,6 +763,9 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
             else:
                 merged_map[ch_idx_int] = nc
             
+    # 重新套用 Python 預計算伏筆/轉折分配，避免 LLM 自行錯塞或同章重複埋收。
+    merged_map = apply_canonical_allocated_tasks_to_chapters(novel_id, merged_map.values())
+
     # 重新轉回列表並依章節序號由小到大排序
     merged_chapters = list(merged_map.values())
     merged_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)))
@@ -1210,146 +1213,154 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
     #    ⚠️ 重要：採用「智慧合併+刪除同步模式」，不直接覆蓋骨架數據。
     #    骨架欄位（brief_title/brief_summary/allocated_tasks）必須保留，
     #    只將章節大綱的欄位 patch 進去；同時刪除 incoming 中已移除的章節。
-    if not skip_volume_sync:
-        if isinstance(parsed_dict, dict) and "chapters" in parsed_dict:
-            chapters_list = parsed_dict["chapters"]
-        if isinstance(chapters_list, list):
-            vol_groups = {}
-            vols = get_volumes(novel_id)
+    chapters_list = []
+    has_chapters_payload = False
+    if isinstance(parsed_dict, dict):
+        if "chapters" in parsed_dict or "chapters_skeleton" in parsed_dict:
+            has_chapters_payload = True
+            candidate = parsed_dict.get("chapters") or parsed_dict.get("chapters_skeleton") or []
+            chapters_list = candidate if isinstance(candidate, list) else []
+    elif isinstance(parsed_dict, list):
+        has_chapters_payload = True
+        chapters_list = parsed_dict
+
+    if not skip_volume_sync and has_chapters_payload:
+        vol_groups = {}
+        vols = get_volumes(novel_id)
             
-            # 💡 建立全書 incoming chapter_index 的完整集合（用於刪除同步）
-            all_incoming_chapter_indices = set()
-            for ch in chapters_list:
+        # 💡 建立全書 incoming chapter_index 的完整集合（用於刪除同步）
+        all_incoming_chapter_indices = set()
+        for ch in chapters_list:
+            try:
+                c_idx = int(ch.get("chapter_index", 0))
+                if c_idx > 0:
+                    all_incoming_chapter_indices.add(c_idx)
+            except:
+                pass
+        
+        for ch in chapters_list:
+            try:
+                c_idx = int(ch.get("chapter_index", 0))
+            except:
+                c_idx = 0
+            if c_idx > 0:
+                vol_idx = get_chapter_volume_index(vols, c_idx)
+                if vol_idx not in vol_groups:
+                    vol_groups[vol_idx] = []
+                vol_groups[vol_idx].append(ch)
+        
+        # 💡 對每個有資料的卷進行合併式更新 + 刪除同步
+        for vol_idx, new_detail_chaps in vol_groups.items():
+            # 建立章節大綱的 chapter_index -> chapter_data 映射
+            detail_map = {}
+            for ch in new_detail_chaps:
                 try:
                     c_idx = int(ch.get("chapter_index", 0))
                     if c_idx > 0:
-                        all_incoming_chapter_indices.add(c_idx)
+                        detail_map[c_idx] = ch
                 except:
                     pass
             
-            for ch in chapters_list:
-                try:
-                    c_idx = int(ch.get("chapter_index", 0))
-                except:
-                    c_idx = 0
-                if c_idx > 0:
-                    vol_idx = get_chapter_volume_index(vols, c_idx)
-                    if vol_idx not in vol_groups:
-                        vol_groups[vol_idx] = []
-                    vol_groups[vol_idx].append(ch)
+            # 讀取目前卷的骨架（chapters_outline）
+            vol_row = cursor.execute(
+                "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
+                (novel_id, vol_idx)
+            ).fetchone()
             
-            # 💡 對每個有資料的卷進行合併式更新 + 刪除同步
-            for vol_idx, new_detail_chaps in vol_groups.items():
-                # 建立章節大綱的 chapter_index -> chapter_data 映射
-                detail_map = {}
-                for ch in new_detail_chaps:
+            if vol_row:
+                existing_outline_str = vol_row["chapters_outline"]
+                
+                # 嘗試解析現有骨架
+                existing_skeleton = []
+                if existing_outline_str:
                     try:
-                        c_idx = int(ch.get("chapter_index", 0))
-                        if c_idx > 0:
-                            detail_map[c_idx] = ch
+                        existing_skeleton = json.loads(existing_outline_str)
+                        if not isinstance(existing_skeleton, list):
+                            existing_skeleton = []
+                    except:
+                        existing_skeleton = []
+                
+                # 建立骨架的 chapter_index -> skeleton_ch 映射
+                skeleton_map = {}
+                for sk_ch in existing_skeleton:
+                    raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
+                    try:
+                        sk_idx = int(raw_idx)
+                        skeleton_map[sk_idx] = sk_ch
                     except:
                         pass
                 
-                # 讀取目前卷的骨架（chapters_outline）
+                # 合併：將章節大綱欄位 patch 進骨架（保留骨架欄位）
+                merged_chapters = {}
+                
+                # 先把所有骨架章節放入（但只保留在 incoming 中仍存在的章節）
+                # 💡 核心修復：若骨架章節的 index 不在 all_incoming_chapter_indices 中，
+                #    代表已被前端刪除，直接跳過（實現骨架刪除同步）
+                for sk_idx, sk_ch in skeleton_map.items():
+                    if sk_idx in all_incoming_chapter_indices:
+                        merged_chapters[sk_idx] = dict(sk_ch)  # 保留所有骨架欄位
+                    # 不在 incoming 中 → 已被刪除，不放入 merged
+                
+                # 再把章節大綱合併進去
+                for det_idx, det_ch in detail_map.items():
+                    if det_idx in merged_chapters:
+                        # 合併：詳細欄位覆蓋，骨架欄位保留（不刪除 brief_title 等）
+                        merged_chapters[det_idx].update(det_ch)
+                    else:
+                        # 新章節直接加入
+                        merged_chapters[det_idx] = dict(det_ch)
+                
+                # 按章節序號排序
+                merged_list = [merged_chapters[k] for k in sorted(merged_chapters.keys())]
+                merged_str = json.dumps(merged_list, ensure_ascii=False)
+                
+                cursor.execute(
+                    "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                    (merged_str, vol_row["id"])
+                )
+            else:
+                # 卷不存在，直接新建（無骨架可合併）
+                v_start, v_end = get_volume_chapter_range(vols, vol_idx)
+                new_chaps_str = json.dumps(list(detail_map.values()), ensure_ascii=False)
+                cursor.execute(
+                    "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
+                    "VALUES (?, ?, ?, ?, ?, 0, ?)",
+                    (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", new_chaps_str)
+                )
+        
+        # 💡 額外處理：對於「有骨架但 incoming 中完全沒有任何章節的卷」，
+        #    也要清除其骨架中已被刪除的章節（例如刪除骨架章節後 plot.chapters 為空時）
+        all_vol_indices = set(v.get("volume_index", 0) for v in vols)
+        for vol_idx in all_vol_indices:
+            if vol_idx not in vol_groups:
+                # 這個卷在 incoming 中沒有任何章節 → 它的骨架也可能需要清除已刪除章節
                 vol_row = cursor.execute(
                     "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
                     (novel_id, vol_idx)
                 ).fetchone()
+                if vol_row and vol_row["chapters_outline"]:
+                    try:
+                        existing_skeleton = json.loads(vol_row["chapters_outline"])
+                        if isinstance(existing_skeleton, list):
+                            # 只保留 incoming 中仍存在的章節
+                            filtered = []
+                            for sk_ch in existing_skeleton:
+                                raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
+                                try:
+                                    sk_idx = int(raw_idx)
+                                    if sk_idx in all_incoming_chapter_indices:
+                                        filtered.append(sk_ch)
+                                except:
+                                    pass
+                            # 若有章節被刪除，更新骨架
+                            if len(filtered) != len(existing_skeleton):
+                                cursor.execute(
+                                    "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                                    (json.dumps(filtered, ensure_ascii=False), vol_row["id"])
+                                )
+                    except:
+                        pass
                 
-                if vol_row:
-                    existing_outline_str = vol_row["chapters_outline"]
-                    
-                    # 嘗試解析現有骨架
-                    existing_skeleton = []
-                    if existing_outline_str:
-                        try:
-                            existing_skeleton = json.loads(existing_outline_str)
-                            if not isinstance(existing_skeleton, list):
-                                existing_skeleton = []
-                        except:
-                            existing_skeleton = []
-                    
-                    # 建立骨架的 chapter_index -> skeleton_ch 映射
-                    skeleton_map = {}
-                    for sk_ch in existing_skeleton:
-                        raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
-                        try:
-                            sk_idx = int(raw_idx)
-                            skeleton_map[sk_idx] = sk_ch
-                        except:
-                            pass
-                    
-                    # 合併：將章節大綱欄位 patch 進骨架（保留骨架欄位）
-                    merged_chapters = {}
-                    
-                    # 先把所有骨架章節放入（但只保留在 incoming 中仍存在的章節）
-                    # 💡 核心修復：若骨架章節的 index 不在 all_incoming_chapter_indices 中，
-                    #    代表已被前端刪除，直接跳過（實現骨架刪除同步）
-                    for sk_idx, sk_ch in skeleton_map.items():
-                        if sk_idx in all_incoming_chapter_indices:
-                            merged_chapters[sk_idx] = dict(sk_ch)  # 保留所有骨架欄位
-                        # 不在 incoming 中 → 已被刪除，不放入 merged
-                    
-                    # 再把章節大綱合併進去
-                    for det_idx, det_ch in detail_map.items():
-                        if det_idx in merged_chapters:
-                            # 合併：詳細欄位覆蓋，骨架欄位保留（不刪除 brief_title 等）
-                            merged_chapters[det_idx].update(det_ch)
-                        else:
-                            # 新章節直接加入
-                            merged_chapters[det_idx] = dict(det_ch)
-                    
-                    # 按章節序號排序
-                    merged_list = [merged_chapters[k] for k in sorted(merged_chapters.keys())]
-                    merged_str = json.dumps(merged_list, ensure_ascii=False)
-                    
-                    cursor.execute(
-                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-                        (merged_str, vol_row["id"])
-                    )
-                else:
-                    # 卷不存在，直接新建（無骨架可合併）
-                    v_start, v_end = get_volume_chapter_range(vols, vol_idx)
-                    new_chaps_str = json.dumps(list(detail_map.values()), ensure_ascii=False)
-                    cursor.execute(
-                        "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
-                        "VALUES (?, ?, ?, ?, ?, 0, ?)",
-                        (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", new_chaps_str)
-                    )
-            
-            # 💡 額外處理：對於「有骨架但 incoming 中完全沒有任何章節的卷」，
-            #    也要清除其骨架中已被刪除的章節（例如刪除骨架章節後 plot.chapters 為空時）
-            all_vol_indices = set(v.get("volume_index", 0) for v in vols)
-            for vol_idx in all_vol_indices:
-                if vol_idx not in vol_groups:
-                    # 這個卷在 incoming 中沒有任何章節 → 它的骨架也可能需要清除已刪除章節
-                    vol_row = cursor.execute(
-                        "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
-                        (novel_id, vol_idx)
-                    ).fetchone()
-                    if vol_row and vol_row["chapters_outline"]:
-                        try:
-                            existing_skeleton = json.loads(vol_row["chapters_outline"])
-                            if isinstance(existing_skeleton, list):
-                                # 只保留 incoming 中仍存在的章節
-                                filtered = []
-                                for sk_ch in existing_skeleton:
-                                    raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
-                                    try:
-                                        sk_idx = int(raw_idx)
-                                        if sk_idx in all_incoming_chapter_indices:
-                                            filtered.append(sk_ch)
-                                    except:
-                                        pass
-                                # 若有章節被刪除，更新骨架
-                                if len(filtered) != len(existing_skeleton):
-                                    cursor.execute(
-                                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-                                        (json.dumps(filtered, ensure_ascii=False), vol_row["id"])
-                                    )
-                        except:
-                            pass
-                    
     conn.commit()
     conn.close()
     return 1
@@ -2082,9 +2093,11 @@ def save_foreshadowing_allocations(novel_id, allocations):
     [新功能] 將全局伏筆編織導演分配好的 allocated_tasks 寫回到各章節的骨架中
     這是 Stage 3 (Foreshadowing Orchestration) 的產出儲存點
     """
-    if not allocations or not isinstance(allocations, list):
-        print("[WARN] No allocations to save")
-        return
+    # 伏筆/轉折章節位置以 Python deterministic blueprint 為唯一來源。
+    # 舊版 LLM allocations 僅作為觸發點，不再追加寫入，以免同一 seed 被錯章重複埋收。
+    touched = repair_foreshadowing_allocations(novel_id)
+    print(f"[DB] Canonical foreshadowing allocations repaired for {novel_id} (volumes={touched})")
+    return
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2276,6 +2289,181 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
     return start_del, end_del
 
 
+
+def _canonical_seed_id(seed_index):
+    return f"FS{seed_index + 1:03d}"
+
+
+def _coerce_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_allocation_pair(pair, total_chapters):
+    if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+        return None
+    p_ch = _coerce_int(pair[0])
+    r_ch = _coerce_int(pair[1])
+    if total_chapters <= 0:
+        total_chapters = max(p_ch, r_ch, 1)
+    p_ch = max(1, min(total_chapters, p_ch))
+    r_ch = max(1, min(total_chapters, r_ch))
+    if total_chapters > 1 and r_ch <= p_ch:
+        if p_ch < total_chapters:
+            r_ch = p_ch + 1
+        else:
+            p_ch = max(1, r_ch - 1)
+    return p_ch, r_ch
+
+
+def _is_valid_foreshadowing_blueprint(blueprint, seed_count, turn_count, total_chapters):
+    if not isinstance(blueprint, dict):
+        return False
+    allocations = blueprint.get("foreshadowing_allocations", [])
+    turns = blueprint.get("turning_allocations", [])
+    if len(allocations) != seed_count or len(turns) != turn_count:
+        return False
+    for pair in allocations:
+        normalized = _normalize_allocation_pair(pair, total_chapters)
+        if not normalized:
+            return False
+        p_ch, r_ch = normalized
+        if total_chapters > 1 and p_ch >= r_ch:
+            return False
+    for turn_ch in turns:
+        turn_ch = _coerce_int(turn_ch)
+        if turn_ch < 1 or (total_chapters > 0 and turn_ch > total_chapters):
+            return False
+    return True
+
+
+def build_canonical_foreshadowing_task_map(novel_id):
+    """Return chapter_index -> canonical allocated_tasks from the deterministic blueprint."""
+    volumes = get_volumes(novel_id)
+    if not volumes:
+        return {}
+    wb = get_latest_worldbuilding(novel_id)
+    worldview = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    seeds = worldview.get("foreshadowing_seeds", []) or []
+    turns = worldview.get("key_turning_points", []) or []
+    blueprint = get_global_foreshadowing_blueprint(novel_id)
+    total_chapters = _coerce_int(blueprint.get("T"), get_total_chapter_count(volumes))
+
+    task_map = {}
+
+    def chapter_tasks(chapter_index):
+        chapter_index = int(chapter_index)
+        if chapter_index not in task_map:
+            task_map[chapter_index] = {
+                "foreshadowing_plants": [],
+                "foreshadowing_payoffs": [],
+                "turning_points": []
+            }
+        return task_map[chapter_index]
+
+    for idx, pair in enumerate(blueprint.get("foreshadowing_allocations", [])[:len(seeds)]):
+        normalized = _normalize_allocation_pair(pair, total_chapters)
+        if not normalized:
+            continue
+        p_ch, r_ch = normalized
+        seed_id = _canonical_seed_id(idx)
+        chapter_tasks(p_ch)["foreshadowing_plants"].append(seed_id)
+        chapter_tasks(r_ch)["foreshadowing_payoffs"].append(seed_id)
+
+    for idx, turn_ch in enumerate(blueprint.get("turning_allocations", [])[:len(turns)]):
+        turn_ch = _coerce_int(turn_ch)
+        if turn_ch <= 0:
+            continue
+        chapter_tasks(turn_ch)["turning_points"].append(f"TP{idx + 1:03d}")
+
+    return task_map
+
+
+def apply_canonical_allocated_tasks_to_chapters(novel_id, chapters):
+    """Overwrite foreshadowing/turn allocations so each seed has one plant and one payoff."""
+    task_map = build_canonical_foreshadowing_task_map(novel_id)
+    normalized = {}
+    for chapter in chapters or []:
+        if not isinstance(chapter, dict):
+            continue
+        ch_idx = chapter.get("chapter_index")
+        if ch_idx is None:
+            continue
+        ch_idx = int(ch_idx)
+        chapter["chapter_index"] = ch_idx
+        allocated = chapter.get("allocated_tasks")
+        if not isinstance(allocated, dict):
+            allocated = {}
+        canonical = task_map.get(ch_idx, {})
+        allocated["foreshadowing_plants"] = list(canonical.get("foreshadowing_plants", []))
+        allocated["foreshadowing_payoffs"] = list(canonical.get("foreshadowing_payoffs", []))
+        allocated["turning_points"] = list(canonical.get("turning_points", []))
+        chapter["allocated_tasks"] = allocated
+        for stale_key in (
+            "foreshadowing_plant",
+            "foreshadowing_plants",
+            "foreshadowing_payoff",
+            "foreshadowing_payoffs",
+            "foreshadowing",
+        ):
+            chapter.pop(stale_key, None)
+        normalized[ch_idx] = chapter
+    return normalized
+
+
+def repair_foreshadowing_allocations(novel_id, volume_index=None):
+    """Rewrite existing volume skeletons and stitched plot with deterministic allocations."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if volume_index is None:
+        rows = cursor.execute(
+            "SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
+            (novel_id,)
+        ).fetchall()
+    else:
+        rows = cursor.execute(
+            "SELECT * FROM volumes WHERE novel_id = ? AND volume_index = ? ORDER BY volume_index ASC",
+            (novel_id, int(volume_index))
+        ).fetchall()
+
+    all_chapters = []
+    touched = 0
+    for row in rows:
+        vol = dict(row)
+        try:
+            chapters = json.loads(vol.get("chapters_outline") or "[]")
+        except Exception:
+            chapters = []
+        if not isinstance(chapters, list):
+            chapters = []
+        canonical_map = apply_canonical_allocated_tasks_to_chapters(novel_id, chapters)
+        canonical_list = list(canonical_map.values())
+        canonical_list.sort(key=lambda item: int(item.get("chapter_index", 0)))
+        cursor.execute(
+            "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+            (json.dumps(_convert_obj_to_traditional(canonical_list), ensure_ascii=False), vol["id"])
+        )
+        all_chapters.extend(canonical_list)
+        touched += 1
+
+    if volume_index is None and all_chapters:
+        all_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
+        row_max = cursor.execute(
+            "SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
+            (novel_id,)
+        ).fetchone()
+        next_v = (row_max["max_v"] or 0) + 1
+        cursor.execute(
+            "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+            (novel_id, json.dumps({"chapters": _convert_obj_to_traditional(all_chapters)}, ensure_ascii=False), next_v)
+        )
+
+    conn.commit()
+    conn.close()
+    return touched
+
 def precompute_global_foreshadowing(novel_id):
     """
     [新功能] 根據卷結構與世界觀伏筆/轉折設定，預計算全書總章數與全域伏筆/轉折的絕對章節分配，
@@ -2336,6 +2524,9 @@ def precompute_global_foreshadowing(novel_id):
             P = r.randint(start_p, end_p)
             R = r.randint(start_r, end_r)
             
+        normalized_pair = _normalize_allocation_pair((P, R), T)
+        if normalized_pair:
+            P, R = normalized_pair
         foreshadowing_allocations.append((P, R))
         
     # 5. 關鍵轉折點確定性循環位置分配，確保均勻覆蓋各卷
@@ -2387,9 +2578,8 @@ def get_global_foreshadowing_blueprint(novel_id):
     if row:
         try:
             blueprint = json.loads(row["blueprint_json"])
-            # 自癒檢驗長度是否一致
-            if (len(blueprint.get("foreshadowing_allocations", [])) == len(all_seeds) and 
-                len(blueprint.get("turning_allocations", [])) == len(all_turns)):
+            total_chapters = _coerce_int(blueprint.get("T"), get_total_chapter_count(get_volumes(novel_id)))
+            if _is_valid_foreshadowing_blueprint(blueprint, len(all_seeds), len(all_turns), total_chapters):
                 return blueprint
         except Exception as e:
             print(f"[WARN] Failed to load/validate global blueprint: {e}")
@@ -2441,6 +2631,8 @@ def save_single_plot_chapter(novel_id, chapter_index, chapter_outline):
         
     # 調用全量 save_plot_chapters 完成寫入與 volumes 智慧合併
     save_plot_chapters(novel_id, {"chapters": chapters}, skip_volume_sync=False, clear_chapters=False)
+
+
 
 
 
