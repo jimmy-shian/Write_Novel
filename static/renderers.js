@@ -23,8 +23,9 @@ function formatForeshadowingSeed(item) {
         const nameStr = item.name ? `<strong>${item.name}</strong>: ` : '';
         const raw = item.detail || item.content || item.summary || item.description || item.seed || '';
         let detailStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
-        if (item.payoff) {
-            const payoffStr = typeof item.payoff === 'string' ? item.payoff : JSON.stringify(item.payoff);
+        if (item.payoff_hint || item.payoff) {
+            const payoffValue = item.payoff_hint || item.payoff;
+            const payoffStr = typeof payoffValue === 'string' ? payoffValue : JSON.stringify(payoffValue);
             detailStr += ` <span style="color:var(--text-muted); font-size:var(--font-2xs); font-style:italic;">(回收: ${payoffStr})</span>`;
         }
         if (!detailStr) {
@@ -65,10 +66,13 @@ function formatKeyTurningPoint(item) {
         const toStr = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? JSON.stringify(v) : String(v));
         
         // 優先使用 trigger（觸發事件）作為主要顯示內容
-        let mainContent = toStr(item.trigger || item.name || item.title || '');
+        let mainContent = toStr(item.turning_point_name || item.trigger_condition || item.trigger || item.name || item.title || '');
         
         // 如果有 HTML 內容在 detail/global_impact 中，檢測並安全處理
-        let additionalContent = toStr(item.global_impact || item.impact || item.detail || item.summary || item.description || '');
+        let additionalContent = toStr(item.structural_impact || item.global_impact || item.impact || item.detail || item.summary || item.description || '');
+        if (item.emotional_stakes) {
+            additionalContent += additionalContent ? `；代價: ${toStr(item.emotional_stakes)}` : toStr(item.emotional_stakes);
+        }
         
         // 檢測附加內容是否包含 HTML
         const hasHtmlInAdditional = /<[a-z][\s\S]*>/i.test(additionalContent);
@@ -97,6 +101,14 @@ function formatKeyTurningPoint(item) {
     return String(item);
 }
 
+function extractForeshadowSeedId(value) {
+    const raw = String(value ?? '');
+    const explicit = raw.match(/(?:\bFS|\bSeed|\[Seed-)\s*-?\s*0*(\d{1,4})\]?/i);
+    if (explicit) return String(parseInt(explicit[1], 10)).padStart(3, '0');
+    const fallback = raw.match(/0*(\d{1,4})/);
+    return fallback ? String(parseInt(fallback[1], 10)).padStart(3, '0') : '';
+}
+
 // Helper to look up detailed seed description from worldview
 function getSeedDescription(idOrString, worldviewJs) {
     if (typeof idOrString === 'object' && idOrString !== null) {
@@ -113,8 +125,8 @@ function getSeedDescription(idOrString, worldviewJs) {
         }
         return JSON.stringify(idOrString);
     }
-    const idStr = String(idOrString).replace(/[^\d]/g, '');
-    const idNum = parseInt(idStr);
+    const idStr = extractForeshadowSeedId(idOrString);
+    const idNum = parseInt(idStr, 10);
     if (isNaN(idNum)) {
         return String(idOrString);
     }
@@ -1016,7 +1028,7 @@ export function renderPlotTab() {
                             <div class="skeleton-tasks" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 8px;">
                                 ${arrSkeletonPlants.map(seed => {
                                     const desc = getSeedDescription(seed, worldviewJs);
-                                    const cleanId = String(seed).replace(/[^\d]/g, '');
+                                    const cleanId = extractForeshadowSeedId(seed);
                                     const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
                                     return `
                                     <div class="task-item seed-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #c084fc; line-height: 1.4;">
@@ -1027,7 +1039,7 @@ export function renderPlotTab() {
                                 }).join('')}
                                 ${arrSkeletonPayoffs.map(pay => {
                                     const desc = getSeedDescription(pay, worldviewJs);
-                                    const cleanId = String(pay).replace(/[^\d]/g, '');
+                                    const cleanId = extractForeshadowSeedId(pay);
                                     const idBadge = cleanId ? `<strong style="color:var(--primary);">[Seed-${cleanId}]</strong> ` : '';
                                     return `
                                     <div class="task-item payoff-item" style="display: flex; align-items: flex-start; gap: 6px; font-size: var(--font-2xs); color: #fbbf24; line-height: 1.4;">

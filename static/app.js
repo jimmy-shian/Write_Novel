@@ -493,9 +493,16 @@ async function executeDirectorAction(decision, userPrompt) {
                 updatePipelineStage('characters', 'running');
                 updateDirectorMessage('👥 開始生成角色設定...');
                 await executePipelineStage('characters', userPrompt, decision);
+            } else if (target === 'foreshadowing' || target === '伏筆' || target === '伏筆轉折' || target === 'foreshadowing_orchestrate' || target === 'foreshadowing_orchestration') {
+                updatePipelineStage('worldview', 'done');
+                updatePipelineStage('characters', 'done');
+                updatePipelineStage('foreshadowing', 'running');
+                updateDirectorMessage('🎭 開始編織全書伏筆與轉折...');
+                await executePipelineStage('foreshadowing', userPrompt, decision);
             } else if (target === 'volumes' || target === '篇卷規劃' || target === '卷設定') {
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
+                updatePipelineStage('foreshadowing', 'done');
                 updatePipelineStage('volumes', 'running');
                 updateDirectorMessage('📚 開始規劃全書篇卷結構...');
                 showToast('📚 開始規劃全書篇卷結構...');
@@ -767,6 +774,27 @@ function isDetailedPlotOutline(chapter) {
 async function executeNextMissingStage(userPrompt) {
     const hasWorldview = state.currentNovelData?.worldbuilding && state.currentNovelData.worldbuilding.trim().length > 50;
     const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
+    
+    // 剛性判斷是否已有伏筆與轉折
+    let hasForeshadowing = false;
+    if (hasWorldview) {
+        try {
+            const text = state.currentNovelData.worldbuilding;
+            let parsed = null;
+            try {
+                parsed = JSON.parse(text);
+            } catch (e) {
+                const match = text.match(/```json\s*([\s\S]*?)\s*```/);
+                if (match && match[1]) {
+                    parsed = JSON.parse(match[1]);
+                }
+            }
+            if (parsed && Array.isArray(parsed.foreshadowing_seeds) && parsed.foreshadowing_seeds.length > 0) {
+                hasForeshadowing = true;
+            }
+        } catch (e) {}
+    }
+
     const volumes = state.currentNovelData?.volumes || [];
     const hasVolumes = volumes.length > 0;
     const hasSkeletons = volumes.length > 0 && volumes.every(v => {
@@ -790,29 +818,32 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('characters', 'running');
         updateDirectorMessage('👥 開始生成角色設定...');
         await executePipelineStage('characters', userPrompt);
+    } else if (!hasForeshadowing) {
+        updatePipelineStage('worldview', 'done');
+        updatePipelineStage('characters', 'done');
+        updatePipelineStage('foreshadowing', 'running');
+        updateDirectorMessage('🎭 開始編織全書伏筆與轉折...');
+        await executePipelineStage('foreshadowing', userPrompt);
     } else if (!hasVolumes) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
+        updatePipelineStage('foreshadowing', 'done');
         updatePipelineStage('volumes', 'running');
         updateDirectorMessage('📚 開始規劃篇卷結構...');
         await executePipelineStage('volumes', userPrompt);
     } else if (!hasSkeletons) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
+        updatePipelineStage('foreshadowing', 'done');
         updatePipelineStage('volumes', 'done');
         updatePipelineStage('volume_skeleton', 'running');
         updateDirectorMessage('🏗️ 開始生成全書卷骨架...');
         await executePipelineStage('volume_skeleton', userPrompt);
-    } else if (!state.foreshadowingOrchestrated) {
-        state.foreshadowingOrchestrated = true;
-        updatePipelineStage('volume_skeleton', 'done');
-        updatePipelineStage('foreshadowing_orchestration', 'running');
-        updateDirectorMessage('🎭 開始全局伏筆編織對齊...');
-        await executePipelineStage('foreshadowing_orchestration', userPrompt);
     } else {
         // 所有前期準備完成，開始寫作
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('characters', 'done');
+        updatePipelineStage('foreshadowing', 'done');
         updatePipelineStage('volumes', 'done');
         updatePipelineStage('volume_skeleton', 'done');
 
@@ -1247,15 +1278,25 @@ function openWorldviewListEditModal(field, title) {
         list.forEach((item, index) => {
             const div = document.createElement('div');
             div.style = 'display: flex; gap: 8px; align-items: center;';
+            const valueStr = typeof item === 'string' ? item : JSON.stringify(item);
             div.innerHTML = `
                 <span style="font-size: var(--font-2xs); color: var(--text-muted); min-width: 24px;">#${index + 1}</span>
-                <input type="text" class="wv-list-item-input" data-index="${index}" value="${item.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="請輸入項目內容...">
+                <input type="text" class="wv-list-item-input" data-index="${index}" value="${valueStr.replace(/"/g, '&quot;')}" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); padding: 8px; font-size: var(--font-2xs);" placeholder="請輸入項目內容...">
                 <button class="btn btn-ghost btn-xs delete-item-btn" data-index="${index}" style="color: var(--text-muted); font-size: var(--font-2xs); border: none; background: none; cursor: pointer;">✕</button>
             `;
             container.appendChild(div);
 
             div.querySelector('.wv-list-item-input').addEventListener('input', (e) => {
-                list[index] = e.target.value;
+                const val = e.target.value.trim();
+                if (val.startsWith('{') && val.endsWith('}')) {
+                    try {
+                        list[index] = JSON.parse(val);
+                    } catch (err) {
+                        list[index] = val;
+                    }
+                } else {
+                    list[index] = val;
+                }
             });
 
             div.querySelector('.delete-item-btn').addEventListener('click', () => {
@@ -1288,7 +1329,25 @@ function openWorldviewListEditModal(field, title) {
     submitBtn.parentNode.replaceChild(newSubmitBtn, submitBtn);
 
     newSubmitBtn.addEventListener('click', async () => {
-        const finalList = list.map(item => item.trim()).filter(item => item !== '');
+        const finalList = list.map(item => {
+            if (typeof item === 'string') {
+                const trimmed = item.trim();
+                if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                    try {
+                        return JSON.parse(trimmed);
+                    } catch (e) {
+                        return trimmed;
+                    }
+                }
+                return trimmed;
+            }
+            return item;
+        }).filter(item => {
+            if (typeof item === 'string') {
+                return item !== '';
+            }
+            return item !== null && item !== undefined;
+        });
         const worldviewText = state.currentNovelData?.worldbuilding || '';
         const js = parseWorldviewJSON(worldviewText);
         js[field] = finalList;
@@ -4635,7 +4694,7 @@ function setupEventListeners() {
                 if (decisionResult) {
                     let action = decisionResult.action;
                     let target = decisionResult.target;
-                    const validStages = ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'writer', 'editor'];
+                    const validStages = ['worldview', 'characters', 'foreshadowing', 'volumes', 'volume_skeleton', 'writer', 'editor'];
                     
                     if (action === 'TRIGGER_AGENT' || validStages.includes(String(action).toLowerCase())) {
                         if (validStages.includes(String(action).toLowerCase()) && !target) {
@@ -4650,7 +4709,7 @@ function setupEventListeners() {
                             showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
                             
                             // Check if state.isAutoExecuteMode is true
-                            if (state.isAutoExecuteMode && ['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration', 'plot', 'writer', 'editor'].includes(target)) {
+                            if (state.isAutoExecuteMode && ['worldview', 'characters', 'foreshadowing', 'volumes', 'volume_skeleton', 'plot', 'writer', 'editor'].includes(target)) {
                                 showToast(`🚀 [一鍵流程] 將從「${target}」階段開始向後自動執行...`);
                                 state.isPipelineRunning = true;
                                 showPipelineProgress(true);
@@ -4662,7 +4721,7 @@ function setupEventListeners() {
                                     hint: hint,
                                     volume_index: volIdx,
                                     chapter_index: chIdx
-                                }, decisionResult.agent_prompt || hint || '請根據總監指示繼續創作');
+                                }, (state.pipelinePrompt || '').trim() || (state.currentNovelData?.novel?.pipeline_prompt || '').trim() || decisionResult.agent_prompt || hint || '請根據總監指示繼續創作');
                             } else {
                                 showToast(`⚡ [非一鍵流程] 僅執行「${target}」單一步驟，執行完成後將停止。`);
                                 state.isPipelineRunning = false;
@@ -4676,8 +4735,9 @@ function setupEventListeners() {
                                     const activeCh = chIdx || state.activeChapterIndex || 1;
                                     state.activeChapterIndex = activeCh;
                                     await executePipelineStage('editor', decisionResult.agent_prompt || hint || '請精修正文', decisionResult);
-                                } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing_orchestration'].includes(target)) {
-                                    await executePipelineStage(target, decisionResult.agent_prompt || hint || '請根據總監指示更新', decisionResult);
+                                } else if (['worldview', 'characters', 'volumes', 'volume_skeleton', 'foreshadowing', 'foreshadowing_orchestrate', 'foreshadowing_orchestration'].includes(target)) {
+                                    const activeTarget = (target === 'foreshadowing_orchestrate' || target === 'foreshadowing_orchestration') ? 'foreshadowing' : target;
+                                    await executePipelineStage(activeTarget, decisionResult.agent_prompt || hint || '請根據總監指示更新', decisionResult);
                                 } else {
                                     console.warn('Unknown TRIGGER_AGENT target:', target);
                                 }
@@ -5357,17 +5417,23 @@ window.showCustomPrompt = function(msg, defaultValue = '', title = '輸入內容
     return window.showCustomDialog({ title, message: msg, type: 'prompt', defaultValue });
 };
 
-// smart scroll helper to support scroll-back
+// smart scroll helper to support scroll-back with requestAnimationFrame throttling
+const scrollPending = new Set();
 window.smartScrollToBottom = function(container, force = false) {
     if (!container) return;
     if (force) {
         container.scrollTop = container.scrollHeight;
         return;
     }
-    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 120;
-    if (isNearBottom) {
-        container.scrollTop = container.scrollHeight;
-    }
+    if (scrollPending.has(container)) return;
+    scrollPending.add(container);
+    requestAnimationFrame(() => {
+        const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 120;
+        if (isNearBottom) {
+            container.scrollTop = container.scrollHeight;
+        }
+        scrollPending.delete(container);
+    });
 };
 
 function getAgentDetails(endpoint) {
@@ -5905,7 +5971,7 @@ window.runForeshadowingOrchestratorDirect = function() {
         updateDirectorMessage('🎭 全局伏筆調度導演啟動，正在編織跨卷長線張力網...');
         
         streamAPI(
-            '/api/agent/foreshadowing-orchestrate',
+            '/api/agent/foreshadowing-orchestrator',
             { 
                 novel_id: state.currentNovelId,
                 user_prompt: null // 可選

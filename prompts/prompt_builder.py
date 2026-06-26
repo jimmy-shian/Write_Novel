@@ -12,6 +12,7 @@ from prompts.prompt_main import (
     VOLUMES_PLANNER_PROMPT,
     VOLUME_SKELETON_PROMPT,
     CHARACTER_DESIGNER_PROMPT,
+    FORESHADOWING_ORCHESTRATOR_PROMPT,
     CHAPTER_WRITER_PROMPT,
     VOLUME_SKELETON_PROMPT_PLUS,
     CHARACTER_DESIGNER_PROMPT_PLUS
@@ -28,15 +29,275 @@ from prompts.prompt_instructions import (
 
 # --- 世界觀摘要輔助函數 ---
 # 用於提取世界觀的關鍵摘要，避免過長的上下文導致 API 失敗
-MAX_WORLDVIEW_SUMMARY_LENGTH = 999999  # 徹底砍掉 1500 字上限，以完整設定提供大上下文
-MAX_MACRO_OUTLINE_LENGTH = 999999       # 徹底砍掉大綱長度限制
+MAX_WORLDVIEW_SUMMARY_LENGTH = 36000
+MAX_MACRO_OUTLINE_LENGTH = 12000
+MAX_DIRECTOR_WORLDVIEW_LENGTH = 42000
+MAX_DIRECTOR_CHARACTERS_LENGTH = 36000
+MAX_DIRECTOR_PLOT_LENGTH = 52000
+MAX_DIRECTOR_PROSE_LENGTH = 32000
+MAX_DIRECTOR_REPORT_LENGTH = 30000
+MAX_GOLD_RULES_CONTEXT_LENGTH = 16000
 
 # --- 角色基本設定輔助函數 ---
 # 定義角色只需要傳入的基本欄位，過濾掉冗長的背景故事等欄位
 # 核心欄位：name 和 personality 是必留的，其他可以過濾
 # CHARACTER_BASIC_FIELDS 定義在 agent_json.py 中，供各模組統一引用
 
-MAX_CHARACTERS_SUMMARY_LENGTH = 999999  # 徹底砍掉角色摘要長度限制
+MAX_CHARACTERS_SUMMARY_LENGTH = 26000
+
+
+def compact_context_text(value, limit, label="context"):
+    """Keep both head and tail so long prompts retain setup and latest details."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, indent=2)
+        except Exception:
+            value = str(value)
+    if limit is None or limit <= 0 or len(value) <= limit:
+        return value
+    marker = f"\n\n...[{label} 已因上下文長度限制省略 {len(value) - limit} 字，保留開頭與結尾]...\n\n"
+    head_len = max(1, (limit - len(marker)) * 2 // 3)
+    tail_len = max(1, limit - len(marker) - head_len)
+    return value[:head_len] + marker + value[-tail_len:]
+
+
+def _parse_jsonish(text):
+    if isinstance(text, (dict, list)):
+        return text
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if "```" in stripped:
+        import re
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", stripped, flags=re.IGNORECASE)
+        if match:
+            stripped = match.group(1).strip()
+    try:
+        return json.loads(stripped)
+    except Exception:
+        return None
+
+
+CONTEXT_REQUEST_RULE = """
+## 資料不足時的回問總監規則
+你收到的是系統依當前任務挑選出的必要資料，不一定是全庫資料。若你判斷「缺少必要角色完整設定、世界觀欄位、卷章大綱、伏筆分配、使用者意圖或其他硬性資料」會導致你只能臆造，請停止生成，不要硬編。
+
+此時請只輸出以下 JSON，讓系統與總監補齊資料後再生成：
+```json
+{
+  "_needs_director_context": true,
+  "context_request": "請總監補充哪些資料，以及為什麼缺這些資料會阻斷本次生成。",
+  "missing_data": ["缺少的資料項目 1", "缺少的資料項目 2"],
+  "why_it_blocks_generation": "若直接生成會造成的人設、世界觀或流程風險。"
+}
+```
+只有在資料真的不足以完成任務時才使用；若資料已足夠，必須依原本 schema 直接生成。
+"""
+
+DIRECTOR_CONTEXT_REQUEST_RULE = """
+## 上下文不足時的總監回問規則
+系統會依目前階段挑選最相關的角色與世界觀資料。若你發現本次審查/下令缺少「已存在但未被提供」的必要資料，或需要總監/使用者補充關鍵決策後才能避免臆造，請使用 `WAIT_USER`，並讓 `reason` 以 `[REQUEST_DIRECTOR_CONTEXT]` 開頭，清楚列出缺少資料與需要補充的內容。
+
+注意：若缺少的是前置階段尚未生成的作品資料，仍遵守黃金流程，使用 `CONTINUE` 或回退到對應 target 讓系統生成，不要把一般的未生成狀態誤判成 `WAIT_USER`。
+"""
+
+WORLDVIEW_FIELD_LABELS = {
+    "title": "作品標題",
+    "genre": "類型",
+    "style": "風格",
+    "theme": "核心主題",
+    "main_conflict": "核心衝突",
+    "worldview": "世界觀設定",
+    "setting": "舞台設定",
+    "power_system": "力量系統",
+    "rules": "世界規則",
+    "factions": "勢力/組織",
+    "locations": "重要地點",
+    "timeline": "時間線",
+    "macro_outline": "整體故事大綱",
+    "multi_act_structure": "多幕結構",
+    "progressive_character_plan": "角色漸進規劃",
+    "foreshadowing_seeds": "伏筆種子",
+    "key_turning_points": "關鍵轉折點",
+}
+
+WORLDVIEW_FIELDS_BY_STAGE = {
+    "worldview": None,
+    "characters": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
+    "foreshadowing": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
+    "volumes": ["theme", "main_conflict", "macro_outline", "multi_act_structure", "worldview", "setting", "power_system", "factions"],
+    "volume_skeleton": ["theme", "main_conflict", "macro_outline", "multi_act_structure", "worldview", "setting", "power_system", "factions", "locations"],
+    "writer": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
+    "editor": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
+    "copilot": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
+}
+
+RELATION_SUMMARY_FIELDS = [
+    "name", "role", "entry_phase", "faction", "affiliation", "relationships",
+    "relationship_matrix", "relation_map", "connections", "character_relationships",
+    "relationship_network"
+]
+
+
+def _json_text(value, *, indent=2):
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=indent)
+    except Exception:
+        return str(value)
+
+
+def _context_query_text(*parts):
+    rendered = []
+    for part in parts:
+        if part is None:
+            continue
+        rendered.append(_json_text(part))
+    return "\n".join(rendered)
+
+
+def _normalize_characters_list(characters_data):
+    parsed = _parse_jsonish(characters_data)
+    if isinstance(parsed, dict):
+        chars = parsed.get("characters")
+        if isinstance(chars, list):
+            return [c for c in chars if isinstance(c, dict)]
+        return [parsed]
+    if isinstance(parsed, list):
+        return [c for c in parsed if isinstance(c, dict)]
+    return []
+
+
+def _character_aliases(char):
+    aliases = []
+    for key in ("name", "alias", "aliases", "nickname", "nicknames", "also_known_as"):
+        value = char.get(key)
+        if isinstance(value, str):
+            for part in value.replace("，", ",").replace("、", ",").split(","):
+                part = part.strip()
+                if part:
+                    aliases.append(part)
+        elif isinstance(value, list):
+            aliases.extend(str(item).strip() for item in value if str(item).strip())
+    seen = set()
+    result = []
+    for alias in aliases:
+        if alias and alias not in seen:
+            seen.add(alias)
+            result.append(alias)
+    return result
+
+
+def _name_matches_query(aliases, query_text):
+    if not query_text:
+        return False
+    for alias in aliases:
+        if not alias or len(alias) == 1:
+            continue
+        if alias in query_text:
+            return True
+    return False
+
+
+def _relationship_summary(char):
+    summary = {}
+    for field in RELATION_SUMMARY_FIELDS:
+        if field in char and char[field] not in (None, "", [], {}):
+            summary[field] = char[field]
+    if "name" not in summary and char.get("name"):
+        summary["name"] = char.get("name")
+    return summary or {"name": char.get("name", "未命名角色")}
+
+
+def build_relevant_character_context(characters_data, query_text="", force_full_names=None, include_all_full=False, max_full_characters=12):
+    """Select full character cards only for characters named in the task context."""
+    chars = _normalize_characters_list(characters_data)
+    if not chars:
+        return characters_data or "尚無角色設定"
+
+    force_full_names = {str(name).strip() for name in (force_full_names or []) if str(name).strip()}
+    matched = []
+    summaries = []
+    query_text = _json_text(query_text)
+
+    for idx, char in enumerate(chars):
+        aliases = _character_aliases(char)
+        name = char.get("name", f"角色{idx + 1}")
+        forced = any(name == n or n in aliases for n in force_full_names)
+        is_match = include_all_full or forced or _name_matches_query(aliases, query_text)
+        if is_match:
+            first_pos = min([query_text.find(alias) for alias in aliases if alias and query_text.find(alias) >= 0] or [10**9])
+            matched.append((first_pos, idx, char))
+        else:
+            summaries.append(_relationship_summary(char))
+
+    matched.sort(key=lambda item: (item[0], item[1]))
+    full_chars = [item[2] for item in matched[:max_full_characters]]
+    overflow = [item[2] for item in matched[max_full_characters:]]
+    summaries.extend(_relationship_summary(char) for char in overflow)
+
+    result = {
+        "selection_policy": "大綱/指令/正文/總監上下文中明確提到的角色提供完整角色卡；其餘角色只提供名稱、定位與基本關係，避免無關人設干擾。",
+        "matched_full_character_names": [char.get("name", "未命名角色") for char in full_chars],
+        "full_characters": full_chars,
+        "other_characters_basic_relationships": summaries,
+    }
+    if overflow:
+        result["overflow_note"] = f"另有 {len(overflow)} 位命中角色因單次上下文過大改列基本關係摘要；如本次必須使用，請回問總監補充完整角色卡。"
+    return result
+
+
+def build_relevant_character_context_text(characters_data, query_text="", force_full_names=None, include_all_full=False, limit=MAX_DIRECTOR_CHARACTERS_LENGTH):
+    selected = build_relevant_character_context(
+        characters_data,
+        query_text=query_text,
+        force_full_names=force_full_names,
+        include_all_full=include_all_full,
+    )
+    return compact_context_text(_json_text(selected), limit, "任務相關角色上下文")
+
+
+def select_worldview_context(worldview_text, current_stage="copilot", query_text="", force_full=False, limit=MAX_DIRECTOR_WORLDVIEW_LENGTH):
+    """Select worldview fields by stage first; use length limits only as an emergency guard."""
+    if not worldview_text:
+        return "（尚無世界觀設定）"
+    parsed = _parse_jsonish(worldview_text)
+    if not isinstance(parsed, dict):
+        return compact_context_text(worldview_text, limit, "世界觀上下文")
+
+    stage = current_stage or "copilot"
+    field_order = WORLDVIEW_FIELDS_BY_STAGE.get(stage, WORLDVIEW_FIELDS_BY_STAGE["copilot"])
+    if force_full or field_order is None:
+        return compact_context_text(_json_text(parsed), limit, "完整世界觀")
+
+    query_text = _json_text(query_text)
+    selected_keys = []
+    for key in field_order:
+        if key in parsed and parsed[key] not in (None, "", [], {}):
+            selected_keys.append(key)
+
+    for key, value in parsed.items():
+        if key in selected_keys or value in (None, "", [], {}):
+            continue
+        label = WORLDVIEW_FIELD_LABELS.get(key, key)
+        if key in query_text or label in query_text:
+            selected_keys.append(key)
+
+    selected = {}
+    for key in selected_keys:
+        value = parsed.get(key)
+        selected[key] = value if isinstance(value, (dict, list)) else str(value)
+
+    result = {
+        "selection_policy": f"依 current_stage={stage} 選入必要世界觀欄位；只有被本次任務命中的額外欄位才追加。長度上限僅作溢位保護。",
+        "selected_fields": selected_keys,
+        "worldview_context": selected,
+    }
+    return compact_context_text(_json_text(result), limit, "任務相關世界觀上下文")
+
 
 def extract_character_basic(characters_data):
     """
@@ -58,7 +319,9 @@ def extract_character_basic(characters_data):
     elif isinstance(characters_data, str):
         # 可能是 JSON 字串，先解析
         try:
-            parsed = json.loads(characters_data)
+            parsed = _parse_jsonish(characters_data)
+            if parsed is None:
+                return characters_data
             return extract_character_basic(parsed)
         except:
             return characters_data
@@ -111,7 +374,9 @@ def extract_character_names_list(characters_data):
     # 解析資料
     if isinstance(characters_data, str):
         try:
-            parsed = json.loads(characters_data)
+            parsed = _parse_jsonish(characters_data)
+            if parsed is None:
+                return []
             return extract_character_names_list(parsed)
         except:
             return []
@@ -155,7 +420,7 @@ def extract_worldview_summary(worldview_text):
     
     # 嘗試解析為 JSON
     try:
-        parsed = json.loads(worldview_text)
+        parsed = _parse_jsonish(worldview_text)
         if isinstance(parsed, dict):
             summary_parts = []
             
@@ -173,14 +438,16 @@ def extract_worldview_summary(worldview_text):
                 if val:
                     if isinstance(val, (list, dict)):
                         val = json.dumps(val, ensure_ascii=False, indent=2)
+                    if key == "macro_outline":
+                        val = compact_context_text(val, MAX_MACRO_OUTLINE_LENGTH, title)
                     summary_parts.append(f"{title}\n{val}")
                 
             if summary_parts:
-                return "\n\n".join(summary_parts)
-    except json.JSONDecodeError:
+                return compact_context_text("\n\n".join(summary_parts), MAX_WORLDVIEW_SUMMARY_LENGTH, "世界觀摘要")
+    except Exception:
         pass
         
-    return worldview_text
+    return compact_context_text(worldview_text, MAX_WORLDVIEW_SUMMARY_LENGTH, "世界觀摘要")
 
 def get_json_schema_prompt_snippet(schema_name):
     """取得 JSON 格式綱要說明字串，已徹底移除非法 Python set literal {...} 以防 JSON 序列化失敗。"""
@@ -220,7 +487,7 @@ def build_story_architect_messages(genre, style, user_prompt):
 def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index):
     """角色設計師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("character")
-    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n"
+    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
     
     if mode == "generate":
         user_content = f"""【世界觀背景】
@@ -277,10 +544,44 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
         {"role": "user", "content": user_content}
     ]
 
+def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None):
+    """伏筆與轉折編織師提示詞拼接"""
+    schema_snippet = "\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n"
+    from agent_json import FORESHADOWING_OUTPUT_SCHEMA
+    import json
+    schema_snippet += json.dumps(FORESHADOWING_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    system_prompt = f"{FORESHADOWING_ORCHESTRATOR_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    
+    user_content = f"""【世界觀背景】
+{worldview_text}
+
+【角色 Bible 與人設】
+{characters_json}
+
+【額外伏筆/轉折設計指令】
+{user_prompt or "請根據世界設定與角色背景，設計一整套豐富的伏筆種子與關鍵轉折點。"}
+
+【不可違反的輸出契約】
+1. 最外層 JSON 必須只有一個物件，且只能包含兩個頂層鍵：`foreshadowing_seeds` 與 `key_turning_points`。
+2. `foreshadowing_seeds` 必須是陣列，至少 50 個；`key_turning_points` 必須是陣列，至少 50 個；少於此數量即為失敗輸出。
+3. 每個 `foreshadowing_seeds` 項目只能使用這些欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。
+4. 每個 `key_turning_points` 項目只能使用這些欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。
+5. `id` 必須是 JSON number / integer，從 1 開始連續編號；禁止填 `FS001`、`Seed-001`、`TP001`、`Turn-001`、中文標號或任何文字。
+6. 所有文字內容只能填入名稱、描述、提示、影響、代價、主題連結等文字欄位；禁止把情節文字、標號規則或說明塞入 `id`、`index`、`number` 類欄位。
+7. 禁止輸出 `volume_1`、`volume_2`、`act_1` 等作為頂層鍵；卷/幕/章節只能寫入文字欄位的內容裡。
+8. 此階段只生成全書伏筆與關鍵轉折藍圖，不需要章節正文、卷骨架，也不可要求 writer/editor 先執行。
+9. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。
+10. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
 def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx):
     """篇卷規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("volumes")
-    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n"
+    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
     
     if mode == "generate":
         user_content = f"""【世界觀背景】
@@ -324,7 +625,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 def build_volume_skeleton_planner_messages(worldview_text, volume_index, current_vol, start_ch, end_ch, vol_chapter_count, surrounding_context, precalc_clues, user_prompt):
     """卷骨架大綱規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
-    system_prompt = f"{VOLUME_SKELETON_PROMPT.format(volume_index=volume_index, start_ch=start_ch, end_ch=end_ch, vol_chapter_count=vol_chapter_count)}\n\n{schema_snippet}\n"
+    system_prompt = f"{VOLUME_SKELETON_PROMPT.format(volume_index=volume_index, start_ch=start_ch, end_ch=end_ch, vol_chapter_count=vol_chapter_count)}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
     
     user_content = f"""【世界觀背景】
 {worldview_text}
@@ -333,15 +634,21 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 - 當前篇卷序號：第 {volume_index} 卷
 - 篇卷標題：{current_vol['title']}
 - 篇卷概要：{current_vol['summary']}
-- 章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {vol_chapter_count} 章）
-請務必嚴格在此章節序號範圍內規劃骨架！
+- 本次輸出章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {vol_chapter_count} 章）
+請務必只輸出此範圍內的章節骨架；不得輸出範圍外章節，不得重寫同卷其他已存在章節。
 
 {surrounding_context}
 {precalc_clues}
+
+【allocated_tasks 硬性填寫規則】
+- 你不得自行挑選、推測、複製或新增任何伏筆 Seed / turning point 到未指定章節。
+- 只有上方清單明確列出的章節，才可在 allocated_tasks 對應陣列填入該任務。
+- 未列出任務的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
+- 若同一 Seed 看似同時需要埋設與回收，視為錯誤；請以章節清單中的單一操作為準。
 【使用者額外提示詞 (Prompt)】
 {user_prompt or "請為本卷精心設計簡易骨架大綱。"}
 
-請為本卷生成符合 JSON 結構的章節骨架清單。
+請只為本次指定章節範圍生成符合 JSON 結構的 chapters_skeleton 清單。輸出章數必須等於上方指定範圍的章數，chapter_index 必須連續且不可缺漏。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -350,10 +657,14 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 
 def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index, user_prompt=None):
     """正文作家寫作提示詞拼接"""
-    system_prompt = CHAPTER_WRITER_PROMPT.format(writing_style=custom_style)
+    system_prompt = CHAPTER_WRITER_PROMPT.format(writing_style=custom_style) + "\n" + CONTEXT_REQUEST_RULE
     
-    # 對角色 Bible 進行基本設定篩選，避免過長導致 API 失敗
-    characters_bible_filtered = extract_character_basic(characters_bible)
+    context_query = _context_query_text(current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, user_prompt)
+    characters_bible_filtered = build_relevant_character_context(
+        characters_bible,
+        query_text=context_query,
+        force_full_names=(current_outline or {}).get("characters_active") if isinstance(current_outline, dict) else None,
+    )
     
     extra_prompt_block = ""
     if user_prompt and str(user_prompt).strip():
@@ -365,7 +676,7 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
     user_content = f"""【世界觀背景】
 {worldview_text}
 
-【角色 Bible 聖經】(基本設定)
+【角色 Bible 聖經】(命中角色完整設定；其他角色名稱與基本關係)
 {json.dumps(characters_bible_filtered, ensure_ascii=False, indent=2)}
 
 【當前章節 (第 {chapter_index} 章) 大綱】
@@ -376,7 +687,7 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 {clue_payoff_details}
 {extra_prompt_block}
 
-請根據以上豐富的上下文細節，展開本章正文寫作，字數適中。
+請根據以上豐富的上下文細節，展開本章正文寫作；正文目標字數為 1500 至 2000 字左右，不要寫成摘要或短章。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -385,7 +696,7 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 
 def build_editor_agent_messages(chapter_index, edit_instructions, original_prose):
     """編輯姬提示詞拼接"""
-    system_prompt = EDITOR_PROMPT
+    system_prompt = EDITOR_PROMPT + "\n" + CONTEXT_REQUEST_RULE
     user_content = f"""【修改指示 / 精修重點】
 {edit_instructions or "精雕細琢遣詞造句，優化意象與文學美感，剔除冗詞贅字，增強情節張力與情緒渲染。"}
 
@@ -457,7 +768,7 @@ def simplify_plot_data_for_copilot(plot_text):
     return plot_text
 
 
-def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None):
+def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_text, history_context, user_message, validation_report=None, gold_rules_context=None):
     """Copilot 創意決策總監聊天提示詞"""
     if not validation_report:
         validation_report = "底層校驗一切正常。全階段架構完備。"
@@ -474,13 +785,15 @@ def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_
         validation_report=validation_report
     )
     
-    # Filter/simplify the inputs to keep context token count safe but provide actual content
-    worldview_summary = worldview_text
+    # Select task-relevant context first; length limits are only overflow guards.
+    context_query = _context_query_text(user_message, plot_text, history_context)
+    worldview_summary = select_worldview_context(worldview_text, "copilot", query_text=context_query)
+    gold_rules_context = compact_context_text(gold_rules_context, MAX_GOLD_RULES_CONTEXT_LENGTH, "創作金律")
     
-    characters_filtered = extract_character_basic(characters_text)
-    characters_summary = json.dumps(characters_filtered, ensure_ascii=False, indent=2) if isinstance(characters_filtered, dict) else str(characters_filtered)
+    characters_summary = build_relevant_character_context_text(characters_text, query_text=context_query)
     
-    plot_summary = simplify_plot_data_for_copilot(plot_text)
+    plot_summary = compact_context_text(simplify_plot_data_for_copilot(plot_text), MAX_DIRECTOR_PLOT_LENGTH, "大綱")
+    gold_rules_block = f"\n【既有會議討論聖經 / 創作金律（若存在，需作為總監判斷參考）】\n{gold_rules_context}\n" if gold_rules_context else ""
     
     user_content = f"""【當前專案實際設定與大綱內容】
 - 【世界觀主題與設定】：
@@ -492,6 +805,7 @@ def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_
 - 【全書篇卷與大綱（簡化版）】：
 {plot_summary}
 
+{gold_rules_block}
 【目前系統診斷狀態】
 - 世界觀：{diags["worldview"]}
 - 角色 Bible：{diags["characters"]}
@@ -515,7 +829,7 @@ def mask_worldview_seeds_and_turns(worldview_text):
         return worldview_text
     
     try:
-        parsed = json.loads(worldview_text)
+        parsed = _parse_jsonish(worldview_text)
         if isinstance(parsed, dict):
             if "foreshadowing_seeds" in parsed:
                 parsed["foreshadowing_seeds"] = "此區塊通過審核不需評判"
@@ -583,7 +897,8 @@ def build_director_decision_messages(
     character_review_target_content=None,
     suggested_next_chapter=None,
     chapter_index=None,
-    director_context_block=None
+    director_context_block=None,
+    gold_rules_context=None
 ):
     from diagnostics import diagnose_all_phases
     diags = diagnose_all_phases(novel_id)
@@ -599,8 +914,22 @@ def build_director_decision_messages(
     """
     import db
     novel = db.get_novel(novel_id)
-    pipeline_prompt = (novel.get("pipeline_prompt") or "").strip() if novel else ""
-    user_prompt_clean = (user_prompt or "").strip()
+    raw_worldview_text = worldview_text
+    raw_characters_text = characters_text
+    context_query = _context_query_text(plot_text, written_chapters_text, user_prompt, character_review_hint, character_review_target_content, director_context_block)
+    worldview_text = select_worldview_context(raw_worldview_text, current_stage, query_text=context_query, force_full=(current_stage == "worldview"))
+    characters_text = build_relevant_character_context_text(
+        raw_characters_text,
+        query_text=context_query,
+        include_all_full=(current_stage == "characters"),
+    )
+    plot_text = compact_context_text(plot_text, MAX_DIRECTOR_PLOT_LENGTH, "大綱/卷骨架")
+    written_chapters_text = compact_context_text(written_chapters_text, MAX_DIRECTOR_PROSE_LENGTH, "正文")
+    validation_report = compact_context_text(validation_report, MAX_DIRECTOR_REPORT_LENGTH, "校驗報告")
+    gold_rules_context = compact_context_text(gold_rules_context, MAX_GOLD_RULES_CONTEXT_LENGTH, "創作金律")
+
+    pipeline_prompt = compact_context_text((novel.get("pipeline_prompt") or "").strip() if novel else "", 12000, "原始需求")
+    user_prompt_clean = compact_context_text((user_prompt or "").strip(), 12000, "當前指示")
     is_only_bg = (not user_prompt_clean) or (user_prompt_clean == pipeline_prompt)
 
     # Prepare prompt blocks
@@ -623,16 +952,23 @@ def build_director_decision_messages(
     
     # 取得世界觀的 macro_outline
     macro_outline = ""
-    if worldview_text:
+    if raw_worldview_text:
         try:
-            parsed = json.loads(worldview_text)
-            macro_outline = parsed.get("macro_outline", "")
+            parsed = _parse_jsonish(raw_worldview_text)
+            macro_outline = parsed.get("macro_outline", "") if isinstance(parsed, dict) else ""
         except:
             # 嘗試從文本提取
-            if "【整體故事大綱】" in worldview_text:
-                parts = worldview_text.split("【整體故事大綱】")
+            if "【整體故事大綱】" in str(raw_worldview_text):
+                parts = str(raw_worldview_text).split("【整體故事大綱】")
                 if len(parts) > 1:
                     macro_outline = parts[1].strip()
+    macro_outline = compact_context_text(macro_outline, MAX_MACRO_OUTLINE_LENGTH, "整體故事大綱")
+    if character_review_target_content:
+        character_review_target_content = compact_context_text(character_review_target_content, 12000, "目標角色")
+    if character_review_hint:
+        character_review_hint = compact_context_text(character_review_hint, 8000, "角色修改提示")
+    if director_context_block:
+        director_context_block = compact_context_text(director_context_block, 16000, "總監補充上下文")
                     
     # 總監評斷世界觀時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
     if current_stage != "worldview":
@@ -645,8 +981,7 @@ def build_director_decision_messages(
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（世界觀架構師）。
-2. 對比使用者的原始意圖，檢查世界觀是否完整且具備深度。
-3. 確認伏筆種子與關鍵轉折點是否足夠且相互呼應。
+2. 對比使用者的原始意圖，檢查世界觀是否完整且具備深度，是否忠實體現了使用者的原始大綱與輸入走向。
  
 {stage_criteria}
  
@@ -756,14 +1091,13 @@ def build_director_decision_messages(
  
 {DIRECTOR_COMMON_FOOTER}
 """
-        # 對角色聖經進行基本設定篩選
-        characters_filtered = extract_character_basic(characters_text)
+        characters_filtered = build_relevant_character_context(raw_characters_text, query_text=context_query)
         user_content = f"""{default_user_prompt_section}
  
 【世界觀背景】
 {worldview_text}
  
-【角色 Bible 聖經（基本設定）】
+【角色 Bible 聖經（命中角色完整設定；其他角色名稱與基本關係）】
 {json.dumps(characters_filtered, ensure_ascii=False, indent=2)}
  
 【當前章節大綱】
@@ -833,6 +1167,14 @@ def build_director_decision_messages(
 請進行深度評估，決定下一步行動！
 """
     
+    if gold_rules_context:
+        system_prompt += f"""
+
+## 既有會議討論聖經 / 創作金律
+以下內容來自本作品先前輸出的 retrospective gold rules。它是總監下指令時的參考規則，應用於判斷風格、避坑與流程建議；若與系統底層剛性校驗報告衝突，仍以 Python 校驗報告為準。
+{gold_rules_context}
+"""
+
     if current_stage in ("volumes", "volume_skeleton", "writer", "editor"):
         system_prompt += """
 
@@ -850,6 +1192,7 @@ def build_director_decision_messages(
         elif current_stage == "volume_skeleton":
             system_prompt += f"\n\n💡【系統寫作計畫指引】：若剛性校驗報告確認【所有卷】的骨架皆已完全生成且無缺漏，準備放行進入正文寫作階段時，系統建請從第 {suggested_next_chapter} 章開始寫作。請在決策放行且 target 為 writer 時，將 `chapter_index` 設為 {suggested_next_chapter}。\n"
 
+    system_prompt += f"\n\n{DIRECTOR_CONTEXT_REQUEST_RULE}\n"
     system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
     if director_context_block:
@@ -890,7 +1233,18 @@ def build_director_decision_help_messages(help_reason, target_data):
 
 def build_incremental_architect_messages(target_section, worldview_text, user_hint):
     """增量世界觀提示詞拼接"""
-    schema_snippet = get_json_schema_prompt_snippet("worldview")
+    from agent_json import FORESHADOWING_OUTPUT_SCHEMA
+    import json
+    
+    if target_section == "foreshadowing_seeds":
+        schema = {"foreshadowing_seeds": FORESHADOWING_OUTPUT_SCHEMA["foreshadowing_seeds"]}
+        schema_snippet = f"\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    elif target_section == "key_turning_points":
+        schema = {"key_turning_points": FORESHADOWING_OUTPUT_SCHEMA["key_turning_points"]}
+        schema_snippet = f"\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    else:
+        schema_snippet = get_json_schema_prompt_snippet("worldview")
+        
     system_prompt = f"""你是一位精準的世界觀增量修正師。請根據用戶的修改要求，對現有的世界觀進行精準的局部修改或增量追加。
 你只需要回傳【本次有新增或被修改的 {target_section}】的內容 JSON 區塊即可，後端會自動完成替換與合併。
 
@@ -1038,4 +1392,9 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
+
+
+
+
+
 

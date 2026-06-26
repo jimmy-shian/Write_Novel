@@ -23,9 +23,7 @@ WORLDVIEW_SCHEMA = {
         {"title": "第一波開篇 (Wave 1)", "content": ""},
         {"title": "第二波發展 (Wave 2)", "content": ""},
         {"title": "第三波高潮 (Wave 3)", "content": ""}
-    ],
-    "foreshadowing_seeds": [],
-    "key_turning_points": []
+    ]
 }
 
 WORLDVIEW_CHAPTER_PATCH = {
@@ -34,6 +32,30 @@ WORLDVIEW_CHAPTER_PATCH = {
     "source_chapter": 0,
     "created_at": ""
 }
+FORESHADOWING_OUTPUT_SCHEMA = {
+    "foreshadowing_seeds": [
+        {
+            "id": 1,
+            "name": "伏筆名稱（文字，不含 FS/Seed 標號）",
+            "description": "伏筆內容與表層偽裝（文字）",
+            "setup_hint": "適合埋設時機或敘事載體（文字）",
+            "payoff_hint": "未來回收方式與反轉效果（文字）",
+            "related_characters": ["角色名"],
+            "thematic_link": "與主題或核心衝突的連結（文字）"
+        }
+    ],
+    "key_turning_points": [
+        {
+            "id": 1,
+            "turning_point_name": "轉折名稱（文字，不含 TP/Turn 標號）",
+            "description": "轉折事件與角色動機衝突（文字）",
+            "trigger_condition": "觸發條件或引爆事件（文字）",
+            "structural_impact": "對陣營、關係或主線局勢的實質改變（文字）",
+            "emotional_stakes": "情感張力與角色代價（文字）",
+            "related_characters": ["角色名"]
+        }
+    ]
+}
 
 # 世界觀通過標準（總監評判用）
 WORLDVIEW_APPROVAL_CRITERIA = {
@@ -41,7 +63,7 @@ WORLDVIEW_APPROVAL_CRITERIA = {
     "display_name": "世界觀架構師",
     "criteria": {
         "structure": {
-            "required_fields": ["theme", "main_conflict", "worldview", "macro_outline", "multi_act_structure", "progressive_character_plan", "foreshadowing_seeds", "key_turning_points"],
+            "required_fields": ["theme", "main_conflict", "worldview", "macro_outline", "multi_act_structure", "progressive_character_plan"],
             "description": "所有必填欄位必須完整填寫，不得為空"
         },
         "theme": {
@@ -68,14 +90,8 @@ WORLDVIEW_APPROVAL_CRITERIA = {
         "progressive_character_plan": {
             "description": "角色漸進規劃需數十波以上，反映角色的階段性登場與成長"
         },
-        "foreshadowing_seeds": {
-            "description": "伏筆種子需數十個，每個需標明早期埋設點、中期干擾、后期收束"
-        },
-        "key_turning_points": {
-            "description": "關鍵轉折點需數十個，每個需標明觸發條件與全局影響"
-        },
         "consistency": {
-            "description": "各欄位間需邏輯一致，伏筆與轉折點需相互呼應"
+            "description": "各欄位間需邏輯一致，主題與衝突需相互呼應"
         }
     },
 }
@@ -93,12 +109,15 @@ CHARACTER_SCHEMA = {
     "want": "",
     "need": "",
     "fatal_flaw": "",
+    "want_need_conflict": "", # 新增： want 與 need 的內心衝突與靈魂拉扯
+    "secret": "", # 新增： 角色的不可告人秘密 (用來做為伏筆)
     "motivation": "",
     "arc": "",
     "speech_style": "",
     "appearance": "",
     "background": "",
-    "relationships": []
+    "relationships": [],
+    "relationship_matrix": [] # 新增： 精細的角色關係網說明
 }
 
 CHARACTER_RELATIONSHIP_SCHEMA = {
@@ -122,12 +141,15 @@ CHARACTER_BASIC_FIELDS = [
     "want",
     "need",
     "fatal_flaw",
+    "want_need_conflict",
+    "secret",
     "speech_style",
     "appearance",
     "motivation",
     "arc",
     "background",
-    "relationships"
+    "relationships",
+    "relationship_matrix"
 ]
 
 # 角色通過標準（總監評判用）
@@ -136,7 +158,7 @@ CHARACTER_APPROVAL_CRITERIA = {
     "display_name": "角色設計師",
     "criteria": {
         "required_fields": {
-            "per_character": ["name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw", "motivation", "arc", "speech_style", "background", "relationships"],
+            "per_character": ["name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw", "want_need_conflict", "secret", "motivation", "arc", "speech_style", "background", "relationships", "relationship_matrix"],
             "description": "每個角色必填欄位必須完整，不得為空或佔位符"
         },
         "name_validity": {
@@ -149,7 +171,9 @@ CHARACTER_APPROVAL_CRITERIA = {
             "want_min_length": 20,
             "need_min_length": 20,
             "fatal_flaw_min_length": 15,
-            "description": "每個角色需具備完整的外在目標(Want)、內在需求(Need)、致命缺陷(Fatal Flaw)"
+            "want_need_conflict_min_length": 30,
+            "secret_min_length": 20,
+            "description": "每個角色需具備完整的外在目標(Want)、內在需求(Need)、致命缺陷(Fatal Flaw)、Want/Need拉扯以及隱藏祕密"
         },
         "character_arc": {
             "min_length": 30,
@@ -197,7 +221,7 @@ VOLUME_APPROVAL_CRITERIA = {
     "display_name": "篇卷規劃師",
     "criteria": {
         "volume_count": {
-            "description": "整部小說必須且至少規劃 8 卷以上（>= 8 卷）"
+            "description": "整部小說必須規劃 10 至 20 卷（含 10 與 20）"
         },
         "required_fields": {
             "per_volume": ["volume_index", "title", "summary", "chapter_count", "factions", "time_timeline", "sequence_context", "applicable_rules"],
@@ -213,7 +237,7 @@ VOLUME_APPROVAL_CRITERIA = {
             "description": "每卷概要需描述核心情節與高潮點"
         },
         "chapter_count": {
-            "description": "每卷章節數量（chapter_count）最多不得超過 50 章，且最好落在 45 章左右（例如 42 至 48 章之間）"
+            "description": "每卷章節數量（chapter_count）必須落在 40 至 50 章之間"
         },
         "structure_coherence": {
             "description": "卷順序需連續，不可遺漏或斷檔；相鄰卷間需有情節銜接"
@@ -357,6 +381,7 @@ WRITER_APPROVAL_CRITERIA = {
     "criteria": {
         "content_length": {
             "min_words": 1500,
+            "max_words": 2000,
             "description": "每章正文需確保足夠的敘事深度"
         },
         "structure_compliance": {

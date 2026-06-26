@@ -19,7 +19,7 @@ export const state = {
     activeVolumeIndex: 1,
     
     // Director pipeline stage control（四階段漏斗流）
-    pipelineStages: ['worldview', 'characters', 'plot', 'volume_skeleton', 'foreshadowing_orchestration', 'writer'],
+    pipelineStages: ['worldview', 'characters', 'foreshadowing', 'volumes', 'volume_skeleton', 'writer'],
     currentPipelineStageIndex: 0,
     
     // Director execution mode: 一鍵執行模式 vs 一般模式

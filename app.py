@@ -976,6 +976,25 @@ def api_heal_rollback(novel_id: str, payload: HealRollbackPayload):
         conn.close()
 
 
+
+class ForeshadowingOrchestratorRequest(BaseModel):
+    novel_id: str
+    user_prompt: Optional[str] = None
+
+@app.post("/api/agent/foreshadowing-orchestrator")
+@app.post("/api/agent/foreshadowing-orchestrate")
+def api_agent_foreshadowing_orchestrator(payload: ForeshadowingOrchestratorRequest):
+    if not db.get_novel(payload.novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return StreamingResponse(
+        agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
+            novel_id=payload.novel_id,
+            user_prompt=payload.user_prompt
+        )),
+        media_type="text/event-stream"
+    )
+
+
 # --- STATIC CONTENT HOSTING ---
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 

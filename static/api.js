@@ -140,6 +140,11 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 // 剩餘的 buffer（不包含完整 data: 行的部分）
                 buffer = searchFrom > 0 ? buffer.substring(searchFrom) : buffer;
                 
+                // Accumulate deltas for this read chunk to avoid layout trashing
+                let accumulatedThinking = '';
+                let accumulatedContent = '';
+                let hasReset = false;
+                
                 for (const line of lines) {
                     const trimmed = line.trim();
                     if (!trimmed || !trimmed.startsWith('data:')) continue;
@@ -150,12 +155,11 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         const parsed = JSON.parse(dataStr);
                         
                         if (parsed.type === 'reset') {
-                            if (typeof onThinking === 'function') onThinking("[RESET]");
-                            if (typeof onContent === 'function') onContent("[RESET]");
+                            hasReset = true;
                         } else if (parsed.type === 'thinking') {
-                            if (typeof onThinking === 'function') onThinking(parsed.delta);
+                            accumulatedThinking += parsed.delta;
                         } else if (parsed.type === 'content') {
-                            if (typeof onContent === 'function') onContent(parsed.delta);
+                            accumulatedContent += parsed.delta;
                         } else if (parsed.type === 'error') {
                             localHadError = true;
                             streamHadFinalError = true;
@@ -164,8 +168,20 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                             if (typeof onRetrying === 'function') onRetrying(parsed.message);
                         }
                     } catch (e) {
-                        // 忽略 JSON 解析錯誤（部分 chunk）
+                        // 忽略 JSON 解析錯誤
                     }
+                }
+                
+                // Flush accumulated deltas
+                if (hasReset) {
+                    if (typeof onThinking === 'function') onThinking("[RESET]");
+                    if (typeof onContent === 'function') onContent("[RESET]");
+                }
+                if (accumulatedThinking) {
+                    if (typeof onThinking === 'function') onThinking(accumulatedThinking);
+                }
+                if (accumulatedContent) {
+                    if (typeof onContent === 'function') onContent(accumulatedContent);
                 }
             }
             

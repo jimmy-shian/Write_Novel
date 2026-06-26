@@ -156,26 +156,29 @@ function shouldReviewPlotBatch(currentChapterIndex) {
 
 function buildDirectorDrivenPrompt(basePrompt, decision = null) {
     const originalPrompt = (basePrompt || '').trim();
-    if (!decision) {
-        return originalPrompt;
-    }
-
-    const agentPrompt = (decision.agent_prompt || decision.hint || '').trim();
-    const agentContext = (decision.agent_context || '').trim();
-    const userIntentSummary = (decision.user_intent_summary || '').trim();
     const sections = [];
 
-    if (agentPrompt) {
-        sections.push(`【總監指定任務】\n${agentPrompt}`);
-    }
-    if (agentContext) {
-        sections.push(`【總監指定素材】\n${agentContext}`);
-    }
-    if (userIntentSummary) {
-        sections.push(`【總監理解的作者目標】\n${userIntentSummary}`);
+    if (originalPrompt) {
+        sections.push(`【使用者原始創作需求】\n${originalPrompt}`);
     }
 
-    return sections.join('\n\n').trim() || originalPrompt;
+    if (decision) {
+        const agentPrompt = (decision.agent_prompt || decision.hint || '').trim();
+        const agentContext = (decision.agent_context || '').trim();
+        const userIntentSummary = (decision.user_intent_summary || '').trim();
+
+        if (agentPrompt && agentPrompt !== originalPrompt) {
+            sections.push(`【總監指定任務】\n${agentPrompt}`);
+        }
+        if (agentContext && agentContext !== originalPrompt) {
+            sections.push(`【總監指定素材】\n${agentContext}`);
+        }
+        if (userIntentSummary) {
+            sections.push(`【總監理解的作者目標】\n${userIntentSummary}`);
+        }
+    }
+
+    return sections.join('\n\n').trim();
 }
 
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
@@ -198,6 +201,13 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
                 targetTextarea = el.editorCharactersJson;
                 state.activeTab = 'characters';
                 agentName = 'Character Designer (角色設計大師)';
+                break;
+            case 'foreshadowing':
+                endpoint = '/api/agent/foreshadowing-orchestrator';
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                targetTextarea = el.editorWorldview;
+                state.activeTab = 'worldview';
+                agentName = 'Foreshadowing Orchestrator (伏筆與轉折編織師)';
                 break;
             case 'volumes':
                 endpoint = '/api/agent/volumes-planner';
