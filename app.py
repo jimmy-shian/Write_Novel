@@ -791,7 +791,8 @@ def api_export_novel(novel_id: str, format: str = "txt"):
         
     wb = db.get_latest_worldbuilding(novel_id)
     char = db.get_latest_characters(novel_id)
-    plot = db.get_latest_plot_chapters(novel_id)
+    plot_data = db.get_stitched_plot(novel_id)
+    plot = {"parsed_data": plot_data} if plot_data else None
     chapters = db.get_all_chapters_latest(novel_id)
     
     title = novel.get("title", "未命名小說")
@@ -888,14 +889,29 @@ def api_novel_retrospective(novel_id: str):
         
     wb = db.get_latest_worldbuilding(novel_id)
     char = db.get_latest_characters(novel_id)
-    plot = db.get_latest_plot_chapters(novel_id)
+    stitched_plot = db.get_stitched_plot(novel_id)
     chapters = db.get_all_chapters_latest(novel_id)
+    chapter_samples = []
+    if chapters:
+        sample_rows = chapters[:3]
+        if len(chapters) > 6:
+            sample_rows += chapters[-3:]
+        else:
+            sample_rows = chapters
+        for ch in sample_rows:
+            content = ch.get("content", "") or ""
+            chapter_samples.append({
+                "chapter_index": ch.get("chapter_index"),
+                "synopsis": ch.get("synopsis", ""),
+                "content_excerpt": content[:900]
+            })
     
     context = {
         "worldbuilding": wb["content"] if wb else "尚無世界觀設定",
         "characters": char["json_data"] if char else "尚無角色設定",
-        "plot": plot["outline_json"] if plot else "尚無章節大綱",
-        "written_chapters": f"已寫作正文章節共 {len(chapters)} 章。" if chapters else "尚未開始寫作正文。"
+        "plot": stitched_plot if stitched_plot else {"chapters": []},
+        "written_chapters": f"已寫作正文章節共 {len(chapters)} 章。" if chapters else "尚未開始寫作正文。",
+        "chapter_samples": chapter_samples
     }
     
     agents_to_call = {
@@ -934,7 +950,8 @@ def api_novel_retrospective(novel_id: str):
                 retrospectives[key] = f"生成心得失敗：{str(e)}"
                 
     final_markdown = f"# 《{novel['title']}》AI 創作圓桌避坑金律說明書\n\n"
-    for agent_display_name, val in retrospectives.items():
+    for agent_display_name in agents_to_call.keys():
+        val = retrospectives.get(agent_display_name, "生成心得失敗：未取得結果")
         final_markdown += f"## 👥 {agent_display_name} 的復盤心得\n\n{val}\n\n---\n\n"
         
     gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
@@ -1006,3 +1023,5 @@ def serve_index():
     return {"message": "AI Novel Factory UI files missing from /static"}
 
 app.mount("/", StaticFiles(directory=static_dir), name="static")
+
+
