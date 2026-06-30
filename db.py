@@ -511,7 +511,62 @@ def db_init():
     """)
     
     conn.commit()
+    
+    # Auto-prune chapters_backup older than 24 hours
+    try:
+        cursor.execute("""
+            DELETE FROM chapters_backup 
+            WHERE backed_up_at < datetime('now', '-24 hours')
+        """)
+        conn.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to prune chapters_backup: {e}")
+    
+    # 9.7. Last agent run tracking table
+    try:
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS last_agent_run (
+            novel_id TEXT PRIMARY KEY,
+            agent_name TEXT,
+            input_data TEXT,
+            output_data TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        conn.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to create last_agent_run table: {e}")
+        
     conn.close()
+
+# --- LAST AGENT RUN TRACKING ---
+def save_last_agent_run(novel_id, agent_name, input_data, output_data):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO last_agent_run (novel_id, agent_name, input_data, output_data, timestamp)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(novel_id) DO UPDATE SET
+            agent_name = excluded.agent_name,
+            input_data = excluded.input_data,
+            output_data = excluded.output_data,
+            timestamp = CURRENT_TIMESTAMP
+        """,
+        (novel_id, agent_name, input_data, output_data)
+    )
+    conn.commit()
+    conn.close()
+
+def get_last_agent_run(novel_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT * FROM last_agent_run WHERE novel_id = ?",
+        (novel_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 # --- NOVELS CRUD ---
 def create_novel(novel_id, title, genre, style):
@@ -955,7 +1010,9 @@ def restore_chapters_backup(novel_id):
 
 # --- PIPELINE LOCK FUNCTIONS (P0-3) ---
 def acquire_pipeline_lock(novel_id, locked_by="pipeline"):
-    """Acquire a pipeline lock for a novel. Returns True if lock acquired, False if already locked."""
+    """Acquire a pipeline lock for a novel. Returns True if lock acquired, False if already locked by active process.
+    If lock exists but heartbeat is older than 5 minutes (stale), breaks the stale lock and acquires new one.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -966,7 +1023,29 @@ def acquire_pipeline_lock(novel_id, locked_by="pipeline"):
         conn.commit()
         return True
     except sqlite3.IntegrityError:
-        # Lock already exists
+        # Lock exists - check if stale (heartbeat older than 5 minutes)
+        cursor.execute("""
+            SELECT locked_by, heartbeat_at FROM pipeline_locks WHERE novel_id = ?
+        """, (novel_id,))
+        row = cursor.fetchone()
+        if row:
+            # Check if heartbeat is stale (older than 5 minutes)
+            # SQLite: (julianday('now') - julianday(heartbeat_at)) * 24 * 60 gives minutes difference
+            cursor.execute("""
+                SELECT (julianday('now') - julianday(heartbeat_at)) * 24 * 60 as minutes_diff
+                FROM pipeline_locks WHERE novel_id = ?
+            """, (novel_id,))
+            diff_row = cursor.fetchone()
+            if diff_row and diff_row["minutes_diff"] > 5:
+                # Stale lock - break it and acquire new one
+                cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+                cursor.execute("""
+                    INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, (novel_id, locked_by))
+                conn.commit()
+                print(f"[LOCK] Broke stale lock for novel {novel_id} (held by {row['locked_by']})")
+                return True
         return False
     finally:
         conn.close()

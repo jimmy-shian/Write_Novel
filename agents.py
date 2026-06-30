@@ -174,6 +174,7 @@ def run_story_architect(novel_id, user_prompt):
             yield "data: " + json.dumps({"type": "error", "message": "世界觀架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
         db.save_worldbuilding(novel_id, full_text, validate=False)
+        db.save_last_agent_run(novel_id, "worldview", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"世界觀生成成功！版本已更新。", message_type="pipeline")
 
 
@@ -216,6 +217,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
             yield "data: " + json.dumps({"type": "error", "message": "角色設計師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
         db.save_characters(novel_id, full_text)
+        db.save_last_agent_run(novel_id, "characters", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"角色聖經更新完畢！版本已更新。", message_type="pipeline")
 
 
@@ -490,8 +492,9 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
         wb_dict["foreshadowing_seeds"] = seeds
         wb_dict["key_turning_points"] = turns
         
-        updated_content = f"```json\n{json.dumps(wb_dict, ensure_ascii=False, indent=2)}\n```"
+        updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
         db.save_worldbuilding(novel_id, updated_content, validate=False)
+        db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         try:
             if db.get_volumes(novel_id):
                 db.precompute_global_foreshadowing(novel_id)
@@ -595,6 +598,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
             except Exception as e:
                 print(f"[WARN] Failed to precompute global foreshadowing in run_volumes_planner: {e}")
                 
+        db.save_last_agent_run(novel_id, "volumes", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="pipeline")
 
 
@@ -890,6 +894,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
             current_missing = [idx for idx in requested_indexes if idx in set(current_missing)]
         remaining = current_missing
 
+    db.save_last_agent_run(novel_id, "volume_skeleton", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
     db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷缺失骨架批次補全完成，共處理 {batches_done} 批，保存/更新 {total_saved} 章。", message_type="pipeline")
     yield "data: " + json.dumps({"type": "content", "delta": f"\n第 {volume_index} 卷缺失骨架批次補全完成，共處理 {batches_done} 批。"}, ensure_ascii=False) + "\n\n"
     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
@@ -1118,6 +1123,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
                 break
                 
         db.save_chapter(novel_id, chapter_index, prose_val, synopsis=current_outline.get("title", f"第 {chapter_index} 章"), thinking=thinking_val)
+        db.save_last_agent_run(novel_id, "writer", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文寫作完成！", message_type="pipeline")
 
 
@@ -1158,6 +1164,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
             yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
         db.save_chapter(novel_id, chapter_index, full_text, synopsis=current_synopsis)
+        db.save_last_agent_run(novel_id, "editor", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功潤色替換！", message_type="pipeline")
 
 
@@ -1233,6 +1240,13 @@ def run_director_decision(
     user_prompt,
     chapter_index=None,
     volume_index=None,
+    character_review_mode=None,
+    character_review_hint=None,
+    character_review_target_content=None,
+    suggested_next_chapter=None,
+    conversation_context=None,
+    summary_context=None,
+    extra_context=None,
     loop_count=0
 ):
     """

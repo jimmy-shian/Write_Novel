@@ -1211,10 +1211,35 @@ def build_director_decision_messages(
             system_prompt += f"\n\n💡【系統寫作計畫指引】：若剛性校驗報告確認【所有卷】的骨架皆已完全生成且無缺漏，準備放行進入正文寫作階段時，系統建請從第 {suggested_next_chapter} 章開始寫作。請在決策放行且 target 為 writer 時，將 `chapter_index` 設為 {suggested_next_chapter}。\n"
 
     system_prompt += f"\n\n{DIRECTOR_CONTEXT_REQUEST_RULE}\n"
+    
+    last_run_block = ""
+    last_run = db.get_last_agent_run(novel_id)
+    if last_run:
+        last_run_block = f"""
+ 
+【上一個運行的 Agent 執行記錄 (Last Agent Run)】
+- 階段名稱 (Stage)：{last_run.get('agent_name')}
+- 該 Agent 接收到的輸入與指示 (LLM Input Messages)：
+{last_run.get('input_data')}
+ 
+- 該 Agent 產生的原始輸出 (LLM Output)：
+{last_run.get('output_data')}
+"""
+        system_prompt += """
+## ⚠️ 【上一個運行的 Agent 審核核對指令】 (🔥 核心職責)
+你在進行本次評審時，請特別核對使用者內容中的【上一個運行的 Agent 執行記錄 (Last Agent Run)】。
+1. 對比上個 Agent 接收到的輸入與指示，評審該 Agent 產生的原始輸出是否正確且完整地完成了要求。
+2. 總監的判斷不應自己重組要求。如果該 Agent 的輸出已經正確完成了生成，沒有嚴重缺失，請放行前進。
+3. 若該 Agent 的輸出有缺失、格式錯誤、欄位缺失或不足量，請在 JSON 決策中將其退回至該 Agent，並在 `reason` 與 `hint` 中明確指出其原始輸出的不足之處，供其重新生成。
+"""
+
     system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
     
     if director_context_block:
         user_content += f"\n\n{director_context_block}"
+        
+    if last_run_block:
+        user_content += f"\n\n{last_run_block}"
 
     # 統一在 user_content 尾端附加額外的說明
     if not is_only_bg:
