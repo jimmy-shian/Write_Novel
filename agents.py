@@ -1271,8 +1271,19 @@ def run_director_decision(
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
         return
 
+    detected_stage = diagnostics.detect_current_stage(novel_id)
     if not current_stage or current_stage == "init":
-        current_stage = diagnostics.detect_current_stage(novel_id)
+        current_stage = detected_stage
+    else:
+        STAGES_ORDER = ["worldview", "characters", "foreshadowing", "volumes", "volume_skeleton", "writer", "editor"]
+        try:
+            detected_idx = STAGES_ORDER.index(detected_stage)
+            current_idx = STAGES_ORDER.index(current_stage) if current_stage in STAGES_ORDER else -1
+            if detected_idx < current_idx or current_idx == -1:
+                print(f"[STAGE OVERRIDE] Override current_stage from '{current_stage}' to '{detected_stage}' due to incomplete database state.")
+                current_stage = detected_stage
+        except Exception:
+            current_stage = detected_stage
     wb = db.get_latest_worldbuilding(novel_id)
     worldview_text = select_worldview_context(wb["content"], current_stage="director", query_text=user_prompt or "") if wb else "尚無世界觀設定"
     if current_stage not in ("foreshadowing", "worldview"):

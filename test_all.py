@@ -134,7 +134,7 @@ class TestAINovelFactory(unittest.TestCase):
             ]
         }, ensure_ascii=False)
         
-        version = db.save_worldbuilding(self.novel_id, wv_content)
+        version = db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         self.assertEqual(version, 1)
         
         # Check latest worldview
@@ -367,7 +367,7 @@ class TestAINovelFactory(unittest.TestCase):
                 {"turning_point_name": "轉折Y", "description": "描述Y"}
             ]
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content)
+        db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         
         # 2. Save some volumes with specified chapter count (e.g. Vol 1 has 30 chapters, Vol 2 has 40 chapters)
         volumes_list = [
@@ -428,7 +428,7 @@ class TestAINovelFactory(unittest.TestCase):
                 {"turning_point_name": "轉折Y", "description": "描述Y"}
             ]
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content_updated)
+        db.save_worldbuilding(self.novel_id, wv_content_updated, validate=False)
         
         # Calling get_global_foreshadowing_blueprint should auto-detect seed count mismatch (4 seeds vs 3 in old blueprint) and heal it
         blueprint_updated = db.get_global_foreshadowing_blueprint(self.novel_id)
@@ -461,7 +461,7 @@ class TestAINovelFactory(unittest.TestCase):
                 {"title": "第三波高潮 (Wave 3)", "content": "第三波人設..."}
             ]
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content)
+        db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         
         stage = db.detect_current_stage(self.novel_id)
         self.assertEqual(stage, "characters")
@@ -512,7 +512,7 @@ class TestAINovelFactory(unittest.TestCase):
             "foreshadowing_seeds": self._foreshadowing_seeds(),
             "key_turning_points": self._turning_points()
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content_with_seeds)
+        db.save_worldbuilding(self.novel_id, wv_content_with_seeds, validate=False)
         stage = db.detect_current_stage(self.novel_id)
         self.assertEqual(stage, "volumes")
         
@@ -569,7 +569,7 @@ class TestAINovelFactory(unittest.TestCase):
             "foreshadowing_seeds": self._foreshadowing_seeds(),
             "key_turning_points": self._turning_points()
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content)
+        db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         
         mock_raw_output = {
             "volumes": [
@@ -640,7 +640,7 @@ class TestAINovelFactory(unittest.TestCase):
             "foreshadowing_seeds": self._foreshadowing_seeds(),
             "key_turning_points": self._turning_points()
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content)
+        db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         db.save_volumes(self.novel_id, self._valid_volumes(count=10, chapter_count=40))
 
         existing = []
@@ -697,6 +697,7 @@ class TestAINovelFactory(unittest.TestCase):
         
         # 1. Setup initial worldview in DB
         wv_content = json.dumps({
+            "title": "測試小說",
             "theme": "主線",
             "main_conflict": "對立",
             "worldview": "規則",
@@ -716,7 +717,7 @@ class TestAINovelFactory(unittest.TestCase):
                 }
             ]
         }, ensure_ascii=False)
-        db.save_worldbuilding(self.novel_id, wv_content)
+        db.save_worldbuilding(self.novel_id, wv_content, validate=False)
         
         # 2. Try to append structured foreshadowing seeds dict payload
         patch_seeds = {

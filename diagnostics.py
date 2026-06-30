@@ -139,10 +139,8 @@ def diagnose_worldview(worldview_text):
     turns = parsed.get("key_turning_points", [])
 
     is_complete = bool(theme and main_conflict and worldview_desc and macro_outline)
-    quantity_ok = len(seeds) >= MIN_FORESHADOWING_SEEDS and len(turns) >= MIN_KEY_TURNING_POINTS
-    status_str = "世界觀完整" if is_complete and quantity_ok else "世界觀不完整"
-    quantity_note = "" if quantity_ok else f"（不足：伏筆至少{MIN_FORESHADOWING_SEEDS}個、轉折至少{MIN_KEY_TURNING_POINTS}個）"
-    return f"{status_str}、伏筆數量{len(seeds)}個、轉折{len(turns)}個{quantity_note}"
+    status_str = "世界觀完整" if is_complete else "世界觀不完整"
+    return f"{status_str}、伏筆數量{len(seeds)}個、轉折{len(turns)}個"
 
 
 def diagnose_characters(characters_data):
@@ -371,8 +369,18 @@ def detect_current_stage(novel_id):
     if not wb or not wb["content"].strip():
         return "worldview"
         
+    # 剛性檢查世界觀完整性
+    worldview_diag = diagnose_worldview(wb["content"])
+    if "世界觀不完整" in worldview_diag:
+        return "worldview"
+        
     char = db.get_latest_characters(novel_id)
     if not char or not char["json_data"] or char["json_data"] == "{'characters': []}":
+        return "characters"
+        
+    # 剛性檢查角色聖經完整性
+    characters_diag = diagnose_characters(char["json_data"])
+    if "角色聖經為空" in characters_diag or "主角欄位可補" in characters_diag or "欄位不完整" in characters_diag:
         return "characters"
         
     # 偵測是否已生成伏筆與轉折

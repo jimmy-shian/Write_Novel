@@ -10,11 +10,17 @@ import db
 from agent_json import CHARACTER_BASIC_FIELDS
 from prompts.prompt_main import (
     STORY_ARCHITECT_PROMPT,
+    STORY_ARCHITECT_GUIDELINES,
     VOLUMES_PLANNER_PROMPT,
+    VOLUMES_PLANNER_GUIDELINES,
     VOLUME_SKELETON_PROMPT,
+    VOLUME_SKELETON_GUIDELINES,
     CHARACTER_DESIGNER_PROMPT,
+    CHARACTER_DESIGNER_GUIDELINES,
     FORESHADOWING_ORCHESTRATOR_PROMPT,
+    FORESHADOWING_ORCHESTRATOR_GUIDELINES,
     CHAPTER_WRITER_PROMPT,
+    CHAPTER_WRITER_GUIDELINES,
     VOLUME_SKELETON_PROMPT_PLUS,
     CHARACTER_DESIGNER_PROMPT_PLUS
 )
@@ -483,17 +489,16 @@ def get_json_schema_prompt_snippet(schema_name):
 
 def build_story_architect_messages(genre, style, user_prompt):
     """世界觀架構師提示詞拼接"""
-    # 這裡的 STORY_ARCHITECT_PROMPT 包含了 generate_style
-    # 為了告知模型多幕式與多波段不限於 3，我們加入說明引導
     schema_snippet = get_json_schema_prompt_snippet("worldview")
-    system_prompt = f"{STORY_ARCHITECT_PROMPT.format(generate_style=style)}\n\n{schema_snippet}\n"
-    # 強調可以任意增長/縮短 multi_act_structure 與 progressive_character_plan 的長度，不限於 3 個元素
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n"
     system_prompt += "\n*[提示：`multi_act_structure` 與 `progressive_character_plan` 可以依據需要規劃任意數量的多幕/波段（例如：4幕、5波等），無須限制為範例中的數量。]*\n"
     
     user_content = f"""【使用者創作需求與設定】
 類型：{genre}
 風格基調：{style}
 詳細故事描述/要求：{user_prompt}
+
+{STORY_ARCHITECT_GUIDELINES}
 
 請根據以上設定，為本作品生成符合結構的完整世界觀 JSON 設定。
 """
@@ -557,6 +562,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 
 請將以上修改與該角色的完整內容融會貫通，修正後輸出完整的角色 Bible JSON 設定。
 """
+    user_content += f"\n\n{CHARACTER_DESIGNER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -591,6 +597,7 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
 9. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。
 10. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。
 """
+    user_content += f"\n\n{FORESHADOWING_ORCHESTRATOR_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -635,6 +642,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 
 請僅針對第 {v_idx} 卷進行精細化生成/修補，並回傳格式完全合法的 volumes JSON，列表中應僅包含第 {v_idx} 卷的新/修改內容。
 """
+    user_content += f"\n\n{VOLUMES_PLANNER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -643,7 +651,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 def build_volume_skeleton_planner_messages(worldview_text, volume_index, current_vol, start_ch, end_ch, vol_chapter_count, surrounding_context, precalc_clues, user_prompt):
     """卷骨架大綱規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
-    system_prompt = f"{VOLUME_SKELETON_PROMPT.format(volume_index=volume_index, start_ch=start_ch, end_ch=end_ch, vol_chapter_count=vol_chapter_count)}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
     
     user_content = f"""【世界觀背景】
 {worldview_text}
@@ -668,6 +676,7 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 
 請只為本次指定章節範圍生成符合 JSON 結構的 chapters_skeleton 清單。輸出章數必須等於上方指定範圍的章數，chapter_index 必須連續且不可缺漏。
 """
+    user_content += f"\n\n{VOLUME_SKELETON_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -675,7 +684,7 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 
 def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index, user_prompt=None):
     """正文作家寫作提示詞拼接"""
-    system_prompt = CHAPTER_WRITER_PROMPT.format(writing_style=custom_style) + "\n" + CONTEXT_REQUEST_RULE
+    system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
     
     context_query = _context_query_text(current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, user_prompt)
     characters_bible_filtered = build_relevant_character_context(
@@ -706,7 +715,10 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 {extra_prompt_block}
 
 請根據以上豐富的上下文細節，展開本章正文寫作；正文目標字數為 1500 至 2000 字左右，不要寫成摘要或短章。
+【寫作風格基調】
+{custom_style}
 """
+    user_content += f"\n\n{CHAPTER_WRITER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
