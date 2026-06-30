@@ -26,6 +26,9 @@ WORLDVIEW_SCHEMA = {
     ]
 }
 
+WORLDVIEW_REQUIRED_FIELDS = ["title", "theme", "worldview"]
+WORLDVIEW_RECOMMENDED_FIELDS = ["main_conflict", "setting", "power_system", "macro_outline"]
+
 WORLDVIEW_CHAPTER_PATCH = {
     "category": "",
     "details": "",

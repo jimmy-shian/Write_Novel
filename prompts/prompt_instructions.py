@@ -93,7 +93,7 @@ DIRECTOR_COMMON_FOOTER = """
 | `INCREMENTAL_MODIFY_CHARACTER_FULL` | 角色局部增量修正（完整模式） | `hint`（修正要求）, `target_char_index`（若有） |
 
 ## 增量指令定位規格（避免局部修改失焦）
-1. `target_char_index` 優先使用角色列表中的 0-based 索引；若只能以「第 N 位角色」表達，仍必須在 `hint` 寫出角色姓名，方便後端容錯校對。
+1. `target_char_index` **必須為 0-based**（第一個角色 = 0）。絕對不要使用 1-based 索引。若只能以「第 N 位角色」表達，仍必須在 `hint` 寫出角色姓名，方便後端容錯校對。
 2. `field_name` 必須使用角色 JSON 欄位名：`name`, `role`, `entry_phase`, `personality`, `want`, `need`, `fatal_flaw`, `want_need_conflict`, `secret`, `motivation`, `arc`, `speech_style`, `appearance`, `background`, `relationships`, `relationship_matrix`。
 3. 角色局部修改的 `hint` 必須包含：目標角色姓名、原欄位/問題、要改成的方向、必須保留的人設約束。不要只寫「優化角色」。
 4. `INCREMENTAL_MODIFY_SKELETON` 的 `hint` 必須包含：第幾卷、要修改/補全的章節 `chapter_index` 範圍或章節標題、具體要補的欄位（如 `chapter_summary`, `events`, `cliffhanger`）、不可改動的既有情節。

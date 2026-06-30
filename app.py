@@ -85,6 +85,7 @@ class VolumesPlannerRequest(BaseModel):
     hint: Optional[str] = None
     mode: Optional[str] = "generate"  # generate, patch
     target_vol_idx: Optional[int] = None
+    confirm_wipe: bool = False
 
 class VolumeSkeletonRequest(BaseModel):
     novel_id: str
@@ -124,6 +125,7 @@ class DirectorDecisionRequest(BaseModel):
     conversation_context: Optional[str] = None
     summary_context: Optional[str] = None
     extra_context: Optional[str] = None
+    loop_count: Optional[int] = 0
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
@@ -210,7 +212,10 @@ def api_delete_novel(novel_id: str):
 # --- MANUAL SAVE OVERRIDES ---
 @app.post("/api/novels/{novel_id}/worldbuilding")
 def api_save_worldbuilding(novel_id: str, payload: WorldbuildingSave):
-    v = db.save_worldbuilding(novel_id, payload.content)
+    try:
+        v = db.save_worldbuilding(novel_id, payload.content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"status": "success", "version": v}
 
 @app.post("/api/novels/{novel_id}/characters")
@@ -275,12 +280,13 @@ def api_adjust_character(novel_id: str, payload: CharacterAdjustRequest):
             parsed = char_data.get("parsed_data", {})
             chars = parsed.get("characters", [])
             
-            if 0 <= payload.char_index < len(chars):
-                chars[payload.char_index][payload.field_name] = payload.value
+            try:
+                normalized_idx = db.normalize_char_index(payload.char_index, len(chars), source='api_adjust_character')
+                chars[normalized_idx][payload.field_name] = payload.value
                 db.save_characters(novel_id, parsed)
-                return {"status": "success", "message": f"Successfully updated character {payload.char_index}."}
-            else:
-                raise HTTPException(status_code=400, detail="Character index out of bounds")
+                return {"status": "success", "message": f"Successfully updated character {normalized_idx}."}
+            except IndexError:
+                raise HTTPException(status_code=400, detail=f"角色索引 {payload.char_index} 超出範圍 [0, {len(chars)})")
         except Exception as e:
             print(f"[Programmatic Adjust Retry] Character edit attempt {attempt + 1} failed: {e}")
             time.sleep(1)
@@ -316,120 +322,126 @@ def api_adjust_volume(novel_id: str, payload: VolumeAdjustRequest):
 def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body(...)):
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt)),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt), novel_id=novel_id)
+        finally:
+            db.release_pipeline_lock(novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/agent/character-designer")
 def api_agent_character_designer(payload: CharacterDesignerRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_character_designer(
-            novel_id=payload.novel_id,
-            user_prompt=payload.user_prompt,
-            hint=payload.hint,
-            mode=payload.mode,
-            target_char_index=payload.target_char_index
-        )),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_character_designer(
+                novel_id=payload.novel_id,
+                user_prompt=payload.user_prompt,
+                hint=payload.hint,
+                mode=payload.mode,
+                target_char_index=payload.target_char_index
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/agent/volumes-planner")
 def api_agent_volumes_planner(payload: VolumesPlannerRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_volumes_planner(
-            novel_id=payload.novel_id,
-            user_prompt=payload.user_prompt,
-            hint=payload.hint,
-            mode=payload.mode,
-            target_vol_idx=payload.target_vol_idx
-        )),
-        media_type="text/event-stream"
-    )
+    if payload.mode != "patch":
+        chapters = db.get_all_chapters_latest(payload.novel_id)
+        chapter_count = len(chapters) if chapters else 0
+        if chapter_count > 0 and not payload.confirm_wipe:
+            raise HTTPException(
+                status_code=409,
+                detail=f"確認刪除：重新產生篇卷將刪除 {chapter_count} 章已寫內容。請設定 confirm_wipe=true 以確認。"
+            )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_volumes_planner(
+                novel_id=payload.novel_id,
+                user_prompt=payload.user_prompt,
+                hint=payload.hint,
+                mode=payload.mode,
+                target_vol_idx=payload.target_vol_idx
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/agent/volume-skeleton")
 def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
-            novel_id=payload.novel_id,
-            volume_index=payload.volume_index,
-            user_prompt=payload.user_prompt
-        )),
-        media_type="text/event-stream"
-    )
-
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
+                novel_id=payload.novel_id,
+                volume_index=payload.volume_index,
+                user_prompt=payload.user_prompt
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 
 @app.post("/api/agent/write-chapter")
 def api_agent_write_chapter(payload: ChapterWriterRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_chapter_writer(
-            novel_id=payload.novel_id,
-            chapter_index=payload.chapter_index,
-            custom_style=payload.custom_style,
-            user_prompt=payload.user_prompt
-        )),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_chapter_writer(
+                novel_id=payload.novel_id,
+                chapter_index=payload.chapter_index,
+                custom_style=payload.custom_style,
+                user_prompt=payload.user_prompt
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/agent/edit-chapter")
 def api_agent_edit_chapter(payload: EditorAgentRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_editor_agent(
-            novel_id=payload.novel_id,
-            chapter_index=payload.chapter_index,
-            edit_instructions=payload.edit_instructions
-        )),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_editor_agent(
+                novel_id=payload.novel_id,
+                chapter_index=payload.chapter_index,
+                edit_instructions=payload.edit_instructions
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/agent/copilot-chat")
 def api_agent_copilot_chat(payload: CopilotChatRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message)),
-        media_type="text/event-stream"
-    )
-
-@app.post("/api/agent/incremental-architect")
-def api_incremental_architect(payload: IncrementalArchitectRequest):
-    if not db.get_novel(payload.novel_id):
-        raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_incremental_architect(payload.novel_id, payload.target_section, payload.user_hint)),
-        media_type="text/event-stream"
-    )
-
-@app.post("/api/agent/incremental-character")
-def api_incremental_character(payload: IncrementalCharacterRequest):
-    if not db.get_novel(payload.novel_id):
-        raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_incremental_character_designer(payload.novel_id, payload.target_char_index, payload.field_name, payload.user_hint)),
-        media_type="text/event-stream"
-    )
-
-
-
-@app.post("/api/agent/incremental-skeleton")
-def api_incremental_skeleton(payload: IncrementalSkeletonRequest):
-    if not db.get_novel(payload.novel_id):
-        raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_incremental_volume_skeleton(payload.novel_id, payload.volume_index, payload.user_hint)),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 
 # --- PIPELINE REVIEW & CHECKPOINT ENDPOINTS ---
@@ -438,7 +450,10 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
     novel = db.get_novel(novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-        
+    
+    if not db.acquire_pipeline_lock(novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    
     effective_prompt = (payload.user_prompt or "").strip()
     if not effective_prompt:
         effective_prompt = (novel.get("pipeline_prompt") or "").strip()
@@ -451,38 +466,46 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
             }, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
         return StreamingResponse(error_gen(), media_type="text/event-stream")
-
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_director_decision(
-            novel_id, payload.current_stage, effective_prompt,
-            chapter_index=payload.chapter_index,
-            volume_index=payload.volume_index,
-            character_review_mode=payload.character_review_mode,
-            character_review_hint=payload.character_review_hint,
-            character_review_target_content=payload.character_review_target_content,
-            suggested_next_chapter=payload.suggested_next_chapter,
-            conversation_context=payload.conversation_context,
-            summary_context=payload.summary_context,
-            extra_context=payload.extra_context,
-        )),
-        media_type="text/event-stream"
-    )
+    
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_director_decision(
+                novel_id, payload.current_stage, effective_prompt,
+                chapter_index=payload.chapter_index,
+                volume_index=payload.volume_index,
+                character_review_mode=payload.character_review_mode,
+                character_review_hint=payload.character_review_hint,
+                character_review_target_content=payload.character_review_target_content,
+                suggested_next_chapter=payload.suggested_next_chapter,
+                conversation_context=payload.conversation_context,
+                summary_context=payload.summary_context,
+                extra_context=payload.extra_context,
+                loop_count=payload.loop_count or 0,
+            ), novel_id=novel_id)
+        finally:
+            db.release_pipeline_lock(novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 @app.post("/api/novels/{novel_id}/director-decision/help")
 def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
     novel = db.get_novel(novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-        
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_director_decision_help(
-            novel_id=novel_id,
-            current_stage=payload.current_stage,
-            help_action=payload.help_action,
-            help_reason=payload.help_reason
-        )),
-        media_type="text/event-stream"
-    )
+    
+    if not db.acquire_pipeline_lock(novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_director_decision_help(
+                novel_id=novel_id,
+                current_stage=payload.current_stage,
+                help_action=payload.help_action,
+                help_reason=payload.help_reason
+            ), novel_id=novel_id)
+        finally:
+            db.release_pipeline_lock(novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
 
 
 class ResolveMissingIndexPayload(BaseModel):
@@ -1003,13 +1026,31 @@ class ForeshadowingOrchestratorRequest(BaseModel):
 def api_agent_foreshadowing_orchestrator(payload: ForeshadowingOrchestratorRequest):
     if not db.get_novel(payload.novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
-    return StreamingResponse(
-        agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
-            novel_id=payload.novel_id,
-            user_prompt=payload.user_prompt
-        )),
-        media_type="text/event-stream"
-    )
+    if not db.acquire_pipeline_lock(payload.novel_id):
+        raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
+    def _wrapped():
+        try:
+            yield from agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
+                novel_id=payload.novel_id,
+                user_prompt=payload.user_prompt
+            ), novel_id=payload.novel_id)
+        finally:
+            db.release_pipeline_lock(payload.novel_id)
+    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+
+
+@app.post("/api/novels/{novel_id}/chapters/restore-backup")
+def api_restore_chapters_backup(novel_id: str):
+    if not db.get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    restored = db.restore_chapters_backup(novel_id)
+    return {"status": "success", "restored_count": restored}
+
+
+@app.get("/api/novels/{novel_id}/pipeline-status")
+def api_pipeline_status(novel_id: str):
+    lock_info = db.get_pipeline_lock_status(novel_id)
+    return {"running": lock_info is not None, "lock_info": lock_info}
 
 
 # --- STATIC CONTENT HOSTING ---

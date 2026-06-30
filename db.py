@@ -483,6 +483,32 @@ def db_init():
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
     )
     """)
+
+    # 9.5. Pipeline locks table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS pipeline_locks (
+        novel_id TEXT PRIMARY KEY,
+        locked_by TEXT NOT NULL,
+        locked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        heartbeat_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # 9.6. Chapters backup table (for P0-1 wipe protection)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS chapters_backup (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        novel_id TEXT,
+        chapter_index INTEGER,
+        content TEXT,
+        synopsis TEXT,
+        thinking TEXT,
+        version INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        backed_up_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+    )
+    """)
     
     conn.commit()
     conn.close()
@@ -544,6 +570,13 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
     else:
         cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
         if clear_downstream:
+            # Backup chapters before wiping (P0-1)
+            cursor.execute("DELETE FROM chapters_backup WHERE novel_id = ?", (novel_id,))
+            cursor.execute("""
+                INSERT INTO chapters_backup (novel_id, chapter_index, content, synopsis, thinking, version, created_at, backed_up_at)
+                SELECT novel_id, chapter_index, content, synopsis, thinking, version, created_at, CURRENT_TIMESTAMP
+                FROM chapters WHERE novel_id = ?
+            """, (novel_id,))
             cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
@@ -887,6 +920,108 @@ def apply_worldview_patch(novel_id, category, details):
 # Alias to support agents.py imports seamlessly
 mark_subsequent_dirty = mark_downstream_dirty
 
+# --- CHAPTERS BACKUP FUNCTIONS (P0-1) ---
+def backup_chapters_before_wipe(novel_id):
+    """Backup all chapters before wiping for volumes regeneration."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Clear existing backup for this novel
+    cursor.execute("DELETE FROM chapters_backup WHERE novel_id = ?", (novel_id,))
+    # Copy current chapters to backup
+    cursor.execute("""
+        INSERT INTO chapters_backup (novel_id, chapter_index, content, synopsis, thinking, version, created_at, backed_up_at)
+        SELECT novel_id, chapter_index, content, synopsis, thinking, version, created_at, CURRENT_TIMESTAMP
+        FROM chapters WHERE novel_id = ?
+    """, (novel_id,))
+    conn.commit()
+    conn.close()
+
+def restore_chapters_backup(novel_id):
+    """Restore chapters from backup after failed volumes regeneration."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Delete current chapters
+    cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+    # Restore from backup
+    cursor.execute("""
+        INSERT INTO chapters (novel_id, chapter_index, content, synopsis, thinking, version, created_at)
+        SELECT novel_id, chapter_index, content, synopsis, thinking, version, created_at
+        FROM chapters_backup WHERE novel_id = ?
+    """, (novel_id,))
+    # Clear backup after restore
+    cursor.execute("DELETE FROM chapters_backup WHERE novel_id = ?", (novel_id,))
+    conn.commit()
+    conn.close()
+
+# --- PIPELINE LOCK FUNCTIONS (P0-3) ---
+def acquire_pipeline_lock(novel_id, locked_by="pipeline"):
+    """Acquire a pipeline lock for a novel. Returns True if lock acquired, False if already locked."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """, (novel_id, locked_by))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        # Lock already exists
+        return False
+    finally:
+        conn.close()
+
+def release_pipeline_lock(novel_id):
+    """Release the pipeline lock for a novel."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+    conn.commit()
+    conn.close()
+
+def update_pipeline_heartbeat(novel_id):
+    """Update the heartbeat timestamp for an active pipeline lock."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE pipeline_locks SET heartbeat_at = CURRENT_TIMESTAMP WHERE novel_id = ?", (novel_id,))
+    conn.commit()
+    conn.close()
+
+def get_pipeline_lock_status(novel_id):
+    """Get the current pipeline lock status for a novel. Returns dict if locked, None if not locked."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT * FROM pipeline_locks WHERE novel_id = ?", (novel_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+# --- WORLDVIEW VALIDATION FUNCTIONS (P1-4) ---
+def validate_worldview_schema(content):
+    errors = []
+    warnings = []
+    parsed = None
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            parsed = parse_worldview_to_json(content)
+        except Exception:
+            pass
+    if not isinstance(parsed, dict):
+        text_lower = content.lower() if isinstance(content, str) else ''
+        title_match = any(k in text_lower for k in ['title', '標題', '書名', '主題', 'theme'])
+        if not title_match:
+            errors.append('無法解析為結構化世界觀，且未包含必要識別欄位')
+        return len(errors) == 0, errors, warnings
+    from agent_json import WORLDVIEW_REQUIRED_FIELDS, WORLDVIEW_RECOMMENDED_FIELDS
+    for field in WORLDVIEW_REQUIRED_FIELDS:
+        if field not in parsed or parsed[field] in (None, '', [], {}):
+            errors.append(f'缺少必要欄位: {field}')
+    for field in WORLDVIEW_RECOMMENDED_FIELDS:
+        if field not in parsed or parsed[field] in (None, '', [], {}):
+            warnings.append(f'建議補充欄位: {field}')
+    return len(errors) == 0, errors, warnings
+
 # --- WORLDBUILDING (VERSIONED) ---
 def get_latest_worldbuilding(novel_id):
     conn = get_db_connection()
@@ -918,7 +1053,13 @@ def get_worldbuilding_by_version(novel_id, version):
     conn.close()
     return dict(row) if row else None
 
-def save_worldbuilding(novel_id, content):
+def save_worldbuilding(novel_id, content, validate=True):
+    if validate:
+        valid, errors, warnings = validate_worldview_schema(content)
+        if not valid:
+            raise ValueError(f'世界觀結構驗證失敗: {";".join(errors)}')
+        if warnings:
+            print(f'[WARN] Worldview validation warnings for novel {novel_id}: {";".join(warnings)}')
     conn = get_db_connection()
     cursor = conn.cursor()
     row = cursor.execute(
@@ -1801,6 +1942,14 @@ def insert_plot_chapter(novel_id, insert_after_index, new_chapter, skip_volume_s
 
 ALLOWED_CHARACTER_FIELDS = {"name", "identity", "personality", "appearance", "background", "arc", "relationships"}
 
+def normalize_char_index(raw_index, total_chars, source='unknown'):
+    if 0 <= raw_index < total_chars:
+        return raw_index
+    if 1 <= raw_index <= total_chars:
+        print(f"[WARN] {source}: received 1-based index {raw_index}, converting to 0-based {raw_index - 1}")
+        return raw_index - 1
+    raise IndexError(f"Character index {raw_index} out of range [0, {total_chars}) from {source}")
+
 def update_character_field(novel_id, char_index, field_name, new_value):
     if field_name not in ALLOWED_CHARACTER_FIELDS:
         print(f"[ERROR] Field '{field_name}' is not in character fields whitelist")
@@ -1811,10 +1960,15 @@ def update_character_field(novel_id, char_index, field_name, new_value):
         return None
     
     parsed = char_data["parsed_data"]
-    if "characters" not in parsed or char_index >= len(parsed["characters"]):
+    if "characters" not in parsed:
         return None
     
-    parsed["characters"][char_index][field_name] = new_value
+    try:
+        norm_idx = normalize_char_index(char_index, len(parsed["characters"]), source='update_character_field')
+    except IndexError:
+        return None
+    
+    parsed["characters"][norm_idx][field_name] = new_value
     
     return save_characters(novel_id, parsed)
 
@@ -2286,6 +2440,17 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
     conn.commit()
     conn.close()
     print(f"[HEALING SUCCESS] Deleted and shifted chapter range [{start_del}, {end_del}] for novel {novel_id}.")
+
+    try:
+        precompute_global_foreshadowing(novel_id)
+    except Exception as e:
+        print(f"[WARN] Failed to recompute foreshadowing blueprint after chapter shift: {e}")
+
+    try:
+        repair_foreshadowing_allocations(novel_id)
+    except Exception as e:
+        print(f"[WARN] Failed to repair foreshadowing allocations after chapter shift: {e}")
+
     return start_del, end_del
 
 

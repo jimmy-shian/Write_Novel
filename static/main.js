@@ -5,6 +5,7 @@ let currentStage = "init";
 let isOneClick = true;
 let currentVolIndex = 0;
 let currentChIndex = 1;
+let directorLoopCount = 0;
 
 document.addEventListener("DOMContentLoaded", () => {
     initEventListeners();
@@ -184,6 +185,7 @@ function updateStageStepper() {
 // Stream and execute the current active stage step using SSE
 function runActiveStageStep() {
     if (!activeNovelId) return;
+    directorLoopCount = 0;
     
     logTerminal(`\n> [執行] 開始進行階段：${translateStage(currentStage)}...`);
     
@@ -229,9 +231,20 @@ function runActiveStageStep() {
                 logTerminal(`[系統] ${translateStage(data.stage)} 階段串流寫入完成，資料庫已自動存檔！`);
                 eventSource.close();
                 
-                // If One-Click is enabled, automatically trigger the Director Decision stream!
                 if (isOneClick) {
-                    runDirectorDecision();
+                    if (directorLoopCount >= 5) {
+                        const toastMsg = "自動流程已安全停駐，請手動決定下一步。";
+                        logTerminal(`\n⏸️ [系統] ${toastMsg}`);
+                        const toastEl = document.getElementById("toastContainer");
+                        if (toastEl) {
+                            toastEl.textContent = toastMsg;
+                            toastEl.classList.add("show");
+                            setTimeout(() => { toastEl.classList.remove("show"); }, 4000);
+                        }
+                        refreshNovelInfo();
+                    } else {
+                        runDirectorDecision();
+                    }
                 } else {
                     refreshNovelInfo();
                 }
@@ -253,6 +266,20 @@ function runActiveStageStep() {
 
 // Trigger Creative Director Decision SSE Stream
 function runDirectorDecision() {
+    if (isOneClick) {
+        directorLoopCount++;
+        if (directorLoopCount >= 5) {
+            const toastMsg = "自動流程已安全停駐，請手動決定下一步。";
+            logTerminal(`\n⏸️ [系統] ${toastMsg}`);
+            const toastEl = document.getElementById("toastContainer");
+            if (toastEl) {
+                toastEl.textContent = toastMsg;
+                toastEl.classList.add("show");
+                setTimeout(() => { toastEl.classList.remove("show"); }, 4000);
+            }
+            return;
+        }
+    }
     logTerminal(`\n> [總監審查] 正在調度創意總監進行本輪產出品質評估...`);
     
     const consoleDiv = document.getElementById("terminalConsole");
@@ -262,7 +289,7 @@ function runDirectorDecision() {
     const lastProse = document.getElementById("activeStreamingText")?.textContent || "";
     
     // Connect to Director Decision Stream
-    const eventSource = new EventSource(`/api/novels/${activeNovelId}/director-decision?is_one_click=${isOneClick}&last_output=${encodeURIComponent(lastProse)}`);
+    const eventSource = new EventSource(`/api/novels/${activeNovelId}/director-decision?is_one_click=${isOneClick}&last_output=${encodeURIComponent(lastProse)}&loop_count=${directorLoopCount}`);
     
     eventSource.onmessage = (event) => {
         try {
@@ -299,6 +326,9 @@ function runDirectorDecision() {
                 }
             }
             else if (data.type === "done") {
+                if (isOneClick) {
+                    directorLoopCount++;
+                }
                 eventSource.close();
                 refreshNovelInfo();
             }
@@ -319,6 +349,7 @@ async function handleSendChat() {
     const text = input.value.trim();
     if (!text || !activeNovelId) return;
     
+    directorLoopCount = 0;
     logTerminal(`👤 [作者] ${text}`);
     input.value = "";
     

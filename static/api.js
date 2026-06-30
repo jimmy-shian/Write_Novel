@@ -61,7 +61,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const STALL_TIMEOUT = 30000; // 30 秒（原 10 秒，避免後端重試等待時觸發前端 abort）
+        const isHeavyEndpoint = /foreshadowing|worldview|volumes|architect/i.test(endpoint);
+        const STALL_TIMEOUT = isHeavyEndpoint ? 120000 : 60000;
+        const CONNECT_TIMEOUT = 30000;
+        let connectTimer = null;
 
         function resetActivityTimer() {
             if (activityTimer) clearTimeout(activityTimer);
@@ -71,8 +74,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             }, STALL_TIMEOUT);
         }
 
-        // Start initial timer
-        resetActivityTimer();
+        connectTimer = setTimeout(() => {
+            console.warn(`[streamAPI] Connect timeout! No response headers after ${CONNECT_TIMEOUT / 1000}s on ${endpoint}. Aborting attempt ${attempt}...`);
+            controller.abort();
+        }, CONNECT_TIMEOUT);
 
         try {
             const response = await fetch(endpoint, {
@@ -82,9 +87,17 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 signal: signal
             });
             
-            resetActivityTimer(); // Got response headers, reset timer
+            if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+            resetActivityTimer();
 
             if (!response.ok) {
+                if (response.status === 429) {
+                    const errData429 = await response.json().catch(() => ({ detail: '此小說的流水線正在執行中，請等待完成。' }));
+                    const msg429 = errData429.detail || '此小說的流水線正在執行中，請等待完成。';
+                    if (typeof onError === 'function') onError(msg429);
+                    if (typeof onDone === 'function') await onDone(false);
+                    return;
+                }
                 const errText = await response.text();
                 throw new Error(`HTTP 錯誤 ${response.status}: ${errText}`);
             }
@@ -197,6 +210,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             // 傳遞 success 狀態給 onDone（讓前端可以區分成功/失敗）
             if (typeof onDone === 'function') await onDone(!localHadError);
         } catch (err) {
+            if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
             if (activityTimer) clearTimeout(activityTimer);
 
             const isAborted = err.name === 'AbortError';

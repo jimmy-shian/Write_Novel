@@ -169,6 +169,7 @@ async function runPipeline(pipelinePrompt = '') {
     // 初始化並重置伏筆編織管線狀態
     state.foreshadowingOrchestrated = false;
     state.isPipelineRunning = true;
+    state.directorLoopCount = 0;
     showPipelineProgress(true);
     updateDirectorMessage('🎬 總監開始評估創作狀態...');
     
@@ -669,6 +670,7 @@ async function executeDirectorAction(decision, userPrompt) {
         case 'WAIT_USER': {
             showToast('⏸️ 總監要求用戶確認，請查看右側聊天區的總監評估');
             updateDirectorMessage('⏸️ 等待用戶確認...');
+            state.directorLoopCount = 0;
             state.isPipelineRunning = false;
             break;
         }
@@ -681,6 +683,7 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('volumes', 'done');
             updatePipelineStage('volume_skeleton', 'done');
             updatePipelineStage('writer', 'done');
+            state.directorLoopCount = 0;
             state.isPipelineRunning = false;
             setTimeout(() => showPipelineProgress(false), 3000);
             await loadNovelDetails(state.currentNovelId);
@@ -956,7 +959,12 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
             onContent,
             (error) => {
                 hasError = true;
-                // 進入錯誤攔截分支
+                if (error && error.includes('流水線正在執行中')) {
+                    showToast(error);
+                    if (typeof onError === 'function') onError(error);
+                    try { hideAllAgentProcessingIndicators(); } catch(e) {}
+                    return;
+                }
                 console.warn(`[GUARD] Pipeline triggered error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
                 
                 if (currentRetry <= maxRetries) {
@@ -3459,8 +3467,14 @@ function buildDirectorExtraContext(reviewContext = null) {
 }
 
 async function runDirectorDecision(currentStage, providedUserPrompt = null, reviewContext = null) {
-    // 總監開始決策時，自動跳轉至總監頁籤 (僅在初始化時觸發 1 次)
     switchToDirectorTab();
+    if (state.isAutoExecuteMode) {
+        state.directorLoopCount++;
+        if (state.directorLoopCount >= 5) {
+            showToast("自動流程已安全停駐，請手動決定下一步。");
+            return { action: 'WAIT_USER', continue: false };
+        }
+    }
     return new Promise((resolve) => {
         const directorResponseContainer = document.createElement('div');
         directorResponseContainer.className = 'message assistant-msg';
@@ -3497,7 +3511,8 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             current_stage: currentStage,
             user_prompt: userPrompt,
             chapter_index: state.activeChapterIndex || 1,
-            extra_context: buildDirectorExtraContext(reviewContext)
+            extra_context: buildDirectorExtraContext(reviewContext),
+            loop_count: state.directorLoopCount || 0
         };
         
         // 計算建議的下一章（用於處理缺漏或補充章節）

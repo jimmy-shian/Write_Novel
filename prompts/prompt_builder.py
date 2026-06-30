@@ -6,6 +6,7 @@ Prompt Builder (隔離的提示詞構建與拼接層)
 
 import json
 import agent_json
+import db
 from agent_json import CHARACTER_BASIC_FIELDS
 from prompts.prompt_main import (
     STORY_ARCHITECT_PROMPT,
@@ -131,6 +132,7 @@ WORLDVIEW_FIELDS_BY_STAGE = {
     "volume_skeleton": ["theme", "main_conflict", "macro_outline", "multi_act_structure", "worldview", "setting", "power_system", "factions", "locations"],
     "writer": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
     "editor": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
+    "director": ["title", "theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "timeline", "macro_outline", "progressive_character_plan"],
     "copilot": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
 }
 
@@ -212,7 +214,7 @@ def _relationship_summary(char):
     return summary or {"name": char.get("name", "未命名角色")}
 
 
-def build_relevant_character_context(characters_data, query_text="", force_full_names=None, include_all_full=False, max_full_characters=12):
+def build_relevant_character_context(characters_data, query_text="", force_full_names=None, include_all_full=False, max_full_characters=12, max_character_tokens=8000):
     """Select full character cards only for characters named in the task context."""
     chars = _normalize_characters_list(characters_data)
     if not chars:
@@ -247,6 +249,22 @@ def build_relevant_character_context(characters_data, query_text="", force_full_
     }
     if overflow:
         result["overflow_note"] = f"另有 {len(overflow)} 位命中角色因單次上下文過大改列基本關係摘要；如本次必須使用，請回問總監補充完整角色卡。"
+
+    est_tokens = len(_json_text(result)) / 4
+    if est_tokens > max_character_tokens:
+        for fi in range(len(result.get("full_characters", []))):
+            if est_tokens <= max_character_tokens:
+                break
+            full_char = result["full_characters"][fi]
+            demoted = _relationship_summary(full_char)
+            result["full_characters"][fi] = demoted
+            name = full_char.get("name", "未命名角色")
+            if name in result.get("matched_full_character_names", []):
+                result["matched_full_character_names"].remove(name)
+            result.setdefault("other_characters_basic_relationships", []).append(demoted)
+            result["demotion_note"] = f"部分命中角色因上下文預算限制改列基本關係摘要；如需完整角色卡請回問總監。"
+            est_tokens = len(_json_text(result)) / 4
+
     return result
 
 
@@ -519,9 +537,9 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
             try:
                 parsed_chars = json.loads(existing_chars_json)
                 chars_list = parsed_chars.get("characters", [])
-                if 0 <= target_char_index < len(chars_list):
-                    target_char_content = f"\n【被修改角色的完整內容 (Index {target_char_index})】\n{json.dumps(chars_list[target_char_index], ensure_ascii=False, indent=2)}"
-            except:
+                norm_idx = db.normalize_char_index(int(target_char_index), len(chars_list), source='character_designer')
+                target_char_content = f"\n【被修改角色的完整內容 (Index {norm_idx})】\n{json.dumps(chars_list[norm_idx], ensure_ascii=False, indent=2)}"
+            except IndexError:
                 pass
                 
         user_content = f"""【世界觀背景】

@@ -24,7 +24,7 @@ MIN_VOLUME_COUNT = 10
 MAX_VOLUME_COUNT = 20
 MIN_CHAPTERS_PER_VOLUME = 40
 MAX_CHAPTERS_PER_VOLUME = 50
-from models.client import call_llm_sync, call_llm_json
+MAX_AUTO_LOOPS = 5
 
 # --- IMPORT SECURE PROMPT BUILDERS ---
 from prompts.prompt_builder import (
@@ -41,7 +41,9 @@ from prompts.prompt_builder import (
     build_director_decision_help_messages,
     build_incremental_architect_messages,
     build_incremental_character_messages,
-    extract_worldview_summary
+    extract_worldview_summary,
+    select_worldview_context,
+    mask_worldview_seeds_and_turns
 )
 
 
@@ -86,16 +88,21 @@ def _load_retrospective_gold_rules(novel_id, limit=16000):
     return content[:head_len] + marker + content[-tail_len:]
 
 
-async def safe_generator_wrapper(gen):
+import time
+
+async def safe_generator_wrapper(gen, novel_id=None):
     """
     Async wrapper around a sync generator.
     - Detects client disconnect (asyncio.CancelledError) and closes the generator cleanly.
     - Prevents exceptions from propagating after data has been yielded.
     - If it raises before yielding anything, re-raises so FastAPI can send a proper error response.
+    - Optionally sends heartbeat SSE events and updates DB heartbeat every 60s.
     """
     loop = asyncio.get_running_loop()
     has_yielded = False
     sentinel = object()
+    last_heartbeat = time.time() if novel_id else None
+    HEARTBEAT_INTERVAL = 60
     try:
         while True:
             chunk = await loop.run_in_executor(None, partial(next, gen, sentinel))
@@ -103,6 +110,15 @@ async def safe_generator_wrapper(gen):
                 break
             has_yielded = True
             yield chunk
+            if novel_id and last_heartbeat is not None:
+                now = time.time()
+                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    last_heartbeat = now
+                    try:
+                        db.update_pipeline_heartbeat(novel_id)
+                    except Exception:
+                        pass
+                    yield "data: " + json.dumps({"type": "heartbeat"}, ensure_ascii=False) + "\n\n"
     except asyncio.CancelledError:
         print("[SAFE_WRAPPER] Client disconnected, stopping generator.")
         try:
@@ -157,7 +173,7 @@ def run_story_architect(novel_id, user_prompt):
         if _handle_director_context_request(novel_id, "世界觀架構師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "世界觀架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
-        db.save_worldbuilding(novel_id, full_text)
+        db.save_worldbuilding(novel_id, full_text, validate=False)
         db.save_chat_message(novel_id, "assistant", f"世界觀生成成功！版本已更新。", message_type="pipeline")
 
 
@@ -475,7 +491,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
         wb_dict["key_turning_points"] = turns
         
         updated_content = f"```json\n{json.dumps(wb_dict, ensure_ascii=False, indent=2)}\n```"
-        db.save_worldbuilding(novel_id, updated_content)
+        db.save_worldbuilding(novel_id, updated_content, validate=False)
         try:
             if db.get_volumes(novel_id):
                 db.precompute_global_foreshadowing(novel_id)
@@ -997,7 +1013,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
     
     char_data = db.get_latest_characters(novel_id)
-    characters_bible = char_data["json_data"] if char_data else "尚無角色設定"
+    characters_bible = char_data["parsed_data"] if (char_data and char_data.get("parsed_data")) else "尚無角色設定"
     
     plot_data = db.get_stitched_plot(novel_id)
     chapters_outlines = plot_data.get("chapters", []) if plot_data else []
@@ -1209,28 +1225,51 @@ def run_copilot_chat(novel_id, user_message):
 # =============================================================================
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
+MAX_AUTO_LOOPS = 5
+
 def run_director_decision(
     novel_id,
     current_stage,
     user_prompt,
     chapter_index=None,
     volume_index=None,
-    character_review_mode=None,
-    character_review_hint=None,
-    character_review_target_content=None,
-    suggested_next_chapter=None,
-    conversation_context=None,
-    summary_context=None,
-    extra_context=None
+    loop_count=0
 ):
     """
     Gateway review after a stage completes. Returns next action:
     CONTINUE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
     """
+    # Circuit breaker: if loop_count exceeds MAX_AUTO_LOOPS, force WAIT_USER
+    if loop_count >= MAX_AUTO_LOOPS:
+        override_text = "data: " + json.dumps({
+            "type": "content",
+            "delta": json.dumps({
+                "action": "WAIT_USER",
+                "target": "user",
+                "reason": f"自動循環已達上限 ({MAX_AUTO_LOOPS} 次)，為避免無限循環，強制切換為等待用戶確認模式。請人工介入決定下一步。",
+                "hint": "",
+                "agent_prompt": "",
+                "agent_context": "",
+                "loop_limited": True
+            }, ensure_ascii=False)
+        }, ensure_ascii=False) + "\n\n"
+        yield override_text
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
     if not current_stage or current_stage == "init":
         current_stage = diagnostics.detect_current_stage(novel_id)
     wb = db.get_latest_worldbuilding(novel_id)
-    worldview_text = wb["content"] if wb else "尚無世界觀設定"
+    worldview_text = select_worldview_context(wb["content"], current_stage="director", query_text=user_prompt or "") if wb else "尚無世界觀設定"
+    if current_stage not in ("foreshadowing", "worldview"):
+        try:
+            worldview_text = mask_worldview_seeds_and_turns(worldview_text)
+        except Exception:
+            pass
+    MAX_DIRECTOR_WORLDVIEW_CHARS = 30000
+    if len(worldview_text) > MAX_DIRECTOR_WORLDVIEW_CHARS:
+        print(f"[WARN] Director worldview emergency-truncated from {len(worldview_text)} to {MAX_DIRECTOR_WORLDVIEW_CHARS} chars for novel {novel_id}")
+        worldview_text = worldview_text[:MAX_DIRECTOR_WORLDVIEW_CHARS] + "\n...[世界觀已截斷]"
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
     
@@ -1515,14 +1554,13 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
             parsed = json.loads(existing_chars_json)
             chars_list = parsed.get("characters", [])
             raw_idx = int(target_char_index)
-            if 0 <= raw_idx < len(chars_list):
-                normalized_target_index = raw_idx
-            elif 1 <= raw_idx <= len(chars_list):
-                normalized_target_index = raw_idx - 1
-            if 0 <= normalized_target_index < len(chars_list):
-                target_char_content = f"\n【待修改角色的完整原內容】\n{json.dumps(chars_list[normalized_target_index], ensure_ascii=False, indent=2)}"
+            normalized_target_index = db.normalize_char_index(raw_idx, len(chars_list), source='incremental_character_designer')
+        except IndexError:
+            normalized_target_index = None
         except:
             pass
+        if normalized_target_index is not None and 0 <= normalized_target_index < len(chars_list):
+            target_char_content = f"\n【待修改角色的完整原內容】\n{json.dumps(chars_list[normalized_target_index], ensure_ascii=False, indent=2)}"
             
     messages = build_incremental_character_messages(
         worldview_text, existing_chars_json, target_char_content, normalized_target_index, field_name, user_hint

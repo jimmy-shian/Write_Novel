@@ -183,6 +183,24 @@ function buildDirectorDrivenPrompt(basePrompt, decision = null) {
 
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt, decision = null) {
+    // Confirmation gate for volumes stage in generate (non-patch) mode
+    if (stage === 'volumes') {
+        const chapters = state.currentNovelData?.chapters || [];
+        const chapterCount = chapters.length || 0;
+        const mode = decision?.mode || 'generate';
+        if (chapterCount > 0 && mode !== 'patch') {
+            const confirmed = window.confirm(`重新產生篇卷將刪除 ${chapterCount} 章已寫內容，確定嗎？`);
+            if (!confirmed) {
+                showToast('已取消篇卷重新生成');
+                updatePipelineStage('volumes', 'error');
+                return;
+            }
+        }
+    }
+    return _executePipelineStageWithBody(stage, userPrompt, decision);
+}
+
+async function _executePipelineStageWithBody(stage, userPrompt, decision = null) {
     return new Promise((resolve) => {
         let endpoint, body, targetTextarea;
         let agentName = '';
@@ -211,7 +229,7 @@ export async function executePipelineStage(stage, userPrompt, decision = null) {
                 break;
             case 'volumes':
                 endpoint = '/api/agent/volumes-planner';
-                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt, confirm_wipe: true };
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
                 agentName = 'Volumes Planner (篇卷結構規劃師)';
