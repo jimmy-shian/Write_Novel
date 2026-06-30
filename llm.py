@@ -4,7 +4,7 @@ import os
 import re
 from db import get_agent_configs, AGENT_DEFAULTS
 from dotenv import load_dotenv
-
+import time
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
@@ -237,7 +237,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
             for line in content.split("\n"):
                 print(line)
     print("\n" + "=" * 80)
-    print("【API 請求即將發送】")
+    print("【API 請求即將發送】", agent_name, " | ", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     print("=" * 80 + "\n")
     # ==========================================
 

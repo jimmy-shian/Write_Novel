@@ -15,88 +15,92 @@ function escapeBackticks(str) {
 // Compatible renderer for Foreshadowing Seeds (🌱)
 function formatForeshadowingSeed(item) {
     if (typeof item === 'string') {
+        const trimmed = item.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                return formatForeshadowingSeed(JSON.parse(trimmed));
+            } catch(e) {}
+        }
         return renderMarkdown(item);
     }
     if (typeof item === 'object' && item !== null) {
-        const idStr = item.id !== undefined ? `<strong style="color:var(--primary);">[Seed-${item.id}]</strong> ` : '';
-        const stageStr = item.stage ? `<span class="char-pill pill-personality" style="margin-right:6px; font-size:var(--font-3xs); border-radius:4px; padding:1px 4px;">${item.stage}</span>` : '';
-        const nameStr = item.name ? `<strong>${item.name}</strong>: ` : '';
-        const raw = item.detail || item.content || item.summary || item.description || item.seed || '';
-        let detailStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
-        if (item.payoff_hint || item.payoff) {
-            const payoffValue = item.payoff_hint || item.payoff;
-            const payoffStr = typeof payoffValue === 'string' ? payoffValue : JSON.stringify(payoffValue);
-            detailStr += ` <span style="color:var(--text-muted); font-size:var(--font-2xs); font-style:italic;">(回收: ${payoffStr})</span>`;
-        }
-        if (!detailStr) {
-            detailStr = JSON.stringify(item);
-        }
-        return `${idStr}${stageStr}${nameStr}${renderMarkdown(detailStr)}`;
+        const id = item.id !== undefined ? `Seed-${item.id}` : '';
+        const name = item.name || item.title || '未命名伏筆';
+        const description = item.description || item.detail || item.content || item.summary || item.seed || '';
+        const setupHint = item.setup_hint || item.setup || '';
+        const payoffHint = item.payoff_hint || item.payoff || '';
+        const relatedChars = Array.isArray(item.related_characters) ? item.related_characters.join(', ') : (item.related_characters || '');
+        const thematicLink = item.thematic_link || '';
+
+        return `
+            <div class="strategy-subcard" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 10px; box-shadow: var(--shadow-sm);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">
+                    <span style="font-weight: 700; color: var(--info); font-size: 0.95rem; display: flex; align-items: center; gap: 4px;">🌱 ${name}</span>
+                    ${id ? `<span style="font-family: monospace; font-size: 0.8rem; background: rgba(59, 130, 246, 0.1); color: var(--primary); padding: 2px 6px; border-radius: 4px; font-weight: 600;">${id}</span>` : ''}
+                </div>
+                <div style="font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 8px;">
+                    ${renderMarkdown(description)}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; font-size: 0.8rem; border-top: 1px dashed var(--border-color); padding-top: 8px;">
+                    ${setupHint ? `<div><span style="color: var(--text-muted); font-weight: 600;">📍 埋設契機: </span>${setupHint}</div>` : ''}
+                    ${payoffHint ? `<div><span style="color: var(--text-muted); font-weight: 600;">🔑 回收反轉: </span>${payoffHint}</div>` : ''}
+                    ${relatedChars ? `<div><span style="color: var(--text-muted); font-weight: 600;">👥 關聯角色: </span>${relatedChars}</div>` : ''}
+                    ${thematicLink ? `<div style="grid-column: 1 / -1;"><span style="color: var(--text-muted); font-weight: 600;">🎯 主題連結: </span>${thematicLink}</div>` : ''}
+                </div>
+            </div>
+        `;
     }
     return String(item);
 }
 
 // Compatible renderer for Key Turning Points (⚡)
-// 支援字串（舊格式，包含已轉義 HTML）、物件（新格式結構化數據）
-// 以及未轉義的 HTML 字串（新版本 AI 直接輸出的格式）
 function formatKeyTurningPoint(item) {
-    // 安全處理：避免 XSS，同時允許合法 HTML 標籤顯示
     const safeHtml = (str) => {
         if (!str) return '';
-        // 只轉義明顯危險的屬性和標籤組合，允許常見格式化標籤
         return str
             .replace(/javascript:/gi, '')
             .replace(/on\w+=/gi, '')
             .replace(/<script[\s\S]*?<\/script>/gi, '')
             .replace(/<style[\s\S]*?<\/style>/gi, '');
     };
-    
+
     if (typeof item === 'string') {
-        // 檢測是否包含未轉義的 HTML 標籤（這是新版本 AI 的輸出格式）
+        const trimmed = item.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                return formatKeyTurningPoint(JSON.parse(trimmed));
+            } catch(e) {}
+        }
         const hasUnescapedHtml = /<[a-z][\s\S]*>/i.test(item);
         if (hasUnescapedHtml) {
-            // 包含未轉義 HTML，安全處理後直接渲染
             return safeHtml(item);
         }
-        // 純文字或已轉義的 HTML，回退到 Markdown 渲染
         return renderMarkdown(item);
     }
     if (typeof item === 'object' && item !== null) {
-        const idStr = item.id !== undefined ? `<strong style="color:var(--status-unwritten);">[Turn-${item.id}]</strong> ` : '';
-        const toStr = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? JSON.stringify(v) : String(v));
-        
-        // 優先使用 trigger（觸發事件）作為主要顯示內容
-        let mainContent = toStr(item.turning_point_name || item.trigger_condition || item.trigger || item.name || item.title || '');
-        
-        // 如果有 HTML 內容在 detail/global_impact 中，檢測並安全處理
-        let additionalContent = toStr(item.structural_impact || item.global_impact || item.impact || item.detail || item.summary || item.description || '');
-        if (item.emotional_stakes) {
-            additionalContent += additionalContent ? `；代價: ${toStr(item.emotional_stakes)}` : toStr(item.emotional_stakes);
-        }
-        
-        // 檢測附加內容是否包含 HTML
-        const hasHtmlInAdditional = /<[a-z][\s\S]*>/i.test(additionalContent);
-        
-        if (mainContent && additionalContent) {
-            // 兩者都有：使用 "觸發事件: 全域影響" 格式
-            if (hasHtmlInAdditional) {
-                return `${idStr}<strong>${safeHtml(mainContent)}</strong>: ${safeHtml(additionalContent)}`;
-            }
-            return `${idStr}<strong>${mainContent}</strong>: ${renderMarkdown(additionalContent)}`;
-        } else if (mainContent) {
-            if (/<[a-z][\s\S]*>/i.test(mainContent)) {
-                return `${idStr}${safeHtml(mainContent)}`;
-            }
-            return `${idStr}${renderMarkdown(mainContent)}`;
-        } else if (additionalContent) {
-            if (hasHtmlInAdditional) {
-                return `${idStr}${safeHtml(additionalContent)}`;
-            }
-            return `${idStr}${renderMarkdown(additionalContent)}`;
-        }
-        
-        // 兩者都為空，安全 stringify
-        return `${idStr}<span style="font-family:monospace;font-size:0.85em;color:var(--text-muted);">${JSON.stringify(item)}</span>`;
+        const id = item.id !== undefined ? `Turn-${item.id}` : '';
+        const name = item.name || item.turning_point_name || item.title || '未命名轉折點';
+        const trigger = item.trigger_condition || item.trigger || '';
+        const structuralImpact = item.structural_impact || item.impact || '';
+        const emotionalStakes = item.emotional_stakes || '';
+        const relatedSeeds = Array.isArray(item.related_seeds) ? item.related_seeds.join(', ') : (item.related_seeds || '');
+        const globalImpact = item.global_impact || item.detail || item.summary || item.description || '';
+
+        return `
+            <div class="strategy-subcard" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 10px; box-shadow: var(--shadow-sm);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">
+                    <span style="font-weight: 700; color: var(--danger); font-size: 0.95rem; display: flex; align-items: center; gap: 4px;">⚡ ${name}</span>
+                    ${id ? `<span style="font-family: monospace; font-size: 0.8rem; background: rgba(239, 68, 68, 0.1); color: var(--danger); padding: 2px 6px; border-radius: 4px; font-weight: 600;">${id}</span>` : ''}
+                </div>
+                ${trigger ? `<div style="font-size: 0.85rem; line-height: 1.5; color: var(--text-primary); margin-bottom: 8px;"><span style="font-weight: 600; color: var(--text-muted);">💥 觸發條件: </span>${trigger}</div>` : ''}
+                ${globalImpact ? `<div style="font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 8px;">${renderMarkdown(globalImpact)}</div>` : ''}
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; font-size: 0.8rem; border-top: 1px dashed var(--border-color); padding-top: 8px;">
+                    ${structuralImpact ? `<div><span style="color: var(--text-muted); font-weight: 600;">📜 結構影響: </span>${structuralImpact}</div>` : ''}
+                    ${emotionalStakes ? `<div><span style="color: var(--text-muted); font-weight: 600;">💔 情感代價: </span>${emotionalStakes}</div>` : ''}
+                    ${relatedSeeds ? `<div><span style="color: var(--text-muted); font-weight: 600;">🌱 關聯伏筆: </span>${relatedSeeds}</div>` : ''}
+                </div>
+            </div>
+        `;
     }
     return String(item);
 }
@@ -364,11 +368,9 @@ export function renderWorldviewSections() {
             </div>
             <div class="worldview-section-content" id="content-seeds">
                 ${seedsList.length > 0 ? `
-                    <ul class="worldview-list">
-                        ${seedsList.map((item, idx) => `
-                            <li>${formatForeshadowingSeed(item)}</li>
-                        `).join('')}
-                    </ul>
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                        ${seedsList.map((item, idx) => formatForeshadowingSeed(item)).join('')}
+                    </div>
                 ` : `
                     <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">🌱 尚無伏筆設定，請點擊編輯按鈕以新增</div>
                 `}
@@ -392,11 +394,9 @@ export function renderWorldviewSections() {
             </div>
             <div class="worldview-section-content" id="content-turning-points">
                 ${tpList.length > 0 ? `
-                    <ul class="worldview-list">
-                        ${tpList.map((item, idx) => `
-                            <li>${formatKeyTurningPoint(item)}</li>
-                        `).join('')}
-                    </ul>
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                        ${tpList.map((item, idx) => formatKeyTurningPoint(item)).join('')}
+                    </div>
                 ` : `
                     <div style="text-align:center; padding: 24px; color:var(--text-muted); font-style:italic;">⚡ 尚無轉折設定，請點擊編輯按鈕以新增</div>
                 `}
@@ -530,10 +530,154 @@ export function applySubSectionVisibility() {
 }
 
 /**
- * 渲染單個世界觀區塊（帶編輯/刪除按鈕，支援 Markdown 語法）
+ * 渲染結構化 JSON 內容為美觀的 HTML 卡片與列表
+ */
+function renderStructuredContent(data) {
+    if (data === null || data === undefined) return '';
+    if (typeof data !== 'object') return renderMarkdown(String(data));
+
+    // 1. 如果是陣列
+    if (Array.isArray(data)) {
+        return `
+            <ul style="padding-left: 20px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px;">
+                ${data.map(item => `
+                    <li style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.4;">
+                        ${typeof item === 'object' ? renderStructuredContent(item) : renderMarkdown(String(item))}
+                    </li>
+                `).join('')}
+            </ul>
+        `;
+    }
+
+    // 2. 如果是核心衝突結構 ( factions, core_tension )
+    if (data.factions || data.core_tension) {
+        let html = '';
+        if (data.core_tension) {
+            html += `
+                <div class="conflict-core-tension" style="background: rgba(239, 68, 68, 0.05); border-left: 4px solid var(--danger); padding: 12px; border-radius: 6px; margin-bottom: 16px; font-weight: 500; font-size: 0.9rem; line-height: 1.5; color: var(--text-primary);">
+                    ${renderMarkdown(data.core_tension)}
+                </div>
+            `;
+        }
+        if (Array.isArray(data.factions)) {
+            html += `
+                <div class="factions-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 8px;">
+                    ${data.factions.map(fac => `
+                        <div class="faction-card" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; box-shadow: var(--shadow-sm);">
+                            <div style="font-weight: 700; color: var(--danger); font-size: 0.95rem; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                                🛡️ ${fac.name || '未命名勢力'}
+                            </div>
+                            ${fac.stance ? `<div style="font-size: 0.85rem; margin-bottom: 4px; line-height: 1.4;"><span style="color: var(--text-muted); font-weight: 600;">立場: </span>${fac.stance}</div>` : ''}
+                            ${fac.secret_goal ? `<div style="font-size: 0.85rem; margin-bottom: 4px; line-height: 1.4;"><span style="color: var(--text-muted); font-weight: 600;">秘密意圖: </span>${fac.secret_goal}</div>` : ''}
+                            ${fac.conflict_root ? `<div style="font-size: 0.85rem; line-height: 1.4;"><span style="color: var(--text-muted); font-weight: 600;">衝突根源: </span>${fac.conflict_root}</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        return html;
+    }
+
+    // 3. 如果是世界觀設定結構 ( geography, power_system, society, atmosphere )
+    if (data.geography || data.power_system || data.society || data.atmosphere) {
+        let html = '';
+        if (data.geography) {
+            html += `
+                <div style="margin-bottom: 16px;">
+                    <h5 style="color: var(--primary); margin-bottom: 6px; font-size: 0.95rem; display: flex; align-items: center; gap: 6px; font-weight: 600;">🗺️ 地理環境</h5>
+                    <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-secondary); margin: 0; padding-left: 4px;">${data.geography}</p>
+                </div>
+            `;
+        }
+        if (data.power_system) {
+            html += `
+                <div style="margin-bottom: 16px;">
+                    <h5 style="color: var(--primary); margin-bottom: 6px; font-size: 0.95rem; display: flex; align-items: center; gap: 6px; font-weight: 600;">⚡ 力量體系</h5>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; padding-left: 4px;">
+            `;
+            if (typeof data.power_system === 'object') {
+                html += Object.entries(data.power_system).map(([key, val]) => `
+                    <div style="background: var(--bg-secondary); border-radius: 6px; padding: 10px; border: 1px dashed var(--border-color);">
+                        <strong style="color: var(--text-primary); font-size: 0.85rem; display: block; margin-bottom: 4px;">🔸 ${key}</strong>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; display: block;">${val}</span>
+                    </div>
+                `).join('');
+            } else {
+                html += `<div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">${data.power_system}</div>`;
+            }
+            html += `</div></div>`;
+        }
+        if (data.society) {
+            html += `
+                <div style="margin-bottom: 16px;">
+                    <h5 style="color: var(--primary); margin-bottom: 6px; font-size: 0.95rem; display: flex; align-items: center; gap: 6px; font-weight: 600;">🏛️ 社會與生態</h5>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; padding-left: 4px;">
+            `;
+            if (typeof data.society === 'object') {
+                html += Object.entries(data.society).map(([key, val]) => `
+                    <div style="background: var(--bg-secondary); border-radius: 6px; padding: 10px; border: 1px dashed var(--border-color);">
+                        <strong style="color: var(--text-primary); font-size: 0.85rem; display: block; margin-bottom: 4px;">🔹 ${key}</strong>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; display: block;">${val}</span>
+                    </div>
+                `).join('');
+            } else {
+                html += `<div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">${data.society}</div>`;
+            }
+            html += `</div></div>`;
+        }
+        if (data.atmosphere) {
+            html += `
+                <div style="margin-bottom: 8px;">
+                    <h5 style="color: var(--primary); margin-bottom: 6px; font-size: 0.95rem; display: flex; align-items: center; gap: 6px; font-weight: 600;">🎬 世界氛圍</h5>
+                    <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-secondary); margin: 0; font-style: italic; padding-left: 4px;">${data.atmosphere}</p>
+                </div>
+            `;
+        }
+        return html;
+    }
+
+    // 4. 通用物件鍵值渲染
+    return `
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+            ${Object.entries(data).map(([key, value]) => `
+                <div style="font-size: 0.9rem; line-height: 1.4;">
+                    <strong style="color: var(--text-primary);">${key}:</strong>
+                    <div style="padding-left: 12px; margin-top: 4px; color: var(--text-secondary);">
+                        ${typeof value === 'object' ? renderStructuredContent(value) : renderMarkdown(String(value))}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+/**
+ * 渲染單個世界觀區塊（帶編輯/刪除按鈕，支援 Markdown 語法與 JSON 美化）
  */
 export function renderWorldviewSection(sectionId, icon, title, content, badgeClass) {
-    const safeContent = content || '';
+    let safeContent = content || '';
+    let isJSON = false;
+    let parsedData = null;
+
+    if (typeof safeContent === 'string' && safeContent.trim()) {
+        const trimmed = safeContent.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                parsedData = JSON.parse(trimmed);
+                isJSON = true;
+            } catch (e) {
+                // Keep as string
+            }
+        }
+    } else if (safeContent && typeof safeContent === 'object') {
+        parsedData = safeContent;
+        isJSON = true;
+    }
+
+    const renderedHTML = isJSON 
+        ? renderStructuredContent(parsedData)
+        : (renderMarkdown(String(safeContent)) || '<em style="color:var(--text-muted)">尚無內容</em>');
+
     return `
         <div class="worldview-section-card" data-section="${sectionId}">
             <div class="worldview-section-header">
@@ -547,7 +691,7 @@ export function renderWorldviewSection(sectionId, icon, title, content, badgeCla
                 </div>
             </div>
             <div class="worldview-section-content" id="content-${sectionId}">
-                ${renderMarkdown(safeContent) || '<em style="color:var(--text-muted)">尚無內容</em>'}
+                ${renderedHTML}
             </div>
         </div>
     `;

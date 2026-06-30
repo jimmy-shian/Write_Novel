@@ -1,90 +1,179 @@
 # -*- coding: utf-8 -*-
-import os
+import sqlite3
 import sys
 import json
 
-# Add parent directory to path so we can import db
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
-import db
+DB_PATH = "novel_factory.db"
 
-def clear_data():
-    novel_id = 'd17af413-03be-4ffe-93a9-3603f8ff9839'
-    print(f"Targeting Novel: {novel_id}")
-    
-    conn = db.get_db_connection()
-    cursor = conn.cursor()
-    
-    # 1. Clear characters (keep only first 10)
-    char_data = db.get_latest_characters(novel_id)
-    if char_data and char_data.get("json_data"):
+TABLES_TO_CLEAR = [
+    "worldbuilding",
+    "characters",
+    "volumes",
+    "plot_chapters",
+    "chapters",
+    "foreshadowing_blueprints",
+    "pipeline_locks",
+    "chapters_backup",
+    "last_agent_run",
+]
+
+
+def list_novels(conn):
+    conn.row_factory = sqlite3.Row
+    novels = conn.execute("SELECT id, title, genre, style, pipeline_prompt, created_at FROM novels ORDER BY created_at DESC").fetchall()
+    return [dict(n) for n in novels]
+
+
+def show_novels(novels):
+    print("\n" + "=" * 70)
+    print(f"  資料庫中共有 {len(novels)} 本小說")
+    print("=" * 70)
+    for i, n in enumerate(novels, 1):
+        title = n['title'] or '(無標題)'
+        genre = n['genre'] or ''
+        style = n['style'] or ''
+        prompt_preview = (n.get('pipeline_prompt') or '')[:60]
+        print(f"\n  [{i}] {title}")
+        print(f"      ID: {n['id']}")
+        if genre:
+            print(f"      類型: {genre}")
+        if style:
+            print(f"      風格: {style}")
+        if prompt_preview:
+            print(f"      一鍵提示: {prompt_preview}{'...' if len(n.get('pipeline_prompt') or '') > 60 else ''}")
+        print(f"      建立時間: {n['created_at']}")
+    print()
+
+
+def show_novel_stats(conn, novel_id):
+    tables = TABLES_TO_CLEAR + ["chat_memory"]
+    conn.row_factory = sqlite3.Row
+    novel = conn.execute("SELECT title FROM novels WHERE id = ?", (novel_id,)).fetchone()
+    title = dict(novel)['title'] if novel else novel_id
+    print(f"\n  小說「{title}」({novel_id}) 各資料表筆數：")
+    for t in tables:
         try:
-            parsed_chars = json.loads(char_data["json_data"])
-            chars_list = parsed_chars.get("characters", [])
-            print(f"Current character count: {len(chars_list)}")
-            
-            # Keep only the first 10 characters
-            trimmed_list = chars_list[:10]
-            print(f"Trimming to count: {len(trimmed_list)}")
-            
-            trimmed_json = {"characters": trimmed_list}
-            db.save_characters(novel_id, trimmed_json)
-            print("Successfully trimmed characters to first 10!")
+            cnt = conn.execute(f"SELECT COUNT(*) FROM {t} WHERE novel_id = ?", (novel_id,)).fetchone()[0]
+            label = "筆" if cnt > 0 else "—"
+            print(f"    {t:30s} {cnt:>6} {label}")
+        except Exception:
+            pass
+    print()
+
+
+def interactive_select(novels):
+    while True:
+        try:
+            raw = input("  請輸入要清除的小說編號（多选用逗號分隔，0=全部，q=取消）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  已取消。")
+            return None
+
+        if raw.lower() in ('q', 'quit', 'cancel', '取消'):
+            print("  已取消。")
+            return None
+
+        if raw == '0':
+            return [n['id'] for n in novels]
+
+        try:
+            indices = [int(x.strip()) for x in raw.split(',') if x.strip()]
+            selected = []
+            valid = True
+            for idx in indices:
+                if 1 <= idx <= len(novels):
+                    selected.append(novels[idx - 1]['id'])
+                else:
+                    print(f"  無效編號: {idx}（範圍 1-{len(novels)}）")
+                    valid = False
+                    break
+            if valid and selected:
+                return selected
+        except ValueError:
+            print("  輸入格式錯誤，請用逗號分隔編號。")
+
+
+def confirm_clear(conn, selected_ids):
+    novels_list = list_novels(conn)
+    id_to_title = {n['id']: n['title'] for n in novels_list}
+
+    print("\n  即將清除以下小說的「生成內容」：")
+    for nid in selected_ids:
+        title = id_to_title.get(nid, nid)
+        print(f"    - {title} ({nid})")
+
+    print("  將保留：小說設定（title, genre, style, pipeline_prompt, worldview_patches）")
+    print("  將保留：chat_memory（對話記錄）")
+    print("  將刪除：worldbuilding, characters, volumes, plot_chapters,")
+    print("          chapters, foreshadowing_blueprints, pipeline_locks,")
+    print("          chapters_backup, last_agent_run")
+
+    while True:
+        try:
+            ans = input("\n  確認執行？(y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  已取消。")
+            return False
+        if ans in ('y', 'yes', '是'):
+            return True
+        return False
+
+
+def clear_novel(conn, novel_id):
+    novel = conn.execute("SELECT title FROM novels WHERE id = ?", (novel_id,)).fetchone()
+    title = dict(novel)['title'] if novel else novel_id
+    print(f"\n  正在清除「{title}」的生成內容...")
+    total = 0
+    for table in TABLES_TO_CLEAR:
+        try:
+            cur = conn.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
+            deleted = cur.rowcount
+            total += deleted
+            print(f"    {table}: 刪除 {deleted} 筆")
         except Exception as e:
-            print(f"Failed to trim characters: {e}")
-    else:
-        print("No characters found to trim.")
-        
-    # 2. Revert detailed outlines in volumes to clean skeletons
-    cursor.execute("SELECT id, volume_index, chapters_outline FROM volumes WHERE novel_id = ?", (novel_id,))
-    vol_rows = cursor.fetchall()
-    print(f"Found {len(vol_rows)} volumes.")
-    
-    for row in vol_rows:
-        vol_id = row['id']
-        vol_idx = row['volume_index']
-        outline_str = row['chapters_outline']
-        if outline_str:
-            try:
-                chaps = json.loads(outline_str)
-                if isinstance(chaps, list):
-                    cleaned_chaps = []
-                    for ch in chaps:
-                        # Extract only skeleton fields
-                        skel_ch = {
-                            "chapter_index": int(ch.get("chapter_index", 0)),
-                            "chapter_title": ch.get("chapter_title") or ch.get("title") or "待設定標題",
-                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or "待設定摘要",
-                            "volume_index": vol_idx,
-                            "allocated_tasks": ch.get("allocated_tasks") or {
-                                "foreshadowing_plants": [],
-                                "foreshadowing_payoffs": [],
-                                "turning_points": []
-                            }
-                        }
-                        cleaned_chaps.append(skel_ch)
-                    
-                    cleaned_json = json.dumps(cleaned_chaps, ensure_ascii=False, indent=2)
-                    cursor.execute("UPDATE volumes SET chapters_outline = ? WHERE id = ?", (cleaned_json, vol_id))
-                    print(f"Volume {vol_idx} detail outlines cleared back to skeleton.")
-            except Exception as e:
-                print(f"Failed to clean Volume {vol_idx}: {e}")
-                
-    # 3. Clean or delete plot_chapters master records
-    cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
-    print("Deleted all master plot_chapters versions for this novel.")
-    
-    # Save a clean empty master plot outline to avoid breaking the front-end
-    cursor.execute(
-        "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, 1, 1)",
-        (novel_id, json.dumps({"chapters": []}, ensure_ascii=False))
-    )
-    print("Inserted fresh empty master plot outline.")
-    
-    # Commit database changes
+            print(f"    {table}: 跳過 ({e})")
     conn.commit()
+    print(f"  「{title}」清除完成，共刪除 {total} 筆。")
+    return total
+
+
+def main():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    novels = list_novels(conn)
+    if not novels:
+        print("  資料庫中沒有任何小說。")
+        conn.close()
+        return
+
+    show_novels(novels)
+
+    selected_ids = interactive_select(novels)
+    if not selected_ids:
+        conn.close()
+        return
+
+    for nid in selected_ids:
+        show_novel_stats(conn, nid)
+
+    if not confirm_clear(conn, selected_ids):
+        conn.close()
+        return
+
+    grand_total = 0
+    for nid in selected_ids:
+        grand_total += clear_novel(conn, nid)
+
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.close()
-    print("Database changes committed successfully!")
+
+    print(f"\n  全部完成！共清除 {len(selected_ids)} 本小說，刪除 {grand_total} 筆資料。")
+    print("  已保留：小說設定 + 對話記錄（chat_memory）\n")
+
 
 if __name__ == "__main__":
-    clear_data()
+    main()

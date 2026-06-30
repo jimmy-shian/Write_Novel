@@ -1,3 +1,11 @@
+// main.js - DEPRECATED / LEGACY
+// ============================================================
+// THIS FILE IS DEPRECATED AND NO LONGER USED.
+// It uses EventSource (GET-only SSE) which is incompatible with the POST-only API endpoints.
+// The active implementation is in pipeline.js + api.js + state.js (ES modules).
+// This file is kept only for reference/historical purposes.
+// ============================================================
+
 // main.js - Premium Interactive Novel Factory Pipeline Controller
 
 let activeNovelId = null;

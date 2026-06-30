@@ -97,11 +97,23 @@ export function parseWorldviewJSON(text) {
                 ];
             }
 
+            const ensureString = (val) => {
+                if (val === null || val === undefined) return "";
+                if (typeof val === 'object') {
+                    try {
+                        return JSON.stringify(val, null, 2);
+                    } catch (e) {
+                        return String(val);
+                    }
+                }
+                return String(val);
+            };
+
             return {
-                theme: parsed.theme || "",
-                main_conflict: parsed.main_conflict || "",
-                worldview: parsed.worldview || "",
-                macro_outline: parsed.macro_outline || "",
+                theme: ensureString(parsed.theme),
+                main_conflict: ensureString(parsed.main_conflict),
+                worldview: ensureString(parsed.worldview),
+                macro_outline: ensureString(parsed.macro_outline),
                 multi_act_structure: normalized_ta,
                 progressive_character_plan: normalized_cp,
                 foreshadowing_seeds: Array.isArray(parsed.foreshadowing_seeds) ? parsed.foreshadowing_seeds : [],
