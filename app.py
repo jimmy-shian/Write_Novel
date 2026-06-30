@@ -324,9 +324,10 @@ def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt), novel_id=novel_id)
+            async for chunk in agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt), novel_id=novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -337,15 +338,16 @@ def api_agent_character_designer(payload: CharacterDesignerRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_character_designer(
+            async for chunk in agents.safe_generator_wrapper(agents.run_character_designer(
                 novel_id=payload.novel_id,
                 user_prompt=payload.user_prompt,
                 hint=payload.hint,
                 mode=payload.mode,
                 target_char_index=payload.target_char_index
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -364,15 +366,16 @@ def api_agent_volumes_planner(payload: VolumesPlannerRequest):
             )
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_volumes_planner(
+            async for chunk in agents.safe_generator_wrapper(agents.run_volumes_planner(
                 novel_id=payload.novel_id,
                 user_prompt=payload.user_prompt,
                 hint=payload.hint,
                 mode=payload.mode,
                 target_vol_idx=payload.target_vol_idx
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -383,13 +386,14 @@ def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
+            async for chunk in agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
                 novel_id=payload.novel_id,
                 volume_index=payload.volume_index,
                 user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -401,14 +405,15 @@ def api_agent_write_chapter(payload: ChapterWriterRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_chapter_writer(
+            async for chunk in agents.safe_generator_wrapper(agents.run_chapter_writer(
                 novel_id=payload.novel_id,
                 chapter_index=payload.chapter_index,
                 custom_style=payload.custom_style,
                 user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -419,13 +424,14 @@ def api_agent_edit_chapter(payload: EditorAgentRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_editor_agent(
+            async for chunk in agents.safe_generator_wrapper(agents.run_editor_agent(
                 novel_id=payload.novel_id,
                 chapter_index=payload.chapter_index,
                 edit_instructions=payload.edit_instructions
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -436,9 +442,10 @@ def api_agent_copilot_chat(payload: CopilotChatRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message), novel_id=payload.novel_id)
+            async for chunk in agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -467,9 +474,9 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
         return StreamingResponse(error_gen(), media_type="text/event-stream")
     
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_director_decision(
+            async for chunk in agents.safe_generator_wrapper(agents.run_director_decision(
                 novel_id, payload.current_stage, effective_prompt,
                 chapter_index=payload.chapter_index,
                 volume_index=payload.volume_index,
@@ -481,7 +488,8 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
                 summary_context=payload.summary_context,
                 extra_context=payload.extra_context,
                 loop_count=payload.loop_count or 0,
-            ), novel_id=novel_id)
+            ), novel_id=novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -495,14 +503,15 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
     if not db.acquire_pipeline_lock(novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
     
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_director_decision_help(
+            async for chunk in agents.safe_generator_wrapper(agents.run_director_decision_help(
                 novel_id=novel_id,
                 current_stage=payload.current_stage,
                 help_action=payload.help_action,
                 help_reason=payload.help_reason
-            ), novel_id=novel_id)
+            ), novel_id=novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
@@ -1028,12 +1037,13 @@ def api_agent_foreshadowing_orchestrator(payload: ForeshadowingOrchestratorReque
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    def _wrapped():
+    async def _wrapped():
         try:
-            yield from agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
+            async for chunk in agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
                 novel_id=payload.novel_id,
                 user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id)
+            ), novel_id=payload.novel_id):
+                yield chunk
         finally:
             db.release_pipeline_lock(payload.novel_id)
     return StreamingResponse(_wrapped(), media_type="text/event-stream")
