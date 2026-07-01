@@ -37,71 +37,71 @@ def _convert_obj_to_traditional(obj):
     return obj
 
 # Load environment variables from .env file
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "novel_factory.db")
 
 # --- Agent Default Configurations from .env ---
 AGENT_DEFAULTS = {
     "global": {
-        "model": os.getenv("MODEL_GLOBAL", "google/gemma-3n-e4b-it"),
-        "temperature": 0.70,
+        "model": os.getenv("MODEL_GLOBAL", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "architect": {
-        "model": os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.30,
+        "model": os.getenv("MODEL_ARCHITECT", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 32768,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "character": {
-        "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "openai/gpt-oss-120b"),
-        "temperature": 0.40,
+        "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 32768,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "volumes": {
-        "model": os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.30,
+        "model": os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "volume_skeleton": {
-        "model": os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.35,
+        "model": os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "plot": {
-        "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "qwen/qwen3.5-122b-a10b"),
-        "temperature": 0.35,
+        "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "writer": {
-        "model": os.getenv("MODEL_WRITER", "nvidia/nemotron-3-super-120b-a12b"),
-        "temperature": 0.65,
+        "model": os.getenv("MODEL_WRITER", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
-        "enable_thinking": 1
+        "enable_thinking": 0
     },
     "editor": {
-        "model": os.getenv("MODEL_EDITOR", "mistralai/mistral-small-4-119b-2603"),
-        "temperature": 0.25,
-        "top_p": 0.90,
+        "model": os.getenv("MODEL_EDITOR", "patcher-main"),
+        "temperature": 1.0,
+        "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "copilot": {
-        "model": os.getenv("MODEL_COPILOT", "stepfun-ai/step-3.5-flash"),
-        "temperature": 0.55,
+        "model": os.getenv("MODEL_COPILOT", "patcher-main"),
+        "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
@@ -138,7 +138,7 @@ def sync_agent_configs_from_env(cursor):
         }
 
     # Fallbacks from global .env variables
-    default_base_url = os.getenv("DEFAULT_BASE_URL", "http://127.0.0.1:4000/v1")
+    default_base_url = os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1")
     default_temp = float(os.getenv("DEFAULT_TEMPERATURE", 0.7))
     default_top_p = float(os.getenv("DEFAULT_TOP_P", 0.95))
     default_max_tokens = int(os.getenv("DEFAULT_MAX_TOKENS", 16384))
@@ -163,7 +163,7 @@ def sync_agent_configs_from_env(cursor):
             elif agent == "volume_skeleton":
                 model = os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT")
             if not model:
-                model = os.getenv("MODEL_GLOBAL") or "google/gemma-3n-e4b-it"
+                model = os.getenv("MODEL_GLOBAL") or "patcher-main"
 
         # Float / Int parameters with robust fallbacks
         def get_float_env(key, fallback):
@@ -424,11 +424,6 @@ def db_init():
     # Sync all configurations from .env on start to ensure DB is always up to date
     sync_agent_configs_from_env(cursor)
     
-    # Migrate any legacy NVIDIA base URLs to local gateway
-    try:
-        cursor.execute("UPDATE agent_configs SET base_url = 'http://127.0.0.1:4000/v1' WHERE base_url = 'https://integrate.api.nvidia.com/v1'")
-    except Exception as e:
-        print(f"[DB MIGRATION] Failed to migrate base_url to local gateway: {e}")
     
     # 9. Global Foreshadowing Blueprint table
     cursor.execute("""

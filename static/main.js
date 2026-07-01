@@ -463,8 +463,8 @@ async function openSettingsModal() {
             // 1. Populate global config inputs
             const g = loadedConfigs["global"] || {};
             document.getElementById("cfg_global_api_key").value = g.api_key || "";
-            document.getElementById("cfg_global_base_url").value = g.base_url || "http://127.0.0.1:4000/v1";
-            document.getElementById("cfg_global_model").value = g.model || "google/gemma-3n-e4b-it";
+            document.getElementById("cfg_global_base_url").value = g.base_url || "https://integrate.api.nvidia.com/v1";
+            document.getElementById("cfg_global_model").value = g.model || "patcher-main";
             document.getElementById("cfg_global_temp").value = g.temperature !== undefined ? g.temperature : 0.7;
             document.getElementById("cfg_global_tokens").value = g.max_tokens !== undefined ? g.max_tokens : 16384;
             

@@ -47,7 +47,7 @@ def get_agent_model(agent_name):
 def get_default_config():
     """Get default config values from .env."""
     return {
-        "base_url": os.getenv("DEFAULT_BASE_URL", "http://127.0.0.1:4000/v1"),
+        "base_url": os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         "temperature": float(os.getenv("DEFAULT_TEMPERATURE", 0.7)),
         "top_p": float(os.getenv("DEFAULT_TOP_P", 0.95)),
         "max_tokens": int(os.getenv("DEFAULT_MAX_TOKENS", 16384)),
@@ -70,7 +70,7 @@ def get_config_for_agent(agent_name):
     # Base fallback from agent-specific AGENT_DEFAULTS
     config = {
         "api_key": get_agent_api_key(agent_name) or "",
-        "base_url": agent_defaults.get("base_url", "http://127.0.0.1:4000/v1"),
+        "base_url": agent_defaults.get("base_url", "https://integrate.api.nvidia.com/v1"),
         "model": get_agent_model(agent_name),
         "temperature": agent_defaults["temperature"],
         "top_p": agent_defaults["top_p"],
