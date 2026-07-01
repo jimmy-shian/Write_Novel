@@ -6,7 +6,7 @@ from db import get_agent_configs, AGENT_DEFAULTS
 from dotenv import load_dotenv
 import time
 # Load environment variables from .env file
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)
 
 
 
@@ -30,7 +30,7 @@ def get_agent_api_key(agent_name):
 def get_agent_model(agent_name):
     """Get default model from environment variables.
     If specific agent model is not set, falls back to MODEL_GLOBAL."""
-    global_default = os.getenv("MODEL_GLOBAL", "qwen/qwen3.5-122b-a10b")
+    global_default = os.getenv("MODEL_GLOBAL", "patcher-main")
     model_map = {
         "global": global_default,
         "architect": os.getenv("MODEL_ARCHITECT") or global_default,
@@ -149,9 +149,9 @@ def normalize_messages(messages):
     normalized.extend(merged_others)
     return normalized
 
-def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
+def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=False, force_json=False):
     """
-    Calls the LLM API using standard streaming.
+    Calls the LLM API using standard streaming or non-streaming.
     On JSON validation failure for structured agents (architect, character, plot, volumes, volume_skeleton),
     automatically redirects the conversation + error to the director (copilot) agent.
     Yields custom SSE formatted chunks:
@@ -202,27 +202,27 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
     if "gpt-oss" in actual_model_string and normalized_msgs and normalized_msgs[0]["role"] == "system":
         normalized_msgs[0]["content"] = "Reasoning: high\n" + normalized_msgs[0]["content"]
         
+    if custom_payload_overrides:
+        custom_payload_overrides = dict(custom_payload_overrides)
+        if "stream" in custom_payload_overrides:
+            stream = custom_payload_overrides.pop("stream")
+        if "force_json" in custom_payload_overrides:
+            force_json = custom_payload_overrides.pop("force_json")
+
     payload_base = {
         "model": actual_model_string,
         "messages": normalized_msgs,
         "max_tokens": int(config["max_tokens"]),
         "temperature": float(config["temperature"]),
         "top_p": float(config["top_p"]),
-        "stream": True,
+        "stream": stream,
     }
     
-    is_local_gateway = "127.0.0.1:4000" in config.get("base_url", "")
-    
-    if is_local_gateway:
-        # For local gateway, omit temperature, top_p, response_format, and thinking templates to let gateway apply its presets/defaults.
-        payload_base.pop("temperature", None)
-        payload_base.pop("top_p", None)
-    else:
-        # 避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
-        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in actual_model_string:
-            payload_base["response_format"] = {"type": "json_object"}
-        if config["enable_thinking"]:
-            payload_base["chat_template_kwargs"] = {"enable_thinking": True}
+    if config["enable_thinking"]:
+        payload_base["chat_template_kwargs"] = {"enable_thinking": True}
+
+    if force_json and "gpt-oss" not in actual_model_string:
+        payload_base["response_format"] = {"type": "json_object"}
         
     # Auto-inject preset parameters from MODELS_CONFIG
     payload_base.update(preset_overrides)
@@ -260,12 +260,50 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         if not base_url.endswith("/chat/completions"):
             base_url += "/chat/completions"
         
+        if not stream:
+            # Non-streaming request
+            response = requests.post(
+                base_url,
+                headers=headers,
+                json=payload_base,
+                timeout=300
+            )
+            if response.status_code != 200:
+                error_text = response.text
+                try:
+                    err_json = response.json()
+                    error_msg = err_json.get("error", {}).get("message", error_text)
+                except:
+                    error_msg = error_text
+                raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
+                
+            res_json = response.json()
+            choice = res_json.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            content = message.get("content") or ""
+            reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+            
+            if reasoning:
+                yield "data: " + json.dumps({"type": "thinking", "delta": reasoning}, ensure_ascii=False) + "\n\n"
+            if content:
+                accumulated_content.append(content)
+                yield "data: " + json.dumps({"type": "content", "delta": content}, ensure_ascii=False) + "\n\n"
+            
+            # --- Validations (before yielding done) ---
+            if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+                parsed_json = extract_json_block(content)
+                if not parsed_json or len(parsed_json) == 0:
+                    raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
+            
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
         response = requests.post(
             base_url,
             headers=headers,
             json=payload_base,
             stream=True,
-            timeout=180
+            timeout=300
         )
         
         if response.status_code != 200:
@@ -371,7 +409,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
                 print(f"[LLM] Line processing error (non-fatal): {e}")
                 continue
         
-        # --- Validations ---
+        # --- Validations (before yielding done) ---
         full_text = "".join(accumulated_content)
         
         # If JSON is expected, validate it
@@ -400,17 +438,15 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
             director_msgs.extend(normalized_msgs)
             
             yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({
-                "type": "retrying",
-                "message": f"⚠️ 代理人「{agent_name}」輸出格式異常，正在轉呈創意總監代理判斷與處理..."
-            }, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "retrying", "message": f"⚠️ 代理人「{agent_name}」輸出格式異常，正在轉呈創意總監代理判斷與處理..."}, ensure_ascii=False) + "\n\n"
             
             yield from call_llm_stream("copilot", director_msgs)
             return
         
-        # For other agents, yield error
-        yield "data: " + json.dumps({
-            "type": "error",
-            "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"
-        }, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        # For other agents, yield error + done
+        if has_yielded_anything:
+            yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        else:
+            yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
