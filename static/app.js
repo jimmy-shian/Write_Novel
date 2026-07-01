@@ -3,7 +3,7 @@ import { el } from './dom.js';
 import { showToast } from './toast.js';
 import { requestAPI, streamAPI } from './api.js';
 import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown } from './utils.js';
-import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage, applySubSectionVisibility, getSubSectionCount } from './renderers.js';
+import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage } from './renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './settings.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators, switchToDirectorTab, switchToStreamTab } from './agentProcessing.js';
@@ -879,6 +879,7 @@ async function executeArchitectAgent() {
         { novel_id: state.currentNovelId, user_prompt: userPrompt },
         null,
         (content) => {
+            if (content === null) { el.editorWorldview.value = ''; return; }
             // 將內容追加到 textarea
             el.editorWorldview.value += content;
         },
@@ -911,6 +912,7 @@ async function executeCharacterAgent() {
         { novel_id: state.currentNovelId },
         null,
         (content) => {
+            if (content === null) { el.editorCharactersJson.value = ''; return; }
             el.editorCharactersJson.value += content;
         },
         (error) => {
@@ -940,18 +942,16 @@ async function executeCharacterAgent() {
  * @param {function} onDone - 成功完成回呼
  * @param {number} maxRetries - 最大重試次數（預設 10 次）
  */
-window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 3) {
+window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10, onRetryRecovered = null) {
     let currentRetry = 0;
+    let hadPreviousError = false;
     
-    // 透過閉包鎖定內部執行邏輯
     function attemptExecute() {
         currentRetry++;
         let hasError = false;
         
-        // 💡 【核心訴求 1】：強制將每一次重試紀錄輸出至對話框，不漏掉任何消息！
         const endpointName = url.split('/').pop();
         
-        // 核心調用原生的 streamAPI
         streamAPI(
             url,
             body,
@@ -968,43 +968,41 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                 console.warn(`[GUARD] Pipeline triggered error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
                 
                 if (currentRetry <= maxRetries) {
-                    // 強制將重試狀態寫入對話框
+                    hadPreviousError = true;
                     appendChatMessage('system', 
                         `⚠️ **[系統防禦中斷]** 管線在執行 \`${endpointName}\` 時發生異常中斷。\n` +
                         `❌ 錯誤回報: *${error}*\n` +
                         `🔄 **正在自動嘗試第 ${currentRetry}/${maxRetries} 次重送指令...** (等待 ${currentRetry * 2} 秒)`
                     );
                     
-                    // 💡 退避延遲演算法：每次等待 2 秒，避開後端資料庫寫入衝突
                     setTimeout(() => {
                         attemptExecute();
                     }, currentRetry * 2000);
                 } else {
-                    // 超過 10 次，徹底放棄，列印絕望紀錄
                     appendChatMessage('system', 
                         `🚨 **[管線徹底崩潰]** 已連續重試送指令達最大上限 ${maxRetries} 次，管線保護性中止。\n` +
                         `請檢查後端終端機環境或點擊「重新生成」！`
                     );
                     showToast(`🚨 管線重試次數已達上限 (${maxRetries}次)`);
                     
-                    // 執行錯誤回呼
                     if (typeof onError === 'function') {
                         onError(`管線重試 ${maxRetries} 次後依然失敗`);
                     }
                     
-                    // 解鎖 UI 載入狀態
                     try { hideAllAgentProcessingIndicators(); } catch(e) {}
                 }
             },
             async () => {
                 if (hasError) return;
-                // 💡 只有完全走完 SSE 流程，收到 [DONE] 訊號，才算 Absolute Done
                 if (currentRetry > 1) {
-                    // 如果是重試後成功，通知用戶
                     appendChatMessage('system', 
                         `✅ **[系統自動修復成功]** 管線在第 **${currentRetry}** 次嘗試後成功恢復運作！\n` +
                         `🚀 \`${endpointName}\` 已正常完成。`
                     );
+                }
+                
+                if (hadPreviousError && typeof onRetryRecovered === 'function') {
+                    await onRetryRecovered();
                 }
                 
                 if (typeof onDone === 'function') {
@@ -1014,7 +1012,6 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
         );
     }
     
-    // 啟動首輪嘗試
     attemptExecute();
 };
 
@@ -1401,16 +1398,6 @@ function addWorldviewSection(sectionType) {
     else showToast('不支援新增此類型');
 }
 
-/**
- * 切換區塊展開/收合狀態
- */
-function toggleSectionExpand(sectionId) {
-    const content = document.getElementById(`content-${sectionId}`);
-    if (content) {
-        content.classList.toggle('expanded');
-    }
-}
-
 
 
 /**
@@ -1748,167 +1735,6 @@ function closeSeedModal() {
 }
 
 // ==========================================
-// STRATEGY CARD VIEW TOGGLE (策略卡片視圖切換)
-// 多幕式結構、角色漸進規劃、關鍵轉折點、伏筆種子
-// ==========================================
-
-/**
- * 切換策略卡片顯示模式
- * @param {string} viewMode - 'all' | '<' | '>'
- *   all: 全部展開顯示（預設）
- *   <:  向左切換（向前一張卡片）
- *   >:  向右切換（向後一張卡片）
- */
-function jumpToStrategyCard(index) {
-    state.currentCardIndex = index;
-    state.currentSubSectionIndex = 'all'; // 進入單張卡片時，預設顯示全部子章節
-    const container = document.getElementById('worldview-sections-container');
-    if (!container) return;
-    const strategyCardsArray = [
-        container.querySelector('.worldview-section-card[data-section="three-act"]'),
-        container.querySelector('.worldview-section-card[data-section="character-waves"]'),
-        container.querySelector('.worldview-section-card[data-section="turning-points"]'),
-        container.querySelector('.worldview-section-card[data-section="seeds"]')
-    ].filter(Boolean);
-    
-    applySingleCardView(strategyCardsArray, index);
-    applySubSectionVisibility();
-}
-
-function setStrategyCardView(viewMode) {
-    const container = document.getElementById('worldview-sections-container');
-    if (!container) return;
-
-    const strategyNames = ['three-act', 'character-waves', 'turning-points', 'seeds'];
-    const strategyCardsArray = strategyNames.map(id => 
-        container.querySelector(`.worldview-section-card[data-section="${id}"]`)
-    ).filter(Boolean);
-
-    const total = strategyCardsArray.length;
-    if (total === 0) return;
-
-    if (viewMode === 'all') {
-        state.strategyCardView = 'all';
-        state.currentSubSectionIndex = 'all'; // 重設子章節
-        
-        const strategyWrapper = container.querySelector('.worldview-strategy-container');
-        if (strategyWrapper) {
-            strategyWrapper.classList.remove('single-mode');
-            strategyWrapper.classList.add('all-mode');
-        }
-
-        strategyCardsArray.forEach(card => {
-            card.style.display = 'flex';
-            card.classList.remove('collapsed');
-            card.classList.add('expanded');
-            
-            // 恢復所有子章節/項目顯示
-            const activeSectionName = card.dataset.section;
-            let subItems = [];
-            if (activeSectionName === 'three-act' || activeSectionName === 'character-waves') {
-                subItems = Array.from(card.querySelectorAll('.worldview-sub-item'));
-            } else {
-                subItems = Array.from(card.querySelectorAll('.worldview-list > li'));
-            }
-            subItems.forEach(item => item.style.display = '');
-
-            // 恢復原始標題 (去除 statusText)
-            const titleContainer = card.querySelector('.worldview-section-title');
-            if (titleContainer && titleContainer.dataset.originalText) {
-                const badgeSpan = titleContainer.querySelector('.worldview-section-badge');
-                titleContainer.innerHTML = '';
-                if (badgeSpan) titleContainer.appendChild(badgeSpan);
-                titleContainer.appendChild(document.createTextNode(' ' + titleContainer.dataset.originalText));
-            }
-        });
-
-        const toggleBtns = document.querySelectorAll('.view-toggle-btn');
-        toggleBtns.forEach(btn => {
-            btn.classList.remove('active');
-            if (btn.dataset.view === 'all') {
-                btn.classList.add('active');
-            }
-        });
-    } else if (viewMode === '<') {
-        // 如果當前不在單卡檢視模式，直接進入第一張卡片
-        if (state.strategyCardView !== 'single') {
-            state.strategyCardView = 'single';
-            state.currentCardIndex = 0;
-            state.currentSubSectionIndex = 'all';
-        }
-
-        const count = getSubSectionCount(state.currentCardIndex);
-        if (count > 0) {
-            if (state.currentSubSectionIndex === 'all') {
-                state.currentSubSectionIndex = count - 1; // 到最後一個子項目
-            } else if (state.currentSubSectionIndex === 0) {
-                state.currentSubSectionIndex = 'all'; // 循環到 "全部"
-            } else {
-                state.currentSubSectionIndex--;
-            }
-        }
-        applySingleCardView(strategyCardsArray, state.currentCardIndex);
-        applySubSectionVisibility();
-    } else if (viewMode === '>') {
-        // 如果當前不在單卡檢視模式，直接進入第一張卡片
-        if (state.strategyCardView !== 'single') {
-            state.strategyCardView = 'single';
-            state.currentCardIndex = 0;
-            state.currentSubSectionIndex = 'all';
-        }
-
-        const count = getSubSectionCount(state.currentCardIndex);
-        if (count > 0) {
-            if (state.currentSubSectionIndex === 'all') {
-                state.currentSubSectionIndex = 0; // 從第一個子項目開始
-            } else if (state.currentSubSectionIndex === count - 1) {
-                state.currentSubSectionIndex = 'all'; // 循環到 "全部"
-            } else {
-                state.currentSubSectionIndex++;
-            }
-        }
-        applySingleCardView(strategyCardsArray, state.currentCardIndex);
-        applySubSectionVisibility();
-    }
-}
-
-function applySingleCardView(cards, activeIndex) {
-    state.strategyCardView = 'single';
-    
-    const container = document.getElementById('worldview-sections-container');
-    if (container) {
-        const strategyWrapper = container.querySelector('.worldview-strategy-container');
-        if (strategyWrapper) {
-            strategyWrapper.classList.remove('all-mode');
-            strategyWrapper.classList.add('single-mode');
-        }
-    }
-
-    cards.forEach((card, index) => {
-        if (index === activeIndex) {
-            card.style.display = 'flex';
-            card.classList.remove('collapsed');
-            card.classList.add('expanded');
-        } else {
-            card.style.display = 'none';
-            card.classList.remove('expanded');
-            card.classList.add('collapsed');
-        }
-    });
-
-    const strategyNames = ['three-act', 'character-waves', 'turning-points', 'seeds'];
-    const activeViewName = strategyNames[activeIndex];
-    
-    const toggleBtns = document.querySelectorAll('.view-toggle-btn');
-    toggleBtns.forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.dataset.view === activeViewName) {
-            btn.classList.add('active');
-        }
-    });
-}
-
-// ==========================================
 // MARKDOWN 渲染支援
 // ==========================================
 
@@ -2138,6 +1964,7 @@ async function generateWorldviewSeedsWithAI() {
         },
         null,
         (delta) => {
+            if (delta === null) { el.editorWorldview.value = ''; return; }
             // 將生成的內容追加到世界觀編輯器
             el.editorWorldview.value += delta;
         },
@@ -2221,6 +2048,7 @@ function openCharacterAIEnhanceModal(charIndex, charName) {
             },
             null,
             (delta) => {
+                if (delta === null) { el.editorCharactersJson.value = ''; return; }
                 // Incremental character returns updated data
                 el.editorCharactersJson.value += delta;
             },
@@ -2901,22 +2729,24 @@ async function executeIncrementalUpdate(target, params) {
             showToast("🌱 增量新增伏筆種子...");
             showAgentProcessingIndicator('worldview', 'Story Architect (增量新增伏筆種子)');
             return new Promise((resolve) => {
-                streamAPI(
-                    '/api/agent/incremental-architect',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        target_section: 'foreshadowing_seeds',
-                        user_hint: user_hint || params.hint || '新增一個伏筆'
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
-                    (delta) => {
-                        if (el.editorWorldview) {
-                            el.editorWorldview.value += delta;
-                        }
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
+streamAPI(
+        '/api/agent/incremental-architect',
+        { 
+            novel_id: state.currentNovelId, 
+            target_section: 'foreshadowing_seeds',
+            user_hint: user_hint || params.hint || '新增一個伏筆'
+        },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
+            window.updateAgentStreamOutput('worldview', delta);
+},
+        (delta) => {
+            if (delta === null) { if (el.editorWorldview) el.editorWorldview.value = ''; return; }
+            if (el.editorWorldview) {
+                el.editorWorldview.value += delta;
+            }
+            window.updateAgentStreamOutput('worldview', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -2934,22 +2764,24 @@ async function executeIncrementalUpdate(target, params) {
             showToast("📐 增量更新多幕式結構...");
             showAgentProcessingIndicator('worldview', 'Story Architect (增量更新多幕式結構)');
             return new Promise((resolve) => {
-                streamAPI(
-                    '/api/agent/incremental-architect',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        target_section: 'multi_act_structure',
-                        user_hint: user_hint || params.hint || '更新多幕式結構'
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
-                    (delta) => {
-                        if (el.editorWorldview) {
-                            el.editorWorldview.value += delta;
-                        }
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
+streamAPI(
+        '/api/agent/incremental-architect',
+        { 
+            novel_id: state.currentNovelId, 
+            target_section: 'multi_act_structure',
+            user_hint: user_hint || params.hint || '更新多幕式結構'
+        },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
+            window.updateAgentStreamOutput('worldview', delta);
+        },
+        (delta) => {
+            if (delta === null) { if (el.editorWorldview) el.editorWorldview.value = ''; return; }
+            if (el.editorWorldview) {
+                el.editorWorldview.value += delta;
+            }
+            window.updateAgentStreamOutput('worldview', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -2968,23 +2800,25 @@ async function executeIncrementalUpdate(target, params) {
             showToast("👤 增量更新角色欄位...");
             showAgentProcessingIndicator('characters', 'Character Designer (增量更新角色欄位)');
             return new Promise((resolve) => {
-                streamAPI(
-                    '/api/agent/incremental-character',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        target_char_index: target_char_index,
-                        field_name: field_name,
-                        user_hint: user_hint || params.hint || '修改角色'
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
-                    (delta) => {
-                        if (el.editorCharactersJson) {
-                            el.editorCharactersJson.value += delta;
-                        }
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
+streamAPI(
+        '/api/agent/incremental-character',
+        { 
+            novel_id: state.currentNovelId, 
+            target_char_index: target_char_index,
+            field_name: field_name,
+            user_hint: user_hint || params.hint || '修改角色'
+        },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
+            window.updateAgentStreamOutput('characters', delta);
+        },
+        (delta) => {
+            if (delta === null) { if (el.editorCharactersJson) el.editorCharactersJson.value = ''; return; }
+            if (el.editorCharactersJson) {
+                el.editorCharactersJson.value += delta;
+            }
+            window.updateAgentStreamOutput('characters', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -3002,23 +2836,25 @@ async function executeIncrementalUpdate(target, params) {
             showToast("➕ 新增角色...");
             showAgentProcessingIndicator('characters', 'Character Designer (新增角色)');
             return new Promise((resolve) => {
-                streamAPI(
-                    '/api/agent/incremental-character',
-                    { 
-                        novel_id: state.currentNovelId, 
-                        target_char_index: null, // 表示新增
-                        field_name: null,
-                        user_hint: user_hint || params.hint || '新增一個新角色'
-                    },
-                    (delta) => {
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
-                    (delta) => {
-                        if (el.editorCharactersJson) {
-                            el.editorCharactersJson.value += delta;
-                        }
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
+streamAPI(
+        '/api/agent/incremental-character',
+        { 
+            novel_id: state.currentNovelId, 
+            target_char_index: null, // 表示新增
+            field_name: null,
+            user_hint: user_hint || params.hint || '新增一個新角色'
+        },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
+            window.updateAgentStreamOutput('characters', delta);
+        },
+        (delta) => {
+            if (delta === null) { if (el.editorCharactersJson) el.editorCharactersJson.value = ''; return; }
+            if (el.editorCharactersJson) {
+                el.editorCharactersJson.value += delta;
+            }
+            window.updateAgentStreamOutput('characters', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -3089,16 +2925,18 @@ async function executeToolCall(tool, params) {
             showAgentProcessingIndicator('worldview', 'Story Architect (全量生成)');
             return new Promise((resolve) => {
                 el.editorWorldview.value = '';
-                streamAPI(
-                    '/api/agent/story-architect',
-                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
-                    (delta) => {
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
-                    (delta) => {
-                        el.editorWorldview.value += delta;
-                        window.updateAgentStreamOutput('worldview', delta);
-                    },
+streamAPI(
+        '/api/agent/story-architect',
+        { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
+            window.updateAgentStreamOutput('worldview', delta);
+        },
+        (delta) => {
+            if (delta === null) { el.editorWorldview.value = ''; return; }
+            el.editorWorldview.value += delta;
+            window.updateAgentStreamOutput('worldview', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('worldview', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -3116,16 +2954,18 @@ async function executeToolCall(tool, params) {
             showAgentProcessingIndicator('characters', 'Character Designer (全量生成)');
             return new Promise((resolve) => {
                 el.editorCharactersJson.value = '';
-                streamAPI(
-                    '/api/agent/character-designer',
-                    { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
-                    (delta) => {
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
-                    (delta) => {
-                        el.editorCharactersJson.value += delta;
-                        window.updateAgentStreamOutput('characters', delta);
-                    },
+streamAPI(
+        '/api/agent/character-designer',
+        { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
+            window.updateAgentStreamOutput('characters', delta);
+        },
+        (delta) => {
+            if (delta === null) { el.editorCharactersJson.value = ''; return; }
+            el.editorCharactersJson.value += delta;
+            window.updateAgentStreamOutput('characters', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('characters', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -3204,16 +3044,22 @@ async function executeToolCall(tool, params) {
                     get scrollHeight() { return el.editorProse ? el.editorProse.scrollHeight : 0; }
                 };
 
-                streamAPI(
-                    '/api/agent/write-chapter',
-                    { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
-                    (delta) => {
-                        window.updateAgentStreamOutput('writer', delta);
-                    },
-                    (delta) => {
-                        virtualTarget.value += delta;
-                        window.updateAgentStreamOutput('writer', delta);
-                    },
+streamAPI(
+        '/api/agent/write-chapter',
+        { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
+        (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('writer', null); return; }
+            window.updateAgentStreamOutput('writer', delta);
+        },
+        (delta) => {
+            if (delta === null) {
+                state.writingBuffer = "";
+                if (el.editorProse) el.editorProse.value = "";
+                return;
+            }
+            virtualTarget.value += delta;
+            window.updateAgentStreamOutput('writer', delta);
+        },
                     (err) => {
                         window.updateAgentStreamOutput('writer', `\n[Error: ${err}]`);
                         showToast("Error: " + err);
@@ -3342,6 +3188,11 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
         body,
         // onThinking
         (delta) => {
+            if (delta === null) {
+                el.aiThinkingText.textContent = '';
+                window.updateAgentStreamOutput(tabName, null, 'thinking');
+                return;
+            }
             el.aiThinkingText.textContent += delta;
             window.updateAgentStreamOutput(tabName, delta, 'thinking');
             // 智慧型滾動 ai-thinking-text（支援用戶回捲後不強行滾動）
@@ -3353,6 +3204,13 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
         },
         // onContent
         (delta) => {
+            if (delta === null) {
+                // Reset signal: clear the target and stream terminal
+                onContentTarget.value = '';
+                el.aiThinkingText.textContent = '';
+                window.updateAgentStreamOutput(tabName, null, 'content');
+                return;
+            }
             onContentTarget.value += delta;
             if (typeof window.smartScrollToBottom === 'function') {
                 window.smartScrollToBottom(onContentTarget, false);
@@ -3591,8 +3449,8 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             requestBody,
             // onThinking
             (thinkingDelta) => {
-                thinkingText += thinkingDelta; // 新增此行
-                // 確保只執行單次追加，徹底解決雙串流問題
+                if (thinkingDelta === null) { thinkingText = ''; if (thinkingPre) thinkingPre.textContent = ''; return; }
+                thinkingText += thinkingDelta;
                 if (thinkingDetails) {
                     thinkingDetails.classList.remove('hidden');
                     thinkingDetails.open = true;
@@ -3606,6 +3464,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             },
             // onContent
             (delta) => {
+                if (delta === null) { responseText = ''; throttledRenderMarkdown(streamTarget, ''); window.updateAgentStreamOutput('director', null, 'content'); return; }
                 responseText += delta;
                 // 寫入聊天區的 Markdown 渲染
                 throttledRenderMarkdown(streamTarget, responseText);
@@ -3801,6 +3660,7 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
             { current_stage: currentStage, help_action: helpAction, help_reason: helpReason },
             // onThinking
             (thinkingDelta) => {
+                if (thinkingDelta === null) { thinkingText = ''; if (thinkingPre) thinkingPre.textContent = ''; return; }
                 thinkingText += thinkingDelta;
                 thinkingDetails.classList.remove('hidden');
                 thinkingDetails.open = true;
@@ -3810,6 +3670,7 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
             },
             // onContent
             (delta) => {
+                if (delta === null) { responseText = ''; throttledRenderMarkdown(streamTarget, ''); window.updateAgentStreamOutput('director', null, 'content'); return; }
                 responseText += delta;
                 throttledRenderMarkdown(streamTarget, responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
@@ -4258,7 +4119,7 @@ function setupEventListeners() {
                 el.settingEnableThinking.checked = preset.enable_thinking;
                 
                 if (!el.settingBaseUrl.value || el.settingBaseUrl.value.trim() === '' || el.settingBaseUrl.value.includes('qwen') || el.settingBaseUrl.value.includes('nvidia')) {
-                    el.settingBaseUrl.value = 'http://127.0.0.1:4000/v1';
+                    el.settingBaseUrl.value = 'https://integrate.api.nvidia.com/v1';
                 }
                 
                 showToast(`已套用 ${preset.model} 預設值，點擊儲存以套用！`);
@@ -4680,6 +4541,7 @@ function setupEventListeners() {
             { novel_id: state.currentNovelId, user_message: text },
             // onThinking
             (thinkingDelta) => {
+                if (thinkingDelta === null) { if (thinkingPre) thinkingPre.textContent = ''; return; }
                 thinkingDetails.classList.remove('hidden');
                 thinkingDetails.open = true;
                 thinkingPre.textContent += thinkingDelta;
@@ -4688,6 +4550,7 @@ function setupEventListeners() {
             },
             // onContent
             (delta) => {
+                if (delta === null) { responseText = ''; throttledRenderMarkdown(streamTarget, ''); window.updateAgentStreamOutput('copilot', null, 'content'); return; }
                 responseText += delta;
                 throttledRenderMarkdown(streamTarget, responseText);
                 window.smartScrollToBottom(el.chatMessagesContainer, false);
@@ -5137,6 +5000,7 @@ function startStage3_Plot(regenerate = false, hint = null) {
         },
         () => {},
         (delta) => {
+            if (delta === null) { if (el.editorPlotJson) el.editorPlotJson.value = ''; return; }
             if (el.editorPlotJson) {
                 el.editorPlotJson.value += delta;
                 el.editorPlotJson.scrollTop = el.editorPlotJson.scrollHeight;
@@ -5265,6 +5129,11 @@ function startStage4_Writer(regenerate = false) {
         { novel_id: state.currentNovelId, chapter_index: targetChapterIndex },
         () => {},
         (delta) => {
+            if (delta === null) {
+                state.writingBuffer = "";
+                if (el.editorProse) el.editorProse.value = "";
+                return;
+            }
             virtualTarget.value += delta;
         },
         (msg) => {
@@ -5539,14 +5408,15 @@ window.onStreamAPIEnd = function(endpoint) {
  */
 window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
     if (type === 'thinking') {
-        // A. 如果是思考流，直接輸入至原生的 ai-thinking-text，使用智能滾動機制
         const thinkingStream = document.getElementById('ai-thinking-stream');
         const thinkingText = document.getElementById('ai-thinking-text');
         if (thinkingStream && thinkingText) {
-            thinkingStream.classList.remove('hidden'); // 解除隱藏
-            thinkingText.textContent += delta;
-            
-            // 調用全域智慧型滾動（支援用戶回捲後不強行滾動）
+            thinkingStream.classList.remove('hidden');
+            if (delta === null) {
+                thinkingText.textContent = '';
+            } else {
+                thinkingText.textContent += delta;
+            }
             if (typeof window.smartScrollToBottom === 'function') {
                 window.smartScrollToBottom(thinkingText, false);
             } else {
@@ -5554,14 +5424,15 @@ window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
             }
         }
     } else {
-        // B. 所有的生成內容、總監日誌、保底 fallback，通通強制塞入原生的「同一個終端視窗」
         const terminal = document.getElementById('stream-output-terminal');
         if (terminal) {
             terminal.classList.remove('hidden');
             terminal.style.display = 'block';
-            terminal.textContent += delta;
-            
-            // 調用全域智慧型滾動
+            if (delta === null) {
+                terminal.textContent = '';
+            } else {
+                terminal.textContent += delta;
+            }
             if (typeof window.smartScrollToBottom === 'function') {
                 window.smartScrollToBottom(terminal, false);
             } else {
@@ -5594,9 +5465,11 @@ window.enhanceWorldviewSectionWithAI = async function(field, title) {
             user_hint: hint || `請為「${title}」生成或擴展深度設定，確保與目前小說的風格和背景完美相容。`
         },
         (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
         },
         (delta) => {
+            if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
         },
         (err) => {
@@ -5635,7 +5508,6 @@ window.openWorldviewComplexListEditModal = openWorldviewComplexListEditModal;
 window.openWorldviewListEditModal = openWorldviewListEditModal;
 window.deleteWorldviewSection = deleteWorldviewSection;
 window.addWorldviewSection = addWorldviewSection;
-window.toggleSectionExpand = toggleSectionExpand;
 window.closeSeedModal = closeSeedModal;
 window.closeCustomDialog = closeCustomDialog;
 window.editWorldviewSection = openWorldviewTextSectionEditModal; // legacy fallback
@@ -5733,10 +5605,7 @@ window.deletePlotChapter = function(chapterIndex) {
     });
 };
 
-// Export strategy card view toggle functions for inline onclick handlers
-window.setStrategyCardView = setStrategyCardView;
-window.jumpToStrategyCard = jumpToStrategyCard;
-window.applySingleCardView = applySingleCardView;
+
 
 // Expose pipeline & streaming helpers to window for pipeline.js
 window.streamAPI = streamAPI;
@@ -5773,16 +5642,17 @@ window.alignVolume = async function(volIdx) {
     }
     
     return new Promise((resolve) => {
-        streamAPI(
-            `/api/novels/${state.currentNovelId}/volumes/${volIdx}/align`,
-            {},
-            null,
-            (content) => {
-                if (streamOutput) {
-                    streamOutput.innerHTML += content;
-                    streamOutput.scrollTop = streamOutput.scrollHeight;
-                }
-            },
+streamAPI(
+        `/api/novels/${state.currentNovelId}/volumes/${volIdx}/align`,
+        {},
+        null,
+        (content) => {
+            if (content === null) { if (streamOutput) streamOutput.innerHTML = ''; return; }
+            if (streamOutput) {
+                streamOutput.innerHTML += content;
+                streamOutput.scrollTop = streamOutput.scrollHeight;
+            }
+        },
             (error) => {
                 showToast(`⚠️ 第 ${volIdx} 卷對齊失敗: ` + error);
                 if (indicator) indicator.classList.add('hidden');

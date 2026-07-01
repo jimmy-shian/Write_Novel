@@ -28,13 +28,6 @@ export const state = {
     isAutoExecuteMode: localStorage.getItem('isAutoExecuteMode') !== 'false',
     showStreamLog: localStorage.getItem('showStreamLog') !== 'false',
     
-    // 策略卡片顯示狀態：'all' | '<' | '>'
-    strategyCardView: 'all',
-    // 當前顯示的卡片索引（0-3），用於 < 和 > 模式
-    currentCardIndex: 0,
-    // 當前顯示的子章節索引（'all' 或數字索引），用於單張卡片內的子項目切換
-    currentSubSectionIndex: 'all',
-
     directorLoopCount: 0
 };
 

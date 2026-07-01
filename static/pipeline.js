@@ -290,14 +290,30 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
         if (stage === 'writer') {
             state.writingBuffer = "";
         }
-        // 🚀 使用具備 10 次自動重試與對話框同步紀錄的守護引擎
+        // 🚀 使用具備自動重試與對話框同步紀錄的守護引擎
+        // onRetryRecovered: 當重試成功時，由 streamAPIWithRetry 在呼叫 onDone 前觸發，
+        // 用於重置因中途錯誤而被污染的 failed / isPipelineRunning 狀態。
         window.streamAPIWithRetry(
             endpoint,
             body,
             (delta) => {
+                if (delta === null) {
+                    window.updateAgentStreamOutput(stage, null, 'thinking');
+                    return;
+                }
                 window.updateAgentStreamOutput(stage, delta, 'thinking');
             },
             (delta) => {
+                if (delta === null) {
+                    // Reset signal: clear the textarea/buffer
+                    if (targetTextarea) {
+                        if (stage === 'writer') {
+                            state.writingBuffer = "";
+                        }
+                        targetTextarea.value = '';
+                    }
+                    return;
+                }
                 if (targetTextarea) {
                     if (stage === 'writer') {
                         state.writingBuffer = (state.writingBuffer || "") + delta;
@@ -385,6 +401,11 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                     await window.executeDirectorAction(nextDecision, userPrompt);
                 }
                 resolve();
+            },
+            10,
+            async () => {
+                failed = false;
+                state.isPipelineRunning = true;
             }
         );
     });

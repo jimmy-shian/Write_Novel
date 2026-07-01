@@ -42,9 +42,22 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onRetrying - 重試中回呼（可選）
  */
 export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying) {
-    const MAX_RETRIES = 1;
+    const MAX_RETRIES = 10;
     let attempt = 0;
     let streamHadFinalError = false;
+
+    // Auto-inject stream and force_json settings
+    if (body && typeof body === 'object') {
+        body.stream = true;
+        const structuredEndpoints = [
+            'story-architect',
+            'character-designer',
+            'volumes-planner',
+            'volume-skeleton'
+        ];
+        const isStructured = structuredEndpoints.some(ep => endpoint.includes(ep));
+        body.force_json = isStructured;
+    }
 
     // Trigger start callback
     if (typeof window.onStreamAPIStart === 'function') {
@@ -61,9 +74,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const isHeavyEndpoint = /foreshadowing|worldview|volumes|architect/i.test(endpoint);
-        const STALL_TIMEOUT = isHeavyEndpoint ? 120000 : 60000;
-        const CONNECT_TIMEOUT = 30000;
+        const STALL_TIMEOUT = 300000; // 300 seconds
+        const CONNECT_TIMEOUT = 300000; // 300 seconds
         let connectTimer = null;
 
         function resetActivityTimer() {
@@ -115,43 +127,11 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
 
                 buffer += decoder.decode(value, { stream: true });
                 
-                // 改進：更智能地處理 SSE 行分割
-                // 確保完整的 "data:" 行被正確識別
-                const lines = [];
-                let searchFrom = 0;
-                let dataIndex;
-                
-                while ((dataIndex = buffer.indexOf('data:', searchFrom)) !== -1) {
-                    // 找到 "data:" 的位置
-                    // 從這個位置開始查找行結束（\n，但雙換行 \n\n 是事件分隔符）
-                    let lineEnd = buffer.indexOf('\n', dataIndex);
-                    
-                    if (lineEnd === -1) {
-                        // 沒有換行，整個剩餘 buffer 構成不完整行
-                        break;
-                    }
-                    
-                    // 檢查這是否是一個完整的事件（可能包含 \n\n 作為結束標記）
-                    // SSE 事件之間用雙換行分隔
-                    let nextDataIndex = buffer.indexOf('data:', dataIndex + 5);
-                    
-                    // 如果下一個 "data:" 在當前行的換行之前，說明這是一個完整事件
-                    if (nextDataIndex !== -1 && nextDataIndex < lineEnd) {
-                        // 多個 data: 在同一行（不尋常但可能）
-                        lineEnd = nextDataIndex - 1;
-                    }
-                    
-                    const line = buffer.substring(dataIndex, lineEnd);
-                    lines.push(line);
-                    
-                    // 如果下一個 "data:" 在當前換行之後，需要找到實際的事件結束
-                    // 實際上，我們只需要確保我們取到了一個完整的 data: 行
-                    // 更新 searchFrom
-                    searchFrom = lineEnd + 1;
-                }
-                
-                // 剩餘的 buffer（不包含完整 data: 行的部分）
-                buffer = searchFrom > 0 ? buffer.substring(searchFrom) : buffer;
+                // Split buffer by newlines to get complete lines
+                const parts = buffer.split('\n');
+                // The last element is kept in the buffer since it might be incomplete
+                buffer = parts.pop();
+                const lines = parts;
                 
                 // Accumulate deltas for this read chunk to avoid layout trashing
                 let accumulatedThinking = '';
@@ -187,8 +167,12 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 
                 // Flush accumulated deltas
                 if (hasReset) {
-                    if (typeof onThinking === 'function') onThinking("[RESET]");
-                    if (typeof onContent === 'function') onContent("[RESET]");
+                    // Signal reset with null to tell downstream handlers to clear their content
+                    if (typeof onThinking === 'function') onThinking(null);
+                    if (typeof onContent === 'function') onContent(null);
+                    // Discard any accumulated content from before the reset
+                    accumulatedThinking = '';
+                    accumulatedContent = '';
                 }
                 if (accumulatedThinking) {
                     if (typeof onThinking === 'function') onThinking(accumulatedThinking);

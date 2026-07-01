@@ -1115,16 +1115,11 @@ aside {
 }
 
 .worldview-section-content {
-    font-size: var(--font-lg); /* Increased 2 sizes (0.85rem -> 1.0rem) */
+    font-size: var(--font-lg);
     line-height: 1.6;
     color: var(--text-secondary);
     white-space: pre-wrap;
-    max-height: 250px;
     overflow-y: auto;
-}
-
-.worldview-section-content.expanded {
-    max-height: none;
 }
 
 /* Wave item in character wave plan */
@@ -2287,35 +2282,14 @@ textarea:focus {
     }
 }
 
-.worldview-strategy-container.single-mode {
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    width: 100%;
-}
-
-/* Strategy cards specific sizes based on mode */
 .worldview-strategy-container.all-mode .worldview-section-card {
-    height: 380px;
+    height: auto;
 }
 
 .worldview-strategy-container.all-mode .worldview-section-content {
     flex: 1;
-    max-height: 290px !important;
-    overflow-y: auto !important;
-}
-
-.worldview-strategy-container.single-mode .worldview-section-card {
-    width: 100%;
-    max-width: 800px;
-    height: auto;
-    min-height: 400px;
-    margin: 0 auto;
-}
-
-.worldview-strategy-container.single-mode .worldview-section-content {
-    max-height: 520px !important;
-    overflow-y: auto !important;
+    max-height: 500px;
+    overflow-y: auto;
 }
 
 /* Sub items & Lists inside strategy cards */
@@ -2430,8 +2404,8 @@ textarea:focus {
 }
 
 #worldview-sections-container > .worldview-section-card .worldview-section-content {
-    max-height: 250px !important;
-    overflow-y: auto !important;
+    max-height: 500px;
+    overflow-y: auto;
     padding-right: 6px;
 }
 
@@ -2459,35 +2433,6 @@ textarea:focus {
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin-bottom: 12px;
     font-style: italic;
-}
-
-/* View Toggle Button Styling */
-.view-toggle-btn {
-    border-radius: 20px !important;
-    padding: 6px 14px !important;
-    font-weight: 500 !important;
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    border: 1px solid transparent !important;
-    background: rgba(0, 0, 0, 0.04) !important;
-    color: var(--text-secondary) !important;
-}
-
-body.dark-theme .view-toggle-btn {
-    background: rgba(255, 255, 255, 0.04) !important;
-}
-
-.view-toggle-btn:hover {
-    background: rgba(0, 113, 227, 0.08) !important;
-    color: var(--primary) !important;
-    border-color: rgba(0, 113, 227, 0.2) !important;
-}
-
-.view-toggle-btn.active {
-    background: linear-gradient(135deg, var(--primary), #8b5cf6) !important;
-    color: #ffffff !important;
-    border: none !important;
-    box-shadow: 0 4px 12px rgba(0, 113, 227, 0.25) !important;
-    font-weight: 600 !important;
 }
 
 /* ==========================================

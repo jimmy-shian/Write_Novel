@@ -296,7 +296,6 @@ export function renderWorldviewSections() {
                     多幕式劇情起伏結構
                 </div>
                 <div class="worldview-section-actions">
-                    <button onclick="toggleSectionExpand('three-act')" title="展開/收合">↕</button>
                     <button onclick="editWorldviewComplexList('multi_act_structure', '多幕式結構', '幕次')" title="編輯">✏️</button>
                 </div>
             </div>
@@ -331,7 +330,6 @@ export function renderWorldviewSections() {
                     角色漸進登場規劃策略
                 </div>
                 <div class="worldview-section-actions">
-                    <button onclick="toggleSectionExpand('character-waves')" title="展開/收合">↕</button>
                     <button onclick="editWorldviewComplexList('progressive_character_plan', '角色漸進規劃策略', '波次')" title="編輯">✏️</button>
                 </div>
             </div>
@@ -362,7 +360,6 @@ export function renderWorldviewSections() {
                     伏筆種子
                 </div>
                 <div class="worldview-section-actions">
-                    <button onclick="toggleSectionExpand('seeds')" title="展開/收合">↕</button>
                     <button onclick="editWorldviewList('foreshadowing_seeds', '伏筆種子')" title="編輯">✏️</button>
                 </div>
             </div>
@@ -388,7 +385,6 @@ export function renderWorldviewSections() {
                     關鍵轉折點
                 </div>
                 <div class="worldview-section-actions">
-                    <button onclick="toggleSectionExpand('turning-points')" title="展開/收合">↕</button>
                     <button onclick="editWorldviewList('key_turning_points', '關鍵轉折點')" title="編輯">✏️</button>
                 </div>
             </div>
@@ -405,128 +401,10 @@ export function renderWorldviewSections() {
     `;
 
     if (strategyHtml) {
-        // 依據 state.strategyCardView 設定 Grid 排版樣式
-        const viewModeClass = (state.strategyCardView === 'single') ? 'single-mode' : 'all-mode';
-        html += `<div class="worldview-strategy-container ${viewModeClass}">${strategyHtml}</div>`;
+        html += `<div class="worldview-strategy-container all-mode">${strategyHtml}</div>`;
     }
     
     container.innerHTML = html;
-
-    // 如果當前處於單張檢視模式，主動套用隱藏邏輯
-    if (state.strategyCardView === 'single') {
-        const strategyNames = ['three-act', 'character-waves', 'turning-points', 'seeds'];
-        const strategyCardsArray = strategyNames.map(id => 
-            container.querySelector(`.worldview-section-card[data-section="${id}"]`)
-        ).filter(Boolean);
-        const activeIndex = state.currentCardIndex !== undefined ? state.currentCardIndex : 0;
-        
-        strategyCardsArray.forEach((card, index) => {
-            if (index === activeIndex) {
-                card.style.display = 'flex';
-                card.classList.remove('collapsed');
-                card.classList.add('expanded');
-            } else {
-                card.style.display = 'none';
-                card.classList.remove('expanded');
-                card.classList.add('collapsed');
-            }
-        });
-
-        // 額外套用子章節/子項目顯示與標題狀態
-        applySubSectionVisibility();
-    }
-}
-
-/**
- * 獲取當前選中卡片的子章節數量
- * @param {number} cardIndex - 卡片索引 (0-3)
- * @returns {number} 子章節個數
- */
-export function getSubSectionCount(cardIndex) {
-    const worldviewText = state.currentNovelData?.worldbuilding || '';
-    const js = parseWorldviewJSON(worldviewText);
-    if (cardIndex === 0) return (js.multi_act_structure || []).length;
-    if (cardIndex === 1) return (js.progressive_character_plan || []).length;
-    if (cardIndex === 2) return (js.key_turning_points || []).length;
-    if (cardIndex === 3) return (js.foreshadowing_seeds || []).length;
-    return 0;
-}
-
-/**
- * 套用當前選中卡片內部子章節的隱藏與動態進度顯示邏輯
- */
-export function applySubSectionVisibility() {
-    const container = document.getElementById('worldview-sections-container');
-    if (!container) return;
-
-    const strategyNames = ['three-act', 'character-waves', 'turning-points', 'seeds'];
-    const activeIndex = state.currentCardIndex !== undefined ? state.currentCardIndex : 0;
-    const activeSectionName = strategyNames[activeIndex];
-    const activeCard = container.querySelector(`.worldview-section-card[data-section="${activeSectionName}"]`);
-    if (!activeCard) return;
-
-    // 找出所有子項目元素
-    let subItems = [];
-    if (activeSectionName === 'three-act' || activeSectionName === 'character-waves') {
-        subItems = Array.from(activeCard.querySelectorAll('.worldview-timeline-item, .worldview-sub-item'));
-    } else {
-        subItems = Array.from(activeCard.querySelectorAll('.worldview-list > li'));
-    }
-
-    const subIndex = state.currentSubSectionIndex !== undefined ? state.currentSubSectionIndex : 'all';
-
-    // 套用 display 屬性與 active class
-    subItems.forEach((item, idx) => {
-        if (subIndex === 'all' || idx === subIndex) {
-            item.style.display = '';
-            item.classList.add('active-sub-item');
-        } else {
-            item.style.display = 'none';
-            item.classList.remove('active-sub-item');
-        }
-    });
-
-    // 獲取與更新標題文字 (加入子項目進度顯示，如 "1/3")
-    const titleContainer = activeCard.querySelector('.worldview-section-title');
-    if (titleContainer) {
-        if (!titleContainer.dataset.originalText) {
-            // 提取純文字節點 (不包括 emoji badge)
-            const badgeSpan = titleContainer.querySelector('.worldview-section-badge');
-            let baseText = '';
-            if (badgeSpan) {
-                baseText = titleContainer.innerText.replace(badgeSpan.innerText, '').trim();
-            } else {
-                baseText = titleContainer.innerText.trim();
-            }
-            titleContainer.dataset.originalText = baseText;
-        }
-
-        let statusText = '';
-        if (state.strategyCardView === 'single') {
-            if (subIndex === 'all') {
-                statusText = ' (全部)';
-            } else if (subItems.length > 0 && subIndex < subItems.length) {
-                let itemTitle = `第 ${subIndex + 1} 部分`;
-                const customTitleEl = subItems[subIndex].querySelector('.worldview-sub-item-title');
-                if (customTitleEl) {
-                    itemTitle = customTitleEl.innerText.trim();
-                } else {
-                    const textContent = subItems[subIndex].innerText || '';
-                    itemTitle = textContent.split('\n')[0].substring(0, 12).trim();
-                    if (textContent.length > 12) itemTitle += '...';
-                }
-                statusText = ` (${subIndex + 1}/${subItems.length}) ${itemTitle}`;
-            }
-        }
-
-        // 重新組裝標題
-        const badgeSpan = titleContainer.querySelector('.worldview-section-badge');
-        titleContainer.innerHTML = '';
-        if (badgeSpan) {
-            titleContainer.appendChild(badgeSpan);
-        }
-        titleContainer.appendChild(document.createTextNode(' ' + titleContainer.dataset.originalText + statusText));
-    }
 }
 
 /**
@@ -686,7 +564,6 @@ export function renderWorldviewSection(sectionId, icon, title, content, badgeCla
                     ${title}
                 </div>
                 <div class="worldview-section-actions">
-                    <button onclick="toggleSectionExpand('${sectionId}')" title="展開/收合">↕</button>
                     <button onclick="editWorldviewSection('${sectionId}', '${title}')" title="編輯">✏️</button>
                 </div>
             </div>

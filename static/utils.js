@@ -36,11 +36,11 @@ export function parseWorldviewJSON(text) {
     // Proactively strip thinking tags if present
     textStripped = textStripped.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
-    // Strip markdown codeblock fences if present
-    if (textStripped.startsWith("```")) {
-        textStripped = textStripped.replace(/^```(?:json)?\s*/i, '');
-        textStripped = textStripped.replace(/\s*```$/, '');
-        textStripped = textStripped.trim();
+    // Extract JSON block between first '{' and last '}'
+    const startIdx = textStripped.indexOf('{');
+    const endIdx = textStripped.lastIndexOf('}');
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+        textStripped = textStripped.substring(startIdx, endIdx + 1);
     }
 
     if (textStripped.startsWith("{") && textStripped.endsWith("}")) {
