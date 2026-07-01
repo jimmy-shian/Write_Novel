@@ -79,6 +79,8 @@ class CharacterDesignerRequest(BaseModel):
     hint: Optional[str] = None
     mode: Optional[str] = "generate"  # generate, expand, modify
     target_char_index: Optional[int] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class VolumesPlannerRequest(BaseModel):
     novel_id: str
@@ -87,32 +89,44 @@ class VolumesPlannerRequest(BaseModel):
     mode: Optional[str] = "generate"  # generate, patch
     target_vol_idx: Optional[int] = None
     confirm_wipe: bool = False
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class VolumeSkeletonRequest(BaseModel):
     novel_id: str
     volume_index: int
     user_prompt: Optional[str] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class PlotPlannerRequest(BaseModel):
     novel_id: str
     chapter_index: Optional[int] = None
     user_prompt: Optional[str] = None
     planner_directive: Optional[str] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class ChapterWriterRequest(BaseModel):
     novel_id: str
     chapter_index: int
     custom_style: Optional[str] = "Classic Modernism"
     user_prompt: Optional[str] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class EditorAgentRequest(BaseModel):
     novel_id: str
     chapter_index: int
     edit_instructions: Optional[str] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class CopilotChatRequest(BaseModel):
     novel_id: str
     user_message: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class DirectorDecisionRequest(BaseModel):
     current_stage: str
@@ -127,11 +141,15 @@ class DirectorDecisionRequest(BaseModel):
     summary_context: Optional[str] = None
     extra_context: Optional[str] = None
     loop_count: Optional[int] = 0
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class DirectorHelpPayload(BaseModel):
     current_stage: str
     help_action: str
     help_reason: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class CharacterAdjustRequest(BaseModel):
     char_index: int
@@ -147,22 +165,30 @@ class IncrementalArchitectRequest(BaseModel):
     novel_id: str
     target_section: str
     user_hint: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class IncrementalCharacterRequest(BaseModel):
     novel_id: str
     target_char_index: Optional[int] = None
     field_name: Optional[str] = None
     user_hint: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class IncrementalPlotRequest(BaseModel):
     novel_id: str
     insert_after_index: int
     user_hint: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 class IncrementalSkeletonRequest(BaseModel):
     novel_id: str
     volume_index: int
     user_hint: str
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 
 # --- NOVELS ROUTES ---
@@ -334,13 +360,18 @@ def _stream_with_lock(novel_id, async_gen):
             db.release_pipeline_lock(novel_id)
     return _wrapped()
 @app.post("/api/agent/story-architect")
-def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body(...)):
+def api_agent_story_architect(
+    novel_id: str = Body(...),
+    user_prompt: str = Body(...),
+    stream: bool = Body(False),
+    force_json: bool = Body(False)
+):
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
     return StreamingResponse(
-        _stream_with_lock(novel_id, agents.run_story_architect(novel_id, user_prompt)),
+        _stream_with_lock(novel_id, agents.run_story_architect(novel_id, user_prompt, stream=stream, force_json=force_json)),
         media_type="text/event-stream",
     )
 
@@ -356,7 +387,9 @@ def api_agent_character_designer(payload: CharacterDesignerRequest):
             user_prompt=payload.user_prompt,
             hint=payload.hint,
             mode=payload.mode,
-            target_char_index=payload.target_char_index
+            target_char_index=payload.target_char_index,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )
@@ -381,7 +414,9 @@ def api_agent_volumes_planner(payload: VolumesPlannerRequest):
             user_prompt=payload.user_prompt,
             hint=payload.hint,
             mode=payload.mode,
-            target_vol_idx=payload.target_vol_idx
+            target_vol_idx=payload.target_vol_idx,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )
@@ -396,7 +431,9 @@ def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
         _stream_with_lock(payload.novel_id, agents.run_volume_skeleton_planner(
             novel_id=payload.novel_id,
             volume_index=payload.volume_index,
-            user_prompt=payload.user_prompt
+            user_prompt=payload.user_prompt,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )
@@ -413,7 +450,9 @@ def api_agent_write_chapter(payload: ChapterWriterRequest):
             novel_id=payload.novel_id,
             chapter_index=payload.chapter_index,
             custom_style=payload.custom_style,
-            user_prompt=payload.user_prompt
+            user_prompt=payload.user_prompt,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )
@@ -428,7 +467,9 @@ def api_agent_edit_chapter(payload: EditorAgentRequest):
         _stream_with_lock(payload.novel_id, agents.run_editor_agent(
             novel_id=payload.novel_id,
             chapter_index=payload.chapter_index,
-            edit_instructions=payload.edit_instructions
+            edit_instructions=payload.edit_instructions,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )
@@ -440,7 +481,12 @@ def api_agent_copilot_chat(payload: CopilotChatRequest):
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
     return StreamingResponse(
-        _stream_with_lock(payload.novel_id, agents.run_copilot_chat(payload.novel_id, payload.user_message)),
+        _stream_with_lock(payload.novel_id, agents.run_copilot_chat(
+            payload.novel_id,
+            payload.user_message,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
+        )),
         media_type="text/event-stream",
     )
 
@@ -482,6 +528,8 @@ def api_director_decision(novel_id: str, payload: DirectorDecisionRequest):
                 summary_context=payload.summary_context,
                 extra_context=payload.extra_context,
                 loop_count=payload.loop_count or 0,
+                stream=payload.stream or False,
+                force_json=payload.force_json or False
             ), novel_id=novel_id):
                 yield chunk
         finally:
@@ -503,7 +551,9 @@ def api_director_decision_help(novel_id: str, payload: DirectorHelpPayload):
                 novel_id=novel_id,
                 current_stage=payload.current_stage,
                 help_action=payload.help_action,
-                help_reason=payload.help_reason
+                help_reason=payload.help_reason,
+                stream=payload.stream or False,
+                force_json=payload.force_json or False
             ), novel_id=novel_id):
                 yield chunk
         finally:
@@ -978,6 +1028,8 @@ def api_heal_rollback(novel_id: str, payload: HealRollbackPayload):
 class ForeshadowingOrchestratorRequest(BaseModel):
     novel_id: str
     user_prompt: Optional[str] = None
+    stream: Optional[bool] = False
+    force_json: Optional[bool] = False
 
 @app.post("/api/agent/foreshadowing-orchestrator")
 @app.post("/api/agent/foreshadowing-orchestrate")
@@ -989,7 +1041,9 @@ def api_agent_foreshadowing_orchestrator(payload: ForeshadowingOrchestratorReque
     return StreamingResponse(
         _stream_with_lock(payload.novel_id, agents.run_foreshadowing_orchestrator(
             novel_id=payload.novel_id,
-            user_prompt=payload.user_prompt
+            user_prompt=payload.user_prompt,
+            stream=payload.stream or False,
+            force_json=payload.force_json or False
         )),
         media_type="text/event-stream",
     )

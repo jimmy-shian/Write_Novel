@@ -4,12 +4,16 @@ AI Novel Factory Agent Runner Functions
 Implements the 6-stage golden axis of creation:
 Worldview -> Character -> Volume -> Skeleton -> Outline -> Writing
 Reinforced with JSON schemas and custom Director hooks.
-All prompt construction is delegated to prompts.prompt_builder.
+
+職責分工（Separation of Concerns）：
+- 限制規範 (Constraints)    : constraints.py
+- 提示詞組裝 (Prompt Assembly): prompts/prompt_builder.py
+- 校驗與結構計算 (Validation)  : validation.py
+- 總監上下文 (Director Context): director_context.py
+- Pipeline 路由與串流 (本檔)   : agents.py
 """
 
 import json
-import os
-import re
 import traceback
 import asyncio
 from functools import partial
@@ -19,22 +23,39 @@ import director_context
 from llm import call_llm_stream
 
 from config import (
-    MIN_FORESHADOWING_SEEDS,
-    MIN_KEY_TURNING_POINTS,
-    MIN_VOLUME_COUNT,
-    MAX_VOLUME_COUNT,
-    MIN_CHAPTERS_PER_VOLUME,
-    MAX_CHAPTERS_PER_VOLUME,
     MAX_AUTO_LOOPS,
     VOLUME_SKELETON_BATCH_SIZE,
     VOLUME_SKELETON_BATCH_RETRIES,
 )
-from utils import safe_filename, deep_merge_dict, StreamAccumulator
+from utils import deep_merge_dict, StreamAccumulator
 
-# --- IMPORT SECURE PROMPT BUILDERS ---
+# --- 限制規範層 (Constraints) ---
+from constraints import (
+    load_retrospective_gold_rules,
+)
+
+# --- 校驗與結構計算層 (Validation) ---
+from validation import (
+    normalize_foreshadowing_output,
+    foreshadowing_quantity_error,
+    foreshadowing_schema_error,
+    volume_plan_validation_error,
+    chapter_index_or_none,
+    volume_existing_chapter_indexes,
+    volume_missing_chapter_indexes,
+    parse_requested_chapter_indexes,
+    split_consecutive_batches,
+    extract_chapters_in_range,
+    extract_worldview_dict_preserving,
+)
+
+# --- 提示詞組裝層 (Prompt Assembly) ---
 from prompts.prompt_builder import (
     get_json_schema_prompt_snippet,
     build_story_architect_messages,
+    build_worldview_core_messages,
+    build_multi_act_structure_messages,
+    build_progressive_character_plan_messages,
     build_character_designer_messages,
     build_foreshadowing_messages,
     build_volumes_planner_messages,
@@ -46,51 +67,18 @@ from prompts.prompt_builder import (
     build_director_decision_help_messages,
     build_incremental_architect_messages,
     build_incremental_character_messages,
+    build_missing_character_designer_messages,
     extract_worldview_summary,
     select_worldview_context,
-    mask_worldview_seeds_and_turns
+    mask_worldview_seeds_and_turns,
+    extract_character_names_list,
+    extract_character_basic,
 )
 
 
-def _safe_gold_rules_filename(title):
-    return safe_filename(title)
-
-
-def _load_retrospective_gold_rules(novel_id, limit=16000):
-    novel = db.get_novel(novel_id)
-    if not novel:
-        return ""
-    gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
-    if not os.path.isdir(gold_rules_dir):
-        return ""
-
-    safe_title = _safe_gold_rules_filename(novel.get("title", ""))
-    candidates = []
-    expected_name = f"{safe_title}_retrospective_gold_rules.md"
-    expected_path = os.path.join(gold_rules_dir, expected_name)
-    if os.path.isfile(expected_path):
-        candidates.append(expected_path)
-    else:
-        for name in os.listdir(gold_rules_dir):
-            if name.endswith("_retrospective_gold_rules.md") and name.startswith(safe_title):
-                path = os.path.join(gold_rules_dir, name)
-                if os.path.isfile(path):
-                    candidates.append(path)
-
-    if not candidates:
-        return ""
-    latest = max(candidates, key=lambda path: os.path.getmtime(path))
-    try:
-        with open(latest, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-    except OSError:
-        return ""
-    if len(content) <= limit:
-        return content
-    marker = f"\n\n...[創作金律過長，已省略 {len(content) - limit} 字，保留開頭與結尾]...\n\n"
-    head_len = max(1, (limit - len(marker)) * 2 // 3)
-    tail_len = max(1, limit - len(marker) - head_len)
-    return content[:head_len] + marker + content[-tail_len:]
+# Gold rules 載入 → 已移至 constraints.py: load_retrospective_gold_rules
+# 提供向後相容的私有別名供本檔內部沿用
+_load_retrospective_gold_rules = load_retrospective_gold_rules
 
 
 import time
@@ -146,39 +134,160 @@ async def safe_generator_wrapper(gen, novel_id=None):
 # =============================================================================
 # 1. Worldview Agent (Story Architect)
 # =============================================================================
-def run_story_architect(novel_id, user_prompt):
+def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     """
     Worldview Stage: Generate worldview based on user's story setting.
+    This stage has been refactored into a three-stage pipeline:
+    1. Core Worldview (theme, main_conflict, worldview, macro_outline)
+    2. Multi-Act Structure (multi_act_structure)
+    3. Progressive Character Plan (progressive_character_plan)
+    
+    If the user_prompt contains [TARGET: ...], we perform targeted incremental generation.
     """
     novel = db.get_novel(novel_id)
     genre = novel.get("genre", "Fantasy")
     style = novel.get("style", "Classic Modernism")
     
-    messages = build_story_architect_messages(genre, style, user_prompt)
+    # 讀取已有的世界觀設定
+    wb = db.get_latest_worldbuilding(novel_id)
+    existing_wb = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    is_initial = not wb or not wb.get("content")
     
-    # Store chat history
+    target_part = None
+    if user_prompt:
+        if "[TARGET: core]" in user_prompt or "[TARGET: worldview]" in user_prompt:
+            target_part = "core"
+        elif "[TARGET: multi_act_structure]" in user_prompt:
+            target_part = "multi_act_structure"
+        elif "[TARGET: progressive_character_plan]" in user_prompt:
+            target_part = "progressive_character_plan"
+            
+    if is_initial:
+        regen_core = True
+        regen_acts = True
+        regen_char_plan = True
+    else:
+        if target_part == "core":
+            regen_core = True
+            regen_acts = False
+            regen_char_plan = False
+        elif target_part == "multi_act_structure":
+            regen_core = False
+            regen_acts = True
+            regen_char_plan = False
+        elif target_part == "progressive_character_plan":
+            regen_core = False
+            regen_acts = False
+            regen_char_plan = True
+        else:
+            regen_core = True
+            regen_acts = True
+            regen_char_plan = True
+            
+    # 紀錄對話歷史
     db.save_chat_message(novel_id, "user", f"開始生成世界觀。要求: {user_prompt}", message_type="pipeline")
     
-    # Run streaming
-    stream = call_llm_stream("architect", messages)
-    acc = StreamAccumulator(stream)
-    for chunk in acc:
-        yield chunk
-    full_text = acc.content
-    # Save output to database
+    # 階段 1：世界觀核心
+    core_json_str = ""
+    last_messages = []
+    if regen_core:
+        yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成核心世界觀設定（Theme, Conflict, Worldview, Outline）..."}, ensure_ascii=False) + "\n\n"
+        messages = build_worldview_core_messages(genre, style, user_prompt)
+        last_messages = messages
+        llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
+        acc = StreamAccumulator(llm_stream)
+        for chunk in acc:
+            yield chunk
+        core_json_str = acc.content
+    else:
+        core_dict = {
+            "theme": existing_wb.get("theme", ""),
+            "main_conflict": existing_wb.get("main_conflict", ""),
+            "worldview": existing_wb.get("worldview", ""),
+            "macro_outline": existing_wb.get("macro_outline", "")
+        }
+        core_json_str = json.dumps(core_dict, ensure_ascii=False, indent=2)
+        
+    # 階段 2：多幕式結構
+    acts_json_str = ""
+    if regen_acts:
+        yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『多幕式劇情起伏結構』(Multi-Act Structure)..."}, ensure_ascii=False) + "\n\n"
+        messages = build_multi_act_structure_messages(core_json_str, user_prompt)
+        last_messages = messages
+        llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
+        acc = StreamAccumulator(llm_stream)
+        for chunk in acc:
+            yield chunk
+        acts_json_str = acc.content
+    else:
+        acts_dict = {
+            "multi_act_structure": existing_wb.get("multi_act_structure", [])
+        }
+        acts_json_str = json.dumps(acts_dict, ensure_ascii=False, indent=2)
+        
+    # 階段 3：角色漸進登場規劃
+    char_plan_json_str = ""
+    if regen_char_plan:
+        yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『角色漸進登場規劃策略』(Progressive Character Plan)..."}, ensure_ascii=False) + "\n\n"
+        messages = build_progressive_character_plan_messages(core_json_str, acts_json_str, user_prompt)
+        last_messages = messages
+        llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
+        acc = StreamAccumulator(llm_stream)
+        for chunk in acc:
+            yield chunk
+        char_plan_json_str = acc.content
+    else:
+        char_plan_dict = {
+            "progressive_character_plan": existing_wb.get("progressive_character_plan", [])
+        }
+        char_plan_json_str = json.dumps(char_plan_dict, ensure_ascii=False, indent=2)
+        
+    # 解析各部分的 JSON，並合併
+    from models.parsers import extract_json_block
+    
+    try:
+        core_data = extract_json_block(core_json_str) or {}
+    except Exception:
+        core_data = {}
+        
+    try:
+        acts_data = extract_json_block(acts_json_str) or {}
+    except Exception:
+        acts_data = {}
+        
+    try:
+        char_plan_data = extract_json_block(char_plan_json_str) or {}
+    except Exception:
+        char_plan_data = {}
+        
+    # 合併
+    final_worldview = {
+        "theme": core_data.get("theme") or existing_wb.get("theme", ""),
+        "main_conflict": core_data.get("main_conflict") or existing_wb.get("main_conflict", ""),
+        "worldview": core_data.get("worldview") or existing_wb.get("worldview", ""),
+        "macro_outline": core_data.get("macro_outline") or existing_wb.get("macro_outline", ""),
+        "multi_act_structure": acts_data.get("multi_act_structure") or existing_wb.get("multi_act_structure", []),
+        "progressive_character_plan": char_plan_data.get("progressive_character_plan") or existing_wb.get("progressive_character_plan", []),
+        "foreshadowing_seeds": existing_wb.get("foreshadowing_seeds", []),
+        "key_turning_points": existing_wb.get("key_turning_points", [])
+    }
+    
+    full_text = json.dumps(final_worldview, ensure_ascii=False, indent=2)
+    
+    # 保存成品
     if full_text.strip():
         if _handle_director_context_request(novel_id, "世界觀架構師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "世界觀架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
         db.save_worldbuilding(novel_id, full_text, validate=False)
-        db.save_last_agent_run(novel_id, "worldview", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-        db.save_chat_message(novel_id, "assistant", f"世界觀生成成功！版本已更新。", message_type="pipeline")
+        db.save_last_agent_run(novel_id, "worldview", json.dumps(last_messages or [], ensure_ascii=False, indent=2), full_text)
+        db.save_chat_message(novel_id, "assistant", f"世界觀與大綱起伏結構、角色登場策略生成成功！版本已更新。", message_type="pipeline")
 
 
 # =============================================================================
 # 2. Character Designer Agent
 # =============================================================================
-def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate", target_char_index=None):
+def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate", target_char_index=None, stream=False, force_json=False):
     """
     Character Stage:
     - Mode 'generate': Generate characters based on worldview summary.
@@ -208,7 +317,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")
     
-    stream = call_llm_stream("character", messages)
+    stream = call_llm_stream("character", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -223,187 +332,19 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
 
 
 
-def _foreshadowing_quantity_error(seeds, turns):
-    seed_count = len(seeds) if isinstance(seeds, list) else 0
-    turn_count = len(turns) if isinstance(turns, list) else 0
-    problems = []
-    if seed_count < MIN_FORESHADOWING_SEEDS:
-        problems.append(f"foreshadowing_seeds 數量不足：需要至少 {MIN_FORESHADOWING_SEEDS} 個，實際 {seed_count} 個")
-    if turn_count < MIN_KEY_TURNING_POINTS:
-        problems.append(f"key_turning_points 數量不足：需要至少 {MIN_KEY_TURNING_POINTS} 個，實際 {turn_count} 個")
-    return "；".join(problems)
-
-
-def _clean_foreshadowing_text(value):
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value).strip()
-    try:
-        return json.dumps(value, ensure_ascii=False).strip()
-    except Exception:
-        return str(value).strip()
-
-
-def _first_foreshadowing_text(item, keys):
-    if not isinstance(item, dict):
-        return ""
-    for key in keys:
-        text = _clean_foreshadowing_text(item.get(key))
-        if text:
-            return text
-    return ""
-
-
-def _foreshadowing_text_list(value):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [text for text in (_clean_foreshadowing_text(v) for v in value) if text]
-    text = _clean_foreshadowing_text(value)
-    return [text] if text else []
-
-
-def _normalize_seed_item(item, index):
-    if not isinstance(item, dict):
-        item = {"description": _clean_foreshadowing_text(item)}
-    return {
-        "id": index + 1,
-        "name": _first_foreshadowing_text(item, ("name", "title", "seed_name")),
-        "description": _first_foreshadowing_text(item, ("description", "detail", "content", "summary", "seed", "foreshadowing")),
-        "setup_hint": _first_foreshadowing_text(item, ("setup_hint", "setup", "plant", "plant_hint", "setup_timing")),
-        "payoff_hint": _first_foreshadowing_text(item, ("payoff_hint", "payoff", "reveal", "resolution", "callback")),
-        "related_characters": _foreshadowing_text_list(item.get("related_characters") or item.get("characters") or item.get("related_roles")),
-        "thematic_link": _first_foreshadowing_text(item, ("thematic_link", "theme", "theme_link", "symbolic_meaning")),
-    }
-
-
-def _normalize_turning_point_item(item, index):
-    if not isinstance(item, dict):
-        item = {"description": _clean_foreshadowing_text(item)}
-    return {
-        "id": index + 1,
-        "turning_point_name": _first_foreshadowing_text(item, ("turning_point_name", "name", "title", "turning_point", "twist")),
-        "description": _first_foreshadowing_text(item, ("description", "detail", "content", "summary", "event")),
-        "trigger_condition": _first_foreshadowing_text(item, ("trigger_condition", "trigger", "condition", "cause", "inciting_event")),
-        "structural_impact": _first_foreshadowing_text(item, ("structural_impact", "global_impact", "impact", "consequence", "plot_impact")),
-        "emotional_stakes": _first_foreshadowing_text(item, ("emotional_stakes", "stakes", "cost", "emotional_cost")),
-        "related_characters": _foreshadowing_text_list(item.get("related_characters") or item.get("characters") or item.get("related_roles")),
-    }
-
-
-def _normalize_foreshadowing_output(parsed):
-    """Normalize known foreshadowing JSON variants into the required strict contract."""
-    if not isinstance(parsed, dict):
-        return {"foreshadowing_seeds": [], "key_turning_points": []}
-
-    seeds = parsed.get("foreshadowing_seeds") or parsed.get("seeds") or parsed.get("foreshadowings") or []
-    turns = parsed.get("key_turning_points") or parsed.get("turning_points") or parsed.get("twists") or []
-
-    # Salvage common director-misguided shapes like {"volume_1": [{"seed": ...}]}.
-    if not seeds or not turns:
-        salvaged_seeds = []
-        salvaged_turns = []
-        for key, value in parsed.items():
-            if key in ("foreshadowing_seeds", "key_turning_points", "seeds", "turning_points", "twists"):
-                continue
-            values = value if isinstance(value, list) else [value]
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                seed_value = item.get("seed") or item.get("foreshadowing") or item.get("setup")
-                turn_value = item.get("turning_point") or item.get("twist") or item.get("reveal")
-                if seed_value:
-                    salvaged_seeds.append(item)
-                if turn_value:
-                    salvaged_turns.append(item)
-        if not seeds:
-            seeds = salvaged_seeds
-        if not turns:
-            turns = salvaged_turns
-
-    if isinstance(seeds, dict):
-        seeds = [seeds]
-    if isinstance(turns, dict):
-        turns = [turns]
-    if not isinstance(seeds, list):
-        seeds = []
-    if not isinstance(turns, list):
-        turns = []
-
-    return {
-        "foreshadowing_seeds": [_normalize_seed_item(item, idx) for idx, item in enumerate(seeds)],
-        "key_turning_points": [_normalize_turning_point_item(item, idx) for idx, item in enumerate(turns)],
-    }
-
-
-def _foreshadowing_schema_error(seeds, turns):
-    problems = []
-    seed_required = ("name", "description", "setup_hint", "payoff_hint", "thematic_link")
-    turn_required = ("turning_point_name", "description", "trigger_condition", "structural_impact", "emotional_stakes")
-
-    for idx, seed in enumerate(seeds if isinstance(seeds, list) else []):
-        if not isinstance(seed, dict):
-            problems.append(f"foreshadowing_seeds[{idx}] 必須是物件")
-            continue
-        if seed.get("id") != idx + 1 or not isinstance(seed.get("id"), int):
-            problems.append(f"foreshadowing_seeds[{idx}].id 必須是整數 {idx + 1}")
-        for field in seed_required:
-            if not _clean_foreshadowing_text(seed.get(field)):
-                problems.append(f"foreshadowing_seeds[{idx}].{field} 不可為空，文字內容不可放錯欄位")
-        if not isinstance(seed.get("related_characters"), list):
-            problems.append(f"foreshadowing_seeds[{idx}].related_characters 必須是文字陣列")
-
-    for idx, turn in enumerate(turns if isinstance(turns, list) else []):
-        if not isinstance(turn, dict):
-            problems.append(f"key_turning_points[{idx}] 必須是物件")
-            continue
-        if turn.get("id") != idx + 1 or not isinstance(turn.get("id"), int):
-            problems.append(f"key_turning_points[{idx}].id 必須是整數 {idx + 1}")
-        for field in turn_required:
-            if not _clean_foreshadowing_text(turn.get(field)):
-                problems.append(f"key_turning_points[{idx}].{field} 不可為空，文字內容不可放錯欄位")
-        if not isinstance(turn.get("related_characters"), list):
-            problems.append(f"key_turning_points[{idx}].related_characters 必須是文字陣列")
-
-    if problems:
-        shown = "；".join(problems[:12])
-        if len(problems) > 12:
-            shown += f"；另有 {len(problems) - 12} 個欄位錯誤"
-        return shown
-    return ""
-
-
-def _extract_worldview_dict_preserving(content):
-    if isinstance(content, dict):
-        return dict(content)
-    if not isinstance(content, str) or not content.strip():
-        return {}
-
-    text = re.sub(r"<think>[\s\S]*?</think>", "", content, flags=re.IGNORECASE).strip()
-    candidates = []
-    candidates.extend(match.group(1) for match in re.finditer(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE))
-    candidates.append(text)
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last != -1 and first < last:
-        candidates.append(text[first:last + 1])
-
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            continue
-    return None
-
+# =============================================================================
+# 伏筆/轉折校驗與結構計算 → 已移至 validation.py
+# 以下為向後相容私有別名，agents.py 內部繼續沿用原名稱呼叫
+# =============================================================================
+_normalize_foreshadowing_output = normalize_foreshadowing_output
+_foreshadowing_quantity_error   = foreshadowing_quantity_error
+_foreshadowing_schema_error     = foreshadowing_schema_error
+_extract_worldview_dict_preserving = extract_worldview_dict_preserving
 
 
 def _extract_director_context_request(content):
-    parsed = _extract_worldview_dict_preserving(content)
+    """從 Agent 回傳內容中檢查是否包含「需要總監補充上下文」的請求標記。"""
+    parsed = extract_worldview_dict_preserving(content)
     if not isinstance(parsed, dict):
         return ""
     if not (parsed.get("_needs_director_context") or parsed.get("needs_director_context") or parsed.get("context_request")):
@@ -419,6 +360,7 @@ def _extract_director_context_request(content):
 
 
 def _handle_director_context_request(novel_id, agent_label, full_text):
+    """若 Agent 輸出包含 context_request 標記，記錄訊息並回傳 True 以中止保存。"""
     request = _extract_director_context_request(full_text)
     if not request:
         return False
@@ -430,7 +372,7 @@ def _handle_director_context_request(novel_id, agent_label, full_text):
 # =============================================================================
 # 2.5 Foreshadowing Orchestrator Agent
 # =============================================================================
-def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
+def run_foreshadowing_orchestrator(novel_id, user_prompt=None, stream=False, force_json=False):
     """
     Foreshadowing Stage: Generate foreshadowing seeds and key turning points.
     Based on worldview text + character bible.
@@ -461,7 +403,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
     
     db.save_chat_message(novel_id, "user", f"執行伏筆與轉折獨立生成。要求: {user_prompt}", message_type="pipeline")
     
-    stream = call_llm_stream("architect", messages) # Map to architect model preset
+    stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json) # Map to architect model preset
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -491,7 +433,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
             yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
             return
 
-        wb_dict = _extract_worldview_dict_preserving(worldview_text) if wb else {}
+        wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
         if wb and wb_dict is None:
             error_message = "伏筆與轉折生成已完成，但既有世界觀不是可安全合併的 JSON；為避免覆蓋前面的世界觀資料，本次不保存。請先修復/重新保存世界觀 JSON 後再生成。"
             db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
@@ -515,28 +457,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
 # =============================================================================
 # 3. Volumes Planner Agent
 # =============================================================================
-def _volume_plan_validation_error(volumes, mode="generate"):
-    if not isinstance(volumes, list) or not volumes:
-        return "未輸出 volumes 陣列"
-    if mode != "patch" and not (MIN_VOLUME_COUNT <= len(volumes) <= MAX_VOLUME_COUNT):
-        return f"篇卷數量不合規：需要 {MIN_VOLUME_COUNT}-{MAX_VOLUME_COUNT} 卷，實際 {len(volumes)} 卷"
-    bad_counts = []
-    for i, vol in enumerate(volumes):
-        try:
-            ch_count = int(vol.get("chapter_count", 0))
-        except Exception:
-            ch_count = 0
-        if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
-            bad_counts.append(f"第 {vol.get('volume_index', i + 1)} 卷 chapter_count={ch_count}")
-    if bad_counts:
-        return (
-            f"每卷章節數不合規：每卷必須 {MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME} 章；"
-            + "、".join(bad_counts[:10])
-        )
-    return ""
+# 篇卷規劃校驗 → 已移至 validation.py: volume_plan_validation_error
+_volume_plan_validation_error = volume_plan_validation_error
 
 
-def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", target_vol_idx=None):
+def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", target_vol_idx=None, stream=False, force_json=False):
     """
     Volumes Planner Stage:
     - Mode 'generate': Generate volumes list based on worldview summary + outline of preceding & succeeding 1 volumes.
@@ -552,7 +477,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     
     db.save_chat_message(novel_id, "user", f"執行篇卷規劃。模式: {mode}, 卷數: {target_vol_idx or '全書'}", message_type="pipeline")
     
-    stream = call_llm_stream("volumes", messages) # Map to volumes model for volumes planning
+    stream = call_llm_stream("volumes", messages, stream=stream, force_json=force_json) # Map to volumes model for volumes planning
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -608,102 +533,20 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
 # =============================================================================
 
 
-def _chapter_index_or_none(chapter):
-    if not isinstance(chapter, dict):
-        return None
-    raw = chapter.get("chapter_index") or chapter.get("chapter") or chapter.get("index")
-    try:
-        return int(raw)
-    except Exception:
-        return None
-
-
-def _volume_existing_chapter_indexes(volume, start_ch, end_ch):
-    existing = set()
-    chapters = volume.get("chapters_outline") if isinstance(volume, dict) else []
-    if isinstance(chapters, str):
-        try:
-            chapters = json.loads(chapters)
-        except Exception:
-            chapters = []
-    if isinstance(chapters, list):
-        for ch in chapters:
-            idx = _chapter_index_or_none(ch)
-            if idx is not None and start_ch <= idx <= end_ch:
-                existing.add(idx)
-    return existing
-
-
-def _volume_missing_chapter_indexes(volumes, volume_index):
-    volume = next((v for v in volumes if int(v.get("volume_index", 0)) == int(volume_index)), None)
-    if not volume:
-        return []
-    start_ch, end_ch = db.get_volume_chapter_range(volumes, volume_index)
-    expected = set(range(start_ch, end_ch + 1))
-    existing = _volume_existing_chapter_indexes(volume, start_ch, end_ch)
-    return sorted(expected - existing)
-
-
-def _parse_requested_chapter_indexes(text, start_ch, end_ch):
-    if not text:
-        return []
-    content = str(text)
-    ranges = []
-    patterns = [
-        r"(?:第\s*)?(\d+)\s*(?:至|到|[-~～—–])\s*(?:第\s*)?(\d+)\s*章?",
-        r"chapters?\s*(\d+)\s*(?:to|-)\s*(\d+)",
-    ]
-    for pattern in patterns:
-        for m in re.finditer(pattern, content, flags=re.IGNORECASE):
-            a, b = int(m.group(1)), int(m.group(2))
-            lo, hi = sorted((a, b))
-            ranges.extend(range(max(start_ch, lo), min(end_ch, hi) + 1))
-    singles = []
-    for m in re.finditer(r"第\s*(\d+)\s*章", content):
-        value = int(m.group(1))
-        if start_ch <= value <= end_ch:
-            singles.append(value)
-    return sorted(set(ranges + singles))
-
-
-def _split_consecutive_batches(indexes, batch_size=VOLUME_SKELETON_BATCH_SIZE):
-    if not indexes:
-        return []
-    batches = []
-    current = []
-    previous = None
-    for idx in sorted(indexes):
-        if previous is None or (idx == previous + 1 and len(current) < batch_size):
-            current.append(idx)
-        else:
-            batches.append(current)
-            current = [idx]
-        previous = idx
-    if current:
-        batches.append(current)
-    return batches
-
-
-def _extract_chapters_in_range(parsed_skeleton, expected_indexes):
-    if isinstance(parsed_skeleton, dict):
-        chapters = parsed_skeleton.get("chapters_skeleton", []) or parsed_skeleton.get("chapters", [])
-    elif isinstance(parsed_skeleton, list):
-        chapters = parsed_skeleton
-    else:
-        chapters = []
-    expected = set(expected_indexes)
-    cleaned = []
-    seen = set()
-    for ch in chapters if isinstance(chapters, list) else []:
-        idx = _chapter_index_or_none(ch)
-        if idx in expected and idx not in seen:
-            ch["chapter_index"] = idx
-            cleaned.append(ch)
-            seen.add(idx)
-    return cleaned
+# =============================================================================
+# 章節索引計算工具 → 已移至 validation.py
+# 以下為向後相容私有別名
+# =============================================================================
+_chapter_index_or_none         = chapter_index_or_none
+_volume_existing_chapter_indexes = volume_existing_chapter_indexes
+_volume_missing_chapter_indexes  = volume_missing_chapter_indexes
+_parse_requested_chapter_indexes = parse_requested_chapter_indexes
+_split_consecutive_batches       = split_consecutive_batches
+_extract_chapters_in_range       = extract_chapters_in_range
 
 
 def _build_nearby_skeleton_context(volume, batch_indexes):
+    """從同卷中提取鄰近批次章節的既有骨架，作為銜接上下文提示詞片段。"""
     chapters = volume.get("chapters_outline") if isinstance(volume, dict) else []
     if isinstance(chapters, str):
         try:
@@ -715,7 +558,7 @@ def _build_nearby_skeleton_context(volume, batch_indexes):
     lo, hi = min(batch_indexes), max(batch_indexes)
     nearby = []
     for ch in chapters:
-        idx = _chapter_index_or_none(ch)
+        idx = chapter_index_or_none(ch)
         if idx is not None and (lo - 2 <= idx <= hi + 2) and idx not in set(batch_indexes):
             nearby.append(ch)
     if not nearby:
@@ -724,7 +567,7 @@ def _build_nearby_skeleton_context(volume, batch_indexes):
     return "\n【同卷鄰近既有骨架（只供銜接，不要重寫這些章）】\n" + json.dumps(nearby, ensure_ascii=False, indent=2) + "\n"
 
 
-def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
+def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False):
     """
     Volume Skeleton Stage.
     Generates only missing chapters, split into small batches, then merges each batch into the existing volume outline.
@@ -845,7 +688,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
             )
 
             yield "data: " + json.dumps({"type": "content", "delta": f"\n[骨架批次] 第 {volume_index} 卷：生成章節 {batch_start}-{batch_end}（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
-            stream = call_llm_stream("volume_skeleton", messages)
+            stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
             accumulated = []
             saw_error = False
             for chunk in stream:
@@ -904,58 +747,8 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
-def build_missing_character_designer_messages(worldview_summary, existing_chars_json, new_char_name, chapter_outline):
-    schema = {
-        "name": "",
-        "role": "",
-        "entry_phase": "",
-        "personality": [],
-        "want": "",
-        "need": "",
-        "fatal_flaw": "",
-        "motivation": "",
-        "arc": "",
-        "speech_style": "",
-        "appearance": "",
-        "background": "",
-        "relationships": []
-    }
-    
-    # 僅提取現有角色的名稱與角色定位，節省 Token 並防範衝突
-    existing_names_str = "暫無角色"
-    if existing_chars_json:
-        try:
-            from prompts.prompt_builder import extract_character_names_list
-            names = extract_character_names_list(existing_chars_json)
-            if names:
-                existing_names_str = ", ".join(names)
-        except Exception:
-            pass
-            
-    system_prompt = f"""你是一位頂尖的角色設計大師（Character Designer）。
-請根據世界觀背景與新角色首次登場的詳細章節大綱，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
-
-⚠️【剛性約束項目】：
-1. 輸出格式必須嚴格是 JSON，符合以下角色 Schema：
-{json.dumps(schema, ensure_ascii=False, indent=2)}
-2. name 欄位必須是角色的具體姓名【{new_char_name}】，絕對禁止填寫無關名稱。
-3. 角色的人設、動機 (motivation)、致命缺陷 (fatal_flaw)、發聲風格 (speech_style) 必須與章節大綱的情境完全契合，且不可與現有的其他角色衝突。
-"""
-    user_content = f"""【世界觀背景大綱】
-{worldview_summary}
-
-【現有已登場角色清單 (避免人設重複或名稱衝突)】
-{existing_names_str}
-
-【新角色【{new_char_name}】登場的第 {chapter_outline.get('chapter_index')} 章大綱】
-{json.dumps(chapter_outline, ensure_ascii=False, indent=2)}
-
-請為新角色【{new_char_name}】生成高品質的完整角色 JSON 卡片。
-"""
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
-    ]
+# build_missing_character_designer_messages → 已移至 prompts/prompt_builder.py
+# 本檔透過頂層 import 直接使用，無需額外別名
 
 
 
@@ -1007,7 +800,7 @@ def _collect_volume_skeleton_chapters(novel_id):
 # =============================================================================
 # 6. Chapter Writer Agent
 # =============================================================================
-def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None):
+def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None, stream=False, force_json=False):
     """
     Writing Stage:
     Generate prose based on:
@@ -1139,7 +932,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         message_type="pipeline"
     )
     
-    stream = call_llm_stream("writer", messages)
+    stream = call_llm_stream("writer", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -1166,7 +959,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
 # =============================================================================
 # 7. Editor Agent
 # =============================================================================
-def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
+def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=False, force_json=False):
     """
     Editor Stage:
     Polishes/edits the chapter prose using Senior Editor, replacing the original content directly.
@@ -1182,7 +975,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
     
     db.save_chat_message(novel_id, "user", f"調用編輯姬潤色第 {chapter_index} 章。指示: {edit_instructions}", message_type="pipeline")
     
-    stream = call_llm_stream("editor", messages)
+    stream = call_llm_stream("editor", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -1199,7 +992,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
 # =============================================================================
 # 8. Copilot / Director Orchestration
 # =============================================================================
-def run_copilot_chat(novel_id, user_message):
+def run_copilot_chat(novel_id, user_message, stream=False, force_json=False):
     """
     AI Copilot Chat: User speaks, Copilot analyzes intent, recommends best flow, and chats.
     """
@@ -1237,7 +1030,7 @@ def run_copilot_chat(novel_id, user_message):
     
     db.save_chat_message(novel_id, "user", user_message, message_type="chat")
     
-    stream = call_llm_stream("copilot", messages)
+    stream = call_llm_stream("copilot", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream, collect_thinking=True)
     for chunk in acc:
         yield chunk
@@ -1264,7 +1057,9 @@ def run_director_decision(
     conversation_context=None,
     summary_context=None,
     extra_context=None,
-    loop_count=0
+    loop_count=0,
+    stream=False,
+    force_json=False
 ):
     """
     Gateway review after a stage completes. Returns next action:
@@ -1302,16 +1097,25 @@ def run_director_decision(
         except Exception:
             current_stage = detected_stage
     wb = db.get_latest_worldbuilding(novel_id)
-    worldview_text = select_worldview_context(wb["content"], current_stage="director", query_text=user_prompt or "") if wb else "尚無世界觀設定"
+    MAX_DIRECTOR_WORLDVIEW_CHARS = 60000 if current_stage == "worldview" else 30000
+    worldview_text = select_worldview_context(wb["content"], current_stage=current_stage, query_text=user_prompt or "", limit=MAX_DIRECTOR_WORLDVIEW_CHARS) if wb else "尚無世界觀設定"
     if current_stage not in ("foreshadowing", "worldview"):
         try:
             worldview_text = mask_worldview_seeds_and_turns(worldview_text)
         except Exception:
             pass
-    MAX_DIRECTOR_WORLDVIEW_CHARS = 30000
     if len(worldview_text) > MAX_DIRECTOR_WORLDVIEW_CHARS:
         print(f"[WARN] Director worldview emergency-truncated from {len(worldview_text)} to {MAX_DIRECTOR_WORLDVIEW_CHARS} chars for novel {novel_id}")
-        worldview_text = worldview_text[:MAX_DIRECTOR_WORLDVIEW_CHARS] + "\n...[世界觀已截斷]"
+        if current_stage != "worldview":
+            try:
+                parsed = json.loads(worldview_text)
+                from prompts.prompt_builder import compact_json_data
+                compacted = compact_json_data(parsed, max_list_items=5)
+                worldview_text = json.dumps(compacted, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        if len(worldview_text) > MAX_DIRECTOR_WORLDVIEW_CHARS:
+            worldview_text = worldview_text[:MAX_DIRECTOR_WORLDVIEW_CHARS] + "\n...[世界觀已截斷]"
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
     
@@ -1472,7 +1276,7 @@ def run_director_decision(
         gold_rules_context=_load_retrospective_gold_rules(novel_id)
     )
     
-    stream = call_llm_stream("copilot", messages)
+    stream = call_llm_stream("copilot", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream, collect_thinking=True)
     for chunk in acc:
         yield chunk
@@ -1482,7 +1286,7 @@ def run_director_decision(
         db.save_chat_message(novel_id, "director", f"【總監階段評估 ({current_stage})】\n{full_text}", thinking=full_thinking if full_thinking.strip() else None, message_type="director")
 
 
-def run_director_decision_help(novel_id, current_stage, help_action, help_reason):
+def run_director_decision_help(novel_id, current_stage, help_action, help_reason, stream=False, force_json=False):
     """
     Subsequent Help check:
     If Director wants to retrieve full details (like help_worldview, help_plot) mid-stream.
@@ -1526,7 +1330,7 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
         
     messages = build_director_decision_help_messages(help_reason, target_data)
     
-    stream = call_llm_stream("copilot", messages)
+    stream = call_llm_stream("copilot", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream, collect_thinking=True)
     for chunk in acc:
         yield chunk
@@ -1539,7 +1343,7 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
 # =============================================================================
 # 10. Incremental / Standalone AI Generators (Auxiliary Buttons support)
 # =============================================================================
-def run_incremental_architect(novel_id, target_section, user_hint):
+def run_incremental_architect(novel_id, target_section, user_hint, stream=False, force_json=False):
     """
     Incremental Architect Stage:
     Updates a specific section of worldview based on user hint, then auto-merges using patch engine.
@@ -1550,7 +1354,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     messages = build_incremental_architect_messages(target_section, worldview_text, user_hint)
     
     db.save_chat_message(novel_id, "user", f"增量世界觀修改。板塊: {target_section}, 要求: {user_hint}", message_type="pipeline")
-    stream = call_llm_stream("architect", messages)
+    stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -1564,7 +1368,7 @@ def run_incremental_architect(novel_id, target_section, user_hint):
             yield "data: " + json.dumps({"type": "error", "message": f"增量世界觀更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
 
 
-def run_incremental_character_designer(novel_id, target_char_index, field_name, user_hint):
+def run_incremental_character_designer(novel_id, target_char_index, field_name, user_hint, stream=False, force_json=False):
     """
     Incremental Character Stage:
     Updates a single character field or appends a new character, then auto-merges using patch engine.
@@ -1596,7 +1400,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     
     action = "PATCH" if normalized_target_index is not None else "APPEND"
     db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {normalized_target_index if normalized_target_index is not None else '新增'}, 要求: {user_hint}", message_type="pipeline")
-    stream = call_llm_stream("character", messages)
+    stream = call_llm_stream("character", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
@@ -1616,7 +1420,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
 
 
 
-def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
+def run_incremental_volume_skeleton(novel_id, volume_index, user_hint, stream=False, force_json=False):
     """
     Incremental Volume Skeleton Stage:
     Updates a specific volume's skeleton based on user hint, then auto-merges and updates the DB.
@@ -1636,7 +1440,7 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
     messages = build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint)
     
     db.save_chat_message(novel_id, "user", f"增量卷骨架修改。卷: {volume_index}, 要求: {user_hint}", message_type="pipeline")
-    stream = call_llm_stream("volume_skeleton", messages)
+    stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
