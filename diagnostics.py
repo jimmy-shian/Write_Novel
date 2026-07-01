@@ -450,6 +450,10 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             parsed_wb = db.parse_worldview_to_json(wb["content"])
             report_lines.append(f"  - 核心主題 (theme)：{parsed_wb.get('theme', '未設定')[:100]}...")
             report_lines.append(f"  - 核心衝突 (main_conflict)：{parsed_wb.get('main_conflict', '未設定')[:100]}...")
+            multi_act = parsed_wb.get('multi_act_structure', [])
+            char_plan = parsed_wb.get('progressive_character_plan', [])
+            report_lines.append(f"  - 多幕結構 (multi_act_structure)：共 {len(multi_act)} 幕")
+            report_lines.append(f"  - 角色漸進規劃 (progressive_character_plan)：共 {len(char_plan)} 波")
         except Exception as e:
             report_lines.append(f"  - 狀態：⚠️ 世界觀非標準 JSON 格式：{e}")
     report_lines.append("")
