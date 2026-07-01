@@ -47,7 +47,7 @@ def get_agent_model(agent_name):
 def get_default_config():
     """Get default config values from .env."""
     return {
-        "base_url": os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        "base_url": os.getenv("DEFAULT_BASE_URL", "http://127.0.0.1:4000/v1"),
         "temperature": float(os.getenv("DEFAULT_TEMPERATURE", 0.7)),
         "top_p": float(os.getenv("DEFAULT_TOP_P", 0.95)),
         "max_tokens": int(os.getenv("DEFAULT_MAX_TOKENS", 16384)),
@@ -70,7 +70,7 @@ def get_config_for_agent(agent_name):
     # Base fallback from agent-specific AGENT_DEFAULTS
     config = {
         "api_key": get_agent_api_key(agent_name) or "",
-        "base_url": agent_defaults.get("base_url", "https://integrate.api.nvidia.com/v1"),
+        "base_url": agent_defaults.get("base_url", "http://127.0.0.1:4000/v1"),
         "model": get_agent_model(agent_name),
         "temperature": agent_defaults["temperature"],
         "top_p": agent_defaults["top_p"],
@@ -85,6 +85,10 @@ def get_config_for_agent(agent_name):
                 # Only override model if agent doesn't have a specialized default model in .env
                 if k == "model" and agent_name != "global":
                     if get_agent_model(agent_name) != get_agent_model("global"):
+                        continue
+                # Do not override if the agent has a specialized default that differs from global
+                if agent_name != "global" and k in agent_defaults and k in AGENT_DEFAULTS["global"]:
+                    if agent_defaults[k] != AGENT_DEFAULTS["global"][k]:
                         continue
                 config[k] = global_cfg[k]
                 
@@ -207,12 +211,18 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None):
         "stream": True,
     }
     
-    # 避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
-    if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in actual_model_string:
-        payload_base["response_format"] = {"type": "json_object"}
+    is_local_gateway = "127.0.0.1:4000" in config.get("base_url", "")
     
-    if config["enable_thinking"]:
-        payload_base["chat_template_kwargs"] = {"enable_thinking": True}
+    if is_local_gateway:
+        # For local gateway, omit temperature, top_p, response_format, and thinking templates to let gateway apply its presets/defaults.
+        payload_base.pop("temperature", None)
+        payload_base.pop("top_p", None)
+    else:
+        # 避免 gpt-oss 系列模型與 json_object 參數衝突，將結構化輸出權限交給後端代碼處理
+        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"] and "gpt-oss" not in actual_model_string:
+            payload_base["response_format"] = {"type": "json_object"}
+        if config["enable_thinking"]:
+            payload_base["chat_template_kwargs"] = {"enable_thinking": True}
         
     # Auto-inject preset parameters from MODELS_CONFIG
     payload_base.update(preset_overrides)

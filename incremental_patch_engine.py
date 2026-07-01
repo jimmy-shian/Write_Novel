@@ -3,6 +3,7 @@ import json
 import re
 import sys
 import db
+from utils import deep_merge_dict
 
 ALLOWED_CHARACTER_FIELDS = {
     "name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw",
@@ -17,21 +18,6 @@ def normalize_character_field_name(field_name):
     if not field_name:
         return field_name
     return CHARACTER_FIELD_ALIASES.get(str(field_name).strip(), str(field_name).strip())
-
-def deep_merge_dict(base, patch):
-    if not isinstance(base, dict):
-        base = {}
-    if not isinstance(patch, dict):
-        return patch
-    merged = dict(base)
-    for key, value in patch.items():
-        if value is None:
-            continue
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = deep_merge_dict(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 def _extract_character_patch(payload, char_index=None):
     """

@@ -4,12 +4,15 @@
 """
 import json
 
-MIN_FORESHADOWING_SEEDS = 50
-MIN_KEY_TURNING_POINTS = 50
-MIN_VOLUME_COUNT = 10
-MAX_VOLUME_COUNT = 20
-MIN_CHAPTERS_PER_VOLUME = 40
-MAX_CHAPTERS_PER_VOLUME = 50
+from config import (
+    MIN_FORESHADOWING_SEEDS,
+    MIN_KEY_TURNING_POINTS,
+    MIN_VOLUME_COUNT,
+    MAX_VOLUME_COUNT,
+    MIN_CHAPTERS_PER_VOLUME,
+    MAX_CHAPTERS_PER_VOLUME,
+)
+from utils import normalize_outlines
 from agent_json import CHARACTER_BASIC_FIELDS
 
 
@@ -39,23 +42,6 @@ def _format_worldview_seed_for_report(seed):
     return str(seed)
 
 
-def _normalize_outlines(plot_data):
-    chapters = plot_data.get("chapters", []) if isinstance(plot_data, dict) else []
-    normalized = []
-    for idx, chapter in enumerate(chapters):
-        if not isinstance(chapter, dict):
-            continue
-        item = dict(chapter)
-        try:
-            raw_idx = item.get("chapter_index") or item.get("chapter") or item.get("chapter_number") or item.get("index") or (idx + 1)
-            item["chapter_index"] = int(raw_idx)
-        except Exception:
-            item["chapter_index"] = idx + 1
-        normalized.append(item)
-    normalized.sort(key=lambda item: item["chapter_index"])
-    return normalized
-
-
 def _is_primary_protagonist(character, index):
     if index == 0:
         return True
@@ -80,7 +66,7 @@ def _append_active_chapter_task_report(report_lines, novel_id, active_chapter_in
         import db
         target_idx = int(active_chapter_index)
         plot_data = db.get_stitched_plot(novel_id)
-        outlines = _normalize_outlines(plot_data or {})
+        outlines = normalize_outlines(plot_data or {})
         current_outline = next((ch for ch in outlines if ch["chapter_index"] == target_idx), None)
         allocated = current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
         if not isinstance(allocated, dict):
@@ -212,7 +198,7 @@ def diagnose_volumes_and_skeletons(volumes):
             if isinstance(skeleton_list, list):
                 empty_titles = 0
                 for c in skeleton_list:
-                    title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+                    title = c.get("chapter_title") or c.get("title") or ""
                     if not title or title.strip() == "" or title == "待設定標題":
                         empty_titles += 1
                 if empty_titles > len(skeleton_list) * 0.5:
@@ -380,7 +366,7 @@ def detect_current_stage(novel_id):
         
     # 剛性檢查角色聖經完整性
     characters_diag = diagnose_characters(char["json_data"])
-    if "角色聖經為空" in characters_diag or "主角欄位可補" in characters_diag or "欄位不完整" in characters_diag:
+    if "角色聖經為空" in characters_diag or "角色有0個" in characters_diag:
         return "characters"
         
     # 偵測是否已生成伏筆與轉折
@@ -399,12 +385,6 @@ def detect_current_stage(novel_id):
     vols = db.get_volumes(novel_id)
     if not vols:
         return "volumes"
-    if len(vols) < MIN_VOLUME_COUNT or len(vols) > MAX_VOLUME_COUNT:
-        return "volumes"
-    for v in vols:
-        ch_count = db._get_clean_chapter_count(v)
-        if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
-            return "volumes"
         
     # 如果有任何一卷尚未規劃簡易骨架大綱，則為 volume_skeleton 階段
     has_all_skeletons = True
@@ -416,7 +396,7 @@ def detect_current_stage(novel_id):
         # 檢查是否超過50%為 "待設定標題" 佔位符
         empty_titles = 0
         for c in skeleton_list:
-            title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+            title = c.get("chapter_title") or c.get("title") or ""
             if not title or title.strip() == "" or title == "待設定標題":
                 empty_titles += 1
         if empty_titles > len(skeleton_list) * 0.5:
@@ -490,15 +470,21 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             else:
                 report_lines.append("  - 狀態：✅ 已建立")
                 report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
-                for i, s in enumerate(seeds):
-                    report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
+                if current_stage in ("worldview", "foreshadowing", None):
+                    for i, s in enumerate(seeds):
+                        report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
+                else:
+                    report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
                 report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
-                for j, t in enumerate(turns):
-                    if isinstance(t, dict):
-                        tp_name = t.get("turning_point_name") or t.get("name") or "未命名轉折"
-                        report_lines.append(f"    * [Turn-{j+1}] {tp_name}")
-                    else:
-                        report_lines.append(f"    * [Turn-{j+1}] {t}")
+                if current_stage in ("worldview", "foreshadowing", None):
+                    for j, t in enumerate(turns):
+                        if isinstance(t, dict):
+                            tp_name = t.get("turning_point_name") or t.get("name") or "未命名轉折"
+                            report_lines.append(f"    * [Turn-{j+1}] {tp_name}")
+                        else:
+                            report_lines.append(f"    * [Turn-{j+1}] {t}")
+                else:
+                    report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
         except Exception as e:
             report_lines.append(f"  - 狀態：⚠️ 無法解析伏筆與轉折：{e}")
     report_lines.append("")
@@ -571,7 +557,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 # 檢查是否含有有效的骨架標題
                 empty_titles = 0
                 for c in skeleton_list:
-                    title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+                    title = c.get("chapter_title") or c.get("title") or ""
                     if not title or title.strip() == "" or title == "待設定標題":
                         empty_titles += 1
                 

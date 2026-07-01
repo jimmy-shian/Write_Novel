@@ -3,6 +3,7 @@ import sqlite3
 import json
 from datetime import datetime
 import os
+from utils import deep_merge_dict, safe_filename
 from dotenv import load_dotenv
 
 # 新增 opencc 套件，用於簡體轉繁體
@@ -53,14 +54,14 @@ AGENT_DEFAULTS = {
         "model": os.getenv("MODEL_ARCHITECT", "qwen/qwen3.5-122b-a10b"),
         "temperature": 0.30,
         "top_p": 0.95,
-        "max_tokens": 16384,
+        "max_tokens": 32768,
         "enable_thinking": 1
     },
     "character": {
         "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "openai/gpt-oss-120b"),
         "temperature": 0.40,
         "top_p": 0.95,
-        "max_tokens": 16384,
+        "max_tokens": 32768,
         "enable_thinking": 1
     },
     "volumes": {
@@ -118,98 +119,26 @@ def sync_agent_configs_from_env(cursor):
     """
     Reads all agent configurations from .env file and inserts/updates them
     directly into the agent_configs table.
-    This ensures that database re-runs/initialization will always sync and overwrite 
-    the DB settings with the values defined in .env.
     """
     agents = ["global", "architect", "character", "volumes", "volume_skeleton", "plot", "writer", "editor", "copilot"]
     
-    # Mapping for Env keys
-    env_keys = {
-        "global": {
-            "api_key": "NVIDIA_API_KEY_GLOBAL",
-            "base_url": "BASE_URL_GLOBAL",
-            "model": "MODEL_GLOBAL",
-            "temperature": "TEMPERATURE_GLOBAL",
-            "top_p": "TOP_P_GLOBAL",
-            "max_tokens": "MAX_TOKENS_GLOBAL",
-            "enable_thinking": "ENABLE_THINKING_GLOBAL"
-        },
-        "architect": {
-            "api_key": "NVIDIA_API_KEY_ARCHITECT",
-            "base_url": "BASE_URL_ARCHITECT",
-            "model": "MODEL_ARCHITECT",
-            "temperature": "TEMPERATURE_ARCHITECT",
-            "top_p": "TOP_P_ARCHITECT",
-            "max_tokens": "MAX_TOKENS_ARCHITECT",
-            "enable_thinking": "ENABLE_THINKING_ARCHITECT"
-        },
-        "character": {
-            "api_key": "NVIDIA_API_KEY_CHARACTER",
-            "base_url": "BASE_URL_CHARACTER",
-            "model": "MODEL_CHARACTER",
-            "temperature": "TEMPERATURE_CHARACTER",
-            "top_p": "TOP_P_CHARACTER",
-            "max_tokens": "MAX_TOKENS_CHARACTER",
-            "enable_thinking": "ENABLE_THINKING_CHARACTER"
-        },
-        "volumes": {
-            "api_key": "NVIDIA_API_KEY_VOLUMES",
-            "base_url": "BASE_URL_VOLUMES",
-            "model": "MODEL_VOLUMES",
-            "temperature": "TEMPERATURE_VOLUMES",
-            "top_p": "TOP_P_VOLUMES",
-            "max_tokens": "MAX_TOKENS_VOLUMES",
-            "enable_thinking": "ENABLE_THINKING_VOLUMES"
-        },
-        "volume_skeleton": {
-            "api_key": "NVIDIA_API_KEY_VOLUME_SKELETON",
-            "base_url": "BASE_URL_VOLUME_SKELETON",
-            "model": "MODEL_VOLUME_SKELETON",
-            "temperature": "TEMPERATURE_VOLUME_SKELETON",
-            "top_p": "TOP_P_VOLUME_SKELETON",
-            "max_tokens": "MAX_TOKENS_VOLUME_SKELETON",
-            "enable_thinking": "ENABLE_THINKING_VOLUME_SKELETON"
-        },
-        "plot": {
-            "api_key": "NVIDIA_API_KEY_PLOT",
-            "base_url": "BASE_URL_PLOT",
-            "model": "MODEL_PLOT",
-            "temperature": "TEMPERATURE_PLOT",
-            "top_p": "TOP_P_PLOT",
-            "max_tokens": "MAX_TOKENS_PLOT",
-            "enable_thinking": "ENABLE_THINKING_PLOT"
-        },
-        "writer": {
-            "api_key": "NVIDIA_API_KEY_WRITER",
-            "base_url": "BASE_URL_WRITER",
-            "model": "MODEL_WRITER",
-            "temperature": "TEMPERATURE_WRITER",
-            "top_p": "TOP_P_WRITER",
-            "max_tokens": "MAX_TOKENS_WRITER",
-            "enable_thinking": "ENABLE_THINKING_WRITER"
-        },
-        "editor": {
-            "api_key": "NVIDIA_API_KEY_EDITOR",
-            "base_url": "BASE_URL_EDITOR",
-            "model": "MODEL_EDITOR",
-            "temperature": "TEMPERATURE_EDITOR",
-            "top_p": "TOP_P_EDITOR",
-            "max_tokens": "MAX_TOKENS_EDITOR",
-            "enable_thinking": "ENABLE_THINKING_EDITOR"
-        },
-        "copilot": {
-            "api_key": "NVIDIA_API_KEY_COPILOT",
-            "base_url": "BASE_URL_COPILOT",
-            "model": "MODEL_COPILOT",
-            "temperature": "TEMPERATURE_COPILOT",
-            "top_p": "TOP_P_COPILOT",
-            "max_tokens": "MAX_TOKENS_COPILOT",
-            "enable_thinking": "ENABLE_THINKING_COPILOT"
+    # Build env key mappings programmatically from agent names
+    # Each agent key is derived from its uppercase name (with volume_skeleton -> VOLUME_SKELETON)
+    env_keys = {}
+    for agent in agents:
+        agent_upper = agent.upper()
+        env_keys[agent] = {
+            "api_key": f"NVIDIA_API_KEY_{agent_upper}",
+            "base_url": f"BASE_URL_{agent_upper}",
+            "model": f"MODEL_{agent_upper}",
+            "temperature": f"TEMPERATURE_{agent_upper}",
+            "top_p": f"TOP_P_{agent_upper}",
+            "max_tokens": f"MAX_TOKENS_{agent_upper}",
+            "enable_thinking": f"ENABLE_THINKING_{agent_upper}",
         }
-    }
 
     # Fallbacks from global .env variables
-    default_base_url = os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    default_base_url = os.getenv("DEFAULT_BASE_URL", "http://127.0.0.1:4000/v1")
     default_temp = float(os.getenv("DEFAULT_TEMPERATURE", 0.7))
     default_top_p = float(os.getenv("DEFAULT_TOP_P", 0.95))
     default_max_tokens = int(os.getenv("DEFAULT_MAX_TOKENS", 16384))
@@ -251,10 +180,31 @@ def sync_agent_configs_from_env(cursor):
             except ValueError:
                 return fallback
 
-        temperature = get_float_env(keys["temperature"], get_float_env("TEMPERATURE_GLOBAL", default_temp))
-        top_p = get_float_env(keys["top_p"], get_float_env("TOP_P_GLOBAL", default_top_p))
-        max_tokens = get_int_env(keys["max_tokens"], get_int_env("MAX_TOKENS_GLOBAL", default_max_tokens))
-        enable_thinking = get_int_env(keys["enable_thinking"], get_int_env("ENABLE_THINKING_GLOBAL", default_enable_thinking))
+        agent_defaults = AGENT_DEFAULTS.get(agent, AGENT_DEFAULTS["global"])
+        
+        # temperature
+        if agent_defaults.get("temperature") != AGENT_DEFAULTS["global"].get("temperature"):
+            temperature = get_float_env(keys["temperature"], agent_defaults["temperature"])
+        else:
+            temperature = get_float_env(keys["temperature"], get_float_env("TEMPERATURE_GLOBAL", agent_defaults["temperature"]))
+            
+        # top_p
+        if agent_defaults.get("top_p") != AGENT_DEFAULTS["global"].get("top_p"):
+            top_p = get_float_env(keys["top_p"], agent_defaults["top_p"])
+        else:
+            top_p = get_float_env(keys["top_p"], get_float_env("TOP_P_GLOBAL", agent_defaults["top_p"]))
+            
+        # max_tokens
+        if agent_defaults.get("max_tokens") != AGENT_DEFAULTS["global"].get("max_tokens"):
+            max_tokens = get_int_env(keys["max_tokens"], agent_defaults["max_tokens"])
+        else:
+            max_tokens = get_int_env(keys["max_tokens"], get_int_env("MAX_TOKENS_GLOBAL", agent_defaults["max_tokens"]))
+            
+        # enable_thinking
+        if agent_defaults.get("enable_thinking") != AGENT_DEFAULTS["global"].get("enable_thinking"):
+            enable_thinking = get_int_env(keys["enable_thinking"], agent_defaults["enable_thinking"])
+        else:
+            enable_thinking = get_int_env(keys["enable_thinking"], get_int_env("ENABLE_THINKING_GLOBAL", agent_defaults["enable_thinking"]))
 
         cursor.execute("""
             INSERT OR REPLACE INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
@@ -473,6 +423,12 @@ def db_init():
     
     # Sync all configurations from .env on start to ensure DB is always up to date
     sync_agent_configs_from_env(cursor)
+    
+    # Migrate any legacy NVIDIA base URLs to local gateway
+    try:
+        cursor.execute("UPDATE agent_configs SET base_url = 'http://127.0.0.1:4000/v1' WHERE base_url = 'https://integrate.api.nvidia.com/v1'")
+    except Exception as e:
+        print(f"[DB MIGRATION] Failed to migrate base_url to local gateway: {e}")
     
     # 9. Global Foreshadowing Blueprint table
     cursor.execute("""
@@ -826,28 +782,13 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         if ch_idx is not None:
             merged_map[int(ch_idx)] = ch
             
-    def _deep_merge_chapter(base, patch):
-        if not isinstance(base, dict):
-            base = {}
-        if not isinstance(patch, dict):
-            return base
-        merged = dict(base)
-        for key, value in patch.items():
-            if value is None:
-                continue
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = _deep_merge_chapter(merged[key], value)
-            else:
-                merged[key] = value
-        return merged
-
     # 💡 3. 用新生成的高解像度微觀章節精確覆蓋或插入緩衝區
     for nc in cleaned_node_chapters:
         ch_idx = nc.get("chapter_index")
         if ch_idx is not None:
             ch_idx_int = int(ch_idx)
             if ch_idx_int in merged_map:
-                merged_map[ch_idx_int] = _deep_merge_chapter(merged_map[ch_idx_int], nc)
+                merged_map[ch_idx_int] = deep_merge_dict(merged_map[ch_idx_int], nc)
             else:
                 merged_map[ch_idx_int] = nc
             
@@ -1431,7 +1372,7 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
     
     # 2. Automatically sync and distribute chapters outlines to individual volumes in the volumes table
     #    ⚠️ 重要：採用「智慧合併+刪除同步模式」，不直接覆蓋骨架數據。
-    #    骨架欄位（brief_title/brief_summary/allocated_tasks）必須保留，
+    #    骨架欄位（chapter_title/chapter_summary/allocated_tasks）必須保留，
     #    只將章節大綱的欄位 patch 進去；同時刪除 incoming 中已移除的章節。
     chapters_list = []
     has_chapters_payload = False
@@ -1524,7 +1465,7 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                 # 再把章節大綱合併進去
                 for det_idx, det_ch in detail_map.items():
                     if det_idx in merged_chapters:
-                        # 合併：詳細欄位覆蓋，骨架欄位保留（不刪除 brief_title 等）
+                        # 合併：詳細欄位覆蓋，骨架欄位保留（不刪除 chapter_title 等）
                         merged_chapters[det_idx].update(det_ch)
                     else:
                         # 新章節直接加入
@@ -2019,7 +1960,8 @@ def insert_plot_chapter(novel_id, insert_after_index, new_chapter, skip_volume_s
     return save_plot_chapters(novel_id, plot_data, skip_volume_sync=skip_volume_sync)
 
 
-ALLOWED_CHARACTER_FIELDS = {"name", "identity", "personality", "appearance", "background", "arc", "relationships"}
+from agent_json import CHARACTER_BASIC_FIELDS
+ALLOWED_CHARACTER_FIELDS = set(CHARACTER_BASIC_FIELDS) | {"identity"}
 
 def normalize_char_index(raw_index, total_chars, source='unknown'):
     if 0 <= raw_index < total_chars:
@@ -2365,8 +2307,8 @@ def save_foreshadowing_allocations(novel_id, allocations):
                         alloc = allocation_map[ch_idx]
                         
                         # 💡【Step 6 修復】：確保原本的章節骨架基礎欄位不被覆蓋或遺漏
-                        ch["chapter_title"] = ch.get("chapter_title") or ch.get("title") or ch.get("name") or "待設定標題"
-                        ch["chapter_summary"] = ch.get("chapter_summary") or ch.get("summary") or ch.get("outline") or "待設定摘要"
+                        ch["chapter_title"] = ch.get("chapter_title") or ch.get("title") or "待設定標題"
+                        ch["chapter_summary"] = ch.get("chapter_summary") or ch.get("summary") or "待設定摘要"
                         
                         # 更新 allocated_tasks
                         if "allocated_tasks" not in ch:
@@ -2555,10 +2497,8 @@ def _normalize_allocation_pair(pair, total_chapters):
     p_ch = max(1, min(total_chapters, p_ch))
     r_ch = max(1, min(total_chapters, r_ch))
     if total_chapters > 1 and r_ch <= p_ch:
-        if p_ch < total_chapters:
-            r_ch = p_ch + 1
-        else:
-            p_ch = max(1, r_ch - 1)
+        p_ch = max(1, min(total_chapters - 1, p_ch))
+        r_ch = p_ch + 1
     return p_ch, r_ch
 
 
@@ -2569,6 +2509,8 @@ def _is_valid_foreshadowing_blueprint(blueprint, seed_count, turn_count, total_c
     turns = blueprint.get("turning_allocations", [])
     if len(allocations) != seed_count or len(turns) != turn_count:
         return False
+    if total_chapters <= 1:
+        return True
     for pair in allocations:
         normalized = _normalize_allocation_pair(pair, total_chapters)
         if not normalized:
@@ -2716,8 +2658,9 @@ def precompute_global_foreshadowing(novel_id):
     # 1. 取得所有篇卷，計算總章數 T
     volumes = get_volumes(novel_id)
     if not volumes:
+        from config import MIN_VOLUME_COUNT, MIN_CHAPTERS_PER_VOLUME
         return {
-            "T": 120,
+            "T": MIN_VOLUME_COUNT * MIN_CHAPTERS_PER_VOLUME,
             "foreshadowing_allocations": [],
             "turning_allocations": []
         }
@@ -2741,6 +2684,7 @@ def precompute_global_foreshadowing(novel_id):
     # 4. 確定性循環對齊散射：保證每個卷均勻分配到伏筆埋設與回收任務，絕不漏空
     foreshadowing_allocations = []
     V = len(sorted_vols)
+    MIN_PAYOFF_DISTANCE = max(20, int(T * 0.05))
     
     for idx, seed in enumerate(all_seeds):
         if V <= 1:
@@ -2766,12 +2710,18 @@ def precompute_global_foreshadowing(novel_id):
             start_r, end_r = get_volume_chapter_range(volumes, v_r_idx)
             
             P = r.randint(start_p, end_p)
-            R = r.randint(start_r, end_r)
+            
+            low = max(start_r, P + MIN_PAYOFF_DISTANCE)
+            high = end_r
+            if low > high:
+                low = start_r
+            if low > high:
+                low = high
+            R = r.randint(low, high)
             
         normalized_pair = _normalize_allocation_pair((P, R), T)
         if normalized_pair:
-            P, R = normalized_pair
-        foreshadowing_allocations.append((P, R))
+            foreshadowing_allocations.append(normalized_pair)
         
     # 5. 關鍵轉折點確定性循環位置分配，確保均勻覆蓋各卷
     turning_allocations = []

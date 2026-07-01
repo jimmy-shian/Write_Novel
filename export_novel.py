@@ -24,10 +24,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import db
-
-def get_db_connection():
-    """獲取資料庫連接（使用專案内的 db 模組）"""
-    return db.get_db_connection()
+from utils import safe_filename
 
 def list_all_novels():
     """列出所有小說"""
@@ -137,10 +134,7 @@ def export_as_txt(novel_data, output_path=None):
     if output_path:
         filename = output_path
     else:
-        # 清理檔名中的非法字元
-        safe_title = title.replace('/', '_').replace('\\', '_').replace(':', '_')
-        safe_title = safe_title.replace('*', '_').replace('?', '_').replace('"', '_')
-        safe_title = safe_title.replace('<', '_').replace('>', '_').replace('|', '_')
+        safe_title = safe_filename(title)
         filename = f"{safe_title}_完整正文.txt"
     
     with open(filename, "w", encoding="utf-8") as f:
@@ -253,9 +247,7 @@ def export_as_markdown(novel_data, output_path=None):
     if output_path:
         filename = output_path
     else:
-        safe_title = title.replace('/', '_').replace('\\', '_').replace(':', '_')
-        safe_title = safe_title.replace('*', '_').replace('?', '_').replace('"', '_')
-        safe_title = safe_title.replace('<', '_').replace('>', '_').replace('|', '_')
+        safe_title = safe_filename(title)
         filename = f"{safe_title}_小說設定與全書正文.md"
     
     with open(filename, "w", encoding="utf-8") as f:

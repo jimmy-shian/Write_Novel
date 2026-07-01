@@ -18,13 +18,18 @@ import diagnostics
 import director_context
 from llm import call_llm_stream
 
-MIN_FORESHADOWING_SEEDS = 50
-MIN_KEY_TURNING_POINTS = 50
-MIN_VOLUME_COUNT = 10
-MAX_VOLUME_COUNT = 20
-MIN_CHAPTERS_PER_VOLUME = 40
-MAX_CHAPTERS_PER_VOLUME = 50
-MAX_AUTO_LOOPS = 5
+from config import (
+    MIN_FORESHADOWING_SEEDS,
+    MIN_KEY_TURNING_POINTS,
+    MIN_VOLUME_COUNT,
+    MAX_VOLUME_COUNT,
+    MIN_CHAPTERS_PER_VOLUME,
+    MAX_CHAPTERS_PER_VOLUME,
+    MAX_AUTO_LOOPS,
+    VOLUME_SKELETON_BATCH_SIZE,
+    VOLUME_SKELETON_BATCH_RETRIES,
+)
+from utils import safe_filename, deep_merge_dict, StreamAccumulator
 
 # --- IMPORT SECURE PROMPT BUILDERS ---
 from prompts.prompt_builder import (
@@ -48,7 +53,7 @@ from prompts.prompt_builder import (
 
 
 def _safe_gold_rules_filename(title):
-    return re.sub(r'[\\/*?:"<>|]', "", title or "novel") or "novel"
+    return safe_filename(title)
 
 
 def _load_retrospective_gold_rules(novel_id, limit=16000):
@@ -156,18 +161,10 @@ def run_story_architect(novel_id, user_prompt):
     
     # Run streaming
     stream = call_llm_stream("architect", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     # Save output to database
     if full_text.strip():
         if _handle_director_context_request(novel_id, "世界觀架構師", full_text):
@@ -190,28 +187,32 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     """
     wb = db.get_latest_worldbuilding(novel_id)
     # 只傳入世界觀摘要，避免過長導致 API 失敗
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
+    worldview_text = select_worldview_context(wb["content"], current_stage="characters") if wb else "尚無世界觀設定"
     
     existing_char_data = db.get_latest_characters(novel_id)
-    existing_chars_json = existing_char_data["json_data"] if existing_char_data else "{'characters': []}"
+    existing_chars_json = existing_char_data["json_data"] if existing_char_data and mode != "generate" else "{'characters': []}"
     
+    # 💡 安全防護：如果角色聖經已存在，只做增量/修補，不允許全量重跑覆蓋
+    if mode == "generate" and existing_char_data:
+        try:
+            parsed_chars = json.loads(existing_chars_json)
+            if parsed_chars.get("characters") and len(parsed_chars["characters"]) > 0:
+                print(f"[CHARACTER DESIGNER] Characters already exist. Falling back to expand mode to prevent wipe.")
+                mode = "expand"
+                if not hint:
+                    hint = "請在現有角色基礎上進行補充或優化設定，不要刪除或重置既有角色。"
+        except Exception:
+            pass
+
     messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index)
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")
     
     stream = call_llm_stream("character", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "角色設計師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "角色設計師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -435,28 +436,36 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None):
     Based on worldview text + character bible.
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    worldview_text = wb["content"] if wb else "尚無世界觀設定"
+    worldview_text = select_worldview_context(wb["content"], current_stage="foreshadowing") if wb else "尚無世界觀設定"
+    
+    # Remove existing seeds/turns so the agent generates them fresh, not referencing old ones
+    try:
+        _wv_tmp = json.loads(worldview_text) if worldview_text and worldview_text != "尚無世界觀設定" else None
+        if isinstance(_wv_tmp, dict):
+            if "worldview_context" in _wv_tmp and isinstance(_wv_tmp["worldview_context"], dict):
+                _wv_ctx = _wv_tmp["worldview_context"]
+                _wv_ctx.pop("foreshadowing_seeds", None)
+                _wv_ctx.pop("key_turning_points", None)
+                worldview_text = json.dumps(_wv_tmp, ensure_ascii=False, indent=2)
+            else:
+                _wv_tmp.pop("foreshadowing_seeds", None)
+                _wv_tmp.pop("key_turning_points", None)
+                worldview_text = json.dumps(_wv_tmp, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
     
     char_data = db.get_latest_characters(novel_id)
-    characters_json = char_data["json_data"] if char_data else "{'characters': []}"
+    characters_json = json.dumps(extract_character_basic(char_data["parsed_data"]), ensure_ascii=False) if char_data else "{'characters': []}"
     
     messages = build_foreshadowing_messages(worldview_text, characters_json, user_prompt)
     
     db.save_chat_message(novel_id, "user", f"執行伏筆與轉折獨立生成。要求: {user_prompt}", message_type="pipeline")
     
     stream = call_llm_stream("architect", messages) # Map to architect model preset
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "伏筆與轉折編織師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -535,27 +544,19 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     """
     wb = db.get_latest_worldbuilding(novel_id)
     # generate 模式傳入完整世界觀讓 LLM 自行決定卷數與章數分配
-    worldview_text = wb["content"] if wb else "尚無世界觀設定"
+    worldview_text = select_worldview_context(wb["content"], current_stage="volumes") if wb else "尚無世界觀設定"
     
-    existing_vols = db.get_volumes(novel_id)
+    existing_vols = [] if mode == "generate" else db.get_volumes(novel_id)
     
     messages = build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx)
     
     db.save_chat_message(novel_id, "user", f"執行篇卷規劃。模式: {mode}, 卷數: {target_vol_idx or '全書'}", message_type="pipeline")
     
     stream = call_llm_stream("volumes", messages) # Map to volumes model for volumes planning
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "篇卷規劃師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "篇卷規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -605,8 +606,6 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
 # =============================================================================
 # 4. Volume Skeleton Planner Agent
 # =============================================================================
-VOLUME_SKELETON_BATCH_SIZE = 8
-VOLUME_SKELETON_BATCH_RETRIES = 2
 
 
 def _chapter_index_or_none(chapter):
@@ -735,7 +734,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
 
     volume_index = int(volume_index)
     wb = db.get_latest_worldbuilding(novel_id)
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
+    worldview_text = select_worldview_context(wb["content"], current_stage="volume_skeleton") if wb else "尚無世界觀設定"
     worldview_parsed = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
 
     all_vols = db.get_volumes(novel_id)
@@ -818,6 +817,15 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
     )
 
     while remaining:
+        # Re-fetch from DB to ensure we have the most up-to-date outline state
+        all_vols = db.get_volumes(novel_id)
+        current_missing = _volume_missing_chapter_indexes(all_vols, volume_index)
+        if requested_indexes:
+            current_missing = [idx for idx in requested_indexes if idx in set(current_missing)]
+        remaining = current_missing
+        if not remaining:
+            break
+            
         batch = _split_consecutive_batches(remaining)[0]
         for attempt in range(1, VOLUME_SKELETON_BATCH_RETRIES + 1):
             all_vols = db.get_volumes(novel_id)
@@ -851,7 +859,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
                             accumulated.append(data.get("delta", ""))
                         elif data.get("type") == "error":
                             saw_error = True
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError, TypeError):
                         pass
                 yield chunk
 
@@ -888,11 +896,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None):
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
 
-        all_vols = db.get_volumes(novel_id)
-        current_missing = _volume_missing_chapter_indexes(all_vols, volume_index)
-        if requested_indexes:
-            current_missing = [idx for idx in requested_indexes if idx in set(current_missing)]
-        remaining = current_missing
+        # Batch completed. The next iteration will re-fetch state from DB.
 
     db.save_last_agent_run(novel_id, "volume_skeleton", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
     db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷缺失骨架批次補全完成，共處理 {batches_done} 批，保存/更新 {total_saved} 章。", message_type="pipeline")
@@ -1014,27 +1018,70 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     - clue retrieval details of the next 3 chapters (if any) + writing content where clue is retrieved
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要
-    worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
+    # 只傳入世界觀摘要（依 stage 選欄位）
+    worldview_text = select_worldview_context(wb["content"], current_stage="writer") if wb else "尚無世界觀設定"
     
     char_data = db.get_latest_characters(novel_id)
     characters_bible = char_data["parsed_data"] if (char_data and char_data.get("parsed_data")) else "尚無角色設定"
     
-    plot_data = db.get_stitched_plot(novel_id)
-    chapters_outlines = plot_data.get("chapters", []) if plot_data else []
+    # Only fetch the current chapter + adjacent chapters from the volume outline, not the entire stitched plot
+    all_vols = db.get_volumes(novel_id)
+    curr_vol_idx = db.get_chapter_volume_index(all_vols, chapter_index)
+    current_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == int(curr_vol_idx or 0)), None)
     
-    # 💡 核心修復：在 Chapter Writer 階段，同樣標準化大綱中所有章節的 chapter_index，避免前後章節比對與查找錯誤
+    vol_chapters = []
+    if current_vol and current_vol.get("chapters_outline"):
+        ch_outline = current_vol["chapters_outline"]
+        if isinstance(ch_outline, str):
+            try:
+                ch_outline = json.loads(ch_outline)
+            except Exception:
+                ch_outline = []
+        if isinstance(ch_outline, list):
+            vol_chapters = ch_outline
+    
+    # Also check adjacent volume for prev/next chapter if at volume boundary
+    if chapter_index > 1:
+        pre_vol_idx = db.get_chapter_volume_index(all_vols, chapter_index - 1)
+        if pre_vol_idx != curr_vol_idx:
+            pre_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == int(pre_vol_idx)), None)
+            if pre_vol and pre_vol.get("chapters_outline"):
+                pre_outline = pre_vol["chapters_outline"]
+                if isinstance(pre_outline, str):
+                    try:
+                        pre_outline = json.loads(pre_outline)
+                    except Exception:
+                        pre_outline = []
+                if isinstance(pre_outline, list):
+                    vol_chapters = pre_outline + vol_chapters
+    
+    total_planned = db.get_total_chapter_count(all_vols)
+    if chapter_index < total_planned:
+        nxt_vol_idx = db.get_chapter_volume_index(all_vols, chapter_index + 1)
+        if nxt_vol_idx != curr_vol_idx:
+            nxt_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == int(nxt_vol_idx)), None)
+            if nxt_vol and nxt_vol.get("chapters_outline"):
+                nxt_outline = nxt_vol["chapters_outline"]
+                if isinstance(nxt_outline, str):
+                    try:
+                        nxt_outline = json.loads(nxt_outline)
+                    except Exception:
+                        nxt_outline = []
+                if isinstance(nxt_outline, list):
+                    vol_chapters = vol_chapters + nxt_outline
+    
+    # Normalize only the relevant chapters
     normalized_outlines = []
-    for idx, ch in enumerate(chapters_outlines):
+    for idx, ch in enumerate(vol_chapters):
         if not isinstance(ch, dict):
             continue
         try:
             raw_idx = ch.get("chapter_index") or ch.get("chapter") or ch.get("chapter_number") or ch.get("index") or ch.get("id") or (idx + 1)
             ch["chapter_index"] = int(raw_idx)
-        except:
+        except (ValueError, TypeError):
             ch["chapter_index"] = idx + 1
         normalized_outlines.append(ch)
-        
+    
     normalized_outlines.sort(key=lambda x: x["chapter_index"])
     
     current_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index), None)
@@ -1043,7 +1090,6 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             "chapter_index": chapter_index,
             "title": f"第 {chapter_index} 章",
             "time_setting": "故事時間",
-            "time_span": "緊接前文",
             "events": [{"scene": "發生場景", "action": "核心情節", "consequence": "引發後果"}],
             "purpose": "推進情節",
             "characters_active": []
@@ -1060,8 +1106,6 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     if nxt_ch_outline:
         surrounding_plot += f"\n【後一章 (第 {chapter_index + 1} 章) 大綱】\n{json.dumps(nxt_ch_outline, ensure_ascii=False, indent=2)}\n"
         
-    all_vols = db.get_volumes(novel_id)
-    curr_vol_idx = db.get_chapter_volume_index(all_vols, chapter_index)
     pre_vol = next((v for v in all_vols if v["volume_index"] == curr_vol_idx - 1), None)
     next_vol = next((v for v in all_vols if v["volume_index"] == curr_vol_idx + 1), None)
     
@@ -1075,7 +1119,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     next_three_chaps = [ch for ch in normalized_outlines if chapter_index < ch["chapter_index"] <= chapter_index + 3]
     payoff_clues = []
     for ch in next_three_chaps:
-        payoffs = ch.get("foreshadowing_payoff", []) or ch.get("allocated_tasks", {}).get("foreshadowing_payoffs", [])
+        payoffs = ch.get("allocated_tasks", {}).get("foreshadowing_payoffs", []) or ch.get("foreshadowing_payoff", [])
         if payoffs:
             payoff_clues.append(f"第 {ch.get('chapter_index')} 章預計收回的伏筆：{json.dumps(payoffs, ensure_ascii=False)}")
             
@@ -1096,18 +1140,10 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     )
     
     stream = call_llm_stream("writer", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "正文寫作作家", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "正文寫作作家需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -1147,18 +1183,10 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None):
     db.save_chat_message(novel_id, "user", f"調用編輯姬潤色第 {chapter_index} 章。指示: {edit_instructions}", message_type="pipeline")
     
     stream = call_llm_stream("editor", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "編輯姬", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -1179,7 +1207,7 @@ def run_copilot_chat(novel_id, user_message):
     # extract_worldview_summary 會保留核心設定並在過長時做頭尾裁切，避免總監上下文爆量
     worldview_text = extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定"
     char_data = db.get_latest_characters(novel_id)
-    characters_text = char_data["json_data"] if char_data else "尚無角色設定"
+    characters_text = json.dumps({"character_names": extract_character_names_list(char_data["json_data"])}, ensure_ascii=False) if char_data else "尚無角色設定"
     
     # 透過 Python 動態偵測階段，修復先前 current_stage 未定義 Bug
     current_stage = diagnostics.detect_current_stage(novel_id)
@@ -1189,7 +1217,8 @@ def run_copilot_chat(novel_id, user_message):
         plot_text = json.dumps({"volumes": vols}, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
     else:
         plot_data = db.get_stitched_plot(novel_id)
-        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+        raw_plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+        plot_text = simplify_plot_data_for_copilot(raw_plot_text)
     
     # 建立系統記憶歷史以保證上下文連貫
     history = db.get_chat_memory(novel_id, limit=10)
@@ -1209,22 +1238,11 @@ def run_copilot_chat(novel_id, user_message):
     db.save_chat_message(novel_id, "user", user_message, message_type="chat")
     
     stream = call_llm_stream("copilot", messages)
-    accumulated = []
-    thinking_accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream, collect_thinking=True)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-                elif data.get("type") == "thinking":
-                    thinking_accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
-    full_thinking = "".join(thinking_accumulated)
+    full_text = acc.content
+    full_thinking = acc.thinking
     if full_text.strip():
         db.save_chat_message(novel_id, "assistant", full_text, thinking=full_thinking if full_thinking.strip() else None, message_type="chat")
 
@@ -1232,7 +1250,6 @@ def run_copilot_chat(novel_id, user_message):
 # =============================================================================
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
-MAX_AUTO_LOOPS = 5
 
 def run_director_decision(
     novel_id,
@@ -1301,7 +1318,7 @@ def run_director_decision(
     if chapter_index is not None:
         try:
             chapter_index = int(chapter_index)
-        except:
+        except (ValueError, TypeError):
             chapter_index = None
             
     plot_text = ""
@@ -1327,7 +1344,7 @@ def run_director_decision(
         plot_text = json.dumps(simplified_vols, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
         allocation_context = director_context.build_foreshadowing_allocation_context(
             novel_id,
-            scope="all",
+            scope="summary",
         )
         plot_text += "\n\n【Python 預計算伏筆/轉折分配總表（總監審核唯一依據）】\n"
         plot_text += json.dumps(allocation_context, ensure_ascii=False, indent=2)
@@ -1456,22 +1473,11 @@ def run_director_decision(
     )
     
     stream = call_llm_stream("copilot", messages)
-    accumulated = []
-    thinking_accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream, collect_thinking=True)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-                elif data.get("type") == "thinking":
-                    thinking_accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
-    full_thinking = "".join(thinking_accumulated)
+    full_text = acc.content
+    full_thinking = acc.thinking
     if full_text.strip():
         db.save_chat_message(novel_id, "director", f"【總監階段評估 ({current_stage})】\n{full_text}", thinking=full_thinking if full_thinking.strip() else None, message_type="director")
 
@@ -1484,15 +1490,31 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     if not current_stage or current_stage == "init":
         current_stage = diagnostics.detect_current_stage(novel_id)
     wb = db.get_latest_worldbuilding(novel_id)
-    worldview_text = wb["content"] if wb else "尚無世界觀設定"  # 這裡需要完整內容因為是調閱
     char_data = db.get_latest_characters(novel_id)
-    characters_text = char_data["json_data"] if char_data else "尚無角色設定"
-    if current_stage == "volumes":
-        vols = db.get_volumes(novel_id)
-        plot_text = json.dumps({"volumes": vols}, ensure_ascii=False, indent=2) if vols else "尚無篇卷規劃"
-    else:
-        plot_data = db.get_stitched_plot(novel_id)
-        plot_text = json.dumps(plot_data, ensure_ascii=False) if plot_data else "尚無章節大綱"
+    worldview_text = "尚無世界觀設定"
+    characters_text = "尚無角色設定"
+    plot_text = "尚無篇卷大綱"
+    
+    if "worldview" in help_action:
+        worldview_text = select_worldview_context(wb["content"], current_stage="director", force_full=True) if wb else "尚無世界觀設定"
+    if "character" in help_action:
+        characters_text = char_data["json_data"] if char_data else "尚無角色設定"
+    if "plot" in help_action or "volume" in help_action:
+        if current_stage == "volumes":
+            vols = db.get_volumes(novel_id)
+            simplified_vols = []
+            for v in vols:
+                v_copy = dict(v)
+                if "chapters_outline" in v_copy:
+                    if isinstance(v_copy["chapters_outline"], list):
+                        v_copy["chapters_outline"] = f"已生成 {len(v_copy['chapters_outline'])} 章骨架大綱"
+                    else:
+                        v_copy["chapters_outline"] = "尚未生成骨架"
+                simplified_vols.append(v_copy)
+            plot_text = json.dumps({"volumes": simplified_vols}, ensure_ascii=False, indent=2) if simplified_vols else "尚無篇卷規劃"
+        else:
+            plot_data = db.get_stitched_plot(novel_id)
+            plot_text = simplify_plot_data_for_copilot(json.dumps(plot_data, ensure_ascii=False)) if plot_data else "尚無章節大綱"
     
     target_data = ""
     if "worldview" in help_action:
@@ -1505,22 +1527,11 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
     messages = build_director_decision_help_messages(help_reason, target_data)
     
     stream = call_llm_stream("copilot", messages)
-    accumulated = []
-    thinking_accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream, collect_thinking=True)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-                elif data.get("type") == "thinking":
-                    thinking_accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
-    full_thinking = "".join(thinking_accumulated)
+    full_text = acc.content
+    full_thinking = acc.thinking
     if full_text.strip():
         db.save_chat_message(novel_id, "director", f"【總監輔助評估 ({current_stage})】\n{full_text}", thinking=full_thinking if full_thinking.strip() else None, message_type="director")
 
@@ -1540,18 +1551,10 @@ def run_incremental_architect(novel_id, target_section, user_hint):
     
     db.save_chat_message(novel_id, "user", f"增量世界觀修改。板塊: {target_section}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("architect", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         from incremental_patch_engine import validate_and_merge_incremental_patch
         success, version, err = validate_and_merge_incremental_patch(novel_id, target_section, "PATCH", full_text)
@@ -1582,7 +1585,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
             normalized_target_index = db.normalize_char_index(raw_idx, len(chars_list), source='incremental_character_designer')
         except IndexError:
             normalized_target_index = None
-        except:
+        except (ValueError, TypeError):
             pass
         if normalized_target_index is not None and 0 <= normalized_target_index < len(chars_list):
             target_char_content = f"\n【待修改角色的完整原內容】\n{json.dumps(chars_list[normalized_target_index], ensure_ascii=False, indent=2)}"
@@ -1594,18 +1597,10 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
     action = "PATCH" if normalized_target_index is not None else "APPEND"
     db.save_chat_message(novel_id, "user", f"增量角色修改。目標: {normalized_target_index if normalized_target_index is not None else '新增'}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("character", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         from incremental_patch_engine import validate_and_merge_incremental_patch
         extra = {}
@@ -1642,18 +1637,10 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint):
     
     db.save_chat_message(novel_id, "user", f"增量卷骨架修改。卷: {volume_index}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("volume_skeleton", messages)
-    accumulated = []
-    for chunk in stream:
+    acc = StreamAccumulator(stream)
+    for chunk in acc:
         yield chunk
-        if chunk.startswith("data:"):
-            try:
-                data = json.loads(chunk[5:].strip())
-                if data.get("type") == "content":
-                    accumulated.append(data.get("delta", ""))
-            except:
-                pass
-                
-    full_text = "".join(accumulated)
+    full_text = acc.content
     if full_text.strip():
         from models.parsers import extract_json_block
         parsed = extract_json_block(full_text)

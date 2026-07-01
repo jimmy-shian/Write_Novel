@@ -8,6 +8,7 @@ runner stays focused on routing and streaming.
 import json
 
 import db
+from utils import normalize_outlines
 
 
 def build_director_conversation_context(novel_id, limit=1):
@@ -176,6 +177,50 @@ def build_foreshadowing_allocation_context(novel_id, scope="all", volume_index=N
             "review_rule": "Only require this turning point in its assigned chapter, or when the chapter outline allocated_tasks explicitly includes it.",
         })
 
+    if scope == "summary":
+        vol_stats = {}
+        for idx, seed in enumerate(seeds):
+            if idx >= len(seed_allocations):
+                continue
+            try:
+                plant_ch, payoff_ch = seed_allocations[idx]
+            except Exception:
+                continue
+            p_vol = _chapter_volume_index(volumes, plant_ch)
+            r_vol = _chapter_volume_index(volumes, payoff_ch)
+            if p_vol is not None:
+                vol_stats.setdefault(p_vol, {"plants": 0, "payoffs": 0, "turns": 0})
+                vol_stats[p_vol]["plants"] += 1
+            if r_vol is not None:
+                vol_stats.setdefault(r_vol, {"plants": 0, "payoffs": 0, "turns": 0})
+                vol_stats[r_vol]["payoffs"] += 1
+        for idx, turn in enumerate(turns):
+            if idx >= len(turn_allocations):
+                continue
+            try:
+                turn_ch = int(turn_allocations[idx])
+            except Exception:
+                continue
+            t_vol = _chapter_volume_index(volumes, turn_ch)
+            if t_vol is not None:
+                vol_stats.setdefault(t_vol, {"plants": 0, "payoffs": 0, "turns": 0})
+                vol_stats[t_vol]["turns"] += 1
+        summary_rows = []
+        for v in sorted(vol_stats.keys()):
+            summary_rows.append({"volume_index": v, **vol_stats[v]})
+        return {
+            "source_of_truth": "Python deterministic foreshadowing_blueprint plus chapter outline allocated_tasks",
+            "scope": "summary",
+            "total_seeds": len(seeds),
+            "total_turns": len(turns),
+            "total_chapters": blueprint.get("T"),
+            "director_review_rules": [
+                "This is a summary view. Full detail is available via scope=all or scope=volume.",
+                "Worldview seed act/stage/chapter/volume metadata is draft reference only, never a hard obligation.",
+            ],
+            "per_volume_summary": summary_rows,
+        }
+
     packet = {
         "source_of_truth": "Python deterministic foreshadowing_blueprint plus chapter outline allocated_tasks",
         "scope": scope,
@@ -204,23 +249,6 @@ def split_generated_prose(text):
         if idx != -1:
             return text[:idx].strip(), text[idx + len(marker):].strip()
     return "", text.strip()
-
-
-def _normalize_outlines(plot_data):
-    chapters = plot_data.get("chapters", []) if isinstance(plot_data, dict) else []
-    normalized = []
-    for idx, chapter in enumerate(chapters):
-        if not isinstance(chapter, dict):
-            continue
-        item = dict(chapter)
-        try:
-            raw_idx = item.get("chapter_index") or item.get("chapter") or item.get("chapter_number") or item.get("index") or (idx + 1)
-            item["chapter_index"] = int(raw_idx)
-        except Exception:
-            item["chapter_index"] = idx + 1
-        normalized.append(item)
-    normalized.sort(key=lambda item: item["chapter_index"])
-    return normalized
 
 
 def _chapter_versions(novel_id, chapter_index, limit=2):
@@ -279,7 +307,7 @@ def _filter_active_characters(characters_text, outline):
 
 def build_writer_review_context(novel_id, chapter_index, characters_text):
     plot_data = db.get_stitched_plot(novel_id)
-    outlines = _normalize_outlines(plot_data or {})
+    outlines = normalize_outlines(plot_data or {})
     target_idx = int(chapter_index or 1)
 
     current_outline = next((ch for ch in outlines if ch["chapter_index"] == target_idx), None)
@@ -339,7 +367,7 @@ def build_editor_review_context(novel_id, chapter_index, characters_text):
     previous = versions[1] if len(versions) > 1 else {}
 
     plot_data = db.get_stitched_plot(novel_id)
-    outlines = _normalize_outlines(plot_data or {})
+    outlines = normalize_outlines(plot_data or {})
     current_outline = next((ch for ch in outlines if ch["chapter_index"] == target_idx), None)
 
     polished = latest.get("content", "（無潤色後正文）")

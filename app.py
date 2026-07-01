@@ -26,6 +26,7 @@ import db
 import agents
 from llm import get_config_for_agent, get_default_config
 from db import AGENT_DEFAULTS
+from utils import safe_filename
 
 # Initialize database
 db.db_init()
@@ -318,19 +319,30 @@ def api_adjust_volume(novel_id: str, payload: VolumeAdjustRequest):
 
 
 # --- DYNAMIC AGENT PIPELINE ENDPOINTS ---
+
+def _stream_with_lock(novel_id, async_gen):
+    """Acquire pipeline lock, stream the async generator, release lock on completion.
+
+    Eliminates the repeated lock/acquire/stream/release boilerplate across
+    every agent endpoint.
+    """
+    async def _wrapped():
+        try:
+            async for chunk in agents.safe_generator_wrapper(async_gen, novel_id=novel_id):
+                yield chunk
+        finally:
+            db.release_pipeline_lock(novel_id)
+    return _wrapped()
 @app.post("/api/agent/story-architect")
 def api_agent_story_architect(novel_id: str = Body(...), user_prompt: str = Body(...)):
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_story_architect(novel_id, user_prompt), novel_id=novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(novel_id, agents.run_story_architect(novel_id, user_prompt)),
+        media_type="text/event-stream",
+    )
 
 @app.post("/api/agent/character-designer")
 def api_agent_character_designer(payload: CharacterDesignerRequest):
@@ -338,19 +350,16 @@ def api_agent_character_designer(payload: CharacterDesignerRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_character_designer(
-                novel_id=payload.novel_id,
-                user_prompt=payload.user_prompt,
-                hint=payload.hint,
-                mode=payload.mode,
-                target_char_index=payload.target_char_index
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_character_designer(
+            novel_id=payload.novel_id,
+            user_prompt=payload.user_prompt,
+            hint=payload.hint,
+            mode=payload.mode,
+            target_char_index=payload.target_char_index
+        )),
+        media_type="text/event-stream",
+    )
 
 @app.post("/api/agent/volumes-planner")
 def api_agent_volumes_planner(payload: VolumesPlannerRequest):
@@ -366,19 +375,16 @@ def api_agent_volumes_planner(payload: VolumesPlannerRequest):
             )
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_volumes_planner(
-                novel_id=payload.novel_id,
-                user_prompt=payload.user_prompt,
-                hint=payload.hint,
-                mode=payload.mode,
-                target_vol_idx=payload.target_vol_idx
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_volumes_planner(
+            novel_id=payload.novel_id,
+            user_prompt=payload.user_prompt,
+            hint=payload.hint,
+            mode=payload.mode,
+            target_vol_idx=payload.target_vol_idx
+        )),
+        media_type="text/event-stream",
+    )
 
 @app.post("/api/agent/volume-skeleton")
 def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
@@ -386,17 +392,14 @@ def api_agent_volume_skeleton(payload: VolumeSkeletonRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_volume_skeleton_planner(
-                novel_id=payload.novel_id,
-                volume_index=payload.volume_index,
-                user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_volume_skeleton_planner(
+            novel_id=payload.novel_id,
+            volume_index=payload.volume_index,
+            user_prompt=payload.user_prompt
+        )),
+        media_type="text/event-stream",
+    )
 
 
 @app.post("/api/agent/write-chapter")
@@ -405,18 +408,15 @@ def api_agent_write_chapter(payload: ChapterWriterRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_chapter_writer(
-                novel_id=payload.novel_id,
-                chapter_index=payload.chapter_index,
-                custom_style=payload.custom_style,
-                user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_chapter_writer(
+            novel_id=payload.novel_id,
+            chapter_index=payload.chapter_index,
+            custom_style=payload.custom_style,
+            user_prompt=payload.user_prompt
+        )),
+        media_type="text/event-stream",
+    )
 
 @app.post("/api/agent/edit-chapter")
 def api_agent_edit_chapter(payload: EditorAgentRequest):
@@ -424,17 +424,14 @@ def api_agent_edit_chapter(payload: EditorAgentRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_editor_agent(
-                novel_id=payload.novel_id,
-                chapter_index=payload.chapter_index,
-                edit_instructions=payload.edit_instructions
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_editor_agent(
+            novel_id=payload.novel_id,
+            chapter_index=payload.chapter_index,
+            edit_instructions=payload.edit_instructions
+        )),
+        media_type="text/event-stream",
+    )
 
 @app.post("/api/agent/copilot-chat")
 def api_agent_copilot_chat(payload: CopilotChatRequest):
@@ -442,13 +439,10 @@ def api_agent_copilot_chat(payload: CopilotChatRequest):
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_copilot_chat(payload.novel_id, payload.user_message), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_copilot_chat(payload.novel_id, payload.user_message)),
+        media_type="text/event-stream",
+    )
 
 
 # --- PIPELINE REVIEW & CHECKPOINT ENDPOINTS ---
@@ -735,58 +729,14 @@ def api_create_volume(novel_id: str, vol_idx: int, payload: VolumeCreatePayload)
 @app.delete("/api/novels/{novel_id}/volumes/{vol_idx}")
 def api_delete_volume(novel_id: str, vol_idx: int):
     """Delete a volume, sequentially renumber the remaining volumes, delete its chapters, and renumber remaining chapters."""
-    novel = db.get_novel(novel_id)
-    if not novel:
+    if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     
-    vols = db.get_volumes(novel_id)
-    
-    # Get the chapter range for this volume to determine which chapters belong to it
-    range_start, range_end = db.get_volume_chapter_range(vols, vol_idx)
-    
-    # Filter out the volume from volumes list
-    vols = [v for v in vols if v.get("volume_index") != vol_idx]
-    # Re-index remaining volumes sequentially starting from 1
-    vols.sort(key=lambda x: x.get("volume_index", 0))
-    for idx, v in enumerate(vols):
-        v["volume_index"] = idx + 1
-        
-    db.save_volumes(novel_id, vols)
-    
-    # 1. Also delete chapters in this volume from plot_chapters outline
-    plot = db.get_stitched_plot(novel_id)
-    if plot and "chapters" in plot:
-        plot["chapters"] = [
-            ch for ch in plot["chapters"]
-            if not (range_start <= (ch.get("chapter_index", 0) or 0) <= range_end)
-        ]
-        # Re-number remaining chapters in plot outline to be continuous starting from 1
-        plot["chapters"].sort(key=lambda x: int(x.get("chapter_index", 0)))
-        for idx, ch in enumerate(plot["chapters"]):
-            ch["chapter_index"] = idx + 1
-            
-        db.save_plot_chapters(novel_id, plot)
-        
-    # 2. Delete corresponding prose chapters in chapters table, and align/renumber the remaining ones
-    conn = db.get_db_connection()
-    cursor = conn.cursor()
     try:
-        # Delete chapters in deleted volume
-        cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index BETWEEN ? AND ?", (novel_id, range_start, range_end))
-        
-        # Select all remaining chapters and update their indexes to be continuous
-        rows = cursor.execute("SELECT id, chapter_index FROM chapters WHERE novel_id = ? ORDER BY chapter_index ASC", (novel_id,)).fetchall()
-        for new_idx, row in enumerate(rows):
-            cursor.execute("UPDATE chapters SET chapter_index = ? WHERE id = ?", (new_idx + 1, row["id"]))
-            
-        conn.commit()
+        db.delete_volume(novel_id, vol_idx)
+        return {"status": "success"}
     except Exception as e:
-        conn.rollback()
-        print(f"[ERROR] Failed to align SQLite chapters on delete: {e}")
-    finally:
-        conn.close()
-    
-    return {"status": "success"}
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/novels/{novel_id}/volumes/{vol_idx}/align")
 def api_align_volume(novel_id: str, vol_idx: int):
@@ -938,10 +888,17 @@ def api_novel_retrospective(novel_id: str):
                 "content_excerpt": content[:900]
             })
     
+    from prompts.prompt_builder import extract_worldview_summary, extract_character_names_list
     context = {
-        "worldbuilding": wb["content"] if wb else "尚無世界觀設定",
-        "characters": char["json_data"] if char else "尚無角色設定",
-        "plot": stitched_plot if stitched_plot else {"chapters": []},
+        "worldbuilding": extract_worldview_summary(wb["content"]) if wb else "尚無世界觀設定",
+        "characters": json.dumps({"character_names": extract_character_names_list(char["json_data"])}, ensure_ascii=False) if char else "尚無角色設定",
+        "plot": {
+            "total_chapters": len(stitched_plot.get("chapters", [])) if stitched_plot else 0,
+            "volumes_summary": [
+                {"volume_index": v.get("volume_index"), "title": v.get("title"), "summary": v.get("summary")}
+                for v in db.get_volumes(novel_id)
+            ]
+        } if stitched_plot else {"chapters": []},
         "written_chapters": f"已寫作正文章節共 {len(chapters)} 章。" if chapters else "尚未開始寫作正文。",
         "chapter_samples": chapter_samples
     }
@@ -988,7 +945,7 @@ def api_novel_retrospective(novel_id: str):
         
     gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
     os.makedirs(gold_rules_dir, exist_ok=True)
-    safe_title = re.sub(r'[\\/*?:"<>|]', "", novel["title"]) or "novel"
+    safe_title = safe_filename(novel["title"])
     filepath = os.path.join(gold_rules_dir, f"{safe_title}_retrospective_gold_rules.md")
     
     with open(filepath, "w", encoding="utf-8") as f:
@@ -1008,21 +965,13 @@ def api_heal_rollback(novel_id: str, payload: HealRollbackPayload):
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
         
-    # Standard DB operation inside transaction (clean up surrounding 3 chapters)
-    conn = db.get_db_connection()
-    cursor = conn.cursor()
     try:
+        db.delete_and_shift_surrounding_chapters(novel_id, payload.target_chapter_index)
         start_del = max(1, payload.target_chapter_index - 3)
         end_del = payload.target_chapter_index + 3
-        
-        cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index BETWEEN ? AND ?", (novel_id, start_del, end_del))
-        conn.commit()
         return {"status": "success", "start_del": start_del, "end_del": end_del}
     except Exception as e:
-        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
 
 
@@ -1037,16 +986,13 @@ def api_agent_foreshadowing_orchestrator(payload: ForeshadowingOrchestratorReque
         raise HTTPException(status_code=404, detail="Novel not found")
     if not db.acquire_pipeline_lock(payload.novel_id):
         raise HTTPException(status_code=429, detail="此小說的流水線正在執行中，請等待完成。")
-    async def _wrapped():
-        try:
-            async for chunk in agents.safe_generator_wrapper(agents.run_foreshadowing_orchestrator(
-                novel_id=payload.novel_id,
-                user_prompt=payload.user_prompt
-            ), novel_id=payload.novel_id):
-                yield chunk
-        finally:
-            db.release_pipeline_lock(payload.novel_id)
-    return StreamingResponse(_wrapped(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_with_lock(payload.novel_id, agents.run_foreshadowing_orchestrator(
+            novel_id=payload.novel_id,
+            user_prompt=payload.user_prompt
+        )),
+        media_type="text/event-stream",
+    )
 
 
 @app.post("/api/novels/{novel_id}/chapters/restore-backup")
