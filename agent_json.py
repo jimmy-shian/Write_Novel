@@ -67,34 +67,28 @@ WORLDVIEW_APPROVAL_CRITERIA = {
     "criteria": {
         "structure": {
             "required_fields": ["theme", "main_conflict", "worldview", "macro_outline"],
-            "description": "所有必填欄位必須完整填寫，不得為空"
+            "description": "建議確保所有必填欄位完整填寫，以便為小說奠定穩固的基礎"
         },
         "theme": {
-            "min_length": 50,
-            "max_length": 500,
-            "description": "核心主題需具備深度與哲學命題"
+            "description": "建議核心主題深入探討價值衝突與哲學命題，字數約在 50 至 500 字之間，能給予讀者更多餘韻"
         },
         "main_conflict": {
-            "min_length": 100,
-            "max_length": 800,
-            "description": "核心衝突需明確描述多陣營張力"
+            "description": "核心衝突若能精準刻劃多方陣營的拉扯與張力，將會更加精彩（建議 100 至 800 字左右）"
         },
         "worldview": {
-            "min_length": 300,
-            "description": "宏大的世界觀需包含地理、力量體系、社會結構、氛圍等要素"
+            "description": "世界觀設定如果能更詳盡地刻劃地理、力量體系與社會秩序，會更有沉浸感（建議在 300 字以上）"
         },
         "macro_outline": {
-            "min_length": 200,
-            "description": "宏觀的大綱需完整描述故事走向"
+            "description": "建議整體故事大綱能完整描述故事的開端、發展與高潮走向，為後續寫作指引清晰的方向"
         },
         "multi_act_structure": {
-            "description": "多幕結構需數十個幕，每幕需有明確的起承轉合功能與內容描述"
+            "description": "【格式強硬要求：幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等不一致的編號標記】多幕結構建議規劃數十個幕，每幕均有清晰的起承轉合功能與精彩內容"
         },
         "progressive_character_plan": {
-            "description": "角色漸進規劃需數十波以上，反映角色的階段性登場與成長"
+            "description": "【格式強硬要求：波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，不允許出現『1.』、『1-0XX』、『Wave 1』等不一致的編號】角色漸進規劃建議包含數十波以上，以體現群像角色的登場與階段性成長"
         },
         "consistency": {
-            "description": "各欄位間需邏輯一致，主題與衝突需相互呼應"
+            "description": "建議各欄位間保持完美的邏輯連貫性，讓主題、衝突與情節大綱互相呼應"
         }
     },
 }

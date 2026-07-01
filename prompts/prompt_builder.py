@@ -69,6 +69,37 @@ def compact_context_text(value, limit, label="context"):
     tail_len = max(1, limit - len(marker) - head_len)
     return value[:head_len] + marker + value[-tail_len:]
 
+def compact_json_data(data, max_list_items=10):
+    """
+    Recursively process dictionary or list to compact large lists.
+    Keeps the first N and last M items of a list (default total N+M = max_list_items),
+    and replaces the middle items with a summary indicator to preserve JSON validity.
+    """
+    if isinstance(data, dict):
+        return {k: compact_json_data(v, max_list_items) for k, v in data.items()}
+    elif isinstance(data, list):
+        total_len = len(data)
+        if total_len > max_list_items:
+            head_len = max_list_items // 2
+            tail_len = max_list_items - head_len
+            head = [compact_json_data(item, max_list_items) for item in data[:head_len]]
+            tail = [compact_json_data(item, max_list_items) for item in data[-tail_len:]]
+            omitted = total_len - max_list_items
+            
+            # Check if elements are dictionaries to preserve a structure-friendly summary
+            if total_len > 0 and isinstance(data[0], dict):
+                summary_item = {
+                    "...摘要...": f"資料庫中實際已完整儲存共 {total_len} 筆項目，符合硬性指標要求；此處為節省上下文長度，省略中間 {omitted} 筆"
+                }
+            else:
+                summary_item = f"...[資料庫中實際已完整儲存共 {total_len} 筆項目，符合硬性指標要求；此處為節省上下文長度，省略中間 {omitted} 筆]..."
+            
+            return head + [summary_item] + tail
+        else:
+            return [compact_json_data(item, max_list_items) for item in data]
+    else:
+        return data
+
 
 def _parse_jsonish(text):
     if isinstance(text, (dict, list)):
@@ -281,7 +312,9 @@ def build_relevant_character_context_text(characters_data, query_text="", force_
         force_full_names=force_full_names,
         include_all_full=include_all_full,
     )
-    return compact_context_text(_json_text(selected), limit, "任務相關角色上下文")
+    # Apply structural JSON compaction to prevent breaking JSON by simple string truncation
+    compacted_selected = compact_json_data(selected, max_list_items=10)
+    return compact_context_text(_json_text(compacted_selected), limit, "任務相關角色上下文")
 
 
 def select_worldview_context(worldview_text, current_stage="copilot", query_text="", force_full=False, limit=MAX_DIRECTOR_WORLDVIEW_LENGTH):
@@ -295,7 +328,12 @@ def select_worldview_context(worldview_text, current_stage="copilot", query_text
     stage = current_stage or "copilot"
     field_order = WORLDVIEW_FIELDS_BY_STAGE.get(stage, WORLDVIEW_FIELDS_BY_STAGE["copilot"])
     if force_full or field_order is None:
-        return compact_context_text(_json_text(parsed), limit, "完整世界觀")
+        # 世界觀評判階段，必須將多幕起伏與角色漸進的完整內容傳給總監，不可進行清單截斷
+        if stage == "worldview":
+            return compact_context_text(_json_text(parsed), limit, "完整世界觀")
+        # Apply structural JSON compaction even for full worldview to preserve JSON structure
+        compacted_parsed = compact_json_data(parsed, max_list_items=15)
+        return compact_context_text(_json_text(compacted_parsed), limit, "完整世界觀")
 
     query_text = _json_text(query_text)
     selected_keys = []
@@ -315,10 +353,13 @@ def select_worldview_context(worldview_text, current_stage="copilot", query_text
         value = parsed.get(key)
         selected[key] = value if isinstance(value, (dict, list)) else str(value)
 
+    # Apply structural JSON compaction to prevent breaking JSON by simple string truncation
+    compacted_selected = compact_json_data(selected, max_list_items=10)
+
     result = {
         "selection_policy": f"依 current_stage={stage} 選入必要世界觀欄位；只有被本次任務命中的額外欄位才追加。長度上限僅作溢位保護。",
         "selected_fields": selected_keys,
-        "worldview_context": selected,
+        "worldview_context": compacted_selected,
     }
     return compact_context_text(_json_text(result), limit, "任務相關世界觀上下文")
 
@@ -501,6 +542,73 @@ def build_story_architect_messages(genre, style, user_prompt):
 {STORY_ARCHITECT_GUIDELINES}
 
 請根據以上設定，為本作品生成符合結構的完整世界觀 JSON 設定。
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
+def build_worldview_core_messages(genre, style, user_prompt):
+    """僅生成世界觀核心設定（theme, main_conflict, worldview, macro_outline）的提示詞"""
+    from prompts.prompt_main import STORY_ARCHITECT_PROMPT, STORY_ARCHITECT_GUIDELINES
+    core_schema = {
+        "theme": "核心主題，深入且具哲學命題（50-500字）",
+        "main_conflict": "核心衝突與多陣營拉扯情節張力網（100-800字）",
+        "worldview": "世界觀核心設定，包含力量體系、地理、社會結構（300字以上）",
+        "macro_outline": "全書宏觀整體大綱，支撐百萬字長篇"
+    }
+    schema_snippet = f"\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n{json.dumps(core_schema, ensure_ascii=False, indent=2)}\n"
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n"
+    
+    user_content = f"""【使用者創作需求與設定】
+類型：{genre}
+風格基調：{style}
+詳細故事描述/要求：{user_prompt}
+
+{STORY_ARCHITECT_GUIDELINES}
+
+請根據以上設定，僅生成核心世界觀（theme、main_conflict、worldview、macro_outline）的 JSON 設定。
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
+def build_multi_act_structure_messages(worldview_core_json, user_prompt):
+    """基於核心世界觀，獨立生成多幕式起伏結構的提示詞"""
+    from prompts.prompt_main import MULTI_ACT_STRUCTURE_PROMPT, MULTI_ACT_STRUCTURE_GUIDELINES
+    system_prompt = f"{MULTI_ACT_STRUCTURE_PROMPT}\n\n{MULTI_ACT_STRUCTURE_GUIDELINES}\n"
+    
+    user_content = f"""【已確定的核心世界觀設定】
+{worldview_core_json}
+
+【使用者原始要求（參考）】
+{user_prompt}
+
+請根據上述已確定的核心設定，獨立規劃並生成大長篇故事的「多幕式起伏結構（multi_act_structure）」。
+幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，使用中文數字編號，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等標號。
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
+def build_progressive_character_plan_messages(worldview_core_json, multi_act_json, user_prompt):
+    """基於核心世界觀與多幕式結構，獨立生成角色漸進登場規劃策略的提示詞"""
+    from prompts.prompt_main import PROGRESSIVE_CHARACTER_PLAN_PROMPT, PROGRESSIVE_CHARACTER_PLAN_GUIDELINES
+    system_prompt = f"{PROGRESSIVE_CHARACTER_PLAN_PROMPT}\n\n{PROGRESSIVE_CHARACTER_PLAN_GUIDELINES}\n"
+    
+    user_content = f"""【已確定的核心世界觀設定】
+{worldview_core_json}
+
+【已確定的多幕式劇情結構】
+{multi_act_json}
+
+【使用者原始要求（參考）】
+{user_prompt}
+
+請根據上述設定，獨立規劃並生成群像劇的「角色漸進登場規劃策略（progressive_character_plan）」。
+波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，使用中文數字編號，不允許出現『1.』、『1-0XX』、『Wave 1』等標號。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -861,10 +969,13 @@ def mask_worldview_seeds_and_turns(worldview_text):
     try:
         parsed = _parse_jsonish(worldview_text)
         if isinstance(parsed, dict):
-            if "foreshadowing_seeds" in parsed:
-                parsed["foreshadowing_seeds"] = "此區塊通過審核不需評判"
-            if "key_turning_points" in parsed:
-                parsed["key_turning_points"] = "此區塊通過審核不需評判"
+            target = parsed
+            if "worldview_context" in parsed and isinstance(parsed["worldview_context"], dict):
+                target = parsed["worldview_context"]
+            if "foreshadowing_seeds" in target:
+                target["foreshadowing_seeds"] = "此區塊通過審核不需評判"
+            if "key_turning_points" in target:
+                target["key_turning_points"] = "此區塊通過審核不需評判"
             return json.dumps(parsed, ensure_ascii=False, indent=2)
     except:
         pass
@@ -1009,9 +1120,17 @@ def build_director_decision_messages(
         # 世界觀階段：只傳世界觀完整內容 + 評斷提示詞
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前世界觀的創作質量，並決定下一步的最佳動作。
  
-【審查原則】
+【審查原則與柔軟語調指南】
 1. 當前階段是「current_stage = {current_stage}」（世界觀架構師）。
-2. 對比使用者的原始意圖，檢查世界觀是否完整且具備深度，是否忠實體現了使用者的原始大綱與輸入走向。
+2. 請用溫和、細心且富有建設性的主編語氣提供反饋。不要使用冰冷或過於強硬的否定字眼，多用「建議您」、「如果能...會更加精彩」等口氣引導作者。
+3. **【拆解評判要求】** 你必須單獨評估並在反饋中給出以下三個獨立區塊的詳細評判意見：
+   - **核心世界觀設定**（主題深度、多陣營衝突、宏觀大綱）。
+   - **🎭多幕式劇情起伏結構**（劇情起伏與功能）。
+   - **👥角色漸進登場規劃策略**（人物登場波次與群像鋪陳）。
+4. **【格式與 ID 的絕對強硬要求】** 
+   - 幕次標題必須嚴格遵循『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等標準命名格式。
+   - 角色波次標題必須嚴格遵循『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等標準命名格式。
+   - **絕對禁止**出現『1.』、『1-01』、『1-0XX』等不一致或隨意的標號，這會影響後續與系統其他部分溝通參數的統一！
  
 {stage_criteria}
  
@@ -1019,10 +1138,10 @@ def build_director_decision_messages(
 """
         user_content = f"""{worldview_user_prompt_section}
  
-【完整世界觀設定】
+【完整世界觀設定（包含核心、多幕起伏結構與角色漸進規劃）】
 {worldview_text}
  
-請進行深度評估，決定下一步行動！
+請進行深度評估，為核心世界觀設定、多幕式結構、角色漸進登場規劃這三個獨立區塊各別給出柔軟但格式要求強硬的評判，並決定下一步行動！
 """
     
     elif current_stage == "characters":
@@ -1466,7 +1585,61 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
     ]
 
 
+def build_missing_character_designer_messages(worldview_summary, existing_chars_json, new_char_name, chapter_outline):
+    """
+    為首次登場的缺失角色生成獨立設計提示詞訊息列表。
+    此函數負責將角色設計 system prompt 與 user prompt 組裝為 LLM messages，
+    按照嚴格 JSON Schema 要求生成新角色卡。
+    """
+    schema = {
+        "name": "",
+        "role": "",
+        "entry_phase": "",
+        "personality": [],
+        "want": "",
+        "need": "",
+        "fatal_flaw": "",
+        "motivation": "",
+        "arc": "",
+        "speech_style": "",
+        "appearance": "",
+        "background": "",
+        "relationships": []
+    }
 
+    # 僅提取現有角色的名稱與角色定位，節省 Token 並防範衝突
+    existing_names_str = "暫無角色"
+    if existing_chars_json:
+        try:
+            names = extract_character_names_list(existing_chars_json)
+            if names:
+                existing_names_str = ", ".join(names)
+        except Exception:
+            pass
 
+    system_prompt = f"""你是一位頂尖的角色設計大師（Character Designer）。
+請根據世界觀背景與新角色首次登場的詳細章節大綱，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
+
+⚠️【剛性約束項目】：
+1. 輸出格式必須嚴格是 JSON，符合以下角色 Schema：
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+2. name 欄位必須是角色的具體姓名【{new_char_name}】，絕對禁止填寫無關名稱。
+3. 角色的人設、動機 (motivation)、致命缺陷 (fatal_flaw)、發聲風格 (speech_style) 必須與章節大綱的情境完全契合，且不可與現有的其他角色衝突。
+"""
+    user_content = f"""【世界觀背景大綱】
+{worldview_summary}
+
+【現有已登場角色清單 (避免人設重複或名稱衝突)】
+{existing_names_str}
+
+【新角色【{new_char_name}】登場的第 {chapter_outline.get('chapter_index')} 章大綱】
+{json.dumps(chapter_outline, ensure_ascii=False, indent=2)}
+
+請為新角色【{new_char_name}】生成高品質的完整角色 JSON 卡片。
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
 
 
