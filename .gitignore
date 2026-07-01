@@ -4,7 +4,8 @@ novels.db
 venv/
 __pycache__/
 *.pyc
-scratch/
+scratch/*
+!scratch/clear_generated_content.py
 simple_test_logging.py
 
 # 排除暫存檔案
