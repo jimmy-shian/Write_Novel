@@ -42,7 +42,7 @@ export function loadAgentConfigFields(agentName) {
     
     el.settingAgentName.value = agentName;
     el.settingApiKey.value = config.api_key || '';
-    el.settingBaseUrl.value = config.base_url || 'https://integrate.api.nvidia.com/v1';
+    el.settingBaseUrl.value = config.base_url || 'http://127.0.0.1:4000/v1';
     el.settingModel.value = config.model || '';
     el.settingMaxTokens.value = config.max_tokens || '';
     el.settingTemperature.value = config.temperature ?? '';

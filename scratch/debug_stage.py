@@ -47,7 +47,7 @@ volumes_list = [
 db.save_volumes(novel_id, volumes_list)
 
 skeleton_outline = [
-    {"chapter_index": 1, "brief_title": "第1章", "brief_summary": "介紹"}
+    {"chapter_index": 1, "chapter_title": "第1章", "chapter_summary": "介紹"}
 ]
 db.update_volume_outline(novel_id, 1, skeleton_outline)
 
@@ -66,7 +66,7 @@ for v in vols:
     
     empty_titles = 0
     for c in skeleton_list:
-        title = c.get("chapter_title") or c.get("brief_title") or c.get("title") or ""
+        title = c.get("chapter_title") or c.get("title") or ""
         print(f"  chapter title: '{title}'")
         if not title or title.strip() == "" or title == "待設定標題":
             empty_titles += 1
