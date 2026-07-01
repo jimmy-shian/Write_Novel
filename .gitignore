@@ -1,8 +1,10 @@
 novel_factory.db
+novels.db
 .env
 venv/
 __pycache__/
-*.pycscratch/
+*.pyc
+scratch/
 simple_test_logging.py
 
 # 排除暫存檔案
