@@ -763,8 +763,8 @@ async function executeDirectorAction(decision, userPrompt) {
  */
 function isDetailedPlotOutline(chapter) {
     if (!chapter || typeof chapter !== 'object') return false;
-    const summary = (chapter.summary || chapter.chapter_summary || chapter.brief_summary || '').toString().trim();
-    const scene = (chapter.scene || chapter.chapter_scene || '').toString().trim();
+    const summary = (chapter.chapter_summary || chapter.summary || '').toString().trim();
+    const scene = (chapter.scene_setting || chapter.scene || '').toString().trim();
     const purpose = (chapter.purpose || '').toString().trim();
     const cliffhanger = (chapter.cliffhanger || '').toString().trim();
     const events = Array.isArray(chapter.events) ? chapter.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
@@ -2536,7 +2536,7 @@ function openChapterOutlineEditModal(index, chapter) {
     }
     
     // 填充當前值
-    document.getElementById('edit-chapter-title').value = chapter.title || '';
+    document.getElementById('edit-chapter-title').value = chapter.chapter_title || chapter.title || '';
     document.getElementById('edit-chapter-time-setting').value = chapter.time_setting || '';
     document.getElementById('edit-chapter-scene-setting').value = chapter.scene_setting || chapter.scene || '';
     document.getElementById('edit-chapter-time-span').value = chapter.time_span || '';
@@ -2571,8 +2571,8 @@ function openChapterOutlineEditModal(index, chapter) {
     
     // 處理 foreshadowing（相容 foreshadowing, foreshadowing_plant, foreshadowing_payoff 避免載入空白）
     let foreshadowText = '';
-    const plants = chapter.foreshadowing_plant || chapter.foreshadowing_plants || [];
-    const payoffs = chapter.foreshadowing_payoff || chapter.foreshadowing_payoffs || [];
+    const plants = chapter.allocated_tasks?.foreshadowing_plants || chapter.foreshadowing_plants || chapter.foreshadowing_plant || [];
+    const payoffs = chapter.allocated_tasks?.foreshadowing_payoffs || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
     const oldForeshadow = chapter.foreshadowing || [];
     const combinedForeshadow = [...new Set([
         ...(Array.isArray(plants) ? plants : (typeof plants === 'string' ? [plants] : [])),
@@ -2627,17 +2627,17 @@ function openChapterOutlineEditModal(index, chapter) {
             const updatedChapter = {
                 ...plotData.chapters[index],
                 title: document.getElementById('edit-chapter-title').value,
+                chapter_title: document.getElementById('edit-chapter-title').value,
                 time_setting: document.getElementById('edit-chapter-time-setting').value,
                 scene_setting: document.getElementById('edit-chapter-scene-setting').value,
-                scene: document.getElementById('edit-chapter-scene-setting').value,
                 time_span: document.getElementById('edit-chapter-time-span').value,
                 characters_active: charsArray,
                 purpose: document.getElementById('edit-chapter-purpose').value,
                 emotional_tone: document.getElementById('edit-chapter-emotional-tone').value,
                 events: eventsArray,
                 foreshadowing: foreshadowArray,
-                foreshadowing_plant: foreshadowArray,
-                foreshadowing_payoff: foreshadowArray,
+                foreshadowing_plants: foreshadowArray,
+                foreshadowing_payoffs: foreshadowArray,
                 cliffhanger: document.getElementById('edit-chapter-cliffhanger').value
             };
             
@@ -4257,9 +4257,8 @@ function setupEventListeners() {
                 el.settingTopP.value = preset.top_p;
                 el.settingEnableThinking.checked = preset.enable_thinking;
                 
-                // If Base URL is empty or matches qwen placeholder/blank, set default Nvidia integration base
-                if (!el.settingBaseUrl.value || el.settingBaseUrl.value.trim() === '' || el.settingBaseUrl.value.includes('qwen')) {
-                    el.settingBaseUrl.value = 'https://integrate.api.nvidia.com/v1';
+                if (!el.settingBaseUrl.value || el.settingBaseUrl.value.trim() === '' || el.settingBaseUrl.value.includes('qwen') || el.settingBaseUrl.value.includes('nvidia')) {
+                    el.settingBaseUrl.value = 'http://127.0.0.1:4000/v1';
                 }
                 
                 showToast(`已套用 ${preset.model} 預設值，點擊儲存以套用！`);

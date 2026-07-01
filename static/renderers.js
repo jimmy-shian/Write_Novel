@@ -1120,14 +1120,14 @@ export function renderPlotTab() {
 
                     // 💡 基於全新的 __renderMode 屬性精確判定單個卡片外觀（需先宣告才能在 chIdxInVol 中使用）
                     // 💡 修復：優先使用骨架欄位
-                    const skeletonTitle = chapter.chapter_title || chapter.brief_title || chapter.title || chapter.name || '待設定標題';
-                    const skeletonSummary = chapter.chapter_summary || chapter.brief_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
+                    const skeletonTitle = chapter.chapter_title || chapter.title || chapter.name || '待設定標題';
+                    const skeletonSummary = chapter.chapter_summary || chapter.summary || (chapter.__renderMode === 'empty' ? '情節骨架待生成' : '');
                     const allocatedTasks = chapter.allocated_tasks || {};
-                    const foreshadowPlants = allocatedTasks.foreshadowing_plants || allocatedTasks.foreshadowing_plant || chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || [];
-                    const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || allocatedTasks.foreshadowing_payoff || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
+                    const foreshadowPlants = allocatedTasks.foreshadowing_plants || chapter.foreshadowing_plants || chapter.foreshadowing_plant || chapter.foreshadowing || [];
+                    const foreshadowPayoffs = allocatedTasks.foreshadowing_payoffs || chapter.foreshadowing_payoffs || chapter.foreshadowing_payoff || [];
                     const turningPoints = allocatedTasks.turning_points || allocatedTasks.turning_point || chapter.turning_points || chapter.turning_point || [];
                     
-                    const skeletonTime = chapter.time_setting || '';
+                    const skeletonTime = chapter.time_setting || chapter.time_span || '';
                     const skeletonTone = chapter.emotional_tone || '';
                     const skeletonCliff = chapter.cliffhanger || '';
                     const arrSkeletonChars = Array.isArray(chapter.characters_active) ? chapter.characters_active : (chapter.characters_active ? [chapter.characters_active] : []);
@@ -1316,7 +1316,7 @@ export function renderPlotTab() {
                                                       !!c.purpose || !!c.emotional_tone || !!c.cliffhanger;
                             const hasTitleOrSummary = c.title && c.title.trim() !== '' && c.title !== '待設定標題';
                             
-                            const isSkeleton = c.brief_title !== undefined && c.brief_title !== null;
+                            const isSkeleton = c.chapter_title === undefined && c.chapter_title === null && c.title === undefined && c.title === null;
                             return !isSkeleton && (hasMicroStructure || hasTitleOrSummary);
                         });
                         
@@ -1361,10 +1361,10 @@ export function renderPlotTab() {
                         displayChapters.forEach((ch, idx) => {
                             const chIdx = parseInt(ch.chapter_index);
                             if (ch && chIdx) {
-                                // 💡【骨架章節支持】：支持 brief_title 等
+                                // 💡【骨架章節支持】：支持 chapter_title 等
                                 allDisplayChapters.push({
                                     index: chIdx,
-                                    title: ch.title || ch.brief_title || ch.chapter_title || ch.name || `第 ${chIdx} 章`
+                                    title: ch.chapter_title || ch.title || ch.name || `第 ${chIdx} 章`
                                 });
                             }
                         });
@@ -1501,7 +1501,7 @@ export function renderWriterTab() {
                             <span class="chapter-list-status" style="font-size: var(--font-2xs); font-weight: 800;">${isWritten ? '✓' : '○'}</span>
                         </div>
                         <div class="chapter-list-title" style="font-size: var(--font-2xs); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: left; margin-top: 2px; pointer-events: none; opacity: 0.95;">
-                            ${chapter.title || chapter.chapter_title || chapter.brief_title || '待設定標題'}
+                            ${chapter.chapter_title || chapter.title || '待設定標題'}
                         </div>
                     </li>
                 `;
@@ -1558,7 +1558,7 @@ export function selectWriterChapter(chapterIndex) {
     
     // 更新標題和狀態
     if (el.activeChapterTitle) {
-        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章（全局第 ${chapterIndex} 章）：${plotChapter?.title || plotChapter?.chapter_title || plotChapter?.brief_title || '待設定標題'}`;
+        el.activeChapterTitle.textContent = `第 ${volIdx} 卷 第 ${chIdxInVol} 章（全局第 ${chapterIndex} 章）：${plotChapter?.chapter_title || plotChapter?.title || '待設定標題'}`;
     }
     
     // --- AI Thinking Process separated rendering ---
@@ -1619,7 +1619,7 @@ export function selectWriterChapter(chapterIndex) {
                     </div>
                     <div class="insp-item" style="margin-bottom: 0;">
                         <span class="insp-label">📍 場景地點</span>
-                        <p class="insp-val">${plotChapter.scene || plotChapter.scene_setting || '待設定'}</p>
+                        <p class="insp-val">${plotChapter.scene_setting || plotChapter.scene || '待設定'}</p>
                     </div>
                 </div>`;
                 
@@ -1629,7 +1629,7 @@ export function selectWriterChapter(chapterIndex) {
                     <p class="insp-val"><span class="insp-tone-badge" style="background: rgba(139,92,246,0.12); color:#8b5cf6; padding: 2px 8px; border-radius:12px; font-size:0.75rem; border:1px solid rgba(139,92,246,0.15); font-weight:600;">${plotChapter.emotional_tone}</span></p>
                 </div>` : '';
                 
-            const currentSummary = plotChapter.summary || plotChapter.chapter_summary || plotChapter.brief_summary || '';
+            const currentSummary = plotChapter.chapter_summary || plotChapter.summary || '';
             const summaryHtml = currentSummary ? `
                 <div class="insp-item">
                     <span class="insp-label">📝 情節概要</span>

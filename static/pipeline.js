@@ -100,7 +100,7 @@ function isPlaceholderOutline(outline) {
 
 function isShallowOutline(outline) {
     if (!outline || typeof outline !== 'object') return true;
-    const summary = (outline.summary || outline.chapter_summary || outline.brief_summary || '').toString().trim();
+    const summary = (outline.chapter_summary || outline.summary || '').toString().trim();
     const scene = (outline.scene || outline.chapter_scene || '').toString().trim();
     const purpose = (outline.purpose || '').toString().trim();
     const cliffhanger = (outline.cliffhanger || '').toString().trim();
