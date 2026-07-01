@@ -100,13 +100,13 @@ DIRECTOR_COMMON_FOOTER = """
 5. 若細節較長，`agent_prompt` 與 `agent_context` 也要填入，系統會一併傳給下游增量 Agent。
 
 ## ⚠️ 【重要評估邊界與管線相依性規則】(🔥 嚴格遵守)
-1. **創作黃金階段依序推進**：世界觀 (`worldview`) -> 角色 (`characters`) -> 伏筆與轉折 (`foreshadowing`) -> 篇卷 (`volumes`) -> 章節骨架 (`volume_skeleton`) -> 正文寫作 (`writer`) -> 編輯姬精修 (`editor`)。
+1. **創作黃金階段依序推進**：世界觀 (`worldview`) -> 伏筆與轉折 (`foreshadowing`) -> 角色 (`characters`) -> 篇卷 (`volumes`) -> 章節骨架 (`volume_skeleton`) -> 正文寫作 (`writer`) -> 編輯姬精修 (`editor`)。
 2. **禁止超前審查（絕對紅線）**：當前評估階段由 `current_stage` 參數給定。如果 `current_stage` 是 `worldview`、`characters`、`foreshadowing`、`volumes` 或 `volume_skeleton`，後續的正文 (`chapters`) 本來就應該是空的！你**絕對禁止**因為正文為空而給出回退指令！這會導致管線死鎖！
 3. **全局/階段性推進規則（🔥 核心修正）**：
    In 決定輸出 `action: "CONTINUE"` 時，必須遵循以下精準導向：
-   - 當 `current_stage` 為 `worldview`，合格後 `target`應為 `characters`。
-   - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `foreshadowing`。
-   - 當 `current_stage` 為 `foreshadowing`，合格後 `target` 應為 `volumes`。
+   - 當 `current_stage` 為 `worldview`，合格後 `target` 應為 `foreshadowing`。
+   - 當 `current_stage` 為 `foreshadowing`，合格後 `target` 應為 `characters`。
+   - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `volumes`。
    - 🔄 **【回退與中斷恢復規則 (🔥 核心規則)】**：
      - 當前階段（`current_stage`）若為 `worldview` 或 `characters` 或 `foreshadowing`，且其內容已合格時：
        - 你必須優先檢查「系統底層剛性校驗報告」中是否已經建立了【篇卷骨架】與【正文進度】。

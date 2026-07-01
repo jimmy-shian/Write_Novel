@@ -765,8 +765,8 @@ def simplify_plot_data_for_copilot(plot_text):
                     if isinstance(ch, dict):
                         simplified_ch = {
                             "chapter_index": ch.get("chapter_index") or ch.get("chapter") or ch.get("index"),
-                            "chapter_title": ch.get("chapter_title") or ch.get("title") or ch.get("brief_title") or "未命名章節",
-                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or ch.get("brief_summary") or "（尚無摘要說明）"
+                            "chapter_title": ch.get("chapter_title") or ch.get("title") or "未命名章節",
+                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or "（尚無摘要說明）"
                         }
                         simplified_chapters.append(simplified_ch)
                 return json.dumps({"chapters": simplified_chapters}, ensure_ascii=False, indent=2)
@@ -788,8 +788,8 @@ def simplify_plot_data_for_copilot(plot_text):
                     if isinstance(ch, dict):
                         simplified_ch = {
                             "chapter_index": ch.get("chapter_index") or ch.get("chapter") or ch.get("index"),
-                            "chapter_title": ch.get("chapter_title") or ch.get("title") or ch.get("brief_title") or "未命名章節",
-                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or ch.get("brief_summary") or "（尚無摘要說明）"
+                            "chapter_title": ch.get("chapter_title") or ch.get("title") or "未命名章節",
+                            "chapter_summary": ch.get("chapter_summary") or ch.get("summary") or "（尚無摘要說明）"
                         }
                         simplified_chapters.append(simplified_ch)
                 return json.dumps(simplified_chapters, ensure_ascii=False, indent=2)
@@ -1109,33 +1109,32 @@ def build_director_decision_messages(
     elif current_stage == "writer":
         # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆+後三章伏筆回收預告)
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作質量，並決定下一步的最佳動作。
- 
+
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（正文寫作作家）。
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
 4. ⚠️【後三章伏筆預埋審查】：請特別注意檢查「clue_payoff_upcoming_3_chapters」中預告的後三章即將回收之伏筆，是否已在本章正文中有合理的前置鋪墊與自然埋入。
 5. 角色聖經的配角欄位缺失不是 writer 階段阻斷理由；除非主角資料缺失已明顯造成正文無法寫作，否則不得改派角色修補，應繼續 writer/editor 流程。
- 
+
 {stage_criteria}
- 
+
 {DIRECTOR_COMMON_FOOTER}
 """
-        characters_filtered = build_relevant_character_context(raw_characters_text, query_text=context_query)
         user_content = f"""{default_user_prompt_section}
- 
+
 【世界觀背景】
 {worldview_text}
- 
+
 【角色 Bible 聖經（命中角色完整設定；其他角色名稱與基本關係）】
-{json.dumps(characters_filtered, ensure_ascii=False, indent=2)}
- 
+{characters_text}
+
 【當前章節大綱】
 {plot_text}
- 
+
 【本章正文（完整內容）】
 {written_chapters_text}
- 
+
 請進行深度評估，決定下一步行動！
 """
     
@@ -1227,15 +1226,33 @@ def build_director_decision_messages(
     last_run_block = ""
     last_run = db.get_last_agent_run(novel_id)
     if last_run:
+        _last_input = last_run.get('input_data', '') or ''
+        _last_output = last_run.get('output_data', '') or ''
+        _last_stage = last_run.get('agent_name', '')
+        _user_content_summary = ''
+        try:
+            _input_msgs = json.loads(_last_input) if _last_input else []
+            if isinstance(_input_msgs, list):
+                _user_parts = []
+                for _m in _input_msgs:
+                    if isinstance(_m, dict) and _m.get('role') == 'user':
+                        _c = (_m.get('content') or '')[:2000]
+                        _user_parts.append(_c)
+                _user_content_summary = '\n---\n'.join(_user_parts) if _user_parts else '(無 user 訊息)'
+            else:
+                _user_content_summary = str(_input_msgs)[:2000]
+        except Exception:
+            _user_content_summary = _last_input[:2000]
+        _output_summary = _last_output[:3000] if len(_last_output) > 3000 else _last_output
         last_run_block = f"""
- 
+
 【上一個運行的 Agent 執行記錄 (Last Agent Run)】
-- 階段名稱 (Stage)：{last_run.get('agent_name')}
-- 該 Agent 接收到的輸入與指示 (LLM Input Messages)：
-{last_run.get('input_data')}
- 
-- 該 Agent 產生的原始輸出 (LLM Output)：
-{last_run.get('output_data')}
+- 階段名稱 (Stage)：{_last_stage}
+- 該 Agent 接收到的使用者指示摘要 (User Content)：
+{_user_content_summary}
+
+- 該 Agent 產生的原始輸出摘要 (Output, 前3000字)：
+{_output_summary}
 """
         system_prompt += """
 ## ⚠️ 【上一個運行的 Agent 審核核對指令】 (🔥 核心職責)

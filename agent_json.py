@@ -26,8 +26,8 @@ WORLDVIEW_SCHEMA = {
     ]
 }
 
-WORLDVIEW_REQUIRED_FIELDS = ["title", "theme", "worldview"]
-WORLDVIEW_RECOMMENDED_FIELDS = ["main_conflict", "setting", "power_system", "macro_outline"]
+WORLDVIEW_REQUIRED_FIELDS = ["theme", "main_conflict", "worldview", "macro_outline"]
+WORLDVIEW_RECOMMENDED_FIELDS = ["setting", "power_system", "multi_act_structure", "progressive_character_plan"]
 
 WORLDVIEW_CHAPTER_PATCH = {
     "category": "",
@@ -66,7 +66,7 @@ WORLDVIEW_APPROVAL_CRITERIA = {
     "display_name": "世界觀架構師",
     "criteria": {
         "structure": {
-            "required_fields": ["theme", "main_conflict", "worldview", "macro_outline", "multi_act_structure", "progressive_character_plan"],
+            "required_fields": ["theme", "main_conflict", "worldview", "macro_outline"],
             "description": "所有必填欄位必須完整填寫，不得為空"
         },
         "theme": {
