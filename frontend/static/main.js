@@ -296,34 +296,65 @@ function runDirectorDecision() {
     // Extract last generated prose snippet as context
     const lastProse = document.getElementById("activeStreamingText")?.textContent || "";
     
-    // Connect to Director Decision Stream
-    const eventSource = new EventSource(`/api/novels/${activeNovelId}/director-decision?is_one_click=${isOneClick}&last_output=${encodeURIComponent(lastProse)}&loop_count=${directorLoopCount}`);
-    
-    eventSource.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            
-            if (data.type === "thinking") {
-                if (!currentThinkBlock) {
-                    currentThinkBlock = document.createElement("div");
-                    currentThinkBlock.className = "terminal-line think-block";
-                    currentThinkBlock.innerHTML = "<strong>🧠 總監審查思維：</strong><br>";
-                    consoleDiv.appendChild(currentThinkBlock);
-                }
-                currentThinkBlock.innerHTML += escapeHtml(data.delta);
-                consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    // Connect to Director Decision Stream using unified streamAPI
+    const requestBody = {
+        novel_id: activeNovelId,
+        task_type: 'evaluate',
+        stage: 'evaluate',
+        scope: 'global',
+        options: { stream: true },
+        is_one_click: isOneClick,
+        last_output: lastProse,
+        loop_count: directorLoopCount
+    };
+
+    window.streamAPI(
+        `/api/novels/${activeNovelId}/director-decision`,
+        requestBody,
+        // onThinking
+        (delta) => {
+            if (delta === null) {
+                if (currentThinkBlock) currentThinkBlock.innerHTML = "<strong>🧠 總監審查思維：</strong><br>";
+                return;
             }
-            else if (data.type === "content") {
+            if (!currentThinkBlock) {
+                currentThinkBlock = document.createElement("div");
+                currentThinkBlock.className = "terminal-line think-block";
+                currentThinkBlock.innerHTML = "<strong>🧠 總監審查思維：</strong><br>";
+                consoleDiv.appendChild(currentThinkBlock);
+            }
+            currentThinkBlock.innerHTML += escapeHtml(delta);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        },
+        // onContent
+        (delta) => {
+            if (delta === null) {
                 currentThinkBlock = null;
-                // Output director dialogue to console log
-                logTerminal(`🗣️ [創意總監] ${data.delta}`);
+                return;
             }
-            else if (data.type === "decision_resolved") {
+            currentThinkBlock = null;
+            logTerminal(`🗣️ [創意總監] ${delta}`);
+        },
+        // onError
+        (err) => {
+            console.error("Director SSE connection error", err);
+        },
+        // onDone
+        async (success) => {
+            if (isOneClick) {
+                directorLoopCount++;
+            }
+            refreshNovelInfo();
+        },
+        // onRetrying
+        null,
+        // onEvent
+        (data) => {
+            if (data.type === "decision_resolved") {
                 const dec = data.decision;
                 logTerminal(`\n[決策] 總監批示結果：決策 - "${dec.decision}", 下一階段 - "${dec.next_stage}"`);
                 logTerminal(`[反饋] ${dec.feedback_to_agent}`);
                 
-                eventSource.close();
                 refreshNovelInfo();
                 
                 // If One-Click is active and decision was 'approve', automatically run next step!
@@ -333,22 +364,8 @@ function runDirectorDecision() {
                     }, 2000);
                 }
             }
-            else if (data.type === "done") {
-                if (isOneClick) {
-                    directorLoopCount++;
-                }
-                eventSource.close();
-                refreshNovelInfo();
-            }
-        } catch (e) {
-            console.error("Director SSE error", e);
         }
-    };
-    
-    eventSource.onerror = (e) => {
-        console.error("Director SSE connection error", e);
-        eventSource.close();
-    };
+    );
 }
 
 // Send interactive message to director

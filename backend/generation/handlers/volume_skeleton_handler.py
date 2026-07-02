@@ -57,7 +57,18 @@ def run_volume_skeleton_task(task: GenerationTaskRequest, context=None):
     prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
     indexes = _resolve_volume_indexes(task)
 
+    if task.task_type == "patch":
+        volume_index = indexes[0] if indexes else 1
+        return agent_runners.run_incremental_volume_skeleton(
+            task.novel_id,
+            volume_index,
+            prompt,
+            stream=task.options.stream,
+            force_json=True,
+        )
+
     if len(indexes) <= 1 and not task.options.batch and task.task_type != "batch_generate":
+
         volume_index = indexes[0]
         return agent_runners.run_volume_skeleton_planner(
             task.novel_id,

@@ -2,6 +2,111 @@
 // API WRAPPERS & STREAMING CORE
 // ==========================================
 
+function mapEndpointAndBody(endpoint, body) {
+    let mappedEndpoint = endpoint;
+    let mappedBody = body;
+
+    // Check if it matches the old agent endpoints or director-decision
+    const isAgent = endpoint.includes('/api/agent/');
+    const isDirectorDecision = endpoint.includes('/director-decision') && !endpoint.includes('/resolve-missing-index') && !endpoint.includes('/help');
+
+    if (isAgent || isDirectorDecision) {
+        mappedEndpoint = '/api/generation-task';
+        const newBody = {
+            novel_id: body ? body.novel_id : '',
+            task_type: 'generate',
+            stage: '',
+            scope: 'global',
+            target: {},
+            options: {
+                stream: (body && body.stream !== undefined) ? body.stream : true,
+                force_json: (body && body.force_json !== undefined) ? body.force_json : false
+            }
+        };
+
+        if (body) {
+            // copy all fields of body to newBody to preserve extra parameters
+            Object.assign(newBody, body);
+        }
+
+        if (isDirectorDecision) {
+            // Extracts novel_id from url if it was `/api/novels/{novel_id}/director-decision`
+            const match = endpoint.match(/\/api\/novels\/([^/]+)\/director-decision/);
+            if (match && match[1]) {
+                newBody.novel_id = match[1];
+            }
+            newBody.task_type = 'evaluate';
+            newBody.stage = 'evaluate';
+            newBody.scope = 'global';
+            newBody.target = {
+                volume_index: body ? body.volume_index : null,
+                chapter_index: body ? body.chapter_index : null
+            };
+            newBody.user_prompt = body ? body.user_prompt : '';
+        } else if (endpoint.includes('story-architect')) {
+            newBody.stage = 'worldview';
+            newBody.scope = 'global';
+        } else if (endpoint.includes('character-designer')) {
+            newBody.stage = 'characters';
+            newBody.scope = 'global';
+        } else if (endpoint.includes('foreshadowing-orchestrator')) {
+            newBody.stage = 'foreshadowing';
+            newBody.scope = 'global';
+        } else if (endpoint.includes('volumes-planner')) {
+            newBody.stage = 'volumes';
+            newBody.scope = 'global';
+        } else if (endpoint.includes('volume-skeleton')) {
+            newBody.stage = 'volume_skeleton';
+            newBody.scope = 'volume';
+            newBody.target = {
+                volume_index: body ? body.volume_index : null
+            };
+        } else if (endpoint.includes('write-chapter')) {
+            newBody.stage = 'writer';
+            newBody.scope = 'chapter';
+            newBody.target = {
+                chapter_index: body ? body.chapter_index : null
+            };
+        } else if (endpoint.includes('edit-chapter')) {
+            newBody.stage = 'editor';
+            newBody.task_type = 'refine';
+            newBody.scope = 'chapter';
+            newBody.target = {
+                chapter_index: body ? body.chapter_index : null
+            };
+            newBody.user_prompt = body ? body.edit_instructions : '';
+        } else if (endpoint.includes('copilot-chat')) {
+            newBody.stage = 'evaluate';
+            newBody.task_type = 'evaluate';
+            newBody.scope = 'global';
+            newBody.user_prompt = body ? body.user_message : '';
+            newBody.is_copilot_chat = true;
+        } else if (endpoint.includes('incremental-architect')) {
+            newBody.stage = 'worldview';
+            newBody.task_type = 'patch';
+            newBody.scope = 'global';
+            newBody.user_prompt = body ? body.user_hint : '';
+        } else if (endpoint.includes('incremental-character')) {
+            newBody.stage = 'characters';
+            newBody.task_type = 'patch';
+            newBody.scope = 'global';
+            newBody.user_prompt = body ? body.user_hint : '';
+        } else if (endpoint.includes('incremental-skeleton')) {
+            newBody.stage = 'volume_skeleton';
+            newBody.task_type = 'patch';
+            newBody.scope = 'volume';
+            newBody.target = {
+                volume_index: body ? body.volume_index : null
+            };
+            newBody.user_prompt = body ? body.user_hint : '';
+        }
+
+        mappedBody = newBody;
+    }
+
+    return { mappedEndpoint, mappedBody };
+}
+
 /**
  * 發送一般 API 請求（非串流）
  * @param {string} url - API 端點
@@ -10,15 +115,16 @@
  * @returns {Promise<object>} 解析後的 JSON 回應
  */
 export async function requestAPI(url, method = 'GET', body = null) {
+    const { mappedEndpoint, mappedBody } = mapEndpointAndBody(url, body);
     try {
         const options = {
-            method,
+            method: (mappedEndpoint !== url) ? 'POST' : method,
             headers: { 'Content-Type': 'application/json' }
         };
-        if (body) {
-            options.body = JSON.stringify(body);
+        if (mappedBody) {
+            options.body = JSON.stringify(mappedBody);
         }
-        const response = await fetch(url, options);
+        const response = await fetch(mappedEndpoint, options);
         
         if (!response.ok) {
             const errData = await response.json().catch(() => ({ detail: response.statusText }));
@@ -41,7 +147,11 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onDone - 完成回呼（可選），會收到一個布林參數 success
  * @param {function|null} onRetrying - 重試中回呼（可選）
  */
-export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying) {
+export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying, onEvent) {
+    const { mappedEndpoint, mappedBody } = mapEndpointAndBody(endpoint, body);
+    endpoint = mappedEndpoint;
+    body = mappedBody;
+
     const MAX_RETRIES = 10;
     let attempt = 0;
     let streamHadFinalError = false;
@@ -147,6 +257,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         if (dataStr === '[DONE]') continue;
                         const parsed = JSON.parse(dataStr);
                         
+                        if (typeof onEvent === 'function') {
+                            try { onEvent(parsed); } catch(err) { console.error(err); }
+                        }
+
                         if (parsed.type === 'reset') {
                             hasReset = true;
                         } else if (parsed.type === 'thinking') {
