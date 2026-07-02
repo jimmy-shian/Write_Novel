@@ -1,0 +1,78 @@
+diff --git a/agents.py b/agents.py
+index a123456..b654321 100644
+--- a/agents.py
++++ b/agents.py
+@@ -16,6 +16,7 @@ from functools import partial
+ import db
+ import diagnostics
+ import director_context
++from constraints import _load_retrospective_gold_rules, _safe_gold_rules_filename
+ from llm import call_llm_stream
+ 
+ from config import (
+@@ -55,42 +56,6 @@ from prompts.prompt_builder import (
+ )
+ 
+ 
+-def _safe_gold_rules_filename(title):
+-    return safe_filename(title)
+-
+-
+-def _load_retrospective_gold_rules(novel_id, limit=16000):
+-    novel = db.get_novel(novel_id)
+-    if not novel:
+-        return ""
+-    gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
+-    if not os.path.isdir(gold_rules_dir):
+-        return ""
+-
+-    safe_title = _safe_gold_rules_filename(novel.get("title", ""))
+-    candidates = []
+-    expected_name = f"{safe_title}_retrospective_gold_rules.md"
+-    expected_path = os.path.join(gold_rules_dir, expected_name)
+-    if os.path.isfile(expected_path):
+-        candidates.append(expected_path)
+-    else:
+-        for name in os.listdir(gold_rules_dir):
+-            if name.endswith("_retrospective_gold_rules.md") and name.startswith(safe_title):
+-                path = os.path.join(gold_rules_dir, name)
+-                if os.path.isfile(path):
+-                    candidates.append(path)
+-
+-    if not candidates:
+-        return ""
+-    latest = max(candidates, key=lambda path: os.path.getmtime(path))
+-    try:
+-        with open(latest, "r", encoding="utf-8") as f:
+-            content = f.read().strip()
+-    except OSError:
+-        return ""
+-    if len(content) <= limit:
+-        return content
+-    marker = f"\n\n...[創作金律過長，已省略 {len(content) - limit} 字，保留開頭與結尾]...\n\n"
+-    head_len = max(1, (limit - len(marker)) * 2 // 3)
+-    tail_len = max(1, limit - len(marker) - head_len)
+-    return content[:head_len] + marker + content[-tail_len:]
+-
+-
+ import time
+ 
+ async def safe_generator_wrapper(gen, novel_id=None):
+@@ -1356,7 +1321,7 @@ def run_copilot_chat(novel_id, user_message, stream=False, force_json=False):
+     messages = build_copilot_chat_messages(
+         novel_id, worldview_text, characters_text, plot_text, history_context, user_message, 
+         validation_report=validation_report,
+-        gold_rules_context=_load_retrospective_gold_rules(novel_id)
++        gold_rules_context=_load_retrospective_gold_rules(novel_id).get("content", "")
+     )
+     
+     db.save_chat_message(novel_id, "user", user_message, message_type="chat")
+@@ -1604,7 +1569,7 @@ def run_director_decision(novel_id, current_stage, user_prompt=None, stream=Fals
+         suggested_next_chapter=suggested_next_chapter,
+         chapter_index=chapter_index,
+         director_context_block=director_context_block,
+-        gold_rules_context=_load_retrospective_gold_rules(novel_id)
++        gold_rules_context=_load_retrospective_gold_rules(novel_id).get("content", "")
+     )
+     
+     stream = call_llm_stream("copilot", messages, stream=stream, force_json=force_json)

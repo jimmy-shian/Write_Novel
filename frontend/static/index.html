@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Novel Factory — 智能小說創作系統</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <!-- Google Fonts Imports -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="light-theme">
+    <div id="app-container">
+        
+        <!-- ================= LEFT SIDEBAR ================= -->
+        <aside id="sidebar-left">
+            <div class="sidebar-header">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24" width="50" height="50" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                    <span>Novel Factory</span>
+                </div>
+                <div class="header-actions" style="display: flex; align-items: center; gap: 8px;">
+                    <button id="btn-toggle-novels" class="btn btn-ghost btn-sm" title="收合/展開項目列表" style="padding: 6px; min-width: 36px;">
+                        <svg id="novels-toggle-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" style="transition: transform 0.2s ease;">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <button id="btn-new-novel" class="btn btn-primary btn-sm">
+                        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        <span>新小說</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="novels-list-container" id="novels-list-container">
+                <div class="sidebar-label">我的創作項目</div>
+                <ul id="novels-list">
+                    <!-- Loaded dynamically -->
+                    <li class="loading-placeholder">載入項目中...</li>
+                </ul>
+            </div>
+            
+            <div class="sidebar-footer">
+                <button id="btn-settings" class="btn btn-ghost btn-full">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>模型設定 & API Key</span>
+                </button>
+            </div>
+        </aside>
+        
+        <!-- ================= MAIN WORKSPACE ================= -->
+        <main id="workspace">
+            <!-- Active Novel Header -->
+            <header id="workspace-header">
+                <div class="workspace-header-top" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+                    <div class="novel-title-badge" style="margin-bottom: 0;">
+                        <span id="current-novel-genre">小說類型</span>
+                        <h1 id="current-novel-title">請選擇或建立一部小說</h1>
+                    </div>
+                    
+                    <div class="header-actions" id="novel-header-actions" style="display: none; gap: 8px;">
+                        <!-- 執行模式切換開關 -->
+                        <div class="execution-mode-toggle" title="一鍵執行模式：總監建議即為執行令 | 一般模式：總監提供建議由用戶決定">
+                            <span class="mode-label">一般模式</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-auto-execute" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="mode-label mode-auto">一鍵執行</span>
+                        </div>
+                        
+                        <!-- 匯出按鈕 -->
+                        <button id="btn-export-novel" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px;" title="將整本小說設定與正文匯出為 TXT 或是 Markdown">
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            <span>📦 匯出</span>
+                        </button>
+                        
+                        <!-- 一鍵啟動按鈕 -->
+                        <button id="btn-pipeline-execute" class="btn btn-primary btn-sm" style="display: flex; align-items: center; gap: 6px;">
+                            <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            <span>🚀 一鍵生成全書</span>
+                        </button>
+                    </div>
+                    
+                    <!-- 管道執行進度指示器 (隱藏直到執行開始) -->
+                    <div id="pipeline-progress-bar" class="pipeline-progress hidden">
+                        <div class="progress-stages">
+                            <div class="stage-indicator" data-stage="worldview">
+                                <div class="stage-icon">🌍</div>
+                                <div class="stage-label">世界觀</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="characters">
+                                <div class="stage-icon">👥</div>
+                                <div class="stage-label">角色</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <!-- 新增：伏筆與轉折獨立生成 -->
+                            <div class="stage-indicator" data-stage="foreshadowing">
+                                <div class="stage-icon">🎭</div>
+                                <div class="stage-label">伏筆轉折</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <!-- 新增：篇卷規劃設計 -->
+                            <div class="stage-indicator" data-stage="volumes">
+                                <div class="stage-icon">📚</div>
+                                <div class="stage-label">卷設定</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <!-- 四階段漏斗流 Stage 2 -->
+                            <div class="stage-indicator" data-stage="volume_skeleton">
+                                <div class="stage-icon">🦴</div>
+                                <div class="stage-label">骨架大綱</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="writer">
+                                <div class="stage-icon">✍️</div>
+                                <div class="stage-label">寫故事</div>
+                                <div class="stage-status"></div>
+                            </div>
+                            <div class="stage-connector"></div>
+                            <div class="stage-indicator" data-stage="editor">
+                                <div class="stage-icon">🖋️</div>
+                                <div class="stage-label">潤飾編輯</div>
+                                <div class="stage-status"></div>
+                            </div>
+                        </div>
+                        <div class="progress-director-message" id="director-message">🎬 AI 總監評估中...</div>
+                        <div id="sub-agent-status-panel" style="margin: 10px 0; padding: 10px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08); display: none;"></div>
+                    </div>
+                </div>
+                
+                <!-- Nav Tabs -->
+                <nav id="workspace-nav">
+                    <button class="nav-tab active" data-tab="worldview">🌍 世界觀設定</button>
+                    <button class="nav-tab" data-tab="characters">👥 角色 Bible</button>
+                    <button class="nav-tab" data-tab="plot">📋 劇情大綱</button>
+                    <button class="nav-tab" data-tab="writer">✍️ 分章寫作</button>
+                </nav>
+            </header>
+            
+            <!-- Workpanels Container -->
+            <div id="workpanels">
+                
+                <!-- 1. WORLDVIEW TAB -->
+                <section id="panel-worldview" class="workpanel">
+                    <div class="panel-actions-header">
+                        <div class="agent-badge">
+                            <span class="pulse-indicator"></span>
+                            <span>Story Architect Agent</span>
+                        </div>
+                        <div class="button-group">
+                            <button id="btn-architect-generate" class="btn btn-secondary btn-sm">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                </svg>
+                                <span>AI 自動規劃世界觀</span>
+                            </button>
+                            <button id="btn-worldview-save" class="btn btn-ghost btn-sm">保存修改</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-worldview" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Story Architect</strong> 正在分析與生成世界觀設定...
+                        </div>
+                    </div>
+                    
+                    <div class="editor-layout worldview-layout">
+                        <div class="editor-main" style="display: none;">
+                            <div class="sidebar-label">世界觀設定 (主要內容)</div>
+                            <textarea id="editor-worldview" placeholder="在此輸入世界觀、主題、核心衝突與結構。你也可以使用上方「AI 自動規劃世界觀」按鈕由 Story Architect Agent 幫忙起草..."></textarea>
+                        </div>
+                        <div class="editor-sidebar-seeds" style="flex: 1;">
+                            <div class="sidebar-label" style="display: flex; align-items: center; width: 100%; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                                <span style="font-weight: 600; font-size: var(--font-sm); display: flex; align-items: center; gap: 6px; color: var(--text-primary);">🌍 【全景世界觀設定】</span>
+                            </div>
+                            <div id="worldview-sections-container" class="worldview-sections strategy-cards-container" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;">
+                                <!-- Dynamic worldview sections here -->
+                                <div class="empty-placeholder">尚無世界觀內容。請在左側編輯器中輸入，或點擊「AI 自動規劃世界觀」生成。</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                
+                <!-- 2. CHARACTERS TAB -->
+                <section id="panel-characters" class="workpanel">
+                    <div class="panel-actions-header">
+                        <div class="agent-badge">
+                            <span class="pulse-indicator"></span>
+                            <span>Character Designer Agent</span>
+                        </div>
+                        <div class="button-group">
+                            <button id="btn-character-generate" class="btn btn-secondary btn-sm">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                                </svg>
+                                <span>AI 自動設計角色</span>
+                            </button>
+                            <button id="btn-character-add" class="btn btn-ghost btn-sm">新增角色</button>
+                            <button id="btn-characters-save" class="btn btn-ghost btn-sm">保存修改</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-characters" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Character Designer</strong> 正在分析與生成角色設定...
+                        </div>
+                    </div>
+                    
+                    <div class="editor-layout">
+                        <div class="editor-sidebar-json" style="display: none;">
+                            <div class="sidebar-label">角色 Bible (JSON 結構)</div>
+                            <textarea id="editor-characters-json" placeholder="角色設定以 JSON 格式儲存於此..."></textarea>
+                        </div>
+                        <div class="editor-preview-view" style="flex: 1;">
+                            <div class="sidebar-label">視覺化角色卡</div>
+                            <div id="characters-cards-grid" class="cards-grid">
+                                <!-- Cards injected here -->
+                                <div class="empty-placeholder">尚無角色。點擊「AI 自動設計角色」或「新增角色」開始。</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                
+                <!-- 3. PLOT OUTLINE TAB -->
+                <section id="panel-plot" class="workpanel">
+                    <div class="panel-actions-header">
+                        <div class="agent-badge">
+                            <span class="pulse-indicator"></span>
+                            <span>Plot Planner Agent</span>
+                        </div>
+                        <div class="button-group">
+                            <button id="btn-plot-generate" class="btn btn-secondary btn-sm">
+                                <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                                </svg>
+                                <span>AI 自動拆分章節</span>
+                            </button>
+                            <button id="btn-plot-add-volume" class="btn btn-ghost btn-sm">➕ 新增空白篇卷</button>
+                            <button id="btn-plot-add-chapter" class="btn btn-ghost btn-sm">新增空白章節</button>
+                            <button id="btn-plot-save" class="btn btn-ghost btn-sm">保存修改</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-plot" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Plot Planner</strong> 正在分析與生成章節大綱...
+                        </div>
+                    </div>
+                    
+                    <div class="editor-layout">
+                        <div class="editor-sidebar-json">
+                            <div class="sidebar-label">章節大綱大腦 (JSON 結構)</div>
+                            <textarea id="editor-plot-json" placeholder="大綱以 JSON 格式儲存於此..."></textarea>
+                        </div>
+                        <div class="editor-preview-view">
+                            <div class="sidebar-label">視覺化大綱時間軸</div>
+                            <div id="plot-timeline" class="timeline-container">
+                                <!-- Chapters injected here -->
+                                <div class="empty-placeholder">尚無章節規劃。點擊「AI 自動拆分章節」來建立整本大綱。</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 快捷時間軸導航列 (Step 1: 改為面板內絕對定位) -->
+                    <div id="plot-quick-timeline" style="position: absolute; right: 20px; top: 140px; width: 80px; max-height: 400px; overflow-y: auto; background: rgba(30, 30, 50, 0.95); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 8px 0px 8px 4px; z-index: 10; display: flex; flex-direction: column; gap: 2px; scrollbar-width: auto;">
+                        <!-- 章節導航按鈕將由 renderers.js 動態生成 -->
+                    </div>
+                </section>
+                
+                <!-- 4. WRITER TAB -->
+                <section id="panel-writer" class="workpanel">
+                    <!-- Agent 處理中指示器 -->
+                    <div id="agent-processing-writer" class="agent-processing-indicator hidden">
+                        <div class="processing-spinner"></div>
+                        <div class="processing-text">
+                            <strong>Chapter Writer</strong> 正在分析與撰寫正文內容...
+                        </div>
+                    </div>
+                    
+                    <div class="writer-split-container">
+                        
+                        <!-- Timeline Chapter Selector -->
+                        <div class="writer-chapters-sidebar">
+                            <div class="sidebar-label">章節清單</div>
+                            <ul id="writer-chapters-list">
+                                <!-- Injected dynamically -->
+                            </ul>
+                        </div>
+                        
+                        <!-- Main Distraction-free sheet -->
+                        <div class="writer-main-sheet">
+                            <div class="writer-top-bar">
+                                <div class="active-chapter-indicator">
+                                    <span id="active-chapter-title">第 0 章：請選擇一個章節</span>
+                                    <span id="active-chapter-status" class="status-pill status-draft">未撰寫</span>
+                                </div>
+                                <div class="button-group">
+                                    <button id="btn-write-chapter" class="btn btn-primary btn-sm" disabled>
+                                        <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 20h9"></path>
+                                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                        </svg>
+                                        <span>AI 撰寫本章正文</span>
+                                    </button>
+                                    <button id="btn-edit-chapter" class="btn btn-secondary btn-sm" disabled>
+                                        <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                        </svg>
+                                        <span>AI 編輯優化本章</span>
+                                    </button>
+                                    <button id="btn-prose-save" class="btn btn-ghost btn-sm" disabled>保存 prose</button>
+                                </div>
+                            </div>
+                            
+                            <div class="chapter-outline-preview-box" id="chapter-outline-preview">
+                                <span class="label">本章事件大綱摘要：</span>
+                                <p id="chapter-outline-summary-text">選擇左側章節查看 AI 大綱事件...</p>
+                            </div>
+                            
+                            <!-- Immersive sheet editor -->
+                            <div class="sheet-container">
+                                <textarea id="editor-prose" class="prose-font" placeholder="從左側選擇或新增一個章節，然後點擊上方「AI 撰寫本章正文」開始寫作..." disabled></textarea>
+                            </div>
+                        </div>
+                        
+                    </div>
+                </section>
+                
+            </div>
+        </main>
+        
+        <!-- ================= RIGHT COLLAPSIBLE CHAT ================= -->
+        <aside id="sidebar-right">
+            <!-- 右側拖曳調整寬度手把 -->
+            <div id="sidebar-right-resizer" class="sidebar-resizer">
+                <div class="resizer-handle">&lt;||&gt;</div>
+            </div>
+            
+            <!-- 頁籤列 -->
+            <nav class="sidebar-tabs">
+                <button class="sidebar-tab active" data-tab="director" id="tab-director">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    總監
+                </button>
+                <button class="sidebar-tab" data-tab="stream" id="tab-stream">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="4 17 10 11 4 5"></polyline>
+                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                    串流
+                </button>
+                <button id="btn-clear-chat" class="btn btn-ghost btn-xs" title="清空對話" style="margin-left:auto;opacity:0.7;border:none;background:none;color:var(--shadow-sm);padding:0 2px;font-size:var(--font-xl);border:1px solid var(--text-muted);">🗑</button>
+            </nav>
+            
+            <!-- 總監頁籤內容 -->
+            <div id="tab-content-director" class="tab-content active">
+                <div class="chat-header">
+                    <div class="agent-badge">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>Co-pilot 小說總監</span>
+                    </div>
+                </div>
+                
+                <div id="chat-messages-container">
+                    <!-- Chat messages injected here -->
+                </div>
+                
+                <div class="chat-input-area">
+                    <textarea id="chat-input" placeholder="對 AI 總監發出指令，指揮修改小說... (Enter 送出)"></textarea>
+                    <button id="btn-chat-send" class="btn btn-primary btn-sm">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 串流頁籤內容 -->
+            <div id="tab-content-stream" class="tab-content">
+                <div class="chat-header">
+                    <div class="agent-badge">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="4 17 10 11 4 5"></polyline>
+                            <line x1="12" y1="19" x2="20" y2="19"></line>
+                        </svg>
+                        <span>即時串流輸出</span>
+                    </div>
+                </div>
+                <div id="stream-content-area" class="stream-content-area">
+                    <div class="stream-empty-state">尚未有即時串流輸出</div>
+                    
+                    <!-- 搬移過來的 AI 思考區塊 -->
+                    <div id="ai-thinking-stream" class="thinking-stream-box hidden">
+                        <div class="stream-header">
+                            <div class="loader-spinner"></div>
+                            <span>AI 思考大腦中... (啟用 enable_thinking)</span>
+                        </div>
+                        <div id="ai-thinking-text" class="stream-body"></div>
+                    </div>
+                    
+                    <!-- 靜態串流終端區塊，統一顯示 -->
+                    <div id="stream-agent-label" style="padding: 6px 12px; background: rgba(255, 255, 255, 0.05); font-size: var(--font-2xs); border-radius: 4px; margin-bottom: 8px; color: var(--text-secondary); display: none; align-items: center; gap: 8px; font-weight: 500; border: 1px solid rgba(255,255,255,0.05);">
+                        <span class="pulse-indicator" style="width: 6px; height: 6px;"></span>
+                        <span id="stream-agent-label-text">當前 Agent: None</span>
+                    </div>
+                    <div id="stream-output-terminal" class="agent-stream-output hidden"></div>
+                </div>
+            </div>
+        </aside>
+        
+    </div>
+    
+    <!-- ================= MODALS & OVERLAYS ================= -->
+    
+    <!-- 1. SETTINGS MODAL -->
+    <div id="modal-settings" class="modal-overlay">
+        <div class="modal-card modal-large">
+            <div class="modal-header">
+                <h2>模型設置 & Agent 團隊 API 金鑰</h2>
+                <button class="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">
+                    在此處，您可以啟用並定義您專屬的 <strong>Agent 團隊</strong>。您可以為不同的 Agent 設置不同的 API Key、模型與參數。
+                    若特定的 Agent 欄位保留空白，系統將自動套用 <strong>Global (全域)</strong> 設置。
+                </p>
+                
+                <div class="settings-grid">
+                    <!-- Left: Select Agent to configure -->
+                    <div class="settings-nav">
+                        <button class="settings-tab-btn active" data-agent="global">🌐 Global (預設)</button>
+                        <button class="settings-tab-btn" data-agent="architect">1️⃣ Story Architect</button>
+                        <button class="settings-tab-btn" data-agent="character">2️⃣ Character Designer</button>
+                        <button class="settings-tab-btn" data-agent="volumes">📚 Volumes Planner</button>
+                        <button class="settings-tab-btn" data-agent="volume_skeleton">🦴 Skeleton Planner</button>
+                        <button class="settings-tab-btn" data-agent="writer">4️⃣ Chapter Writer</button>
+                        <button class="settings-tab-btn" data-agent="editor">5️⃣ Editor Agent</button>
+                        <button class="settings-tab-btn" data-agent="copilot">🧠 AI 總監 Copilot</button>
+                    </div>
+                    
+                    <!-- Right: Config Panel -->
+                    <div class="settings-fields-panel">
+                        <h3 id="settings-agent-title">Global 全域設置</h3>
+                        <input type="hidden" id="setting-agent-name" value="global">
+                        
+                        <div class="form-group">
+                            <label>API Key (NVIDIA / OpenAI / Custom)</label>
+                            <input type="text" id="setting-api-key" placeholder="輸入 API 金鑰 (例如 nvapi-xxx 或 sk-xxx)">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>API Base URL</label>
+                            <input type="text" id="setting-base-url" placeholder="http://127.0.0.1:4000/v1">
+                        </div>
+                        
+                        <!-- 參數由本地網關自動預設，此處隱藏以簡化介面 -->
+                        <div style="display: none;">
+                            <select id="setting-preset-model">
+                                <option value="">-- 手動輸入或選擇預設 --</option>
+                            </select>
+                            <input type="text" id="setting-model" value="patcher-main">
+                            <input type="number" id="setting-max-tokens" value="16384">
+                            <input type="number" step="0.05" id="setting-temperature" value="1.0">
+                            <input type="number" step="0.01" id="setting-top-p" value="0.95">
+                            <input type="checkbox" id="setting-enable-thinking">
+                        </div>
+                        
+                        <button id="btn-save-agent-settings" class="btn btn-primary btn-full mt-4">儲存本項設定</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 2. CREATE NOVEL MODAL -->
+    <div id="modal-create-novel" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>創立新小說專案</h2>
+                <button class="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>小說書名</label>
+                    <input type="text" id="input-novel-title" placeholder="例如：天衍九州：斬仙路">
+                </div>
+                <div class="form-group">
+                    <label>題材類型</label>
+                    <input type="text" id="input-novel-genre" placeholder="例如：仙俠 / 科幻 / 都市 / 玄幻">
+                </div>
+                <div class="form-group">
+                    <label>風格基調</label>
+                    <input type="text" id="input-novel-style" placeholder="例如：史詩宏大、偏硬科幻、黑暗殘酷、幽默詼諧">
+                </div>
+                <button id="btn-submit-create-novel" class="btn btn-primary btn-full mt-4">開始專案</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 3. ACTION INSTRUCTION DRAWER (AUTOMATIC PROMPT INTERACTION) -->
+    <div id="drawer-prompt" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="prompt-drawer-title">引導 AI 生成</h2>
+                <button class="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p id="prompt-drawer-desc">請在此輸入您的小說初步構想、角色條件或大綱調整指令：</p>
+                <div class="form-group">
+                    <textarea id="prompt-drawer-textarea" rows="6" placeholder="輸入引導詞，例如：這是一部講述機械飛升、底層賽博朋克武士向財閥復仇的小說。基調冰冷血腥..."></textarea>
+                </div>
+                <button id="btn-prompt-drawer-submit" class="btn btn-primary btn-full mt-2">啟動 Agent 運算</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 4. SEED MODAL (新增/編輯伏筆) -->
+    <div id="modal-seed" class="modal-overlay">
+        <div class="modal-card modal-small">
+            <div class="modal-header">
+                <h2 id="seed-modal-title">新增伏筆</h2>
+                <button class="btn-close-modal" onclick="closeSeedModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>伏筆內容</label>
+                    <textarea id="input-seed-content" rows="4" placeholder="輸入伏筆內容..."></textarea>
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 16px;">
+                    <button id="btn-seed-modal-cancel" class="btn btn-ghost" onclick="closeSeedModal()" style="flex: 1;">取消</button>
+                    <button id="btn-seed-modal-confirm" class="btn btn-primary" style="flex: 1;">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. REUSABLE CUSTOM DIALOG MODAL (PREMIUM UI DIALOGUE) -->
+    <div id="modal-custom-dialog" class="modal-overlay">
+        <div class="modal-card modal-small" style="max-width: 480px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 22, 33, 0.85); backdrop-filter: blur(16px); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); border-radius: 16px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <h2 id="custom-dialog-title" style="font-size: var(--font-base); font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff;">提示</h2>
+                <button class="btn-close-modal" onclick="closeCustomDialog()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-xs); padding: 4px; transition: color 0.2s;">✕</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <p id="custom-dialog-message" style="margin-bottom: 16px; font-size: var(--font-2xs); line-height: 1.6; color: rgb(75, 75, 75); white-space: pre-wrap;"></p>
+                
+                <!-- Input field container for prompt type -->
+                <div id="custom-dialog-input-container" class="form-group" style="display: none; margin-bottom: 16px;">
+                    <textarea id="custom-dialog-textarea" rows="4" style="width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(12, 12, 18, 0.7); color: #fff; padding: 12px; font-size: var(--font-2xs); resize: vertical; outline: none; transition: border-color 0.2s;" placeholder="請輸入內容..."></textarea>
+                </div>
+                
+                <!-- Options buttons container for multiple-choice style -->
+                <div id="custom-dialog-options-container" style="display: none; flex-direction: column; gap: 10px; margin-bottom: 16px;">
+                    <!-- Options buttons will be dynamically injected here -->
+                </div>
+                
+                <div style="display: flex; gap: 12px; margin-top: 24px;" id="custom-dialog-standard-actions">
+                    <button id="btn-custom-dialog-cancel" class="btn btn-ghost" onclick="closeCustomDialog()" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">取消</button>
+                    <button id="btn-custom-dialog-confirm" class="btn btn-primary" style="flex: 1; padding: 12px; border-radius: 8px; font-weight: 500;">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Global Notification toast -->
+    <div id="toast" class="hidden">儲存成功</div>
+    
+    <!-- JS modules -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
+
+

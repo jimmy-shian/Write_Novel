@@ -1,0 +1,484 @@
+import { state } from '../core/state.js';
+import { el } from '../core/dom.js';
+import { showToast } from '../core/toast.js';
+import { showAgentProcessingIndicator, hideAgentProcessingIndicator } from '../pipeline/agentProcessing.js';
+import { renderSubAgentStatus } from '../pipeline/status_panel.js';
+
+// 顯示/隱藏管道進度條與子代理人面板
+export function showPipelineProgress(show) {
+    const progressBar = document.getElementById('pipeline-progress-bar');
+    if (progressBar) {
+        if (show) {
+            progressBar.classList.remove('hidden');
+        } else {
+            progressBar.classList.add('hidden');
+        }
+    }
+    const statusPanel = document.getElementById('sub-agent-status-panel');
+    if (statusPanel) {
+        if (show) {
+            statusPanel.style.display = 'block';
+        } else {
+            statusPanel.style.display = 'none';
+        }
+    }
+}
+
+// 心跳機制
+export function startPipelineHeartbeat(novelId) {
+    state.pipelineStartTime = Date.now();
+    state.receiveFinishCommand = false;
+    
+    if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+    
+    state.heartbeatTimer = setInterval(async () => {
+        const elapsed = Date.now() - state.pipelineStartTime;
+        if (elapsed > state.maxPipelineTimeout) {
+            clearInterval(state.heartbeatTimer);
+            showToast('⚠️ 管線已超時 (10 分鐘)，自動暫停');
+            abortPipeline();
+            return;
+        }
+        
+        try {
+            const res = await fetch(`/api/novels/${novelId}/pipeline-status`);
+            const data = await res.json();
+            if (!data.running) {
+                showToast('⚠️ 後端管線已中斷');
+                abortPipeline();
+            }
+        } catch (e) {
+            // ignore transient network errors
+        }
+    }, 15000);
+}
+
+export function stopPipelineHeartbeat() {
+    if (state.heartbeatTimer) {
+        clearInterval(state.heartbeatTimer);
+        state.heartbeatTimer = null;
+    }
+}
+
+export function abortPipeline() {
+    state.isPipelineRunning = false;
+    state.receiveFinishCommand = true;
+    stopPipelineHeartbeat();
+    showPipelineProgress(false);
+}
+
+// 更新管道階段指示器的狀態
+export function updatePipelineStage(stage, status) {
+    const stageIndicator = document.querySelector(`.stage-indicator[data-stage="${stage}"]`);
+    if (!stageIndicator) return;
+    
+    stageIndicator.classList.remove('pending', 'running', 'done', 'error');
+    if (status) {
+        stageIndicator.classList.add(status);
+    }
+    
+    const statusDiv = stageIndicator.querySelector('.stage-status');
+    if (statusDiv) {
+        if (status === 'running') {
+            statusDiv.innerHTML = '<span class="loader-spinner"></span>';
+        } else if (status === 'done') {
+            statusDiv.textContent = '✓';
+        } else if (status === 'error') {
+            statusDiv.textContent = '✗';
+        } else {
+            statusDiv.textContent = '';
+        }
+    }
+}
+
+// 更新總監訊息
+export function updateDirectorMessage(message) {
+    const directorMsg = document.getElementById('director-message');
+    if (directorMsg) {
+        directorMsg.textContent = message;
+    }
+}
+
+// 在 textarea 中顯示「生成中...」告示
+export function showGeneratingIndicator(tabName) {
+    let textarea = null;
+    if (tabName === 'worldview') {
+        textarea = el.editorWorldview;
+    } else if (tabName === 'characters') {
+        textarea = el.editorCharactersJson;
+    } else if (tabName === 'plot') {
+        textarea = el.editorPlotJson;
+    } else if (tabName === 'writer') {
+        textarea = el.editorProse;
+    }
+    if (textarea) {
+        textarea.value = '🔄 AI 正在生成中，請稍候...\n\n';
+        textarea.disabled = true;
+    }
+}
+
+function getChapterIndex(outline, fallbackIndex) {
+    const raw = outline?.chapter_index;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackIndex;
+}
+
+function isPlaceholderOutline(outline) {
+    if (!outline || typeof outline !== 'object') return true;
+    const parts = [
+        outline.title,
+        outline.summary,
+        outline.purpose,
+        outline.cliffhanger,
+        outline.scene,
+        ...(Array.isArray(outline.events)
+            ? outline.events.flatMap(event => typeof event === 'object'
+                ? [event.scene, event.action, event.consequence]
+                : [String(event)])
+            : [])
+    ].filter(Boolean).join('\n').toLowerCase();
+
+    return [
+        '保底',
+        '占位',
+        '佔位',
+        'placeholder',
+        '命運波折之章',
+        '推進核心衝突',
+        '推動大綱情節發展',
+        '主角面臨新考驗'
+    ].some(token => parts.includes(token.toLowerCase()));
+}
+
+function isShallowOutline(outline) {
+    if (!outline || typeof outline !== 'object') return true;
+    const summary = (outline.chapter_summary || outline.summary || '').toString().trim();
+    const scene = (outline.scene || outline.chapter_scene || '').toString().trim();
+    const purpose = (outline.purpose || '').toString().trim();
+    const cliffhanger = (outline.cliffhanger || '').toString().trim();
+    const events = Array.isArray(outline.events) ? outline.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
+
+    const hasSummary = summary.length >= 20;
+    const hasExtraDetail = scene.length >= 20 || purpose.length >= 20 || cliffhanger.length >= 20 || events;
+    return !(hasSummary && hasExtraDetail);
+}
+
+function getPlotReviewBatchSize() {
+    const raw = state.settingsData?.plot?.plot_review_batch_size
+        ?? state.settingsData?.global?.plot_review_batch_size
+        ?? state.plotReviewBatchSize
+        ?? 3;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
+function isDetailedOutline(outline) {
+    const events = outline?.events || outline?.scenes;
+    return Array.isArray(events) && events.length > 0;
+}
+
+function getDetailedPlotChapterCount() {
+    const chapters = state.currentNovelData?.plot?.chapters || [];
+    return chapters.filter(isDetailedOutline).length;
+}
+
+function getExpectedPlotChapterCount(fallbackChapterIndex) {
+    const vols = state.currentNovelData?.volumes || [];
+    const planned = vols.reduce((sum, v) => {
+        const count = Number.parseInt(v.chapter_count, 10);
+        return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+    }, 0);
+    if (planned > 0) return planned;
+
+    const skeletonMax = vols.reduce((maxIdx, v) => {
+        try {
+            const parsed = typeof v.chapters_outline === 'string' ? JSON.parse(v.chapters_outline) : v.chapters_outline;
+            if (!Array.isArray(parsed)) return maxIdx;
+            return Math.max(maxIdx, ...parsed.map(ch => Number.parseInt(ch.chapter_index ?? ch.chapter ?? ch.chapter_number ?? ch.index ?? ch.id, 10) || 0));
+        } catch (e) {
+            return maxIdx;
+        }
+    }, 0);
+    return skeletonMax || (fallbackChapterIndex + getPlotReviewBatchSize());
+}
+
+function shouldReviewPlotBatch(currentChapterIndex) {
+    return true;
+}
+
+function buildDirectorDrivenPrompt(basePrompt, decision = null) {
+    const originalPrompt = (basePrompt || '').trim();
+    const sections = [];
+
+    if (originalPrompt) {
+        sections.push(`【使用者原始創作需求】\n${originalPrompt}`);
+    }
+
+    if (decision) {
+        const agentPrompt = (decision.agent_prompt || decision.hint || '').trim();
+        const agentContext = (decision.agent_context || '').trim();
+        const userIntentSummary = (decision.user_intent_summary || '').trim();
+
+        if (agentPrompt && agentPrompt !== originalPrompt) {
+            sections.push(`【總監指定任務】\n${agentPrompt}`);
+        }
+        if (agentContext && agentContext !== originalPrompt) {
+            sections.push(`【總監指定素材】\n${agentContext}`);
+        }
+        if (userIntentSummary) {
+            sections.push(`【總監理解的作者目標】\n${userIntentSummary}`);
+        }
+    }
+
+    return sections.join('\n\n').trim();
+}
+
+// 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
+export async function executePipelineStage(stage, userPrompt, decision = null) {
+    // Confirmation gate for volumes stage in generate (non-patch) mode
+    if (stage === 'volumes') {
+        const chapters = state.currentNovelData?.chapters || [];
+        const chapterCount = chapters.length || 0;
+        const mode = decision?.mode || 'generate';
+        if (chapterCount > 0 && mode !== 'patch') {
+            const confirmed = window.confirm(`重新產生篇卷將刪除 ${chapterCount} 章已寫內容，確定嗎？`);
+            if (!confirmed) {
+                showToast('已取消篇卷重新生成');
+                updatePipelineStage('volumes', 'error');
+                return;
+            }
+        }
+    }
+    return _executePipelineStageWithBody(stage, userPrompt, decision);
+}
+
+async function _executePipelineStageWithBody(stage, userPrompt, decision = null) {
+    return new Promise((resolve) => {
+        let endpoint, body, targetTextarea;
+        let agentName = '';
+        const directorDrivenPrompt = buildDirectorDrivenPrompt(userPrompt, decision);
+        switch (stage) {
+            case 'worldview':
+                endpoint = '/api/agent/story-architect';
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                targetTextarea = el.editorWorldview;
+                state.activeTab = 'worldview';
+                agentName = 'Story Architect (故事結構架構師)';
+                break;
+            case 'characters':
+                endpoint = '/api/agent/character-designer';
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                targetTextarea = el.editorCharactersJson;
+                state.activeTab = 'characters';
+                agentName = 'Character Designer (角色設計大師)';
+                break;
+            case 'foreshadowing':
+                endpoint = '/api/agent/foreshadowing-orchestrator';
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                targetTextarea = el.editorWorldview;
+                state.activeTab = 'worldview';
+                agentName = 'Foreshadowing Orchestrator (伏筆與轉折編織師)';
+                break;
+            case 'volumes':
+                endpoint = '/api/agent/volumes-planner';
+                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt, confirm_wipe: true };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = 'Volumes Planner (篇卷結構規劃師)';
+                break;
+
+            case 'volume_skeleton': {
+                const volIdx = decision?.volume_index || state.activeVolumeIndex || 1;
+                state.activeVolumeIndex = volIdx;
+                const hint = decision?.hint || '';
+                
+                endpoint = '/api/agent/volume-skeleton';
+                body = { 
+                    novel_id: state.currentNovelId, 
+                    volume_index: volIdx, 
+                    user_prompt: buildDirectorDrivenPrompt(hint || userPrompt, decision)
+                };
+                targetTextarea = el.editorPlotJson;
+                state.activeTab = 'plot';
+                agentName = `Volume Skeleton Planner (第 ${volIdx} 卷骨架規劃)`;
+                break;
+            }
+            case 'writer':
+                endpoint = '/api/agent/write-chapter';
+                body = {
+                    novel_id: state.currentNovelId,
+                    chapter_index: state.activeChapterIndex || 1,
+                    user_prompt: directorDrivenPrompt || undefined
+                };
+                targetTextarea = el.editorProse;
+                state.activeTab = 'writer';
+                agentName = 'Chapter Writer (小說正文寫作作家)';
+                // 標記正在寫作此章節
+                state.currentlyWritingChapterIndex = state.activeChapterIndex || 1;
+                break;
+            case 'editor':
+                endpoint = '/api/agent/edit-chapter';
+                body = {
+                    novel_id: state.currentNovelId,
+                    chapter_index: state.activeChapterIndex || 1,
+                    edit_instructions: directorDrivenPrompt || undefined
+                };
+                targetTextarea = el.editorProse;
+                state.activeTab = 'editor';
+                agentName = 'Chapter Editor (小說正文編輯作家)';
+                break;
+            default:
+                resolve();
+                return;
+        }
+        window.renderActiveTab();
+        if (targetTextarea) targetTextarea.value = '';
+        showToast(`🚀 正在啟動 ${stage} Agent...`);
+        showAgentProcessingIndicator(stage, agentName);
+        let failed = false;
+        // 保存寫作章節索引用於閉包
+        const writingChapterIndex = state.currentlyWritingChapterIndex;
+        // Initialize buffer
+        if (stage === 'writer') {
+            state.writingBuffer = "";
+        }
+
+        // 即時狀態跟蹤與心跳開始
+        state.directorSubAgentStatus[stage] = 'running';
+        renderSubAgentStatus(state.directorSubAgentStatus);
+        startPipelineHeartbeat(state.currentNovelId);
+
+        // 🚀 使用具備自動重試與對話框同步紀錄的守護引擎
+        window.streamAPIWithRetry(
+            endpoint,
+            body,
+            (delta) => {
+                if (delta === null) {
+                    window.updateAgentStreamOutput(stage, null, 'thinking');
+                    return;
+                }
+                window.updateAgentStreamOutput(stage, delta, 'thinking');
+            },
+            (delta) => {
+                if (delta === null) {
+                    // Reset signal: clear the textarea/buffer
+                    if (targetTextarea) {
+                        if (stage === 'writer') {
+                            state.writingBuffer = "";
+                        }
+                        targetTextarea.value = '';
+                    }
+                    return;
+                }
+                if (targetTextarea) {
+                    if (stage === 'writer') {
+                        state.writingBuffer = (state.writingBuffer || "") + delta;
+                        
+                        let proseVal = state.writingBuffer;
+                        let thinkingVal = "";
+                        const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
+                        let splitIndex = -1;
+                        for (const sw of specialWords) {
+                            const idx = state.writingBuffer.indexOf(sw);
+                            if (idx !== -1) {
+                                splitIndex = idx;
+                                thinkingVal = state.writingBuffer.substring(0, idx).trim();
+                                proseVal = state.writingBuffer.substring(idx + sw.length).trim();
+                                break;
+                            }
+                        }
+                        if (splitIndex === -1) {
+                            thinkingVal = state.writingBuffer;
+                            proseVal = "";
+                        }
+                        
+                        if (state.activeChapterIndex === writingChapterIndex) {
+                            targetTextarea.value = proseVal;
+                            if (typeof window.smartScrollToBottom === 'function') {
+                                window.smartScrollToBottom(targetTextarea, false);
+                            } else {
+                                targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                            }
+                            
+                            // Update thinking preview real-time
+                            const thinkingPreviewText = document.getElementById('chapter-thinking-preview-text');
+                            const thinkingPreview = document.getElementById('chapter-thinking-preview');
+                            if (thinkingPreview && thinkingPreviewText && thinkingVal.trim()) {
+                                thinkingPreview.classList.remove('hidden');
+                                thinkingPreviewText.textContent = thinkingVal;
+                            }
+                        }
+                    } else {
+                        targetTextarea.value += delta;
+                        if (typeof window.smartScrollToBottom === 'function') {
+                            window.smartScrollToBottom(targetTextarea, false);
+                        } else {
+                            targetTextarea.scrollTop = targetTextarea.scrollHeight;
+                        }
+                    }
+                }
+                window.updateAgentStreamOutput(stage, delta, 'content');
+            },
+            (msg) => {
+                failed = true;
+                state.directorSubAgentStatus[stage] = 'error';
+                renderSubAgentStatus(state.directorSubAgentStatus);
+                stopPipelineHeartbeat();
+                const wasRunning = state.isPipelineRunning;
+                state.isPipelineRunning = false;
+                state.currentlyWritingChapterIndex = null;
+                window.updateAgentStreamOutput(stage, `\n[Error: ${msg}]`);
+                showToast(`${stage} Agent 執行失敗: ${msg}`);
+                updatePipelineStage(stage, 'error');
+                hideAgentProcessingIndicator(stage);
+                
+                if (wasRunning) {
+                    // 啟用總監自癒容錯機制，將錯誤反饋給總監
+                    showToast("⚠️ 偵測到管線執行錯誤，正在請求總監進行決策自癒修正...");
+                    setTimeout(async () => {
+                        state.isPipelineRunning = true;
+                        showPipelineProgress(true);
+                        const errorPrompt = `【⚠️ 系統錯誤自癒回報】：\n在執行「${stage}」階段（目標章節：第 ${state.activeChapterIndex || 1} 章 / 目標卷：第 ${state.activeVolumeIndex || 1} 卷）時，底層 Agent 發生錯誤崩潰。\n錯誤訊息：${msg}\n\n這通常是由於目標章節尚未寫作（例如在無正文的情況下調用 editor），或者大綱中缺少對應的骨架。\n請仔細審視上述「系統底層剛性校驗報告」並分析本錯誤，然後修正你的下一步決策 JSON，切勿重複相同的錯誤指令！`;
+                        const nextDecision = await window.runDirectorDecision(stage, errorPrompt);
+                        await window.executeDirectorAction(nextDecision, userPrompt);
+                        resolve();
+                    }, 3000);
+                } else {
+                    resolve();
+                }
+            },
+            async () => {
+                state.currentlyWritingChapterIndex = null;
+                if (failed) {
+                    state.directorSubAgentStatus[stage] = 'error';
+                    renderSubAgentStatus(state.directorSubAgentStatus);
+                    stopPipelineHeartbeat();
+                    resolve();
+                    return;
+                }
+                state.directorSubAgentStatus[stage] = 'done';
+                renderSubAgentStatus(state.directorSubAgentStatus);
+                stopPipelineHeartbeat();
+                updatePipelineStage(stage, 'done');
+                hideAgentProcessingIndicator(stage);
+                await window.loadNovelDetails(state.currentNovelId);
+                if (state.isPipelineRunning && !state.receiveFinishCommand) {
+                    showToast(`${stage} 完成，正在請求 AI 總監評估...`);
+                    const nextDecision = await window.runDirectorDecision(stage);
+                    if (nextDecision && nextDecision.action === 'FINISH') {
+                        state.receiveFinishCommand = true;
+                        abortPipeline();
+                    } else {
+                        await window.executeDirectorAction(nextDecision, userPrompt);
+                    }
+                }
+                resolve();
+            },
+            10,
+            async () => {
+                failed = false;
+                state.isPipelineRunning = true;
+            }
+        );
+    });
+}
