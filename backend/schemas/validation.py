@@ -441,6 +441,50 @@ def suggest_segment_split(indexes: list, suggested_size: int = None) -> tuple:
     return (first_half, second_half)
 
 
+def resolve_single_volume_index(task: "GenerationTaskRequest") -> int:
+    """
+    解析出單一目標卷號。
+    優先順序：task.target.volume_index > task.target.selection[0] > DB 第一個缺失卷 > 1
+    注意：不再自動批量遍歷所有缺失卷，卷的派發順序完全由總監決定。
+    """
+    from backend import db
+    from backend.generation.task_schema import GenerationTaskRequest
+    
+    # 1. 直接指定 volume_index
+    if task.target.volume_index is not None:
+        try:
+            return int(task.target.volume_index)
+        except Exception:
+            pass
+
+    # 2. 從 selection 取第一個
+    if isinstance(task.target.selection, list) and task.target.selection:
+        item = task.target.selection[0]
+        raw_idx = item.get("volume_index") or item.get("volume") or item.get("id") if isinstance(item, dict) else item
+        try:
+            return int(raw_idx)
+        except Exception:
+            pass
+
+    # 3. DB 第一個缺失骨架的卷（fallback）
+    volumes = db.get_volumes(task.novel_id) or []
+    for vol in volumes:
+        try:
+            idx = int(vol.get("volume_index", 0))
+        except Exception:
+            continue
+        if not vol.get("chapters_outline"):
+            return idx
+
+    # 4. 第一卷
+    if volumes:
+        try:
+            return int(volumes[0].get("volume_index", 1))
+        except Exception:
+            pass
+    return 1
+
+
 
 # =============================================================================
 # Worldview JSON Extraction (世界觀 JSON 安全提取)

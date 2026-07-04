@@ -5689,7 +5689,7 @@ window.deletePlotChapter = function(chapterIndex) {
 // Expose pipeline & streaming helpers to window for pipeline.js
 window.streamAPI = streamAPI;
 
-// 總監分段調度：處理 partial_state（即時回填 volumes）與 status（即時進度）事件
+// 總監分段調度：處理 partial_state（即時回填 volumes）、status（即時進度）與 need_characters（角色不足提醒）事件
 window.handleGenerationEvent = function(parsed, endpoint) {
     if (!parsed) return;
     try {
@@ -5710,6 +5710,14 @@ window.handleGenerationEvent = function(parsed, endpoint) {
             } else if (typeof updateDirectorMessage === 'function') {
                 updateDirectorMessage(parsed.message);
             }
+        } else if (parsed.type === 'need_characters') {
+            // 骨架生成前偵測到角色不足，記錄供總監上下文使用
+            state.skeletonNeedsCharacters = {
+                volume_index: parsed.volume_index,
+                current_char_count: parsed.current_char_count,
+                minimum_required: parsed.minimum_required
+            };
+            showToast(`⚠️ 角色不足偵測：第 ${parsed.volume_index} 卷骨架需要至少 ${parsed.minimum_required} 個角色`);
         }
     } catch (e) {
         console.error('handleGenerationEvent failed:', e);

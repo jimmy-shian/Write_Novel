@@ -285,8 +285,9 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                             if (typeof onError === 'function') onError(parsed.message, false);
                         } else if (parsed.type === 'retrying') {
                             if (typeof onRetrying === 'function') onRetrying(parsed.message);
-                        } else if (parsed.type === 'partial_state' || parsed.type === 'status') {
+                        } else if (parsed.type === 'partial_state' || parsed.type === 'status' || parsed.type === 'need_characters') {
                             // 總監分段調度：即時回填與進度事件走全域 hook
+                            // need_characters 也需走同一管線以觸發角色補充提醒
                             try {
                                 if (typeof window.handleGenerationEvent === 'function') {
                                     window.handleGenerationEvent(parsed, endpoint);

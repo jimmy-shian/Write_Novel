@@ -32,6 +32,6 @@ export const state = {
     directorSubAgentStatus: {},     // { agentName: "running" | "done" | "error" }
     pipelineStartTime: null,        // 管線啟動時間戳
     heartbeatTimer: null,           // keep-alive 定時器
-    maxPipelineTimeout: 6000000,     // 10 分鐘 (ms)
+    maxPipelineTimeout: 600000,     // 10 分鐘 (ms)
     receiveFinishCommand: false     // 前端是否收到 finish 指令
 };

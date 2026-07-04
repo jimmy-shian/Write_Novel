@@ -50,6 +50,7 @@ from backend.schemas.validation import (
     extract_chapters_in_range,
     suggest_segment_split,
     extract_worldview_dict_preserving,
+    resolve_single_volume_index,
 )
 
 # --- 提示詞組裝層 (Prompt Assembly) ---
@@ -895,6 +896,7 @@ def _resolve_segment_chapter_range(task, volume_index):
     selection = getattr(task.target, "selection", None)
     if isinstance(selection, list) and selection:
         idxs = []
+        has_chapter_range_in_selection = False
         for item in selection:
             if isinstance(item, dict):
                 raw = item.get("chapter_index") or item.get("chapter") or item.get("index")
@@ -907,6 +909,7 @@ def _resolve_segment_chapter_range(task, volume_index):
                         pass
                 rr = item.get("chapter_range") or item.get("range")
                 if isinstance(rr, list) and len(rr) == 2:
+                    has_chapter_range_in_selection = True
                     try:
                         lo, hi = int(rr[0]), int(rr[1])
                         idxs.extend(range(max(start_ch, lo), min(end_ch, hi) + 1))
@@ -919,6 +922,8 @@ def _resolve_segment_chapter_range(task, volume_index):
                         idxs.append(v)
                 except Exception:
                     pass
+        # 如果 selection 中只有 chapter_range 而無具體 chapter_index，後端仍按 range 展開
+        # 但前端傳來的 selection 通常已包含具體 chapter_index 列表，優先使用
         if idxs:
             return sorted(set(idxs))
 
@@ -929,6 +934,13 @@ def _resolve_segment_chapter_range(task, volume_index):
                 return [v]
         except Exception:
             pass
+
+    # For segment_complete, we should NOT fall back to all missing chapters
+    # as completion mode is meant for bounded suffixes only.
+    # The task should carry explicit chapter_range/selection.
+    if task.task_type == "segment_complete":
+        # Return empty to signal missing range; caller will handle as error
+        return []
 
     missing = _volume_missing_chapter_indexes(all_vols, volume_index)
     return missing
@@ -1030,7 +1042,7 @@ def run_volume_skeleton_segment(task, context=None):
     """
     from backend.models.parsers import extract_json_block
     novel_id = task.novel_id
-    volume_index = _resolve_single_volume_index(task)
+    volume_index = resolve_single_volume_index(task)
     volume_index = int(volume_index)
 
     # 前置角色數量檢查（沿用既有保護）
@@ -1146,7 +1158,7 @@ def run_volume_skeleton_completion(task, context=None):
     """
     from backend.models.parsers import extract_json_block
     novel_id = task.novel_id
-    volume_index = _resolve_single_volume_index(task)
+    volume_index = resolve_single_volume_index(task)
     volume_index = int(volume_index)
     prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
 
