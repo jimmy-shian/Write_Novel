@@ -206,6 +206,11 @@ def api_heal_rollback(novel_id: str, payload: HealRollbackPayload):
 def api_pipeline_status(novel_id: str):
     from backend import db
     lock_info = db.get_pipeline_lock_status(novel_id)
+    if lock_info is not None:
+        try:
+            db.update_pipeline_heartbeat(novel_id)
+        except Exception:
+            pass
     return {"running": lock_info is not None, "lock_info": lock_info}
 
 @router.post("/novels/{novel_id}/chapters/restore-backup")

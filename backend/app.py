@@ -11,6 +11,20 @@ if hasattr(sys.stderr, 'reconfigure'):
     except:
         pass
 
+# Set console title to the port number on Windows
+if sys.platform == 'win32':
+    try:
+        import ctypes
+        port = "8000"  # Default uvicorn port
+        for i, arg in enumerate(sys.argv):
+            if arg in ("--port", "-p") and i + 1 < len(sys.argv):
+                port = sys.argv[i + 1]
+                break
+        ctypes.windll.kernel32.SetConsoleTitleW(port)
+    except Exception:
+        pass
+
+
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
