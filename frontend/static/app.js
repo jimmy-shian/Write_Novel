@@ -745,6 +745,25 @@ async function executeDirectorAction(decision, userPrompt) {
             break;
         }
         
+        case 'SEGMENT_GENERATE':
+        case 'SEGMENT_COMPLETE': {
+            // 總監分段調度：生成/補全指定卷的某一段章節
+            const volIdx = decision.volume_index || state.activeVolumeIndex || 1;
+            state.activeVolumeIndex = parseInt(volIdx) || 1;
+            updatePipelineStage('volume_skeleton', 'running');
+            updateDirectorMessage(`🏗️ 總監分段調度：${action} 第 ${state.activeVolumeIndex} 卷骨架…`);
+
+            // 組裝章節範圍；decision.chapter_range 或 decision.selection 擇一
+            const segDecision = {
+                ...decision,
+                target: 'volume_skeleton',
+                volume_index: state.activeVolumeIndex,
+                task_type: action === 'SEGMENT_COMPLETE' ? 'segment_complete' : 'segment_generate',
+            };
+            await executePipelineStage('volume_skeleton', userPrompt, segDecision);
+            break;
+        }
+
         default: {
             // 無法解析的 ACTION — 回退到智能狀態檢測
             console.warn('Unknown director action:', action, '— falling back to state detection');
@@ -957,7 +976,7 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
             body,
             onThinking,
             onContent,
-            (error) => {
+            (error, isConnectionError = false) => {
                 hasError = true;
                 if (error && error.includes('流水線正在執行中')) {
                     showToast(error);
@@ -965,7 +984,17 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                     try { hideAllAgentProcessingIndicators(); } catch(e) {}
                     return;
                 }
-                console.warn(`[GUARD] Pipeline triggered error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
+                
+                // 💡 [重要修復]: 如果不是連線/伺服器異常（而是邏輯/模型解析/校驗等業務錯誤），不進行 10 次的自動重連重試。
+                // 應直接將錯誤反饋給總監做自癒重試/自癒評估，避免前端不斷重發無效請求導致管線崩潰卡死。
+                if (!isConnectionError) {
+                    console.warn(`[GUARD] Pipeline logical/SSE error at ${url}. Bypassing retry, reporting directly to director.`);
+                    if (typeof onError === 'function') onError(error);
+                    try { hideAllAgentProcessingIndicators(); } catch(e) {}
+                    return;
+                }
+                
+                console.warn(`[GUARD] Pipeline connection error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
                 
                 if (currentRetry <= maxRetries) {
                     hadPreviousError = true;
@@ -3321,6 +3350,18 @@ function buildDirectorExtraContext(reviewContext = null) {
     if (reviewContext?.summary_context) {
         parts.push(`【呼叫端補充摘要】\n${String(reviewContext.summary_context).trim()}`);
     }
+    // 骨架生成前偵測到角色不足時，將 need_characters 信號傳入總監上下文
+    if (state.skeletonNeedsCharacters) {
+        const nc = state.skeletonNeedsCharacters;
+        parts.push(
+            `【⚠️ need_characters 信號】\n` +
+            `骨架生成前後端偵測到角色數量不足：\n` +
+            `- 目標卷：第 ${nc.volume_index} 卷\n` +
+            `- 目前角色數：${nc.current_char_count} 位\n` +
+            `- 建議最少：${nc.minimum_required} 位\n` +
+            `請使用 GO_BACK_TO_CHARACTERS 補充角色，角色完成後再回到第 ${nc.volume_index} 卷骨架生成。`
+        );
+    }
     return parts.join('\n\n');
 }
 
@@ -5647,6 +5688,37 @@ window.deletePlotChapter = function(chapterIndex) {
 
 // Expose pipeline & streaming helpers to window for pipeline.js
 window.streamAPI = streamAPI;
+
+// 總監分段調度：處理 partial_state（即時回填 volumes）與 status（即時進度）事件
+window.handleGenerationEvent = function(parsed, endpoint) {
+    if (!parsed) return;
+    try {
+        if (parsed.type === 'partial_state' && parsed.state_updates) {
+            const updates = parsed.state_updates;
+            if (!state.currentNovelData) state.currentNovelData = {};
+            // 即時回填 volumes（以及其它已存在的 state_updates 欄位）
+            for (const [key, value] of Object.entries(updates)) {
+                state.currentNovelData[key] = value;
+            }
+            // 若目前顯示的是 plot/writer tab，嘗試重渲染以反映最新骨架
+            if (typeof window.renderActiveTab === 'function') {
+                try { window.renderActiveTab(); } catch (e) { /* ignore */ }
+            }
+        } else if (parsed.type === 'status' && parsed.message) {
+            if (typeof window.updateDirectorMessageSafe === 'function') {
+                window.updateDirectorMessageSafe(parsed.message);
+            } else if (typeof updateDirectorMessage === 'function') {
+                updateDirectorMessage(parsed.message);
+            }
+        }
+    } catch (e) {
+        console.error('handleGenerationEvent failed:', e);
+    }
+};
+window.updateDirectorMessageSafe = function(message) {
+    if (typeof updateDirectorMessage === 'function') updateDirectorMessage(message);
+};
+
 window.renderActiveTab = renderActiveTab;
 window.loadNovelDetails = loadNovelDetails;
 window.runDirectorDecision = runDirectorDecision;

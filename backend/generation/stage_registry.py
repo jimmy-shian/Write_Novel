@@ -8,7 +8,7 @@ from typing import Dict, Optional
 STAGE_ORDER = ["worldview", "foreshadowing", "characters", "volumes", "volume_skeleton", "writer", "editor"]
 VALID_STAGES = set(STAGE_ORDER + ["evaluate"])
 VALID_SCOPES = {"global", "volume", "chapter", "section", "selection"}
-VALID_TASK_TYPES = {"generate", "regenerate", "patch", "batch_generate", "refine", "evaluate"}
+VALID_TASK_TYPES = {"generate", "regenerate", "patch", "batch_generate", "refine", "evaluate", "segment_generate", "segment_complete"}
 
 STAGE_ALIASES = {
     "character": "characters",
@@ -32,6 +32,10 @@ TASK_TYPE_ALIASES = {
     "update": "patch",
     "multi_generate": "batch_generate",
     "batch": "batch_generate",
+    "segment": "segment_generate",
+    "seg_generate": "segment_generate",
+    "seg_complete": "segment_complete",
+    "complete": "segment_complete",
     "review": "evaluate",
     "evaluate": "evaluate",
 }
@@ -52,6 +56,8 @@ DEFAULT_STAGE_BY_TASK_TYPE = {
     "regenerate": "worldview",
     "patch": "worldview",
     "batch_generate": "volume_skeleton",
+    "segment_generate": "volume_skeleton",
+    "segment_complete": "volume_skeleton",
     "refine": "editor",
     "evaluate": "evaluate",
 }

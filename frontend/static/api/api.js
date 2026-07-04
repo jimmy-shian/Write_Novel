@@ -58,9 +58,21 @@ function mapEndpointAndBody(endpoint, body) {
         } else if (endpoint.includes('volume-skeleton')) {
             newBody.stage = 'volume_skeleton';
             newBody.scope = 'volume';
+            // 預設 generate；分段模式由 body.task_type 覆蓋為 segment_generate / segment_complete
+            newBody.task_type = (body && body.task_type) ? body.task_type : 'generate';
             newBody.target = {
-                volume_index: body ? body.volume_index : null
-            };
+                volume_index: body ? body.volume_index : null,
+            }
+            // 若 body 帶 chapter_range 或 selection（總監分段調度），傳入供後端解析
+            if (body) {
+                if (Array.isArray(body.chapter_range) && body.chapter_range.length === 2) {
+                    newBody.target.selection = [{
+                        chapter_range: [parseInt(body.chapter_range[0]), parseInt(body.chapter_range[1])]
+                    }];
+                } else if (Array.isArray(body.selection)) {
+                    newBody.target.selection = body.selection;
+                }
+            }
         } else if (endpoint.includes('write-chapter')) {
             newBody.stage = 'writer';
             newBody.scope = 'chapter';
@@ -216,7 +228,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                 if (response.status === 429) {
                     const errData429 = await response.json().catch(() => ({ detail: '此小說的流水線正在執行中，請等待完成。' }));
                     const msg429 = errData429.detail || '此小說的流水線正在執行中，請等待完成。';
-                    if (typeof onError === 'function') onError(msg429);
+                    if (typeof onError === 'function') onError(msg429, false);
                     if (typeof onDone === 'function') await onDone(false);
                     return;
                 }
@@ -270,9 +282,16 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         } else if (parsed.type === 'error') {
                             localHadError = true;
                             streamHadFinalError = true;
-                            if (typeof onError === 'function') onError(parsed.message);
+                            if (typeof onError === 'function') onError(parsed.message, false);
                         } else if (parsed.type === 'retrying') {
                             if (typeof onRetrying === 'function') onRetrying(parsed.message);
+                        } else if (parsed.type === 'partial_state' || parsed.type === 'status') {
+                            // 總監分段調度：即時回填與進度事件走全域 hook
+                            try {
+                                if (typeof window.handleGenerationEvent === 'function') {
+                                    window.handleGenerationEvent(parsed, endpoint);
+                                }
+                            } catch (evErr) { console.error('handleGenerationEvent error:', evErr); }
                         }
                     } catch (e) {
                         // 忽略 JSON 解析錯誤
@@ -313,7 +332,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
 
             const isAborted = err.name === 'AbortError';
             const isServerError = err.message.includes('HTTP 錯誤 5');
-            if ((isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || isServerError) && attempt <= MAX_RETRIES) {
+            const isConnectionError = isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || isServerError;
+            if (isConnectionError && attempt <= MAX_RETRIES) {
                 console.warn(`[streamAPI] Attempt ${attempt} failed or aborted (${err.message}). Retrying in 3 seconds...`);
                 // Wait 3 seconds before retrying
                 await new Promise(r => setTimeout(r, 3000));
@@ -329,7 +349,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
 
             streamHadFinalError = true;
             if (typeof onError === 'function') {
-                onError(isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`);
+                onError(
+                    isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`,
+                    isConnectionError
+                );
             }
             // 錯誤時也以 success=false 調用 onDone，確保 Promise 能結束
             if (typeof onDone === 'function') await onDone(false);

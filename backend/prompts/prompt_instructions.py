@@ -81,16 +81,34 @@ DIRECTOR_COMMON_FOOTER = """
 
 | ACTION | 用途 | 必要欄位 |
 |--------|------|----------|
-| `CONTINUE` | 指引系統前往指定階段執行生成、修改或繼續下一階段。只要需要執行該階段（不論是首次生成、品質不足需重新生成，還是合格後繼續下一階段），請直接指定該 `target` 即可。 | `target`（目標階段名稱：worldview, foreshadowing, characters, volumes, volume_skeleton, writer, editor）, `volume_index`, `chapter_index` |
-| `GO_BACK_TO_WORLDVIEW` | 發現世界觀重大缺失（大綱方向/風格 和設定不符）。⚠️ 伏筆/轉折缺失不算世界觀重大缺失，請用 `CONTINUE` 導向 `foreshadowing` 而非此指令 | `hint`（具體要修改的世界觀內容）, `volume_index`（若與特定卷相關，填入整數；否則填 null） |
-| `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失 (角色列表為空) | `hint`（具體要修改的角色內容） |
-| `GO_BACK_TO_SKELETON_EXPANSION` | 發現序號中斷或空殼卷，退回至骨架增生 (volume_skeleton) 重新生成大綱骨架 | 無 |
-| `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策 | `reason`（原因） |
-| `FINISH` | 全部正文寫作任務完成100% | 無 |
-| `INCREMENTAL_MODIFY_CHARACTER` | 局部修改角色的特定欄位 | `target_char_index`（角色索引）, `field_name`（要修改的欄位）, `hint`（修改要求） |
-| `INCREMENTAL_APPEND_CHARACTER` | 增量追加新角色(角色未在角色列表中) | `hint`（新角色要求） |
-| `INCREMENTAL_MODIFY_SKELETON` | 卷骨架局部修正 | `volume_index`（卷索引）, `hint`（修正要求） |
-| `INCREMENTAL_MODIFY_CHARACTER_FULL` | 角色局部增量修正（完整模式） | `hint`（修正要求）, `target_char_index`（若有） |
+| `CONTINUE` | 指引系統前往指定階段執行生成、修改或繼續下一階段。 | `target`（目標階段名稱）, `volume_index`, `chapter_index` |
+| `GO_BACK_TO_WORLDVIEW` | 發現世界觀重大缺失。 | `hint`（修改要求）, `volume_index` |
+| `GO_BACK_TO_CHARACTERS` | 發現角色重大缺失。 | `hint`（修改要求） |
+| `GO_BACK_TO_SKELETON_EXPANSION` | 發現序號中斷或空殼卷，退回至骨架增生。 | 無 |
+| `WAIT_USER` | 遇到重大歧義或需要用戶確認的決策。 | `reason`（原因） |
+| `FINISH` | 全部正文寫作任務完成100%。 | 無 |
+| `INCREMENTAL_MODIFY_CHARACTER` | 局部修改角色的特定欄位。 | `target_char_index`（角色索引）, `field_name`, `hint` |
+| `INCREMENTAL_APPEND_CHARACTER` | 增量追加新角色。 | `hint` |
+| `INCREMENTAL_MODIFY_SKELETON` | 卷骨架局部修正。 | `volume_index`（卷索引）, `hint` |
+| `INCREMENTAL_MODIFY_CHARACTER_FULL` | 角色局部增量修正（完整模式）。 | `hint`, `target_char_index` |
+| `TOOL_CALL` | 主動調用總監核心工具執行生成、評審或補強。 | `tool_call`（定義要執行的工具及參數） |
+
+## 總監核心工具 (TOOL_CALL) 使用規格
+當你決定使用 `TOOL_CALL` 時，必須在 JSON 中帶入非空的 `tool_call` 對象，結構如下：
+```json
+{
+  "action": "TOOL_CALL",
+  "tool_call": {
+    "tool_name": "invoke_sub_agent | evaluate_output | supplement_content",
+    "parameters": {
+      // 1. invoke_sub_agent: {"agent_name": "worldview|characters|volumes|volume_skeleton|writer|editor", "task_description": "描述生成任務", "context": {}}
+      // 2. evaluate_output: {"stage_name": "worldview|foreshadowing|volumes", "output_content": "待評估之文字內容", "novel_id": "{novel_id}"}
+      // 3. supplement_content: {"stage_name": "階段名稱", "original_output": "原內容", "evaluation_feedback": "不合格之具體原因", "novel_id": "{novel_id}"}
+    }
+  }
+}
+```
+
 
 ## 增量指令定位規格（避免局部修改失焦）
 1. `target_char_index` **必須為 0-based**（第一個角色 = 0）。絕對不要使用 1-based 索引。若只能以「第 N 位角色」表達，仍必須在 `hint` 寫出角色姓名，方便後端容錯校對。
@@ -111,6 +129,13 @@ DIRECTOR_COMMON_FOOTER = """
 5. **全局/階段性推進規則（🔥 核心修正）**：
    In 決定輸出 `action: "CONTINUE"` 時，必須遵循以下精準導向：
    - 當 `current_stage` 為 `worldview`，合格後 `target` 應為 `foreshadowing`。
+   - 🔥 **【伏筆分批派發規則（防止 JSON 解析錯誤）】**：
+     - 伏筆生成 (`foreshadowing`) 現在支援**分批模式**，每次只生成一類：
+       - 第一批：`target = "foreshadowing"`，且在 `agent_prompt` 中明確指示 `[BATCH: foreshadowing_seeds]`（只生成伏筆種子，至少 25 個）
+       - 第二批：`target = "foreshadowing"`，且在 `agent_prompt` 中明確指示 `[BATCH: key_turning_points]`（只生成關鍵轉折點，至少 25 個）
+     - 系統後端會根據 `agent_prompt` 中的 `[BATCH: ...]` 標記決定只生成哪一類，並保留另一類已有資料。
+     - **強制要求**：你必須分兩次派發伏筆生成，絕對禁止一次派發要求 AI 同時生成 50 個伏筆種子 **+** 50 個轉折點（單次 JSON 過長必然造成截斷或解析錯誤）。
+     - 第一批完成後（validation_report 確認 `foreshadowing_seeds` 已有足夠數量），再派第二批。
    - 當 `current_stage` 為 `foreshadowing`，合格後 `target` 應為 `characters`。
    - 當 `current_stage` 為 `characters`，合格後 `target` 應為 `volumes`。
    - 🔄 **【回退與中斷恢復規則 (🔥 核心規則)】**：
@@ -120,10 +145,13 @@ DIRECTOR_COMMON_FOOTER = """
          - **絕對禁止**再次設定 `target = "volumes"` 或 `target = "volume_skeleton"`，因為這會導致重跑/重寫現有大綱與骨架！
          - 你必須直接將 `target` 設為 `writer`（或若當前章節已有正文則設為 `editor`），並將 `chapter_index` 設為報告中指出的「最早缺漏/未寫作的章節」（或 suggested_next_chapter），將 `volume_index` 設為該章節所屬的卷號，以恢復先前的正文寫作進度！
    - 當 `current_stage` 為 `volumes`，合格後 `target` 應為 `volume_skeleton`，且 `volume_index` 設為 `1`。
-   - 🔥 **當 `current_stage` 為 `volume_skeleton` 時（卷骨架遞進邏輯）**：
-     - 若目前「僅完成第 N 卷」的骨架且品質合格，但小說總共有更多卷尚未生成骨架：`target` **必須保持為 `volume_skeleton`**，並將 `volume_index` 設為 `N+1`（遞進到下一卷骨架生成），此時 `chapter_index` 必須為 `null`。**嚴格禁止直接跳到 `writer`**！
-     - 只有當【系統底層剛性校驗報告】或上下文確認【所有篇卷（全書）】的骨架都已 100% 生成完畢，`target` 才能設為 `writer`，此時 `volume_index` 設為 `1`，`chapter_index` 設為 `1`。
-     - 🔥🔥 **【`volume_index` 絕對不可為 null 的紅線】**：當 `target = "volume_skeleton"` 時（當 action 是 `CONTINUE` 時），`volume_index` **必須填寫明確的整數**，指定要生成/重新生成的是【第幾卷】的骨架。**絕對禁止填寫 `null`**！你必須從「系統底層剛性校驗報告」中找出缺失/需重跑的卷號，填入正確的整數！
+   - 🔥 **當 `current_stage` 為 `volume_skeleton` 時（卷骨架逐卷派發規則）⭐⭐⭐ 核心改變**：
+     - **每次只處理一卷**：總監必須每次只指定一卷骨架生成，通過 `CONTINUE + target="volume_skeleton" + volume_index=N` 來派發。後端不支援一次處理多卷，一次執行只會處理一卷。
+     - **途徑完成後逐卷更新**：第 N 卷骨架完成後，總監重新被呼叫，讀取 validation_report 確認第 N 卷已完成，再下指令 `volume_index = N+1`。
+     - **絕對禁止**：當骨架尚未全部完成時，絕對不得跳到 `target="writer"`。
+     - **角色不足特殊處理**：若 extra_context 中包含 `need_characters` 信號（即骨架生成前後端偵測到角色數量不足），**必須**使用 `GO_BACK_TO_CHARACTERS`，帶上 `hint` 指出需要補充多少個角色及其功能定位。角色補充完成後，再回到上次失敗的卷重新骨架。
+     - 只有當【系統底層剛性校驗報告】或上下文確認「所有篇卷（全書）的骨架都已 100% 生成完畢」，`target` 才能設為 `writer`，此時 `volume_index` 設為 `1`，`chapter_index` 設為 `1`。
+     - 🔥🔥 **【`volume_index` 絕對不可為 null 的紅線】**：當 `target = "volume_skeleton"` 時（當 action 是 `CONTINUE` 時），`volume_index` **必須填寫明確的整數**，指定要生成/重新生成的是【第幾卷】的骨架。**絕對禁止填寫 `null`**！你必須從「系統底層剛性校驗報告」中找出缺失/需重跨的卷號，填入正確的整數！
     - 當 `current_stage` 為 `writer`，當前章節合格後，`target` 應為 `editor`（去精修當前章），此時 `chapter_index` 必須保持為當前章的序號（例如：當前寫完第 37 章且合格，`target` 必須設為 `editor`，`chapter_index` 必須為 37。絕對禁止設為尚未寫作的下一章，如 38！因為該章尚無正文，編輯姬將因找不到內容而報錯崩潰）。
     - 當 `current_stage` 為 `editor`，當前章節潤色合格後：若全書正文未完成 100%，`target` 應回到 `writer`，並將 `chapter_index` 遞增（進入下一章寫作，例如：第 37 章編輯精修完畢且合格，`target` 設為 `writer`，`chapter_index` 設為 38）。
     - ⚠️【無正文禁止編輯】：你絕對禁止對任何尚未寫作（無正文內容）的章節指定 `target: "editor"`！如果不確定或該章尚未寫作，應優先使用 `target: "writer"` 進行寫作。
@@ -136,7 +164,7 @@ DIRECTOR_COMMON_FOOTER = """
    - 當 `target` 為 `volume_skeleton` 時：**必須**透過 `volume_index` 指定當前要處理或接下來要生成的卷數（整數，**不可為 `null`**！）。在進度為volume_index時，若報告顯示「第 X 卷骨架缺失」，`volume_index` 必須填寫 `X`。此時 `chapter_index` **必須嚴格填寫 `null`**（骨架階段不存在章節寫作）。
    - 當 `target` 為 `writer` 或 `editor` 時：**必須**同時指定 `volume_index`（哪一卷）與 `chapter_index`（哪一章）。絕對不可填寫 null！
    - 其他與特定卷章微關的階段（如 `worldview`, `characters`, `foreshadowing`, `volumes`），則兩者皆填入 `null`。
-   - 當 `target` 為 `foreshadowing` 時，`agent_prompt` 必須明確要求下游輸出頂層 `foreshadowing_seeds` 與 `key_turning_points` 兩個非空陣列；禁止要求 `volume_1`、`volume_2` 或其他卷別鍵作為頂層 JSON。更重要的是，必須命令下游 Agent 將伏筆種子的屬性鍵全部限制為英文（`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`），關鍵轉折點的屬性鍵也全部限制為英文（`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`），絕對禁止要求或允許下游使用中文作為 JSON 屬性鍵（如『伏筆內容』、『回收方式』），否則後端將無法解析。
+   - 當 `target` 為 `foreshadowing` 時，`agent_prompt` **必須包含 `[BATCH: foreshadowing_seeds]` 或 `[BATCH: key_turning_points]` 標記**之一，以便後端識別本次生成的類別。禁止要求兩者同時生成，也禁止使用 `volume_1`、`volume_2` 或其他卷別鍵作為頂層 JSON。所有欄位鍵必須是英文（`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link` 或 `turning_point_name`, `trigger_condition`, `structural_impact`, `emotional_stakes`），絕對禁止使用中文作為 JSON 屬性鍵。
 9. **引導與生成規則（🔥 核心修正，絕不跑去 WAIT_USER）**：
    - 當某個階段的內容為空、未生成、缺失，或你評估其品質需要重新生成/修改時，**絕對禁止**使用 `WAIT_USER`！
    - 你必須使用 `action: "CONTINUE"`，並將 `target` 設為該需要生成或修改的階段（例如：若篇卷規劃尚未完成，則 `target` 設為 `"volumes"`；若卷骨架缺失，則 `target` 設為 `"volume_skeleton"`，並指定對應的 `volume_index`；若某章正文為空或需要重寫，則 `target` 設為 `"writer"`，並指定 `chapter_index`），以利系統自動前往該階段調用對應 Agent 執行生成/修改。

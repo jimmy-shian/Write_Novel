@@ -422,6 +422,26 @@ def extract_chapters_in_range(parsed_skeleton, expected_indexes: list) -> list:
     return cleaned
 
 
+def suggest_segment_split(indexes: list, suggested_size: int = None) -> tuple:
+    """
+    建議「分段生成」的切段點：將缺失章節索引切成前半段與後半段。
+    不再驅動迴圈；僅供總監決定 chapter_range 時參考。
+    回傳 (first_half, second_half)，皆為排序後的章節索引列表。
+    前半段長度取 min(suggested_size, len//2)，剩餘歸後半段。
+    """
+    from backend.config import VOLUME_SKELETON_SEGMENT_SUGGESTED
+    if suggested_size is None:
+        suggested_size = VOLUME_SKELETON_SEGMENT_SUGGESTED
+    if not indexes:
+        return ([], [])
+    ordered = sorted(indexes)
+    half = max(1, min(int(suggested_size), max(1, len(ordered) // 2 or 1)))
+    first_half = ordered[:half]
+    second_half = ordered[half:]
+    return (first_half, second_half)
+
+
+
 # =============================================================================
 # Worldview JSON Extraction (世界觀 JSON 安全提取)
 # =============================================================================

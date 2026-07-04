@@ -291,16 +291,30 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 const volIdx = decision?.volume_index || state.activeVolumeIndex || 1;
                 state.activeVolumeIndex = volIdx;
                 const hint = decision?.hint || '';
-                
+
                 endpoint = '/api/agent/volume-skeleton';
-                body = { 
-                    novel_id: state.currentNovelId, 
-                    volume_index: volIdx, 
+                const baseBody = {
+                    novel_id: state.currentNovelId,
+                    volume_index: volIdx,
                     user_prompt: buildDirectorDrivenPrompt(hint || userPrompt, decision)
                 };
+                // 總監分段調度：若 decision 帶 segment_generate / segment_complete，
+                // 則轉送 task_type 與章節範圍給後端分段 runner
+                const segTaskType = decision?.task_type || (decision?.action === 'SEGMENT_COMPLETE' ? 'segment_complete' : (decision?.action === 'SEGMENT_GENERATE' ? 'segment_generate' : null));
+                if (segTaskType) {
+                    baseBody.task_type = segTaskType;
+                    if (Array.isArray(decision.chapter_range) && decision.chapter_range.length === 2) {
+                        baseBody.chapter_range = decision.chapter_range;
+                    } else if (Array.isArray(decision.selection)) {
+                        baseBody.selection = decision.selection;
+                    }
+                }
+                body = baseBody;
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
-                agentName = `Volume Skeleton Planner (第 ${volIdx} 卷骨架規劃)`;
+                agentName = segTaskType
+                    ? `Volume Skeleton Segment (第 ${volIdx} 卷${segTaskType === 'segment_complete' ? ' 補全' : ' 分段'})`
+                    : `Volume Skeleton Planner (第 ${volIdx} 卷骨架規劃)`;
                 break;
             }
             case 'writer':
@@ -417,7 +431,26 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                         }
                     }
                 }
-                window.updateAgentStreamOutput(stage, delta, 'content');
+                    window.updateAgentStreamOutput(stage, delta, 'content');
+                    // 骨架階段：偵測後端 need_characters 事件
+                    if (stage === 'volume_skeleton' && delta) {
+                        const rawDelta = String(delta);
+                        // 嘗試解析 SSE 事件資料中的 need_characters 類型
+                        const ncMatch = rawDelta.match(/\{[^}]*"type"\s*:\s*"need_characters"[^}]*\}/);
+                        if (ncMatch) {
+                            try {
+                                const ncData = JSON.parse(ncMatch[0]);
+                                if (ncData.type === 'need_characters') {
+                                    state.skeletonNeedsCharacters = {
+                                        volume_index: ncData.volume_index,
+                                        current_char_count: ncData.current_char_count,
+                                        minimum_required: ncData.minimum_required
+                                    };
+                                    showToast(`⚠️ 角色不足偵測：第 ${ncData.volume_index} 卷骨架需要至少 ${ncData.minimum_required} 個角色`);
+                                }
+                            } catch (e) { /* ignore parse errors */ }
+                        }
+                    }
             },
             (msg) => {
                 failed = true;
@@ -462,6 +495,10 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 updatePipelineStage(stage, 'done');
                 hideAgentProcessingIndicator(stage);
                 await window.loadNovelDetails(state.currentNovelId);
+                // 角色生成完成後，清除 need_characters 信號（已補充完畢）
+                if (stage === 'characters') {
+                    state.skeletonNeedsCharacters = null;
+                }
                 if (state.isPipelineRunning && !state.receiveFinishCommand) {
                     showToast(`${stage} 完成，正在請求 AI 總監評估...`);
                     const nextDecision = await window.runDirectorDecision(stage);

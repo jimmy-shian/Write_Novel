@@ -469,9 +469,15 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let volume_index = null;
     let chapter_index = null;
     let insert_after_index = null;
+    let chapter_range = null;
+    let selection = null;
+    let task_type = null;
     
     // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } 或是 \\\json ... ）
-    const jsonBlockMatch = responseText.match(/(?:```json|\\+json)\s*(\{[\s\S]*?\})\s*(?:```|\\+)/i);
+    // 取「最後」一個 JSON 區塊：後端 Python 分段調度器會在總監原始輸出之後
+    // 附加覆寫決策（SEGMENT_GENERATE / SEGMENT_COMPLETE），最後一個才是最終決策。
+    const jsonBlockMatches = [...responseText.matchAll(/(?:```json|\\+json)\s*(\{[\s\S]*?\})\s*(?:```|\\+)/gi)];
+    const jsonBlockMatch = jsonBlockMatches.length ? jsonBlockMatches[jsonBlockMatches.length - 1] : null;
     if (jsonBlockMatch) {
         try {
             const jsonCmd = JSON.parse(jsonBlockMatch[1]);
@@ -482,7 +488,7 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             agent_prompt = jsonCmd.agent_prompt || '';
             agent_context = jsonCmd.agent_context || '';
             user_intent_summary = jsonCmd.user_intent_summary || '';
-            
+
             if (jsonCmd.volume_index !== undefined && jsonCmd.volume_index !== null) {
                 volume_index = parseInt(jsonCmd.volume_index);
             }
@@ -491,6 +497,25 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             }
             if (jsonCmd.insert_after_index !== undefined && jsonCmd.insert_after_index !== null) {
                 insert_after_index = parseInt(jsonCmd.insert_after_index);
+            }
+            // 分段調度專屬欄位
+            if (Array.isArray(jsonCmd.chapter_range) && jsonCmd.chapter_range.length === 2) {
+                chapter_range = [parseInt(jsonCmd.chapter_range[0]), parseInt(jsonCmd.chapter_range[1])];
+            }
+            if (Array.isArray(jsonCmd.selection)) {
+                selection = jsonCmd.selection
+                    .map(item => {
+                        if (item && typeof item === 'object') {
+                            const ci = parseInt(item.chapter_index ?? item.chapter ?? item.index);
+                            return Number.isFinite(ci) ? { chapter_index: ci } : null;
+                        }
+                        const v = parseInt(item);
+                        return Number.isFinite(v) ? { chapter_index: v } : null;
+                    })
+                    .filter(Boolean);
+            }
+            if (jsonCmd.task_type) {
+                task_type = String(jsonCmd.task_type);
             }
         } catch (e) {
             console.warn('Failed to parse Director JSON command:', e);
@@ -578,6 +603,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         volume_index: volume_index,
         chapter_index: chapter_index,
         insert_after_index: insert_after_index,
+        chapter_range: chapter_range,
+        selection: selection,
+        task_type: task_type,
         agent_prompt: agent_prompt,
         agent_context: agent_context,
         user_intent_summary: user_intent_summary

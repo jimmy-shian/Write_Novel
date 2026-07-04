@@ -677,35 +677,66 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
         {"role": "user", "content": user_content}
     ]
 
-def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None):
-    """伏筆與轉折編織師提示詞拼接"""
-    schema_snippet = "\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n"
+def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None, target_field=None):
+    """伏筆與轉折編織師提示詞拼接
+
+    target_field: None = 兩者都生成（全量，每類至少50條）
+                  "foreshadowing_seeds"   = 只生成伏筆種子（至少25條）
+                  "key_turning_points"    = 只生成關鍵轉折點（至少25條）
+    分批模式可顯著減少單次 JSON 長度，降低解析錯誤機率。
+    """
     from backend.schemas.agent_json import FORESHADOWING_OUTPUT_SCHEMA
     import json
-    schema_snippet += json.dumps(FORESHADOWING_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+
+    if target_field == "foreshadowing_seeds":
+        schema = {"foreshadowing_seeds": FORESHADOWING_OUTPUT_SCHEMA["foreshadowing_seeds"]}
+        target_instruction = (
+            "【本次只生成 foreshadowing_seeds】\n"
+            "1. 最外層 JSON 只能有一個頂層鍵：`foreshadowing_seeds`（陣列）。\n"
+            "2. 必須至少 25 個；少於此數量即為失敗輸出。\n"
+            "3. 每個項目只能使用：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。\n"
+            "4. `id` 必須是整數，從 1 開始連續編號。\n"
+            "5. 禁止輸出 key_turning_points 或任何其他頂層鍵。\n"
+            "6. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。"
+        )
+    elif target_field == "key_turning_points":
+        schema = {"key_turning_points": FORESHADOWING_OUTPUT_SCHEMA["key_turning_points"]}
+        target_instruction = (
+            "【本次只生成 key_turning_points】\n"
+            "1. 最外層 JSON 只能有一個頂層鍵：`key_turning_points`（陣列）。\n"
+            "2. 必須至少 25 個；少於此數量即為失敗輸出。\n"
+            "3. 每個項目只能使用：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
+            "4. `id` 必須是整數，從 1 開始連續編號。\n"
+            "5. 禁止輸出 foreshadowing_seeds 或任何其他頂層鍵。\n"
+            "6. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。"
+        )
+    else:
+        schema = FORESHADOWING_OUTPUT_SCHEMA
+        target_instruction = (
+            "【不可違反的輸出契約】\n"
+            "1. 最外層 JSON 必須只有一個物件，且只能包含兩個頂層鍵：`foreshadowing_seeds` 與 `key_turning_points`。\n"
+            "2. `foreshadowing_seeds` 必須是陣列，至少 50 個；`key_turning_points` 必須是陣列，至少 50 個；少於此數量即為失敗輸出。\n"
+            "3. 每個 `foreshadowing_seeds` 項目只能使用這些欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。\n"
+            "4. 每個 `key_turning_points` 項目只能使用這些欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
+            "5. `id` 必須是 JSON number / integer，從 1 開始連續編號；禁止填 `FS001`、`Seed-001`、`TP001`、`Turn-001`、中文標號或任何文字。\n"
+            "6. 所有文字內容只能填入名稱、描述、提示、影響、代價、主題連結等文字欄位；禁止把情節文字、標號規則或說明塞入 `id`、`index`、`number` 類欄位。\n"
+            "7. 禁止輸出 `volume_1`、`volume_2`、`act_1` 等作為頂層鍵；卷/幕/章節只能寫入文字欄位的內容裡。\n"
+            "8. 此階段只生成全書伏筆與關鍵轉折藍圖，不需要章節正文、卷骨架，也不可要求 writer/editor 先執行。\n"
+            "9. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。\n"
+            "10. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。"
+        )
+
+    schema_snippet = "\n[CRITICAL REQUIREMENT: Output strictly in JSON format matching this schema. Wrap in ```json ... ``` codeblock]\n"
+    schema_snippet += json.dumps(schema, ensure_ascii=False, indent=2)
     system_prompt = f"{FORESHADOWING_ORCHESTRATOR_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
-    
-    user_content = f"""【世界觀背景】
-{worldview_text}
 
-【角色 Bible 與人設】
-{characters_json}
-
-【額外伏筆/轉折設計指令】
-{user_prompt or "請根據世界設定與角色背景，設計一整套豐富的伏筆種子與關鍵轉折點。"}
-
-【不可違反的輸出契約】
-1. 最外層 JSON 必須只有一個物件，且只能包含兩個頂層鍵：`foreshadowing_seeds` 與 `key_turning_points`。
-2. `foreshadowing_seeds` 必須是陣列，至少 50 個；`key_turning_points` 必須是陣列，至少 50 個；少於此數量即為失敗輸出。
-3. 每個 `foreshadowing_seeds` 項目只能使用這些欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。
-4. 每個 `key_turning_points` 項目只能使用這些欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。
-5. `id` 必須是 JSON number / integer，從 1 開始連續編號；禁止填 `FS001`、`Seed-001`、`TP001`、`Turn-001`、中文標號或任何文字。
-6. 所有文字內容只能填入名稱、描述、提示、影響、代價、主題連結等文字欄位；禁止把情節文字、標號規則或說明塞入 `id`、`index`、`number` 類欄位。
-7. 禁止輸出 `volume_1`、`volume_2`、`act_1` 等作為頂層鍵；卷/幕/章節只能寫入文字欄位的內容裡。
-8. 此階段只生成全書伏筆與關鍵轉折藍圖，不需要章節正文、卷骨架，也不可要求 writer/editor 先執行。
-9. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。
-10. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。
-"""
+    default_task = "請根據世界設定與角色背景，設計豐富的伏筆種子與關鍵轉折點。"
+    user_content = (
+        "【世界觀背景】\n" + worldview_text + "\n\n"
+        "【角色 Bible 與人設】\n" + characters_json + "\n\n"
+        "【額外設計指令】\n" + (user_prompt or default_task) + "\n\n"
+        + target_instruction + "\n"
+    )
     user_content += f"\n\n{FORESHADOWING_ORCHESTRATOR_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
@@ -790,6 +821,76 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
+
+def build_volume_skeleton_completion_messages(
+    worldview_text, volume_index, current_vol, start_ch, end_ch, batch_count,
+    surrounding_context, precalc_clues, user_prompt, prior_segment_json
+):
+    """
+    卷骨架「分段補全」提示詞拼接（completion 模式）。
+    把已生成的前段章節成果（prior_segment_json 字串）放在 messages 中作為
+    「已完成段落」，要求 LLM 只接續輸出剩餘章節 (start_ch ~ end_ch) 的骨架，
+    銜接前段已有標題、情節、allocated_tasks，避免前後斷層。
+
+    messages 結構刻意在最後放置一條 role=assistant 的「前段成果節錄」前綴，
+    讓模型以續寫方式產出後半，達成真正的 completion 補全。
+    """
+    schema_snippet = get_json_schema_prompt_snippet("skeleton")
+    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+
+    user_content = f"""【世界觀背景】
+{worldview_text}
+
+【當前特定篇卷任務 — 分段補全 (Completion)】
+- 當前篇卷序號：第 {volume_index} 卷
+- 篇卷標題：{current_vol['title']}
+- 篇卷概要：{current_vol['summary']}
+- 已完成前段：第 {start_ch - 1} 章及之前（請勿重寫此前段章節）
+- 本次需補全章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {batch_count} 章）
+請務必只輸出此補全範圍內的章節骨架；不得輸出範圍外章節，不得重寫前段已存在章節。
+
+{surrounding_context}
+{precalc_clues}
+
+【前段已生成之章節骨架（務必延續其標題命名風格、情節脈絡、伏筆分配）】
+{prior_segment_json}
+
+以下為本次需補全章節的 allocated_tasks 硬性填寫規則：
+- 你不得自行挑選、推測、複製或新增任何伏筆 Seed / turning point 到未指定章節。
+- 只有上方清單明確列出的章節，才可在 allocated_tasks 對應陣列填入該任務。
+- 未列出任務的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
+- 補全章節須與前段情節自然銜接：延續前段 cliffhanger 的解決、角色行為因果、時間線連貫。
+
+【使用者額外提示詞 (Prompt)】
+{user_prompt or "請接續前段內容，為本卷剩餘章節補全骨架大綱。"}
+
+請以 completion（續寫）方式，只輸出第 {start_ch} 章至第 {end_ch} 章的 chapters_skeleton JSON 陣列。輸出章數必須等於 {batch_count}，chapter_index 必須連續且不可缺漏。
+"""
+    user_content += f"\n\n{VOLUME_SKELETON_GUIDELINES}"
+
+    # 為促成真正的 completion，把前段成果作為 assistant 前綴（role=assistant），
+    # 讓模型以「自己先前已開始產出此 JSON」的續寫方式補完剩餘章節。
+    # 注意：以下字串刻意不以 f-string 撰寫，避免 JSON 花括號被當成 f-string 表達式。
+    assistant_intro = (
+        "以下是第 " + str(volume_index) + " 卷前段已生成的章節骨架（請勿重複輸出，僅作為脈絡）：\n"
+        "```json\n" + prior_segment_json + "\n```\n\n"
+        "我現在接續輸出第 " + str(start_ch) + " 章至第 " + str(end_ch) + " 章的 chapters_skeleton：\n"
+        "```json\n"
+        '{"volume_index": ' + str(volume_index) + ', "chapters_skeleton": ['
+    )
+    assistant_follow = (
+        "請接著上面已開始的 JSON 直接輸出 chapters_skeleton 陣列中的章節元素"
+        "（第 " + str(start_ch) + " ~ " + str(end_ch) + " 章），"
+        "然後以 ]}} 結束。只輸出尚未補完的章節，不要重複前段章節。"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": assistant_intro},
+        {"role": "user", "content": assistant_follow},
+    ]
+    return messages
 
 def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index, user_prompt=None):
     """正文作家寫作提示詞拼接"""
