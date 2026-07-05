@@ -16,3 +16,6 @@ test_*.txt
 
 # 排除本地資料目錄
 data/
+
+# 排除封存工具之子模組/未追蹤內容
+_archive/tools/superpowers
