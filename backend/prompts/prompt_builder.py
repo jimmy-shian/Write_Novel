@@ -54,7 +54,7 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 
 def compact_context_text(value, limit, label="context"):
-    """Keep both head and tail so long prompts retain setup and latest details."""
+    """Emergency transport guard; normal detail selection should use structured/paged context."""
     if value is None:
         return ""
     if not isinstance(value, str):
@@ -64,7 +64,11 @@ def compact_context_text(value, limit, label="context"):
             value = str(value)
     if limit is None or limit <= 0 or len(value) <= limit:
         return value
-    marker = f"\n\n...[{label} 已因上下文長度限制省略 {len(value) - limit} 字，保留開頭與結尾]...\n\n"
+    marker = (
+        f"\n\n...[{label} 超過單次傳輸上限，這是後端保護性收合而非審查依據；"
+        f"請總監用 inspect_content_block/expand_collapsed_json 指定位置展開，未展開前不得臆測。"
+        f"保留開頭與結尾，收合 {len(value) - limit} 字]...\n\n"
+    )
     head_len = max(1, (limit - len(marker)) * 2 // 3)
     tail_len = max(1, limit - len(marker) - head_len)
     return value[:head_len] + marker + value[-tail_len:]
@@ -92,7 +96,11 @@ def compact_json_data(data, max_list_items=10):
             
             # Use a consistent structural summary marker so callers can detect compaction reliably.
             summary_item = {
-                "...摘要...": f"資料庫中實際已完整儲存共 {total_len} 筆項目，符合硬性指標要求；此處為節省上下文長度，省略中間 {omitted} 筆"
+                "...摘要...": (
+                    f"資料庫中實際已完整儲存共 {total_len} 筆項目；此處只提供預設視圖，"
+                    f"收合中間 {omitted} 筆。若需逐項審查，請由總監指定 start_index/end_index "
+                    "呼叫 inspect_content_block 或 expand_collapsed_json。"
+                )
             }
             
             return head + [summary_item] + tail
@@ -1212,9 +1220,17 @@ def build_director_decision_messages(
         character_review_hint = compact_context_text(character_review_hint, 8000, "角色修改提示")
     if director_context_block:
         director_context_block = compact_context_text(director_context_block, 16000, "總監補充上下文")
+
+    director_input_policy = """
+
+## Director 輸入與展開政策
+1. 本輪輸入可能包含「硬指標計數」與「預設視圖」。硬指標由 Python 校驗報告直接計算；預設視圖只用於定位，不可把未展開項目當成已審查。
+2. 若需要查看長列表或指定章節/卷/欄位的完整內容，請用 `TOOL_CALL inspect_content_block` 指定 stage_name、block_name、volume_index/chapter_index、start_index/end_index；首次預設檢視 1~15，後續由你決定下一段。
+3. 若遇到前端回報的 system_event（錯誤、阻斷、索引缺失、執行失敗），請把它當作事實封包，根據 validation_report 與工具檢視結果決定下一步；前端不負責判斷流程。
+"""
                     
-    # 總監評斷世界觀時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
-    if current_stage != "worldview":
+    # 總監評斷世界觀與進行伏筆審查時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
+    if current_stage not in ("worldview", "foreshadowing"):
         worldview_text = mask_worldview_seeds_and_turns(worldview_text)
 
     # 根據 current_stage 構建不同的審查內容
@@ -1395,6 +1411,35 @@ def build_director_decision_messages(
 請進行深度評估，決定下一步行動！
 """
     
+    elif current_stage == "foreshadowing":
+        # 伏筆審查階段
+        system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前伏筆與轉折點的創作質量，並決定下一步的最佳動作。
+ 
+【審查原則】
+1. 當前階段是「current_stage = {current_stage}」（伏筆與轉折編織師）。
+2. 請核對「世界觀背景」以及「剛性校驗報告」。
+3. 確認伏筆種子（foreshadowing_seeds）是否包含必要欄位，且數量是否達到 50 個。
+4. 確認關鍵轉折點（key_turning_points）是否包含必要欄位，且數量是否達到 50 個。
+5. **重要審查指引（分步展開審查）**：
+   - 審查應分步進行（例如先確認伏筆種子，再確認轉折點）。
+   - 你可以使用 `expand_collapsed_json` 工具來分頁展開查看資料庫中的完整伏筆列表。
+   - 例如，你可以呼叫 `expand_collapsed_json` 展開 1~10，在下一輪呼叫展開 11~20，依此類推。
+   - **檢查-1, 2, 3 的步驟狀態**：你必須在反饋中寫清楚目前是針對「Step 1: 伏筆種子 1-10 審查」、「Step 2: 伏筆種子 11-20 審查」還是「Step 3: 轉折點審查」等。
+   - 如果某部分不合格，你可以使用 `supplement_content` 工具進行部分修改與補強。
+   - 只有當伏筆種子與轉折點皆確認合格且數量足夠後，才能下達 `CONTINUE` 進入 `characters` 階段。
+
+{stage_criteria}
+ 
+{DIRECTOR_COMMON_FOOTER}
+"""
+        user_content = f"""{default_user_prompt_section}
+ 
+【完整世界觀背景】
+{worldview_text}
+ 
+請進行深度評估，決定下一步行動！
+"""
+    
     else:
         # 默認通用格式
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前階段的創作質量，並決定下一步的最佳動作。
@@ -1409,14 +1454,16 @@ def build_director_decision_messages(
         user_content = f"""{default_user_prompt_section}
  
 【當前各板塊數據】
-- 世界觀設定：{worldview_text[:1500] if worldview_text else "（空）"}
-- 角色設定：{characters_text[:1500] if characters_text else "（空）"}
-- 大綱設定：{plot_text[:1500] if plot_text else "（空）"}
+- 世界觀設定：{worldview_text if worldview_text else "（空）"}
+- 角色設定：{characters_text if characters_text else "（空）"}
+- 大綱設定：{plot_text if plot_text else "（空）"}
 - 正文：{written_chapters_text if written_chapters_text else "（空）"}
  
 請進行深度評估，決定下一步行動！
 """
     
+    system_prompt += director_input_policy
+
     if gold_rules_context:
         system_prompt += f"""
 
@@ -1457,14 +1504,19 @@ def build_director_decision_messages(
                 _user_parts = []
                 for _m in _input_msgs:
                     if isinstance(_m, dict) and _m.get('role') == 'user':
-                        _c = (_m.get('content') or '')[:2000]
+                        _c = compact_context_text(_m.get('content') or '', 8000, "上一輪 Agent user input")
                         _user_parts.append(_c)
                 _user_content_summary = '\n---\n'.join(_user_parts) if _user_parts else '(無 user 訊息)'
             else:
-                _user_content_summary = str(_input_msgs)[:2000]
+                _user_content_summary = compact_context_text(str(_input_msgs), 8000, "上一輪 Agent input")
         except Exception:
-            _user_content_summary = _last_input[:2000]
-        _output_summary = _last_output[:3000] if len(_last_output) > 3000 else _last_output
+            _user_content_summary = compact_context_text(_last_input, 8000, "上一輪 Agent input")
+        # 清理思考過程標記 (不放入思考)
+        import re
+        clean_last_output = re.sub(r"<think>.*?</think>", "", _last_output, flags=re.DOTALL).strip()
+        is_structural_stage = _last_stage in ("worldview", "foreshadowing", "characters", "volumes", "volume_skeleton")
+        limit = 50000 if is_structural_stage else 5000
+        _output_summary = compact_context_text(clean_last_output, limit, "上一輪 Agent output")
         last_run_block = f"""
 
 【上一個運行的 Agent 執行記錄 (Last Agent Run)】
@@ -1472,7 +1524,7 @@ def build_director_decision_messages(
 - 該 Agent 接收到的使用者指示摘要 (User Content)：
 {_user_content_summary}
 
-- 該 Agent 產生的原始輸出摘要 (Output, 前3000字)：
+- 該 Agent 產生的原始輸出內容 (Output)：
 {_output_summary}
 """
         system_prompt += """
