@@ -86,6 +86,105 @@ from backend.prompts.prompt_builder import (
 _load_retrospective_gold_rules = load_retrospective_gold_rules
 
 
+
+def _tool_json(value):
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(value)
+
+
+def _infer_tool_review_range(params, fallback_start=1, fallback_end=15):
+    text = " ".join(
+        str(params.get(key, ""))
+        for key in ("evaluation_feedback", "reason", "hint", "agent_prompt", "original_output")
+    )
+    for pattern in (r"(\d+)\s*[-~到至]\s*(\d+)", r"第\s*(\d+)\s*[到至]\s*(\d+)"):
+        import re
+        match = re.search(pattern, text)
+        if match:
+            try:
+                start = max(1, int(match.group(1)))
+                end = max(start, int(match.group(2)))
+                return start, end
+            except Exception:
+                pass
+    try:
+        start = int(params.get("start_index") or fallback_start)
+    except Exception:
+        start = fallback_start
+    try:
+        end = int(params.get("end_index") or fallback_end)
+    except Exception:
+        end = fallback_end
+    return max(1, start), max(max(1, start), end)
+
+
+def _latest_stage_output_for_tool_review(novel_id, stage_name):
+    stage = (stage_name or "").strip()
+    if stage in ("worldview", "foreshadowing"):
+        wb = db.get_latest_worldbuilding(novel_id)
+        return wb["content"] if wb else ""
+    if stage == "characters":
+        char = db.get_latest_characters(novel_id)
+        if not char:
+            return ""
+        return char.get("json_data") or _tool_json(char.get("parsed_data") or {})
+    if stage == "volumes":
+        return _tool_json({"volumes": db.get_volumes(novel_id)})
+    if stage == "volume_skeleton":
+        return _tool_json({"volumes": db.get_volumes(novel_id)})
+    return ""
+
+
+def _build_tool_followup_context(tool_name, params, tool_result, post_tool_audit=None):
+    return (
+        "【總監工具執行結果 - 必須二次評判】\n"
+        f"tool_name: {tool_name}\n"
+        f"parameters:\n{_tool_json(params)}\n\n"
+        f"tool_result:\n{_tool_json(tool_result)}\n\n"
+        f"post_tool_audit:\n{_tool_json(post_tool_audit or {})}\n\n"
+        "請你根據最新資料庫狀態、validation_report、post_tool_audit 與必要的展開內容重新判斷。\n"
+        "如果補強後內容仍未達標，禁止輸出 WAIT_USER 或 FINISH；請使用 TOOL_CALL 繼續展開/補強，或用 CONTINUE/AUTO_REGENERATE/GO_BACK_* 派發正確階段。\n"
+        "只有在硬性校驗與你實際展開審查的內容都確認已合格，才可以放行或等待使用者。"
+    )
+
+
+def _run_director_followup_after_tool(
+    novel_id,
+    current_stage,
+    user_prompt,
+    extra_context,
+    tool_context,
+    chapter_index,
+    volume_index,
+    suggested_next_chapter,
+    conversation_context,
+    summary_context,
+    loop_count,
+    stream,
+    force_json,
+):
+    combined_extra = "\n\n".join(part for part in (extra_context, tool_context) if part)
+    yield "data: " + json.dumps({
+        "type": "status",
+        "message": "工具執行完成，正在請總監依更新後資料二次評判..."
+    }, ensure_ascii=False) + "\n\n"
+    yield from run_director_decision(
+        novel_id,
+        current_stage=current_stage,
+        user_prompt=user_prompt,
+        chapter_index=chapter_index,
+        volume_index=volume_index,
+        suggested_next_chapter=suggested_next_chapter,
+        conversation_context=conversation_context,
+        summary_context=summary_context,
+        extra_context=combined_extra,
+        loop_count=loop_count + 1,
+        stream=stream,
+        force_json=force_json,
+    )
+
 import time
 
 async def safe_generator_wrapper(gen, novel_id=None):
@@ -1883,6 +1982,7 @@ def run_director_decision(
             tool_call = parsed.get("tool_call") or {}
             tool_name = tool_call.get("tool_name")
             params = tool_call.get("parameters") or {}
+            tool_followup_context = None
             
             if tool_name == "invoke_sub_agent":
                 agent_name = params.get("agent_name")
@@ -1900,9 +2000,11 @@ def run_director_decision(
                 res = sub_gen.result
                 if res and res.get("success"):
                     yield "data: " + json.dumps({"type": "status", "message": f"子代理人 {agent_name} 執行成功。"}, ensure_ascii=False) + "\n\n"
+                    tool_followup_context = _build_tool_followup_context(tool_name, params, res)
                 else:
                     err_msg = res.get("error", "未知錯誤") if res else "未取得執行結果"
                     yield "data: " + json.dumps({"type": "error", "message": f"子代理人 {agent_name} 執行失敗: {err_msg}"}, ensure_ascii=False) + "\n\n"
+                    tool_followup_context = _build_tool_followup_context(tool_name, params, res or {"success": False, "error": err_msg})
                     
             elif tool_name == "evaluate_output":
                 stage_name = params.get("stage_name")
@@ -1912,6 +2014,7 @@ def run_director_decision(
                 from backend.services.director_tools import evaluate_output
                 eval_res = evaluate_output(stage_name, output_content, novel_id)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[評估結果] {json.dumps(eval_res, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
+                tool_followup_context = _build_tool_followup_context(tool_name, params, eval_res)
                 
             elif tool_name == "supplement_content":
                 stage_name = params.get("stage_name")
@@ -1925,10 +2028,118 @@ def run_director_decision(
                     yield sub_chunk
                 res = supp_gen.result
                 if res and res.get("success"):
-                    yield "data: " + json.dumps({"type": "status", "message": f"內容補強與局部修正完成。"}, ensure_ascii=False) + "\n\n"
+                    enhanced_content = res.get("enhanced_content")
+                    # 💡 [關鍵功能]: 保存補強內容到資料庫中！
+                    if stage_name == "worldview":
+                        db.save_worldbuilding(novel_id, enhanced_content, validate=False)
+                    elif stage_name == "foreshadowing":
+                        parsed_enhanced = extract_json_block(enhanced_content)
+                        wb = db.get_latest_worldbuilding(novel_id)
+                        wb_dict = db.parse_worldview_to_json(wb["content"]) if wb else {}
+                        
+                        if isinstance(parsed_enhanced, dict):
+                            if "foreshadowing_seeds" in parsed_enhanced:
+                                wb_dict["foreshadowing_seeds"] = parsed_enhanced["foreshadowing_seeds"]
+                            if "key_turning_points" in parsed_enhanced:
+                                wb_dict["key_turning_points"] = parsed_enhanced["key_turning_points"]
+                            db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False, indent=2), validate=False)
+                        elif isinstance(parsed_enhanced, list):
+                            # 若直接回傳 JSON 陣列，判斷其是否為伏筆種子（含有 setup_hint/payoff_hint 等）或轉折點
+                            is_seeds = any("setup_hint" in str(item) or "payoff" in str(item) for item in parsed_enhanced[:3])
+                            if is_seeds:
+                                wb_dict["foreshadowing_seeds"] = parsed_enhanced
+                            else:
+                                wb_dict["key_turning_points"] = parsed_enhanced
+                            db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False, indent=2), validate=False)
+                    elif stage_name == "characters":
+                        db.save_characters(novel_id, enhanced_content)
+                    elif stage_name == "volumes":
+                        parsed_enhanced = extract_json_block(enhanced_content)
+                        volumes_payload = parsed_enhanced.get("volumes") if isinstance(parsed_enhanced, dict) else parsed_enhanced
+                        if isinstance(volumes_payload, list):
+                            db.save_volumes(novel_id, volumes_payload)
+                        else:
+                            raise ValueError("supplement_content for volumes did not return a volumes list")
+                    elif stage_name == "volume_skeleton":
+                        parsed_enhanced = extract_json_block(enhanced_content)
+                        chapters_skeleton = parsed_enhanced.get("chapters") or parsed_enhanced.get("chapters_outline") or parsed_enhanced
+                        if isinstance(chapters_skeleton, list):
+                            vol_idx = params.get("volume_index") or 1
+                            db.save_volume_skeletons(novel_id, vol_idx, chapters_skeleton)
+
+                    post_tool_audit = {"persisted": True, "stage_name": stage_name}
+                    latest_output = _latest_stage_output_for_tool_review(novel_id, stage_name)
+                    if latest_output:
+                        try:
+                            from backend.services.director_tools import evaluate_output, inspect_content_block
+                            post_tool_audit["hard_evaluation"] = evaluate_output(stage_name, latest_output, novel_id)
+                            if stage_name in ("foreshadowing", "worldview"):
+                                start_idx, end_idx = _infer_tool_review_range(params)
+                                parsed_latest = db.parse_worldview_to_json(latest_output)
+                                fields_to_inspect = []
+                                if isinstance(parsed_latest, dict):
+                                    if isinstance(parsed_latest.get("foreshadowing_seeds"), list):
+                                        fields_to_inspect.append("foreshadowing_seeds")
+                                    if isinstance(parsed_latest.get("key_turning_points"), list):
+                                        fields_to_inspect.append("key_turning_points")
+                                post_tool_audit["expanded_after_persist"] = [
+                                    inspect_content_block(stage_name, field, novel_id, start_index=start_idx, end_index=end_idx)
+                                    for field in fields_to_inspect
+                                ]
+                        except Exception as audit_exc:
+                            post_tool_audit["audit_error"] = str(audit_exc)
+
+                    yield "data: " + json.dumps({"type": "status", "message": "內容補強與局部修正完成，已自動更新至資料庫，將交回總監二次核驗。"}, ensure_ascii=False) + "\n\n"
+                    tool_followup_context = _build_tool_followup_context(tool_name, params, res, post_tool_audit)
                 else:
                     yield "data: " + json.dumps({"type": "error", "message": f"內容補強失敗。"}, ensure_ascii=False) + "\n\n"
+                    tool_followup_context = _build_tool_followup_context(tool_name, params, res or {"success": False, "error": "內容補強失敗"})
 
+
+
+            elif tool_name == "inspect_content_block":
+                from backend.services.director_tools import inspect_content_block
+                result = inspect_content_block(novel_id=novel_id, **params)
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n[展開檢視結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            elif tool_name == "expand_collapsed_json":
+                from backend.services.director_tools import expand_collapsed_json
+                result = expand_collapsed_json(novel_id=novel_id, **params)
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n[展開檢視結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            elif tool_name == "goto_generation_position":
+                from backend.services.director_tools import goto_generation_position
+                result = goto_generation_position(novel_id=novel_id, **params)
+                decision = result.get("decision") if isinstance(result, dict) else None
+                if decision:
+                    yield "data: " + json.dumps({"type": "content", "delta": "\n```json\n" + json.dumps(decision, ensure_ascii=False, indent=2) + "\n```\n"}, ensure_ascii=False) + "\n\n"
+                    return
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            else:
+                result = {"success": False, "error": f"未知總監工具: {tool_name}"}
+                yield "data: " + json.dumps({"type": "error", "message": result["error"]}, ensure_ascii=False) + "\n\n"
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            if tool_followup_context:
+                yield from _run_director_followup_after_tool(
+                    novel_id,
+                    current_stage,
+                    user_prompt,
+                    extra_context,
+                    tool_followup_context,
+                    chapter_index,
+                    volume_index,
+                    suggested_next_chapter,
+                    conversation_context,
+                    summary_context,
+                    loop_count,
+                    stream,
+                    force_json,
+                )
+                return
 
 
 def run_director_decision_help(novel_id, current_stage, help_action, help_reason, stream=False, force_json=False):
