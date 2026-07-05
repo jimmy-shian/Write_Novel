@@ -2235,19 +2235,38 @@ def save_volume_skeletons(novel_id, volume_index, chapters_skeleton):
     volumes = get_volumes(novel_id)
     start_ch, end_ch = get_volume_chapter_range(volumes, volume_index)
     
-    # 過濾出界章節，避免不連續跳號或骨架寫入其他卷
+    # 過濾與映射章節，避免不連續跳號或骨架寫入其他卷
     cleaned_skeleton = []
-    for ch in chapters_skeleton:
+    
+    # 建立映射以防相對/缺漏索引
+    expected_count = (end_ch - start_ch + 1) if (start_ch is not None and end_ch is not None) else len(chapters_skeleton)
+    
+    for idx, ch in enumerate(chapters_skeleton):
+        if not isinstance(ch, dict):
+            continue
         c_idx = ch.get("chapter_index")
-        if c_idx is not None:
-            try:
-                c_idx_int = int(c_idx)
-                if start_ch <= c_idx_int <= end_ch:
+        
+        if start_ch is not None and end_ch is not None:
+            if c_idx is not None:
+                try:
+                    c_idx_int = int(c_idx)
+                    # 💡 [相對索引映射]: 若為相對卷內索引 (如 1..10)，將其映射至絕對章節區間
+                    if 1 <= c_idx_int <= expected_count and c_idx_int < start_ch:
+                        c_idx_int = start_ch + c_idx_int - 1
+                        ch["chapter_index"] = c_idx_int
+                    
+                    if start_ch <= c_idx_int <= end_ch:
+                        cleaned_skeleton.append(ch)
+                    else:
+                        print(f"[WARN] save_volume_skeletons filtered out out-of-bounds chapter {c_idx_int} for Vol {volume_index} (expected [{start_ch}, {end_ch}])")
+                except Exception as e:
+                    print(f"[WARN] Failed to parse/map chapter index {c_idx} in save_volume_skeletons: {e}")
+            else:
+                # 💡 [補全缺漏索引]: 若無 chapter_index，自動依序賦予
+                assigned_idx = start_ch + len(cleaned_skeleton)
+                if assigned_idx <= end_ch:
+                    ch["chapter_index"] = assigned_idx
                     cleaned_skeleton.append(ch)
-                else:
-                    print(f"[WARN] save_volume_skeletons filtered out out-of-bounds chapter {c_idx_int} for Vol {volume_index} (expected [{start_ch}, {end_ch}])")
-            except:
-                pass
         else:
             cleaned_skeleton.append(ch)
             
