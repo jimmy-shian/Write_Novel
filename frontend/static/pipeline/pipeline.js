@@ -28,6 +28,7 @@ export function showPipelineProgress(show) {
 export function startPipelineHeartbeat(novelId) {
     state.pipelineStartTime = Date.now();
     state.receiveFinishCommand = false;
+    state.pipelineHeartbeatMisses = 0;
     
     if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
     
@@ -35,8 +36,7 @@ export function startPipelineHeartbeat(novelId) {
         const elapsed = Date.now() - state.pipelineStartTime;
         if (elapsed > state.maxPipelineTimeout) {
             clearInterval(state.heartbeatTimer);
-            showToast('⚠️ 管線已超時 (10 分鐘)，自動暫停');
-            abortPipeline();
+            await recoverPipelineFromHeartbeat('pipeline_timeout', '管線已超時，正在請求總監重新判斷下一步');
             return;
         }
         
@@ -44,13 +44,73 @@ export function startPipelineHeartbeat(novelId) {
             const res = await fetch(`/api/novels/${novelId}/pipeline-status`);
             const data = await res.json();
             if (!data.running) {
-                showToast('⚠️ 後端管線已中斷');
-                abortPipeline();
+                state.pipelineHeartbeatMisses = (state.pipelineHeartbeatMisses || 0) + 1;
+                if (state.pipelineHeartbeatMisses >= 3) {
+                    await recoverPipelineFromHeartbeat('pipeline_lock_lost', '後端管線狀態中斷，正在請求總監重新接續');
+                }
+            } else {
+                state.pipelineHeartbeatMisses = 0;
             }
         } catch (e) {
             // ignore transient network errors
         }
     }, 15000);
+}
+
+function getRunningPipelineStage() {
+    const statuses = state.directorSubAgentStatus || {};
+    const runningStage = Object.entries(statuses).find(([, status]) => status === 'running')?.[0];
+    if (runningStage) return runningStage;
+    if (state.activeTab === 'plot') return 'volume_skeleton';
+    return state.activeTab || 'init';
+}
+
+async function recoverPipelineFromHeartbeat(type, message) {
+    if (state.pipelineRecoveryInProgress || !state.isPipelineRunning || state.receiveFinishCommand) {
+        return;
+    }
+    state.pipelineRecoveryInProgress = true;
+    stopPipelineHeartbeat();
+    showToast(`⚠️ ${message}...`);
+
+    try {
+        const stage = getRunningPipelineStage();
+        const userPrompt = (state.pipelinePrompt || '').trim()
+            || (state.currentNovelData?.novel?.pipeline_prompt || '').trim()
+            || '請根據現有設定繼續創作';
+
+        if (typeof window.runDirectorDecision !== 'function' || typeof window.executeDirectorAction !== 'function') {
+            throw new Error('總監恢復函式尚未載入');
+        }
+
+        const nextDecision = await window.runDirectorDecision(stage, userPrompt, {
+            system_event: {
+                type,
+                failed_stage: stage,
+                active_chapter_index: state.activeChapterIndex || 1,
+                active_volume_index: state.activeVolumeIndex || 1,
+                original_user_prompt: userPrompt,
+                instruction: '前端偵測到後端管線 lock 消失或逾時。請根據 validation_report 重新派發下一個正確階段；若內容已完成，直接前往下一階段，不要讓流程停擺。'
+            }
+        });
+
+        if (nextDecision && nextDecision.action) {
+            state.isPipelineRunning = true;
+            showPipelineProgress(true);
+            await window.executeDirectorAction(nextDecision, userPrompt);
+        } else {
+            state.isPipelineRunning = false;
+            showPipelineProgress(false);
+        }
+    } catch (e) {
+        console.error('[PipelineHeartbeat] Recovery failed:', e);
+        state.isPipelineRunning = false;
+        showPipelineProgress(false);
+        showToast(`管線恢復失敗: ${e.message || e}`);
+    } finally {
+        state.pipelineRecoveryInProgress = false;
+        state.pipelineHeartbeatMisses = 0;
+    }
 }
 
 export function stopPipelineHeartbeat() {
@@ -218,6 +278,16 @@ function buildDirectorDrivenPrompt(basePrompt, decision = null) {
         const agentPrompt = (decision.agent_prompt || decision.hint || '').trim();
         const agentContext = (decision.agent_context || '').trim();
         const userIntentSummary = (decision.user_intent_summary || '').trim();
+        const reason = (decision.reason || '').trim();
+        const decisionEnvelope = {
+            action: decision.action || null,
+            target: decision.target || null,
+            volume_index: decision.volume_index ?? null,
+            chapter_index: decision.chapter_index ?? null,
+            task_type: decision.task_type || null,
+            chapter_range: decision.chapter_range || null,
+            selection: decision.selection || null
+        };
 
         if (agentPrompt && agentPrompt !== originalPrompt) {
             sections.push(`【總監指定任務】\n${agentPrompt}`);
@@ -228,6 +298,10 @@ function buildDirectorDrivenPrompt(basePrompt, decision = null) {
         if (userIntentSummary) {
             sections.push(`【總監理解的作者目標】\n${userIntentSummary}`);
         }
+        if (reason) {
+            sections.push(`【總監決策理由】\n${reason}`);
+        }
+        sections.push(`【總監決策封包】\n${JSON.stringify(decisionEnvelope, null, 2)}`);
     }
 
     return sections.join('\n\n').trim();
@@ -457,23 +531,45 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 state.directorSubAgentStatus[stage] = 'error';
                 renderSubAgentStatus(state.directorSubAgentStatus);
                 stopPipelineHeartbeat();
-                const wasRunning = state.isPipelineRunning;
-                state.isPipelineRunning = false;
+                const shouldAskDirector = state.isPipelineRunning && !state.receiveFinishCommand;
                 state.currentlyWritingChapterIndex = null;
                 window.updateAgentStreamOutput(stage, `\n[Error: ${msg}]`);
                 showToast(`${stage} Agent 執行失敗: ${msg}`);
                 updatePipelineStage(stage, 'error');
                 hideAgentProcessingIndicator(stage);
                 
-                if (wasRunning) {
+                if (shouldAskDirector) {
                     // 啟用總監自癒容錯機制，將錯誤反饋給總監
                     showToast("⚠️ 偵測到管線執行錯誤，正在請求總監進行決策自癒修正...");
                     setTimeout(async () => {
-                        state.isPipelineRunning = true;
-                        showPipelineProgress(true);
-                        const errorPrompt = `【⚠️ 系統錯誤自癒回報】：\n在執行「${stage}」階段（目標章節：第 ${state.activeChapterIndex || 1} 章 / 目標卷：第 ${state.activeVolumeIndex || 1} 卷）時，底層 Agent 發生錯誤崩潰。\n錯誤訊息：${msg}\n\n這通常是由於目標章節尚未寫作（例如在無正文的情況下調用 editor），或者大綱中缺少對應的骨架。\n請仔細審視上述「系統底層剛性校驗報告」並分析本錯誤，然後修正你的下一步決策 JSON，切勿重複相同的錯誤指令！`;
-                        const nextDecision = await window.runDirectorDecision(stage, errorPrompt);
-                        await window.executeDirectorAction(nextDecision, userPrompt);
+                        try {
+                            state.isPipelineRunning = true;
+                            showPipelineProgress(true);
+                            const nextDecision = await window.runDirectorDecision(stage, userPrompt, {
+                                system_event: {
+                                    type: 'agent_execution_error',
+                                    failed_stage: stage,
+                                    failed_endpoint: endpoint,
+                                    active_chapter_index: state.activeChapterIndex || 1,
+                                    active_volume_index: state.activeVolumeIndex || 1,
+                                    error_message: msg,
+                                    original_user_prompt: userPrompt || '',
+                                    director_decision_before_failure: decision || null,
+                                    instruction: '前端只回報錯誤事實；請總監根據 validation_report 與工具檢視結果決定下一步，避免重複同一錯誤指令。若後端已中斷，請重新派發正確階段，而不是讓流程停擺。'
+                                }
+                            });
+                            if (nextDecision && nextDecision.action) {
+                                await window.executeDirectorAction(nextDecision, userPrompt);
+                            } else {
+                                state.isPipelineRunning = false;
+                                showPipelineProgress(false);
+                            }
+                        } catch (e) {
+                            console.error('[PipelineRecovery] Director recovery failed:', e);
+                            state.isPipelineRunning = false;
+                            showPipelineProgress(false);
+                            showToast(`總監自癒重試失敗: ${e.message || e}`);
+                        }
                         resolve();
                     }, 3000);
                 } else {
@@ -512,6 +608,9 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 resolve();
             },
             10,
+            (error, retry, maxRetries) => {
+                window.updateAgentStreamOutput(stage, `\n[Retry ${retry}/${maxRetries}: ${error}]\n`);
+            },
             async () => {
                 failed = false;
                 state.isPipelineRunning = true;

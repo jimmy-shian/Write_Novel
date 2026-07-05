@@ -196,8 +196,8 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
         const signal = controller.signal;
 
         let activityTimer = null;
-        const STALL_TIMEOUT = 300000; // 300 seconds
-        const CONNECT_TIMEOUT = 300000; // 300 seconds
+        const STALL_TIMEOUT = 300000; // 300 seconds (5 minutes) - Director timeout set to 5 mins
+        const CONNECT_TIMEOUT = 300000; // 300 seconds (5 minutes) - Director connect timeout set to 5 mins
         let connectTimer = null;
 
         function resetActivityTimer() {

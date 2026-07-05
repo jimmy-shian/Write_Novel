@@ -672,6 +672,10 @@ async function executeDirectorAction(decision, userPrompt) {
             updateDirectorMessage('⏸️ 等待用戶確認...');
             state.directorLoopCount = 0;
             state.isPipelineRunning = false;
+            
+            if (state.currentNovelId) {
+                await loadNovelDetails(state.currentNovelId);
+            }
             break;
         }
         
@@ -761,6 +765,22 @@ async function executeDirectorAction(decision, userPrompt) {
                 task_type: action === 'SEGMENT_COMPLETE' ? 'segment_complete' : 'segment_generate',
             };
             await executePipelineStage('volume_skeleton', userPrompt, segDecision);
+            break;
+        }
+
+        case 'TOOL_CALL': {
+            showToast('🔎 總監工具已執行，正在重新載入資料並進行二次評判...');
+            if (state.currentNovelId) {
+                await loadNovelDetails(state.currentNovelId);
+            }
+            const nextDecision = await runDirectorDecision(state.activeTab || 'init', userPrompt, {
+                system_event: {
+                    type: 'tool_call_requires_followup',
+                    previous_director_response: decision.response || '',
+                    instruction: '前端最終仍收到 TOOL_CALL。請根據最新資料庫狀態與工具結果重新輸出正常決策 JSON；若內容仍不合格，禁止 WAIT_USER，需繼續展開/補強或派發正確階段。'
+                }
+            });
+            await executeDirectorAction(nextDecision, userPrompt);
             break;
         }
 
@@ -909,7 +929,7 @@ async function executeArchitectAgent() {
             // 添加錯誤訊息到聊天
             appendChatMessage('assistant', `⚠️ 世界觀生成失敗: ${error}`);
         },
-        async () => {
+        async (success) => {
             el.editorWorldview.disabled = false;
             updatePipelineStage('worldview', 'done');
             
@@ -961,7 +981,7 @@ async function executeCharacterAgent() {
  * @param {function} onDone - 成功完成回呼
  * @param {number} maxRetries - 最大重試次數（預設 10 次）
  */
-window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10, onRetryRecovered = null) {
+window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10, onRetrying = null, onRetryRecovered = null) {
     let currentRetry = 0;
     let hadPreviousError = false;
     
@@ -998,6 +1018,9 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                 
                 if (currentRetry <= maxRetries) {
                     hadPreviousError = true;
+                    if (typeof onRetrying === 'function') {
+                        onRetrying(error, currentRetry, maxRetries);
+                    }
                     appendChatMessage('system', 
                         `⚠️ **[系統防禦中斷]** 管線在執行 \`${endpointName}\` 時發生異常中斷。\n` +
                         `❌ 錯誤回報: *${error}*\n` +
@@ -1021,8 +1044,8 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                     try { hideAllAgentProcessingIndicators(); } catch(e) {}
                 }
             },
-            async () => {
-                if (hasError) return;
+            async (success) => {
+                if (hasError || success === false) return;
                 if (currentRetry > 1) {
                     appendChatMessage('system', 
                         `✅ **[系統自動修復成功]** 管線在第 **${currentRetry}** 次嘗試後成功恢復運作！\n` +
@@ -3341,6 +3364,15 @@ function cacheDirectorDecisionMessage(content, thinking) {
 
 function buildDirectorExtraContext(reviewContext = null) {
     const parts = [];
+    if (reviewContext?.system_event) {
+        let eventText = '';
+        try {
+            eventText = JSON.stringify(reviewContext.system_event, null, 2);
+        } catch (e) {
+            eventText = String(reviewContext.system_event);
+        }
+        parts.push(`【前端系統事件】\n${eventText}`);
+    }
     if (reviewContext?.extra_context) {
         parts.push(`【呼叫端補充說明】\n${String(reviewContext.extra_context).trim()}`);
     }
@@ -3365,7 +3397,7 @@ function buildDirectorExtraContext(reviewContext = null) {
     return parts.join('\n\n');
 }
 
-async function runDirectorDecision(currentStage, providedUserPrompt = null, reviewContext = null) {
+async function runDirectorDecision(currentStage, providedUserPrompt = null, reviewContext = null, retryCount = 0) {
     switchToDirectorTab();
     if (state.isAutoExecuteMode) {
         state.directorLoopCount++;
@@ -3526,7 +3558,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 streamTarget.classList.remove('stream-typing');
                 streamTarget.classList.add('streaming-done');
             },
-            async () => {
+            async (success) => {
                 if (pipelineLockBusy) {
                     console.log('[Director] Pipeline lock was busy, resolving with null action to trigger fallback.');
                     resolve({
@@ -3550,6 +3582,32 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 cacheDirectorDecisionMessage(responseText, thinkingText);
                 let decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
+
+                // 檢查是否呼叫失敗或解析無效
+                const isFailed = (success === false) || !action;
+                if (isFailed) {
+                    const MAX_RETRIES = 3;
+                    if (retryCount < MAX_RETRIES) {
+                        const nextRetry = retryCount + 1;
+                        console.warn(`[Director] Call failed or unparseable. Retrying attempt ${nextRetry}/${MAX_RETRIES}...`);
+                        appendChatMessage('system', `⚠️ **[總監決策異常]** 連線失敗或無法解析決策指令。將在 3 秒後進行第 ${nextRetry} 次重試重新呼叫總監...`);
+                        showToast(`⚠️ 總監呼叫失敗，將在 3 秒後重試第 ${nextRetry} 次...`);
+                        
+                        setTimeout(async () => {
+                            try {
+                                const retryResult = await runDirectorDecision(currentStage, providedUserPrompt, reviewContext, nextRetry);
+                                resolve(retryResult);
+                            } catch (e) {
+                                console.error('Director retry error:', e);
+                                resolve({ action: null, target: null, reason: 'Retry error: ' + e.message });
+                            }
+                        }, 3000);
+                        return;
+                    } else {
+                        appendChatMessage('system', `❌ **[總監決策失敗]** 已達到最大重試次數 (${MAX_RETRIES})，總監呼叫仍失敗。回退到智能狀態檢測。`);
+                        showToast(`❌ 總監呼叫失敗已達上限，回退至狀態檢測`);
+                    }
+                }
                 
                 // 【自動補正 volume_index / chapter_index】
                 // 若 AI 總監回傳了 target 但缺少必要的索引，呼叫後端純計算補正端點
