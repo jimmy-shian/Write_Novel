@@ -26,6 +26,14 @@ from backend.models.parsers import extract_json_block
 MAX_RETRIES = 10
 
 TOOL_REGISTRY = {
+    "goto_generation_position": {
+        "description": "前往指定生成位置；由總監明確指定下一個 target/stage 與卷章索引，系統會轉成可執行決策",
+        "parameters": ["target", "novel_id", "volume_index", "chapter_index", "reason", "agent_prompt", "agent_context"],
+    },
+    "inspect_content_block": {
+        "description": "檢視指定區塊；依總監指定的 stage/block/range 展開資料庫內容，預設每次 15 筆",
+        "parameters": ["stage_name", "block_name", "novel_id", "volume_index", "chapter_index", "start_index", "end_index"],
+    },
     "invoke_sub_agent": {
         "description": "呼叫指定的下游代理人執行生成任務，傳回結果",
         "parameters": ["agent_name", "task_description", "context", "max_tokens"],
@@ -37,6 +45,10 @@ TOOL_REGISTRY = {
     "supplement_content": {
         "description": "對不合格的輸出進行補強生成或局部修正",
         "parameters": ["stage_name", "original_output", "evaluation_feedback", "novel_id"],
+    },
+    "expand_collapsed_json": {
+        "description": "分批/分頁展開查看被收合的 JSON 內容，每次指定一小段區間（如 1~10、11~20），避免一次讀取過多導致截斷",
+        "parameters": ["stage_name", "field_name", "start_index", "end_index", "novel_id"],
     },
 }
 
@@ -196,6 +208,194 @@ def supplement_content(
         }
 
     return SubAgentGenerator(_run())
+
+
+def expand_collapsed_json(
+    stage_name: str,
+    field_name: str,
+    start_index: int,
+    end_index: int,
+    novel_id: str
+) -> Dict[str, Any]:
+    """
+    [Tool 4] 允許總監分批展開查看被收合的 JSON 陣列內容 (如 1~10, 11~20)
+    避免一次載入全部 50 個項目導致 Token 溢出或截斷，使總監能精準評估。
+    """
+    if stage_name in ("foreshadowing", "worldview"):
+        wb = db.get_latest_worldbuilding(novel_id)
+        if not wb:
+            return {"success": False, "error": "世界觀設定為空"}
+        try:
+            parsed = json.loads(wb["content"])
+        except Exception:
+            parsed = db.parse_worldview_to_json(wb["content"])
+            
+        if not isinstance(parsed, dict):
+            return {"success": False, "error": "無法解析世界觀 JSON"}
+            
+        items = parsed.get(field_name, [])
+        if not isinstance(items, list):
+            return {"success": False, "error": f"欄位 {field_name} 不是列表"}
+            
+        total_count = len(items)
+        # Convert 1-based indexing to 0-based slice
+        start_offset = max(0, start_index - 1)
+        end_offset = max(start_offset, end_index)
+        sub_items = items[start_offset:end_offset]
+        
+        return {
+            "success": True,
+            "stage_name": stage_name,
+            "field_name": field_name,
+            "start_index": start_index,
+            "end_index": end_index,
+            "total_count": total_count,
+            "returned_count": len(sub_items),
+            "items": sub_items,
+            "step_description": f"已展開查看 {field_name} 的第 {start_index} 到 {end_index} 個項目 (總計 {total_count} 個)。"
+        }
+    else:
+        return {"success": False, "error": f"不支援的階段: {stage_name}"}
+
+
+def goto_generation_position(
+    target: str,
+    novel_id: str,
+    volume_index: Optional[int] = None,
+    chapter_index: Optional[int] = None,
+    reason: str = "",
+    agent_prompt: str = "",
+    agent_context: str = "",
+    **_: Any,
+) -> Dict[str, Any]:
+    """
+    [Tool] Convert a Director navigation intent into a normal executable decision.
+    The frontend should not invent this decision; the Director chooses the target.
+    """
+    return {
+        "success": True,
+        "decision": {
+            "action": "CONTINUE",
+            "target": target,
+            "volume_index": volume_index,
+            "chapter_index": chapter_index,
+            "reason": reason or f"總監指定前往 {target}",
+            "hint": agent_prompt or reason or "",
+            "agent_prompt": agent_prompt or "",
+            "agent_context": agent_context or "",
+        },
+    }
+
+
+def _coerce_range(start_index: Any = None, end_index: Any = None, default_size: int = 15) -> tuple[int, int]:
+    try:
+        start = int(start_index or 1)
+    except Exception:
+        start = 1
+    try:
+        end = int(end_index or (start + default_size - 1))
+    except Exception:
+        end = start + default_size - 1
+    start = max(1, start)
+    end = max(start, end)
+    return start, end
+
+
+def _page_items(items: List[Any], start_index: int, end_index: int) -> Dict[str, Any]:
+    start_offset = max(0, start_index - 1)
+    end_offset = max(start_offset, end_index)
+    return {
+        "start_index": start_index,
+        "end_index": end_index,
+        "total_count": len(items),
+        "returned_count": len(items[start_offset:end_offset]),
+        "items": items[start_offset:end_offset],
+    }
+
+
+def inspect_content_block(
+    stage_name: str,
+    block_name: str,
+    novel_id: str,
+    volume_index: Optional[int] = None,
+    chapter_index: Optional[int] = None,
+    start_index: int = 1,
+    end_index: Optional[int] = None,
+    **_: Any,
+) -> Dict[str, Any]:
+    """
+    [Tool] Inspect a concrete persisted block chosen by the Director.
+    This is the preferred path for long inputs: counts stay in validation reports,
+    and details are paged by explicit location/range.
+    """
+    stage = (stage_name or "").strip()
+    block = (block_name or "").strip()
+    start, end = _coerce_range(start_index, end_index)
+
+    if stage in ("worldview", "foreshadowing"):
+        wb = db.get_latest_worldbuilding(novel_id)
+        if not wb:
+            return {"success": False, "error": "世界觀設定為空"}
+        try:
+            parsed = json.loads(wb["content"])
+        except Exception:
+            parsed = db.parse_worldview_to_json(wb["content"])
+        if not isinstance(parsed, dict):
+            return {"success": False, "error": "無法解析世界觀 JSON"}
+        value = parsed.get(block)
+        if isinstance(value, list):
+            return {"success": True, "stage_name": stage, "block_name": block, **_page_items(value, start, end)}
+        return {"success": True, "stage_name": stage, "block_name": block, "value": value}
+
+    if stage == "characters":
+        char_data = db.get_latest_characters(novel_id)
+        parsed = char_data.get("parsed_data") if char_data else None
+        chars = parsed.get("characters", []) if isinstance(parsed, dict) else []
+        if block in ("characters", "角色", ""):
+            return {"success": True, "stage_name": stage, "block_name": "characters", **_page_items(chars, start, end)}
+        return {"success": False, "error": f"不支援的角色區塊: {block}"}
+
+    if stage in ("volumes", "volume_skeleton"):
+        vols = db.get_volumes(novel_id)
+        if stage == "volumes" or block in ("volumes", "篇卷", ""):
+            return {"success": True, "stage_name": stage, "block_name": "volumes", **_page_items(vols, start, end)}
+        try:
+            vol_idx = int(volume_index) if volume_index is not None else None
+        except Exception:
+            vol_idx = None
+        target_vol = next((v for v in vols if int(v.get("volume_index", 0)) == int(vol_idx or 0)), None)
+        if not target_vol:
+            return {"success": False, "error": f"找不到第 {vol_idx} 卷"}
+        chapters = target_vol.get("chapters_outline") or []
+        if isinstance(chapters, str):
+            try:
+                chapters = json.loads(chapters)
+            except Exception:
+                chapters = []
+        return {
+            "success": True,
+            "stage_name": stage,
+            "block_name": "chapters_outline",
+            "volume_index": vol_idx,
+            **_page_items(chapters if isinstance(chapters, list) else [], start, end),
+        }
+
+    if stage in ("writer", "editor"):
+        try:
+            ch_idx = int(chapter_index or 1)
+        except Exception:
+            ch_idx = 1
+        chapter = db.get_latest_chapter(novel_id, ch_idx)
+        return {
+            "success": bool(chapter),
+            "stage_name": stage,
+            "block_name": block or "chapter",
+            "chapter_index": ch_idx,
+            "chapter": dict(chapter) if chapter else None,
+            "error": None if chapter else f"第 {ch_idx} 章尚無正文",
+        }
+
+    return {"success": False, "error": f"不支援的階段: {stage}"}
 
 
 def export_tools():
