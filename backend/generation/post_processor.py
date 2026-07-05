@@ -160,7 +160,6 @@ def iter_post_processed_generation_stream(
                     collected_text.append(event.get("delta", ""))
                     event_log.append({"type": "content"})
                 elif event_type == "thinking":
-                    collected_text.append(event.get("delta", ""))
                     event_log.append({"type": "thinking"})
                 elif event_type == "status":
                     event_log.append({"type": "status", "message": event.get("message", "")})
