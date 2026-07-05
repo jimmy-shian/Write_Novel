@@ -13,7 +13,7 @@ from backend.utils import normalize_outlines
 
 def build_director_conversation_context(novel_id, limit=1):
     """Return the latest chat memory slice used by Director decisions."""
-    memory = db.get_chat_memory(novel_id, limit=max(limit * 8, 8))
+    memory = db.get_chat_memory(novel_id, limit=max(limit * 8, 16))
     if not memory:
         return ""
 
@@ -24,16 +24,25 @@ def build_director_conversation_context(novel_id, limit=1):
     }
     lines = []
     for item in memory:
-        if item.get("role") == "director" or item.get("message_type") in ("director", "pipeline"):
-            continue
         role = role_labels.get(item.get("role"), item.get("role", "未知"))
         content = (item.get("content") or "").strip()
         thinking = (item.get("thinking") or "").strip()
+        
+        # 💡 [重要修改]: 如果是總監自己的評語或工具執行紀錄，也予以保留傳入，使總監能夠維持跨輪評審的連續性與上下文記憶！
+        # 尤其是當包含 [展開檢視結果] 或 [評估結果] 時，或者是最近的 director 訊息。
+        if item.get("role") == "director" or item.get("message_type") in ("director", "pipeline"):
+            if "[展開檢視結果]" in content or "[評估結果]" in content or "TOOL_CALL" in content:
+                pass
+            elif len(lines) < 3:
+                pass
+            else:
+                continue
+
         if content:
             lines.append(f"[{role}] {content}")
         if thinking:
             lines.append(f"[{role}思考摘錄] {thinking[:400]}")
-        if len(lines) >= limit:
+        if len(lines) >= max(limit, 4):
             break
     return "\n\n".join(lines)
 

@@ -467,28 +467,33 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             parsed_wb = db.parse_worldview_to_json(wb["content"])
             seeds = parsed_wb.get("foreshadowing_seeds", [])
             turns = parsed_wb.get("key_turning_points", [])
-            if (not seeds or not turns or
-                len(seeds) < MIN_FORESHADOWING_SEEDS or
-                len(turns) < MIN_KEY_TURNING_POINTS):
-                report_lines.append(f"  - 狀態：❌ 未完成 (伏筆/轉折數量不足；需要伏筆至少 {MIN_FORESHADOWING_SEEDS} 個、轉折至少 {MIN_KEY_TURNING_POINTS} 個)")
-            else:
+            seeds_count = len(seeds) if isinstance(seeds, list) else 0
+            turns_count = len(turns) if isinstance(turns, list) else 0
+            seeds_ok = seeds_count >= MIN_FORESHADOWING_SEEDS
+            turns_ok = turns_count >= MIN_KEY_TURNING_POINTS
+            
+            if seeds_ok and turns_ok:
                 report_lines.append("  - 狀態：✅ 已建立")
-                report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {len(seeds)} 個")
-                if current_stage in ("worldview", "foreshadowing", None):
-                    for i, s in enumerate(seeds):
-                        report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
-                else:
-                    report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
-                report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {len(turns)} 個")
-                if current_stage in ("worldview", "foreshadowing", None):
-                    for j, t in enumerate(turns):
-                        if isinstance(t, dict):
-                            tp_name = t.get("turning_point_name") or t.get("name") or "未命名轉折"
-                            report_lines.append(f"    * [Turn-{j+1}] {tp_name}")
-                        else:
-                            report_lines.append(f"    * [Turn-{j+1}] {t}")
-                else:
-                    report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
+            else:
+                report_lines.append(f"  - 狀態：❌ 未完成 (伏筆種子數量：{seeds_count}/{MIN_FORESHADOWING_SEEDS}，關鍵轉折點數量：{turns_count}/{MIN_KEY_TURNING_POINTS})")
+                
+            report_lines.append(f"  - 伏筆種子 (foreshadowing_seeds)：共 {seeds_count} 個")
+            if current_stage in ("worldview", "foreshadowing", None):
+                for i, s in enumerate(seeds):
+                    report_lines.append(f"    * [Seed-{i+1}] {_format_worldview_seed_for_report(s)}")
+            else:
+                report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
+                
+            report_lines.append(f"  - 關鍵轉折點 (key_turning_points)：共 {turns_count} 個")
+            if current_stage in ("worldview", "foreshadowing", None):
+                for j, t in enumerate(turns):
+                    if isinstance(t, dict):
+                        tp_name = t.get("turning_point_name") or t.get("name") or "未命名轉折"
+                        report_lines.append(f"    * [Turn-{j+1}] {tp_name}")
+                    else:
+                        report_lines.append(f"    * [Turn-{j+1}] {t}")
+            else:
+                report_lines.append("    * （明細已省略，僅 worldview/foreshadowing 階段展開逐條）")
         except Exception as e:
             report_lines.append(f"  - 狀態：⚠️ 無法解析伏筆與轉折：{e}")
     report_lines.append("")
