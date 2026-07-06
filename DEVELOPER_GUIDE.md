@@ -19,7 +19,8 @@
    ```
 3. 使用虛擬環境 Python 啟動 Uvicorn 伺服器：
    ```powershell
-   C:\Users\user\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+   C:\Users\user\venv\Scripts\python.exe -m pip install -r requirements.txt
+   C:\Users\user\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
    ```
 4. 啟動成功後，造訪本地服務網址：
    👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
@@ -42,6 +43,17 @@
 1. **資料庫設定**：在網頁前端「⚙️ 模型設定 & API Key」中所儲存並修改的設定（優先權最高）。
 2. **本地環境變數 (`.env`)**：專案設定預設值。
 3. **程式碼內置備援值**：若以上兩者皆缺少時的 Fallback 模型與參數。
+
+---
+
+## 統一校閱標準
+
+總監審核先走程式硬性檢查，再做內容品質判斷。
+
+- `backend/services/director_tools.py::evaluate_output` 統一檢查 `worldview`、`foreshadowing`、`characters`、`volumes`、`volume_skeleton`、`writer`、`editor`。
+- 硬性檢查範圍包含 JSON 解析、必填欄位、數量限制、章節/卷索引連續性、正文基本長度與占位內容。
+- 長列表或完整章節不得只看摘要。總監需呼叫 `inspect_content_block` 或 `expand_collapsed_json` 分段展開，再判斷內容品質。
+- 只有硬性檢查失敗或內容問題有明確位置時才退回；一般風格建議應寫成 feedback，不阻斷流程。
 
 ---
 
@@ -240,8 +252,8 @@ function downloadNovel(novelId, format = 'txt') {
 
 ## 🧭 7. 原始碼結構與邏輯說明
 
-- **[app.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/app.py)**：系統的控制中心，定義了所有 Web 介面 API、WebSocket 通訊協議，負責調度背景任務以及數據的導出與導出邏輯。
-- **[db.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/db.py)**：底層 SQLite 資料庫的存取層。提供小說設定、版本管理、對話紀錄與 Agent 配置等讀寫介面。
-- **[agents.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/agents.py)**：核心創作大腦。封裝了調用 NVIDIA 頂尖模型的底層邏輯，包括 System Prompts 的構建、溫度等參數設定、四階段大綱生成管線、正文寫作以及總監決策循環。
-- **[agent_json.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/agent_json.py)**：定義各個智能體輸出內容的 JSON Schema。
-- **[export_novel.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/export_novel.py)**：命令列資料提取與檔案編寫工具。
+- **[backend/app.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/app.py)**：FastAPI 應用入口，註冊 API 路由、靜態前端與 `/api/generation-task`。
+- **[backend/db.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/db.py)**：SQLite 資料庫存取層。提供小說設定、版本管理、對話紀錄與 Agent 配置等讀寫介面。
+- **[backend/generation/agent_runners.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/generation/agent_runners.py)**：正式 Agent 執行器。`agents.py` 已移至 `_archive/legacy/`，不再作為 runtime 入口。
+- **[backend/schemas/agent_json.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/schemas/agent_json.py)**：定義各個智能體輸出內容的 JSON Schema 與通過標準。
+- **[backend/services/director_tools.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/services/director_tools.py)**：總監工具層，包含 `evaluate_output`、內容展開、局部補強與子代理呼叫。

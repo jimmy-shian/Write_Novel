@@ -2,88 +2,8 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 router = APIRouter()
-
-class ResolveMissingIndexPayload(BaseModel):
-    target: str
-    action: Optional[str] = None
-
-@router.post("/novels/{novel_id}/director-decision/resolve-missing-index")
-def api_resolve_missing_index(novel_id: str, payload: ResolveMissingIndexPayload):
-    from backend import db
-    import json
-    novel = db.get_novel(novel_id)
-    if not novel:
-        raise HTTPException(status_code=404, detail="Novel not found")
-
-    target = (payload.target or "").strip().lower()
-    resolved_volume_index = None
-    resolved_chapter_index = None
-
-    if "skeleton" in target or target == "volume_skeleton":
-        vols = db.get_volumes(novel_id)
-        for v in sorted(vols, key=lambda x: x.get("volume_index", 0)):
-            outline = v.get("chapters_outline")
-            if not outline:
-                resolved_volume_index = v["volume_index"]
-                break
-            try:
-                parsed = outline if isinstance(outline, list) else json.loads(outline or "[]")
-                if not isinstance(parsed, list) or len(parsed) == 0:
-                    resolved_volume_index = v["volume_index"]
-                    break
-            except Exception:
-                resolved_volume_index = v["volume_index"]
-                break
-        if resolved_volume_index is None and vols:
-            resolved_volume_index = max(v.get("volume_index", 1) for v in vols)
-
-    elif target in ("writer", "editor"):
-        vols = db.get_volumes(novel_id)
-        total_planned = sum(
-            int(v.get("chapter_count") or 0)
-            for v in vols
-            if str(v.get("chapter_count", "")).isdigit()
-        ) or 50
-
-        written_chs = db.get_all_chapters_latest(novel_id)
-        written_idx = set()
-        for ch in written_chs:
-            c_idx = ch.get("chapter_index")
-            if c_idx:
-                try:
-                    content = ch.get("content", "")
-                    is_placeholder = "保底" in content or "占位" in content or len(content.strip()) < 100
-                    if not is_placeholder:
-                        written_idx.add(int(c_idx))
-                except Exception:
-                    pass
-
-        for i in range(1, total_planned + 1):
-            if i not in written_idx:
-                resolved_chapter_index = i
-                break
-
-        if resolved_chapter_index is None:
-            resolved_chapter_index = total_planned
-
-        if vols:
-            for v in sorted(vols, key=lambda x: x.get("volume_index", 0)):
-                start_ch, end_ch = db.get_volume_chapter_range(vols, v["volume_index"])
-                if start_ch <= resolved_chapter_index <= end_ch:
-                    resolved_volume_index = v["volume_index"]
-                    break
-
-    return {
-        "status": "success",
-        "target": target,
-        "resolved_volume_index": resolved_volume_index,
-        "resolved_chapter_index": resolved_chapter_index,
-        "message": f"已補正 volume_index={resolved_volume_index}, chapter_index={resolved_chapter_index}"
-    }
-
 
 class HealRollbackPayload(BaseModel):
     target_chapter_index: int

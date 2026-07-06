@@ -54,7 +54,7 @@ Write_Novel/
 │   └── static/
 │       ├── index.html         # 主頁面
 │       ├── style.css          # 樣式
-│       ├── app.js             # 入口 (legacy)
+│       ├── app.js             # 前端主入口
 │       ├── core/              # 核心工具
 │       ├── api/               # API 客戶端
 │       ├── pipeline/          # Pipeline 流程
@@ -81,7 +81,7 @@ Write_Novel/
 
 ```bash
 # 安裝依賴
-pip install -r requirements.txt  # fastapi, uvicorn, pydantic, python-dotenv, opencc-python-reimplemented
+pip install -r requirements.txt
 
 # 啟動伺服器
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
@@ -123,6 +123,15 @@ http://127.0.0.1:8000
 2. **無雙重入口** - `agents.py` 已封存，不再被 import
 3. **單一 DB 層** - 只有 `backend/db.py`，`db/` 套件已封存
 4. **乾淨根目錄** - 無除錯/臨時檔案
+
+## 統一校閱標準
+
+總監審核分成兩層：
+
+1. **程式硬性檢查**：`evaluate_output` 統一檢查 `worldview`、`foreshadowing`、`characters`、`volumes`、`volume_skeleton`、`writer`、`editor` 的 JSON 格式、必填欄位、索引連續性、數量限制與明顯空內容。
+2. **內容品質檢查**：長列表或完整章節不要只看摘要。總監需用 `inspect_content_block` 或 `expand_collapsed_json` 分段展開，再判斷角色一致性、伏筆執行、章節節奏與文風品質。
+
+硬性檢查不通過才阻斷流程；主觀品質問題應給明確修改位置與理由。
 
 ## 文檔
 

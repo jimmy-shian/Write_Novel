@@ -28,10 +28,24 @@ Frontend (frontend/static/generation/generationTaskClient.js)
 | `backend/generation/agent_runners.py` | Actual generator functions: `run_story_architect`, `run_character_designer`, `run_volumes_planner`, `run_volume_skeleton_planner`, `run_chapter_writer`, `run_editor_agent`, `run_foreshadowing_orchestrator`, `run_director_decision` |
 | `backend/generation/context_builder.py` | Build context bundle (worldview, characters, plot, allocations) for handlers |
 | `backend/generation/lock_manager.py` | Pipeline lock context manager using `db.pipeline_locks` table |
+| `backend/services/director_tools.py` | Director tools, including unified hard validation through `evaluate_output` and paged content inspection |
 
 ---
 
-## 2. Legacy: `agents.py` Removed
+## 2. Director Review Standard
+
+Director review uses one standard for every stage:
+
+1. Run hard validation through `evaluate_output`.
+2. Use Python validation reports for counts, required fields, indexes, and basic structure.
+3. Use `inspect_content_block` or `expand_collapsed_json` to inspect long lists and chapter content in small ranges.
+4. Block only on hard validation failures or specific content defects with locations. General prose or style advice stays as feedback.
+
+`evaluate_output` covers `worldview`, `foreshadowing`, `characters`, `volumes`, `volume_skeleton`, `writer`, and `editor`.
+
+---
+
+## 3. Legacy: `agents.py` Removed
 
 - **File**: `agents.py` was the old monolithic pipeline runner (~1466 lines)
 - **Status**: Moved to `_archive/legacy/agents.py`
@@ -41,7 +55,7 @@ Frontend (frontend/static/generation/generationTaskClient.js)
 
 ---
 
-## 3. FastAPI Generation Endpoint
+## 4. FastAPI Generation Endpoint
 
 **Single unified endpoint**: `POST /api/generation-task`
 
@@ -63,9 +77,11 @@ Frontend (frontend/static/generation/generationTaskClient.js)
 
 ---
 
-## 4. Frontend Entry Point
+## 5. Frontend Entry Point
 
-**File**: `frontend/static/generation/generationTaskClient.js`
+**Primary page entry**: `frontend/static/app.js`
+
+**Generation client**: `frontend/static/generation/generationTaskClient.js`
 
 Exports `submitGenerationTask(payload, callbacks)` which:
 - POSTs to `/api/generation-task`
@@ -73,15 +89,15 @@ Exports `submitGenerationTask(payload, callbacks)` which:
 - Parses events: `thinking`, `content`, `reset`, `status`, `error`, `done`
 - Calls back: `onThinking`, `onContent`, `onError`, `onDone`, `onRetrying`, `onEvent`
 
-**Legacy frontend files** (still present but no longer used for generation):
-- `frontend/static/pipeline.js` — legacy director pipeline orchestration (uses old `/api/agent/*` endpoints)
-- `frontend/static/agentProcessing.js` — legacy SSE terminal display
-- `frontend/static/api.js` — legacy `streamAPI` / `requestAPI` (used by `pipeline.js`)
-- `frontend/static/app.js` — legacy main controller (uses EventSource GET SSE, deprecated)
+**Compatibility files**:
+- `frontend/static/pipeline/pipeline.js` — director pipeline orchestration through `POST /api/generation-task`
+- `frontend/static/pipeline/agentProcessing.js` — SSE terminal display helpers
+- `frontend/static/api/api.js` — shared `streamAPI` / `requestAPI`
+- `frontend/static/main.js` — deprecated legacy entry, not loaded by `index.html`
 
 ---
 
-## 5. Database Layer
+## 6. Database Layer
 
 **Single DB module**: `backend/db.py` (SQLite + WAL mode, versioned tables)
 
@@ -104,7 +120,7 @@ Exports `submitGenerationTask(payload, callbacks)` which:
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 ```
 Write_Novel/
@@ -219,9 +235,12 @@ Write_Novel/
 
 ---
 
-## 7. Startup & Testing
+## 8. Startup & Testing
 
 ```bash
+# Install dependencies
+pip install -r requirements.txt
+
 # Compile check
 python -m py_compile backend/app.py
 python -m py_compile backend/generation/task_router.py
@@ -238,10 +257,10 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 
 ---
 
-## 8. Key Design Principles
+## 9. Key Design Principles
 
 1. **Single generation flow** — Only `backend/generation/` is the runtime path
-2. **No dual entry points** — `agents.py` is archived; `app.py` has no old `/api/agent/*` routes
+2. **No dual entry points** — `agents.py` is archived; all frontend generation and director calls use `POST /api/generation-task`
 3. **Unified DB** — Only `backend/db.py`; `db/` package archived
 4. **Clean separation** — `backend/` for Python, `frontend/` for JS/CSS/HTML, `data/` for runtime data
 5. **Documentation consistency** — This file is the source of truth for architecture
