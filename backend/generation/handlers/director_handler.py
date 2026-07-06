@@ -20,6 +20,16 @@ def run_director_task(task: GenerationTaskRequest, context=None):
             force_json=True,
         )
 
+    if getattr(task, "help_action", None):
+        return agent_runners.run_director_decision_help(
+            task.novel_id,
+            current_stage=getattr(task, "current_stage", None) or task.stage,
+            help_action=getattr(task, "help_action", ""),
+            help_reason=getattr(task, "help_reason", "") or prompt,
+            stream=task.options.stream,
+            force_json=True,
+        )
+
     current_stage = getattr(task, "current_stage", None) or task.stage
     if not current_stage or current_stage == "evaluate":
         current_stage = detect_current_stage(task.novel_id)
@@ -41,5 +51,4 @@ def run_director_task(task: GenerationTaskRequest, context=None):
         stream=task.options.stream,
         force_json=True,
     )
-
 
