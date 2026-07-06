@@ -1869,6 +1869,39 @@ def _director_decision_needs_recovery(parsed):
     return False
 
 
+def _record_director_review_status(novel_id, current_stage, parsed, volume_index=None, chapter_index=None):
+    if not isinstance(parsed, dict):
+        return
+    action = str(parsed.get("action") or "").upper().strip()
+    if action == "TOOL_CALL" or "tool_call" in parsed:
+        status = "inspecting"
+        tool_call = parsed.get("tool_call") or {}
+        block_name = (tool_call.get("parameters") or {}).get("block_name")
+    elif action in {"CONTINUE", "FINISH"}:
+        status = "approved"
+        block_name = None
+    elif action == "WAIT_USER":
+        status = "blocked"
+        block_name = None
+    else:
+        status = "needs_revision"
+        block_name = None
+    try:
+        db.save_director_review_status(
+            novel_id,
+            current_stage,
+            status,
+            block_name=block_name,
+            volume_index=volume_index,
+            chapter_index=chapter_index,
+            reason=parsed.get("reason") or parsed.get("hint") or "",
+            decision_json=parsed,
+        )
+    except Exception as exc:
+        print(f"[WARN] Failed to save director review status: {exc}")
+
+
+
 def re_search_batch_marker(text):
     import re
     return bool(re.search(r"\[BATCH:\s*(foreshadowing_seeds|key_turning_points)\]", text or "", flags=re.IGNORECASE))
@@ -2192,7 +2225,15 @@ def run_director_decision(
                         # 更新 parsed 以防後續 tool_call 處理
                         parsed = override
 
-        if parsed and isinstance(parsed, dict) and (parsed.get("action") == "TOOL_CALL" or "tool_call" in parsed):
+                _record_director_review_status(
+            novel_id,
+            current_stage,
+            parsed,
+            volume_index=volume_index,
+            chapter_index=chapter_index,
+        )
+
+if parsed and isinstance(parsed, dict) and (parsed.get("action") == "TOOL_CALL" or "tool_call" in parsed):
             tool_call = parsed.get("tool_call") or {}
             tool_name = tool_call.get("tool_name")
             params = tool_call.get("parameters") or {}

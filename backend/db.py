@@ -446,6 +446,27 @@ def db_init():
     )
     """)
 
+    # 9.5b. Director review ledger
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS director_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        novel_id TEXT NOT NULL,
+        stage_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        block_name TEXT,
+        volume_index INTEGER,
+        chapter_index INTEGER,
+        reason TEXT,
+        decision_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+    )
+    """)
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_director_reviews_lookup ON director_reviews (novel_id, stage_name, created_at)")
+    except sqlite3.OperationalError:
+        pass
+
     # 9.6. Chapters backup table (for P0-1 wipe protection)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS chapters_backup (
@@ -1602,6 +1623,62 @@ def save_chat_message(novel_id, role, content, thinking=None, message_type='chat
     )
     conn.commit()
     conn.close()
+
+
+def save_director_review_status(
+    novel_id,
+    stage_name,
+    status,
+    block_name=None,
+    volume_index=None,
+    chapter_index=None,
+    reason="",
+    decision_json=None,
+):
+    """Append a Director review status record without mutating content tables."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if decision_json is not None and not isinstance(decision_json, str):
+        try:
+            decision_json = json.dumps(decision_json, ensure_ascii=False, indent=2)
+        except Exception:
+            decision_json = str(decision_json)
+    cursor.execute(
+        """
+        INSERT INTO director_reviews (
+            novel_id, stage_name, status, block_name, volume_index, chapter_index, reason, decision_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (novel_id, stage_name, status, block_name, volume_index, chapter_index, reason, decision_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_latest_director_review_status(novel_id, stage_name=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if stage_name:
+        row = cursor.execute(
+            """
+            SELECT * FROM director_reviews
+            WHERE novel_id = ? AND stage_name = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (novel_id, stage_name),
+        ).fetchone()
+    else:
+        row = cursor.execute(
+            """
+            SELECT * FROM director_reviews
+            WHERE novel_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (novel_id,),
+        ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 
 def clear_chat_memory(novel_id):
     conn = get_db_connection()
