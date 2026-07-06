@@ -703,71 +703,20 @@ def get_volumes(novel_id):
     return res
 
 def _get_clean_chapter_count(vol):
-    if not vol:
-        return 50
-    try:
-        val = int(vol.get("chapter_count"))
-        return val if val > 0 else 50
-    except:
-        return 50
+    from backend.services.chapter_math import get_clean_chapter_count
+    return get_clean_chapter_count(vol)
 
 def get_volume_chapter_range(volumes, target_volume_index):
-    """
-    根據篇卷列表，動態計算特定篇卷的起始與結束章節序號 (1-indexed)。
-    每卷包含的章節數由 vol["chapter_count"] 決定（預設為 50 章）。
-    """
-    start_chapter = 1
-    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
-    for vol in sorted_vols:
-        vol_idx = int(vol.get("volume_index", 0))
-        vol_ch_count = _get_clean_chapter_count(vol)
-        end_chapter = start_chapter + vol_ch_count - 1
-        if vol_idx == target_volume_index:
-            return start_chapter, end_chapter
-        start_chapter = end_chapter + 1
-        
-    # Fallback: 如果 target_volume_index 超出 volumes 已有範圍，則從最後一卷向後推導
-    if sorted_vols:
-        last_vol = sorted_vols[-1]
-        last_vol_idx = int(last_vol.get("volume_index", 0))
-        last_start, last_end = get_volume_chapter_range(volumes, last_vol_idx)
-        diff = target_volume_index - last_vol_idx
-        default_count = _get_clean_chapter_count(last_vol)
-        start = last_end + (diff - 1) * default_count + 1
-        return start, start + default_count - 1
-        
-    return (target_volume_index - 1) * 50 + 1, target_volume_index * 50
+    from backend.services.chapter_math import get_volume_chapter_range as _get_volume_chapter_range
+    return _get_volume_chapter_range(volumes, target_volume_index)
 
 def get_chapter_volume_index(volumes, chapter_index):
-    """
-    根據章節序號，尋找所屬的篇卷 index。如果找不到，返回 fallback 估計值。
-    """
-    start_chapter = 1
-    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
-    for vol in sorted_vols:
-        vol_idx = int(vol.get("volume_index", 0))
-        vol_ch_count = _get_clean_chapter_count(vol)
-        end_chapter = start_chapter + vol_ch_count - 1
-        if start_chapter <= int(chapter_index) <= end_chapter:
-            return vol_idx
-        start_chapter = end_chapter + 1
-        
-    # Fallback: 如果超出已規劃卷的最末章節，則往後延伸
-    if sorted_vols:
-        last_vol = sorted_vols[-1]
-        last_vol_idx = int(last_vol.get("volume_index", 0))
-        _, last_end = get_volume_chapter_range(volumes, last_vol_idx)
-        if int(chapter_index) > last_end:
-            default_count = _get_clean_chapter_count(last_vol)
-            diff = (int(chapter_index) - last_end - 1) // default_count + 1
-            return last_vol_idx + diff
-            
-    return (int(chapter_index) - 1) // 50 + 1
+    from backend.services.chapter_math import get_chapter_volume_index as _get_chapter_volume_index
+    return _get_chapter_volume_index(volumes, chapter_index)
 
 def get_total_chapter_count(volumes):
-    if not volumes:
-        return 1000
-    return sum(_get_clean_chapter_count(v) for v in volumes)
+    from backend.services.chapter_math import get_total_chapter_count as _get_total_chapter_count
+    return _get_total_chapter_count(volumes)
 
 def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn = get_db_connection()
@@ -1062,30 +1011,8 @@ def get_pipeline_lock_status(novel_id):
 
 # --- WORLDVIEW VALIDATION FUNCTIONS (P1-4) ---
 def validate_worldview_schema(content):
-    errors = []
-    warnings = []
-    parsed = None
-    try:
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        try:
-            parsed = parse_worldview_to_json(content)
-        except Exception:
-            pass
-    if not isinstance(parsed, dict):
-        text_lower = content.lower() if isinstance(content, str) else ''
-        title_match = any(k in text_lower for k in ['title', '標題', '書名', '主題', 'theme'])
-        if not title_match:
-            errors.append('無法解析為結構化世界觀，且未包含必要識別欄位')
-        return len(errors) == 0, errors, warnings
-    from backend.schemas.agent_json import WORLDVIEW_REQUIRED_FIELDS, WORLDVIEW_RECOMMENDED_FIELDS
-    for field in WORLDVIEW_REQUIRED_FIELDS:
-        if field not in parsed or parsed[field] in (None, '', [], {}):
-            errors.append(f'缺少必要欄位: {field}')
-    for field in WORLDVIEW_RECOMMENDED_FIELDS:
-        if field not in parsed or parsed[field] in (None, '', [], {}):
-            warnings.append(f'建議補充欄位: {field}')
-    return len(errors) == 0, errors, warnings
+    from backend.schemas.worldview import validate_worldview_schema as _validate_worldview_schema
+    return _validate_worldview_schema(content)
 
 # --- WORLDBUILDING (VERSIONED) ---
 def get_latest_worldbuilding(novel_id):
@@ -1703,221 +1630,8 @@ def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, 
 
 # --- INCREMENTAL UPDATE FUNCTIONS ---
 def parse_worldview_to_json(content):
-    default_structure = {
-        "theme": "",
-        "main_conflict": "",
-        "worldview": "",
-        "macro_outline": "",
-        "multi_act_structure": [
-            {"title": "第一幕 (Setup)", "content": ""},
-            {"title": "第二幕 (Confrontation)", "content": ""},
-            {"title": "第三幕 (Resolution)", "content": ""}
-        ],
-        "progressive_character_plan": [
-            {"title": "第一波開篇 (Wave 1)", "content": ""},
-            {"title": "第二波發展 (Wave 2)", "content": ""},
-            {"title": "第三波高潮 (Wave 3)", "content": ""}
-        ],
-        "foreshadowing_seeds": [],
-        "key_turning_points": []
-    }
-
-    if not content:
-        return default_structure
-    
-    if isinstance(content, str):
-        if "\n\n【全域" in content:
-            content = content.split("\n\n【全域")[0]
-            
-    content_stripped = content.strip()
-    # 💡 核心修復：處理 markdown codeblock 包含的 JSON 格式
-    if "```" in content_stripped:
-        import re
-        cleaned = re.sub(r"<think>.*?</think>", "", content_stripped, flags=re.DOTALL).strip()
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.DOTALL)
-        if json_match:
-            content_stripped = json_match.group(1).strip()
-        else:
-            first_brace = cleaned.find("{")
-            last_brace = cleaned.rfind("}")
-            if first_brace != -1 and last_brace != -1:
-                content_stripped = cleaned[first_brace:last_brace + 1].strip()
-
-    if content_stripped.startswith("{") and content_stripped.endswith("}"):
-        try:
-            parsed = json.loads(content_stripped)
-            
-            ta = parsed.get("multi_act_structure", [])
-            normalized_ta = []
-            if isinstance(ta, list):
-                for idx, item in enumerate(ta):
-                    if isinstance(item, dict):
-                        normalized_ta.append({
-                            "title": item.get("title", f"項目 #{idx + 1}"),
-                            "content": item.get("content", "")
-                        })
-                    else:
-                        normalized_ta.append({
-                            "title": f"項目 #{idx + 1}",
-                            "content": str(item)
-                        })
-            elif isinstance(ta, dict):
-                normalized_ta = [
-                    {"title": "第一幕 (Setup)", "content": ta.get("act1_setup", ta.get("act1", ""))},
-                    {"title": "第二幕 (Confrontation)", "content": ta.get("act2_confrontation", ta.get("act2", ""))},
-                    {"title": "第三幕 (Resolution)", "content": ta.get("act3_resolution", ta.get("act3", ""))}
-                ]
-            else:
-                normalized_ta = default_structure["multi_act_structure"]
-
-            cp = parsed.get("progressive_character_plan", [])
-            normalized_cp = []
-            if isinstance(cp, list):
-                for idx, item in enumerate(cp):
-                    if isinstance(item, dict):
-                        normalized_cp.append({
-                            "title": item.get("title", f"階段 #{idx + 1}"),
-                            "content": item.get("content", "")
-                        })
-                    else:
-                        normalized_cp.append({
-                            "title": f"階段 #{idx + 1}",
-                            "content": str(item)
-                        })
-            elif isinstance(cp, dict):
-                normalized_cp = [
-                    {"title": "第一波開篇 (Wave 1)", "content": cp.get("wave_1_opening", "")},
-                    {"title": "第二波發展 (Wave 2)", "content": cp.get("wave_2_development", "")},
-                    {"title": "第三波高潮 (Wave 3)", "content": cp.get("wave_3_climax", "")}
-                ]
-            else:
-                normalized_cp = default_structure["progressive_character_plan"]
-
-            result_obj = parsed.copy()
-            result_obj.update({
-                "theme": parsed.get("theme", ""),
-                "main_conflict": parsed.get("main_conflict", ""),
-                "worldview": parsed.get("worldview", ""),
-                "macro_outline": parsed.get("macro_outline", ""),
-                "multi_act_structure": normalized_ta,
-                "progressive_character_plan": normalized_cp,
-                "foreshadowing_seeds": parsed.get("foreshadowing_seeds", []) if isinstance(parsed.get("foreshadowing_seeds"), list) else [],
-                "key_turning_points": parsed.get("key_turning_points", []) if isinstance(parsed.get("key_turning_points"), list) else []
-            })
-            return result_obj
-
-        except Exception as e:
-            print(f"[WARN] parse_worldview_to_json JSON load failed: {e}. Falling back to text parser.")
-            
-    result = {
-        "theme": "",
-        "main_conflict": "",
-        "worldview": "",
-        "macro_outline": "",
-        "multi_act_structure": [
-            {"title": "第一幕 (Setup)", "content": ""},
-            {"title": "第二幕 (Confrontation)", "content": ""},
-            {"title": "第三幕 (Resolution)", "content": ""}
-        ],
-        "progressive_character_plan": [
-            {"title": "第一波開篇 (Wave 1)", "content": ""},
-            {"title": "第二波發展 (Wave 2)", "content": ""},
-            {"title": "第三波高潮 (Wave 3)", "content": ""}
-        ],
-        "foreshadowing_seeds": [],
-        "key_turning_points": []
-    }
-    
-    headers = [
-        "【核心主題】",
-        "【核心衝突】",
-        "【世界觀設定】",
-        "【整體故事大綱】",
-        "【多幕式結構】",
-        "【角色漸進規劃策略】",
-        "【伏筆種子】",
-        "【關鍵轉折點】"
-    ]
-    
-    pos = []
-    for h in headers:
-        idx = content.find(h)
-        if idx != -1:
-            pos.append((idx, h))
-    pos.sort()
-    
-    sections = {}
-    for i in range(len(pos)):
-        start_idx = pos[i][0] + len(pos[i][1])
-        end_idx = pos[i+1][0] if i + 1 < len(pos) else len(content)
-        sections[pos[i][1]] = content[start_idx:end_idx].strip()
-        
-    if "【核心主題】" in sections:
-        result["theme"] = sections["【核心主題】"]
-    if "【核心衝突】" in sections:
-        result["main_conflict"] = sections["【核心衝突】"]
-    if "【世界觀設定】" in sections:
-        result["worldview"] = sections["【世界觀設定】"]
-    if "【整體故事大綱】" in sections:
-        result["macro_outline"] = sections["【整體故事大綱】"]
-        
-    if "【多幕式結構】" in sections:
-        three_act_text = sections["【多幕式結構】"]
-        parsed_ta = []
-        for line in three_act_text.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            clean_line = line[1:].strip() if (line.startswith("-") or line.startswith("•") or line.startswith("*")) else line
-            if "：" in clean_line or ":" in clean_line:
-                sep = "：" if "：" in clean_line else ":"
-                parts = clean_line.split(sep, 1)
-                title = parts[0].strip()
-                content_text = parts[1].strip()
-                parsed_ta.append({"title": title, "content": content_text})
-            else:
-                parsed_ta.append({"title": f"項目 #{len(parsed_ta) + 1}", "content": clean_line})
-        if parsed_ta:
-            result["multi_act_structure"] = parsed_ta
-
-    if "【角色漸進規劃策略】" in sections:
-        prog_text = sections["【角色漸進規劃策略】"]
-        parsed_cp = []
-        for line in prog_text.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            clean_line = line[1:].strip() if (line.startswith("-") or line.startswith("•") or line.startswith("*")) else line
-            if "：" in clean_line or ":" in clean_line:
-                sep = "：" if "：" in clean_line else ":"
-                parts = clean_line.split(sep, 1)
-                title = parts[0].strip()
-                content_text = parts[1].strip()
-                parsed_cp.append({"title": title, "content": content_text})
-            else:
-                parsed_cp.append({"title": f"階段 #{len(parsed_cp) + 1}", "content": clean_line})
-        if parsed_cp:
-            result["progressive_character_plan"] = parsed_cp
-                        
-    if "【伏筆種子】" in sections:
-        seeds_text = sections["【伏筆種子】"]
-        for line in seeds_text.split("\n"):
-            line = line.strip()
-            if line.startswith("•") or line.startswith("-") or line.startswith("*"):
-                line = line[1:].strip()
-            if line:
-                result["foreshadowing_seeds"].append(line)
-                
-    if "【關鍵轉折點】" in sections:
-        pts_text = sections["【關鍵轉折點】"]
-        for line in pts_text.split("\n"):
-            line = line.strip()
-            if line.startswith("•") or line.startswith("-") or line.startswith("*"):
-                line = line[1:].strip()
-            if line:
-                result["key_turning_points"].append(line)
-                
-    return result
+    from backend.schemas.worldview import parse_worldview_to_json as _parse_worldview_to_json
+    return _parse_worldview_to_json(content)
 
 def append_foreshadowing(novel_id, new_seed):
     wb = get_latest_worldbuilding(novel_id)
@@ -2336,97 +2050,6 @@ def save_foreshadowing_allocations(novel_id, allocations):
     touched = repair_foreshadowing_allocations(novel_id)
     print(f"[DB] Canonical foreshadowing allocations repaired for {novel_id} (volumes={touched})")
     return
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # 建立 chapter_index -> allocation 的映射
-        allocation_map = {}
-        for alloc in allocations:
-            ch_idx = alloc.get("chapter_index")
-            if ch_idx is not None:
-                allocation_map[int(ch_idx)] = alloc
-        
-        # 取得所有 volumes
-        cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,))
-        volume_rows = cursor.fetchall()
-        
-        for vol_row in volume_rows:
-            vol = dict(vol_row)
-            ch_outline_str = vol.get("chapters_outline")
-            if not ch_outline_str:
-                continue
-            
-            try:
-                ch_list = json.loads(ch_outline_str)
-                if not isinstance(ch_list, list):
-                    continue
-                    
-                modified = False
-                for ch in ch_list:
-                    ch_idx = int(ch.get("chapter_index", 0))
-                    if ch_idx in allocation_map:
-                        alloc = allocation_map[ch_idx]
-                        
-                        # 💡【Step 6 修復】：確保原本的章節骨架基礎欄位不被覆蓋或遺漏
-                        ch["chapter_title"] = ch.get("chapter_title") or ch.get("title") or "待設定標題"
-                        ch["chapter_summary"] = ch.get("chapter_summary") or ch.get("summary") or "待設定摘要"
-                        
-                        # 更新 allocated_tasks
-                        if "allocated_tasks" not in ch:
-                            ch["allocated_tasks"] = {}
-                        
-                        alloc_tasks = ch["allocated_tasks"]
-                        if "foreshadowing_plants" in alloc:
-                            existing_plants = alloc_tasks.get("foreshadowing_plants", [])
-                            if isinstance(existing_plants, list):
-                                for plant in alloc["foreshadowing_plants"]:
-                                    if plant not in existing_plants:
-                                        existing_plants.append(plant)
-                            else:
-                                alloc_tasks["foreshadowing_plants"] = alloc["foreshadowing_plants"]
-                        
-                        if "foreshadowing_payoffs" in alloc:
-                            existing_payoffs = alloc_tasks.get("foreshadowing_payoffs", [])
-                            if isinstance(existing_payoffs, list):
-                                for payoff in alloc["foreshadowing_payoffs"]:
-                                    if payoff not in existing_payoffs:
-                                        existing_payoffs.append(payoff)
-                            else:
-                                alloc_tasks["foreshadowing_payoffs"] = alloc["foreshadowing_payoffs"]
-                        
-                        if "turning_points" in alloc:
-                            existing_tps = alloc_tasks.get("turning_points", [])
-                            if isinstance(existing_tps, list):
-                                for tp in alloc["turning_points"]:
-                                    if tp not in existing_tps:
-                                        existing_tps.append(tp)
-                            else:
-                                alloc_tasks["turning_points"] = alloc["turning_points"]
-                        
-                        modified = True
-                
-                if modified:
-                    # 回寫到資料庫
-                    new_outline_json = json.dumps(_convert_obj_to_traditional(ch_list), ensure_ascii=False, indent=2)
-                    cursor.execute(
-                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-                        (new_outline_json, vol_row["id"])
-                    )
-                    
-            except Exception as e:
-                print(f"[WARN] Failed to update allocations for vol {vol.get('volume_index')}: {e}")
-        
-        conn.commit()
-        print(f"[DB] Foreshadowing allocations saved successfully for {novel_id}")
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"[ERROR] Failed to save foreshadowing allocations: {e}")
-        raise
-    finally:
-        conn.close()
 
 
 def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
@@ -2540,309 +2163,47 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
 
 
 def _canonical_seed_id(seed_index):
-    return f"FS{seed_index + 1:03d}"
+    from backend.services.foreshadowing_blueprint import canonical_seed_id
+    return canonical_seed_id(seed_index)
 
 
 def _coerce_int(value, default=0):
-    try:
-        return int(value)
-    except Exception:
-        return default
+    from backend.services.foreshadowing_blueprint import coerce_int
+    return coerce_int(value, default)
 
 
 def _normalize_allocation_pair(pair, total_chapters):
-    if not isinstance(pair, (list, tuple)) or len(pair) < 2:
-        return None
-    p_ch = _coerce_int(pair[0])
-    r_ch = _coerce_int(pair[1])
-    if total_chapters <= 0:
-        total_chapters = max(p_ch, r_ch, 1)
-    p_ch = max(1, min(total_chapters, p_ch))
-    r_ch = max(1, min(total_chapters, r_ch))
-    if total_chapters > 1 and r_ch <= p_ch:
-        p_ch = max(1, min(total_chapters - 1, p_ch))
-        r_ch = p_ch + 1
-    return p_ch, r_ch
+    from backend.services.foreshadowing_blueprint import normalize_allocation_pair
+    return normalize_allocation_pair(pair, total_chapters)
 
 
 def _is_valid_foreshadowing_blueprint(blueprint, seed_count, turn_count, total_chapters):
-    if not isinstance(blueprint, dict):
-        return False
-    allocations = blueprint.get("foreshadowing_allocations", [])
-    turns = blueprint.get("turning_allocations", [])
-    if len(allocations) != seed_count or len(turns) != turn_count:
-        return False
-    if total_chapters <= 1:
-        return True
-    for pair in allocations:
-        normalized = _normalize_allocation_pair(pair, total_chapters)
-        if not normalized:
-            return False
-        p_ch, r_ch = normalized
-        if total_chapters > 1 and p_ch >= r_ch:
-            return False
-    for turn_ch in turns:
-        turn_ch = _coerce_int(turn_ch)
-        if turn_ch < 1 or (total_chapters > 0 and turn_ch > total_chapters):
-            return False
-    return True
+    from backend.services.foreshadowing_blueprint import is_valid_foreshadowing_blueprint
+    return is_valid_foreshadowing_blueprint(blueprint, seed_count, turn_count, total_chapters)
 
 
 def build_canonical_foreshadowing_task_map(novel_id):
-    """Return chapter_index -> canonical allocated_tasks from the deterministic blueprint."""
-    volumes = get_volumes(novel_id)
-    if not volumes:
-        return {}
-    wb = get_latest_worldbuilding(novel_id)
-    worldview = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
-    seeds = worldview.get("foreshadowing_seeds", []) or []
-    turns = worldview.get("key_turning_points", []) or []
-    blueprint = get_global_foreshadowing_blueprint(novel_id)
-    total_chapters = _coerce_int(blueprint.get("T"), get_total_chapter_count(volumes))
-
-    task_map = {}
-
-    def chapter_tasks(chapter_index):
-        chapter_index = int(chapter_index)
-        if chapter_index not in task_map:
-            task_map[chapter_index] = {
-                "foreshadowing_plants": [],
-                "foreshadowing_payoffs": [],
-                "turning_points": []
-            }
-        return task_map[chapter_index]
-
-    for idx, pair in enumerate(blueprint.get("foreshadowing_allocations", [])[:len(seeds)]):
-        normalized = _normalize_allocation_pair(pair, total_chapters)
-        if not normalized:
-            continue
-        p_ch, r_ch = normalized
-        seed_id = _canonical_seed_id(idx)
-        chapter_tasks(p_ch)["foreshadowing_plants"].append(seed_id)
-        chapter_tasks(r_ch)["foreshadowing_payoffs"].append(seed_id)
-
-    for idx, turn_ch in enumerate(blueprint.get("turning_allocations", [])[:len(turns)]):
-        turn_ch = _coerce_int(turn_ch)
-        if turn_ch <= 0:
-            continue
-        chapter_tasks(turn_ch)["turning_points"].append(f"TP{idx + 1:03d}")
-
-    return task_map
+    from backend.services.foreshadowing_blueprint import build_canonical_foreshadowing_task_map as _build_map
+    return _build_map(novel_id)
 
 
 def apply_canonical_allocated_tasks_to_chapters(novel_id, chapters):
-    """Overwrite foreshadowing/turn allocations so each seed has one plant and one payoff."""
-    task_map = build_canonical_foreshadowing_task_map(novel_id)
-    normalized = {}
-    for chapter in chapters or []:
-        if not isinstance(chapter, dict):
-            continue
-        ch_idx = chapter.get("chapter_index")
-        if ch_idx is None:
-            continue
-        ch_idx = int(ch_idx)
-        chapter["chapter_index"] = ch_idx
-        allocated = chapter.get("allocated_tasks")
-        if not isinstance(allocated, dict):
-            allocated = {}
-        canonical = task_map.get(ch_idx, {})
-        allocated["foreshadowing_plants"] = list(canonical.get("foreshadowing_plants", []))
-        allocated["foreshadowing_payoffs"] = list(canonical.get("foreshadowing_payoffs", []))
-        allocated["turning_points"] = list(canonical.get("turning_points", []))
-        chapter["allocated_tasks"] = allocated
-        for stale_key in (
-            "foreshadowing_plant",
-            "foreshadowing_plants",
-            "foreshadowing_payoff",
-            "foreshadowing_payoffs",
-            "foreshadowing",
-        ):
-            chapter.pop(stale_key, None)
-        normalized[ch_idx] = chapter
-    return normalized
+    from backend.services.foreshadowing_blueprint import apply_canonical_allocated_tasks_to_chapters as _apply_tasks
+    return _apply_tasks(novel_id, chapters)
 
 
 def repair_foreshadowing_allocations(novel_id, volume_index=None):
-    """Rewrite existing volume skeletons and stitched plot with deterministic allocations."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if volume_index is None:
-        rows = cursor.execute(
-            "SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
-            (novel_id,)
-        ).fetchall()
-    else:
-        rows = cursor.execute(
-            "SELECT * FROM volumes WHERE novel_id = ? AND volume_index = ? ORDER BY volume_index ASC",
-            (novel_id, int(volume_index))
-        ).fetchall()
-
-    all_chapters = []
-    touched = 0
-    for row in rows:
-        vol = dict(row)
-        try:
-            chapters = json.loads(vol.get("chapters_outline") or "[]")
-        except Exception:
-            chapters = []
-        if not isinstance(chapters, list):
-            chapters = []
-        canonical_map = apply_canonical_allocated_tasks_to_chapters(novel_id, chapters)
-        canonical_list = list(canonical_map.values())
-        canonical_list.sort(key=lambda item: int(item.get("chapter_index", 0)))
-        cursor.execute(
-            "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-            (json.dumps(_convert_obj_to_traditional(canonical_list), ensure_ascii=False), vol["id"])
-        )
-        all_chapters.extend(canonical_list)
-        touched += 1
-
-    if volume_index is None and all_chapters:
-        all_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
-        row_max = cursor.execute(
-            "SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
-            (novel_id,)
-        ).fetchone()
-        next_v = (row_max["max_v"] or 0) + 1
-        cursor.execute(
-            "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-            (novel_id, json.dumps({"chapters": _convert_obj_to_traditional(all_chapters)}, ensure_ascii=False), next_v)
-        )
-
-    conn.commit()
-    conn.close()
-    return touched
+    from backend.services.foreshadowing_blueprint import repair_foreshadowing_allocations as _repair
+    return _repair(novel_id, volume_index=volume_index)
 
 def precompute_global_foreshadowing(novel_id):
-    """
-    [新功能] 根據卷結構與世界觀伏筆/轉折設定，預計算全書總章數與全域伏筆/轉折的絕對章節分配，
-    並儲存為單一且確定的 Blueprint JSON，防止 volume_skeleton 生成時漂移。
-    """
-    # 1. 取得所有篇卷，計算總章數 T
-    volumes = get_volumes(novel_id)
-    if not volumes:
-        from backend.config import MIN_VOLUME_COUNT, MIN_CHAPTERS_PER_VOLUME
-        return {
-            "T": MIN_VOLUME_COUNT * MIN_CHAPTERS_PER_VOLUME,
-            "foreshadowing_allocations": [],
-            "turning_allocations": []
-        }
-        
-    sorted_vols = sorted(volumes, key=lambda x: int(x.get("volume_index", 0)))
-    _, T = get_volume_chapter_range(volumes, sorted_vols[-1]["volume_index"])
-    
-    # 2. 取得世界觀中所有的伏筆種子與關鍵轉折點
-    wb = get_latest_worldbuilding(novel_id)
-    worldview_parsed = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
-    all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
-    all_turns = worldview_parsed.get("key_turning_points", [])
-    
-    import hashlib
-    import random
-    
-    # 3. 初始化確定性隨機數生成器
-    h_seed = int(hashlib.md5(f"global_blueprint_{novel_id}".encode('utf-8')).hexdigest(), 16) % (2**32)
-    r = random.Random(h_seed)
-    
-    # 4. 確定性循環對齊散射：保證每個卷均勻分配到伏筆埋設與回收任務，絕不漏空
-    foreshadowing_allocations = []
-    V = len(sorted_vols)
-    MIN_PAYOFF_DISTANCE = max(20, int(T * 0.05))
-    
-    for idx, seed in enumerate(all_seeds):
-        if V <= 1:
-            # 單卷時保底前後散射
-            start_p, end_p = get_volume_chapter_range(volumes, sorted_vols[0]["volume_index"])
-            if end_p - start_p >= 1:
-                P = r.randint(start_p, end_p - 1)
-                R = r.randint(P + 1, end_p)
-            else:
-                P = start_p
-                R = end_p
-        else:
-            # 多卷時，循環指定埋設卷與回收卷，保證跨卷張力
-            v_p_idx = (idx % V) + 1  # 埋設卷
-            if v_p_idx < V:
-                v_r_idx = r.randint(v_p_idx + 1, V)  # 回收卷在埋設卷之後
-            else:
-                # 若為最後一卷，則將埋設點放到前面任意一卷，回收點放在最後一卷
-                v_p_idx = r.randint(1, V - 1)
-                v_r_idx = V
-                
-            start_p, end_p = get_volume_chapter_range(volumes, v_p_idx)
-            start_r, end_r = get_volume_chapter_range(volumes, v_r_idx)
-            
-            P = r.randint(start_p, end_p)
-            
-            low = max(start_r, P + MIN_PAYOFF_DISTANCE)
-            high = end_r
-            if low > high:
-                low = start_r
-            if low > high:
-                low = high
-            R = r.randint(low, high)
-            
-        normalized_pair = _normalize_allocation_pair((P, R), T)
-        if normalized_pair:
-            foreshadowing_allocations.append(normalized_pair)
-        
-    # 5. 關鍵轉折點確定性循環位置分配，確保均勻覆蓋各卷
-    turning_allocations = []
-    for jdx, turn in enumerate(all_turns):
-        if V > 0:
-            v_k_idx = (jdx % V) + 1
-            start_k, end_k = get_volume_chapter_range(volumes, v_k_idx)
-            K = r.randint(start_k, end_k)
-        else:
-            K = r.randint(1, T)
-        turning_allocations.append(K)
-        
-    blueprint = {
-        "T": T,
-        "foreshadowing_allocations": foreshadowing_allocations,
-        "turning_allocations": turning_allocations
-    }
-    
-    # 6. 保存至資料庫
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO foreshadowing_blueprints (novel_id, blueprint_json) VALUES (?, ?)",
-        (novel_id, json.dumps(blueprint, ensure_ascii=False))
-    )
-    conn.commit()
-    conn.close()
-    
-    print(f"[DB] Global foreshadowing blueprint precomputed successfully for novel {novel_id} (T={T})")
-    return blueprint
+    from backend.services.foreshadowing_blueprint import precompute_global_foreshadowing as _precompute
+    return _precompute(novel_id)
 
 
 def get_global_foreshadowing_blueprint(novel_id):
-    """
-    [新功能] 獲取預計算的伏筆分配藍圖。
-    具備自癒檢驗：若藍圖長度與目前世界觀種子/轉折點個數不一致，或尚未預計算，則會自動重算！
-    """
-    wb = get_latest_worldbuilding(novel_id)
-    worldview_parsed = parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
-    all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
-    all_turns = worldview_parsed.get("key_turning_points", [])
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    row = cursor.execute("SELECT blueprint_json FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,)).fetchone()
-    conn.close()
-    
-    if row:
-        try:
-            blueprint = json.loads(row["blueprint_json"])
-            total_chapters = _coerce_int(blueprint.get("T"), get_total_chapter_count(get_volumes(novel_id)))
-            if _is_valid_foreshadowing_blueprint(blueprint, len(all_seeds), len(all_turns), total_chapters):
-                return blueprint
-        except Exception as e:
-            print(f"[WARN] Failed to load/validate global blueprint: {e}")
-            
-    # 若不一致或尚未預計算，自動觸發並回傳預計算結果
-    return precompute_global_foreshadowing(novel_id)
+    from backend.services.foreshadowing_blueprint import get_global_foreshadowing_blueprint as _get_blueprint
+    return _get_blueprint(novel_id)
 
 
 from backend.services.diagnostics import detect_current_stage, generate_validation_report
