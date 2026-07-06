@@ -165,7 +165,7 @@ def diagnose_characters(characters_data):
 
 def diagnose_volumes_and_skeletons(volumes):
     """
-    對篇卷骨架進行剛性診斷。
+    對篇卷骨架進行結構與進度診斷。
     """
     if not volumes:
         return "第1卷缺漏"
@@ -183,12 +183,16 @@ def diagnose_volumes_and_skeletons(volumes):
     if bad_chapter_counts:
         return f"篇卷章節數不合規；每卷需{MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME}章；{', '.join(bad_chapter_counts[:10])}"
 
-    missing_skeleton_vols = []
+    incomplete_skeleton_vols = []
     for v in volumes:
         vol_idx = v.get("volume_index")
         skeleton_list = v.get("chapters_outline")
+        try:
+            start_ch, end_ch = db.get_volume_chapter_range(volumes, int(vol_idx))
+        except Exception:
+            start_ch, end_ch = 1, int(v.get("chapter_count") or 50)
         if not skeleton_list:
-            missing_skeleton_vols.append(vol_idx)
+            incomplete_skeleton_vols.append(f"卷{vol_idx}全卷未生成")
         else:
             if isinstance(skeleton_list, str):
                 try:
@@ -202,12 +206,22 @@ def diagnose_volumes_and_skeletons(volumes):
                     if not title or title.strip() == "" or title == "待設定標題":
                         empty_titles += 1
                 if empty_titles > len(skeleton_list) * 0.5:
-                    missing_skeleton_vols.append(vol_idx)
+                    incomplete_skeleton_vols.append(f"卷{vol_idx}骨架品質不足")
+                else:
+                    expected = set(range(start_ch, end_ch + 1))
+                    actual = {
+                        int(c.get("chapter_index"))
+                        for c in skeleton_list
+                        if isinstance(c, dict) and c.get("chapter_index") is not None
+                    }
+                    missing = sorted(expected - actual)
+                    if missing:
+                        incomplete_skeleton_vols.append(f"卷{vol_idx}缺{len(missing)}章")
             else:
-                missing_skeleton_vols.append(vol_idx)
+                incomplete_skeleton_vols.append(f"卷{vol_idx}骨架格式錯誤")
 
-    if missing_skeleton_vols:
-        return f"第{','.join(map(str, sorted(missing_skeleton_vols)))}卷缺漏"
+    if incomplete_skeleton_vols:
+        return "篇卷骨架待補：" + "；".join(incomplete_skeleton_vols[:12])
     
     return f"篇卷骨架完整，共{len(volumes)}卷"
 
@@ -534,7 +548,8 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
     # 3. 篇卷規劃與骨架大綱
     vols = db.get_volumes(novel_id)
     report_lines.append("【3. 篇卷規劃與骨架大綱層】")
-    missing_skeleton_vols = []  # 收集缺失骨架的卷索引
+    missing_skeleton_vols = []  # 完全缺失或骨架不可用的卷索引
+    incomplete_skeleton_items = []  # 所有未完整卷，包含部分缺章
     if not vols:
         report_lines.append("  - 狀態：❌ 未完成 (尚未規劃篇卷)")
     else:
@@ -557,6 +572,13 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             if not skeleton_list:
                 report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：❌ [骨架缺失] (尚未規劃簡易章節骨架大綱)")
                 missing_skeleton_vols.append(vol_idx)
+                incomplete_skeleton_items.append({
+                    "volume_index": vol_idx,
+                    "title": vol_title,
+                    "status": "全卷未生成",
+                    "missing_count": ch_count,
+                    "missing_sample": [start_ch, end_ch] if start_ch != end_ch else [start_ch],
+                })
             else:
                 if isinstance(skeleton_list, str):
                     try:
@@ -573,6 +595,13 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 if empty_titles > len(skeleton_list) * 0.5:
                     report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：❌ [骨架未生成] (超過50%章節標題為待設定)")
                     missing_skeleton_vols.append(vol_idx)
+                    incomplete_skeleton_items.append({
+                        "volume_index": vol_idx,
+                        "title": vol_title,
+                        "status": "骨架品質不足",
+                        "missing_count": ch_count,
+                        "missing_sample": [start_ch, end_ch] if start_ch != end_ch else [start_ch],
+                    })
                 else:
                     report_lines.append(f"    * 卷 {vol_idx}《{vol_title}》：✅ 骨架已建立 (第 {start_ch} 章至第 {end_ch} 章，共 {len(skeleton_list)} 章)")
                 # 剛性檢查章節序號覆蓋度
@@ -587,14 +616,31 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 duplicate_indexes = [x for x in actual_indexes if list(map(lambda y: int(y.get("chapter_index", 0)), skeleton_list)).count(x) > 1]
                 
                 if missing_indexes:
-                    report_lines.append(f"      - ⚠️ [大綱骨架缺漏] 缺少章節：{sorted(list(missing_indexes))}")
+                    missing_sorted = sorted(list(missing_indexes))
+                    report_lines.append(f"      - ⚠️ [大綱骨架待補] 缺少 {len(missing_sorted)} 章；樣本：{missing_sorted[:20]}{'...' if len(missing_sorted) > 20 else ''}")
+                    incomplete_skeleton_items.append({
+                        "volume_index": vol_idx,
+                        "title": vol_title,
+                        "status": "部分缺章",
+                        "missing_count": len(missing_sorted),
+                        "missing_sample": missing_sorted[:20],
+                    })
                 if duplicate_indexes:
                     report_lines.append(f"      - ⚠️ [大綱骨架重複] 重複章節：{duplicate_indexes}")
         
-        if missing_skeleton_vols:
-            report_lines.append(f"  - 🚫🚫🚫 [硬性阻斷] 以下卷的骨架尚未完成：卷 {missing_skeleton_vols}。")
-            first_missing_vol = missing_skeleton_vols[0]
-            report_lines.append(f"  - 卷生成骨架的優先順序為：從第一卷開始依序生成，請優先完成遺失的卷 {missing_skeleton_vols} 的骨架規劃。")
+        if incomplete_skeleton_items:
+            incomplete_skeleton_items.sort(key=lambda item: int(item["volume_index"]))
+            next_item = incomplete_skeleton_items[0]
+            compact_queue = [
+                f"卷{item['volume_index']}({item['status']}，缺{item['missing_count']}章)"
+                for item in incomplete_skeleton_items[:12]
+            ]
+            report_lines.append(f"  - ⚠️ [骨架待生成佇列] {'；'.join(compact_queue)}")
+            report_lines.append(
+                "  - [下一步建議] 這是流程進度提示，不是上一輪內容品質不合格。"
+                f"請優先處理最早未完整卷：卷 {next_item['volume_index']}《{next_item['title']}》。"
+                "若系統規則要求整卷生成，請一次生成該卷完整章節骨架；不要因後續卷缺失而跳過較早未完整卷。"
+            )
         else:
             report_lines.append(f"  - ✅ [全卷骨架完整性檢查] 所有 {len(vols)} 卷骨架均已建立，允許進入後續階段。")
     report_lines.append("")

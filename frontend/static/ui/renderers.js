@@ -12,6 +12,90 @@ function escapeBackticks(str) {
     return typeof str === 'string' ? str.replace(/`/g, '\\`') : str;
 }
 
+function escapeHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function isEmptyDisplayValue(value) {
+    if (value === null || value === undefined) return true;
+    if (typeof value === 'string') return value.trim() === '';
+    if (Array.isArray(value)) return value.every(isEmptyDisplayValue);
+    if (typeof value === 'object') return Object.keys(value).length === 0 || Object.values(value).every(isEmptyDisplayValue);
+    return false;
+}
+
+function firstDisplayValue(...values) {
+    return values.find(value => !isEmptyDisplayValue(value));
+}
+
+const CHARACTER_FIELD_LABELS = {
+    want: '外在目標',
+    need: '內在需求',
+    motivation: '動機',
+    arc: '成長弧線',
+    goal: '目標',
+    desire: '欲求',
+    external_goal: '外在目標',
+    internal_need: '內在需求',
+    conflict: '衝突',
+    reason: '原因',
+    summary: '摘要',
+    description: '描述',
+    content: '內容',
+    text: '內容',
+    value: '內容'
+};
+
+function characterFieldToText(value, fallback = '') {
+    if (isEmptyDisplayValue(value)) return fallback;
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+        return value
+            .map(item => characterFieldToText(item, ''))
+            .filter(Boolean)
+            .join('、') || fallback;
+    }
+    if (typeof value === 'object') {
+        for (const key of ['text', 'value', 'content', 'description', 'summary']) {
+            if (!isEmptyDisplayValue(value[key])) {
+                const direct = characterFieldToText(value[key], '');
+                if (direct) return direct;
+            }
+        }
+        return Object.entries(value)
+            .map(([key, val]) => {
+                const text = characterFieldToText(val, '');
+                if (!text) return '';
+                const label = CHARACTER_FIELD_LABELS[key] || key;
+                return `${label}: ${text}`;
+            })
+            .filter(Boolean)
+            .join('\n') || fallback;
+    }
+    return String(value);
+}
+
+function characterFieldHtml(value, fallback = '待設定') {
+    return escapeHtml(characterFieldToText(value, fallback)).replace(/\n/g, '<br>');
+}
+
+function normalizeCharacterPills(value) {
+    const rawItems = Array.isArray(value) ? value : (isEmptyDisplayValue(value) ? [] : [value]);
+    return rawItems
+        .flatMap(item => {
+            const text = characterFieldToText(item, '').trim();
+            if (!text) return [];
+            return text.split(/[，,、;；\n]+/).map(part => part.trim()).filter(Boolean);
+        })
+        .filter(Boolean);
+}
+
 // Compatible renderer for Foreshadowing Seeds (🌱)
 function formatForeshadowingSeed(item) {
     if (typeof item === 'string') {
@@ -590,39 +674,33 @@ export function renderCharactersTab() {
         } else {
             el.charactersCardsGrid.innerHTML = characters.map((char, idx) => {
                 // Parse personality traits
-                let traits = [];
-                if (Array.isArray(char.personality)) {
-                    traits = char.personality;
-                } else if (typeof char.personality === 'string') {
-                    traits = char.personality.split(',').map(s => s.trim()).filter(Boolean);
-                }
+                const traits = normalizeCharacterPills(char.personality);
                 
                 // Parse flaws
-                let flaws = [];
-                if (Array.isArray(char.flaws)) {
-                    flaws = char.flaws;
-                } else if (typeof char.flaws === 'string') {
-                    flaws = char.flaws.split(',').map(s => s.trim()).filter(Boolean);
-                } else if (char.fatal_flaw) {
-                    flaws = [char.fatal_flaw];
-                }
+                const flaws = normalizeCharacterPills(firstDisplayValue(char.flaws, char.fatal_flaw));
                 
-                const personalityPills = traits.map(t => `<span class="char-pill pill-personality">${t}</span>`).join('');
-                const flawsPills = flaws.map(f => `<span class="char-pill pill-flaw">${f}</span>`).join('');
+                const personalityPills = traits.map(t => `<span class="char-pill pill-personality">${escapeHtml(t)}</span>`).join('');
+                const flawsPills = flaws.map(f => `<span class="char-pill pill-flaw">${escapeHtml(f)}</span>`).join('');
+                const roleText = characterFieldToText(char.role, '配角');
+                const nameText = characterFieldToText(char.name, `角色 ${idx + 1}`);
+                const entryPhaseText = characterFieldToText(char.entry_phase, '');
+                const motivationValue = firstDisplayValue(char.motivation, char.want);
+                const arcValue = firstDisplayValue(char.arc, char.need);
+                const speechStyleText = characterFieldToText(char.speech_style, '');
                 
-                const roleClass = char.role === '主角' ? 'role-protagonist' :
-                                  char.role === '反派' ? 'role-antagonist' :
-                                  char.role === '導師' ? 'role-mentor' : 'role-secondary';
+                const roleClass = roleText === '主角' ? 'role-protagonist' :
+                                  roleText === '反派' ? 'role-antagonist' :
+                                  roleText === '導師' ? 'role-mentor' : 'role-secondary';
 
-                const motivationText = char.motivation || char.want || '待設定';
-                const arcText = char.arc || char.need || '待設定';
-                const entryText = char.entry_phase ? `<span class="char-entry-phase">🚪 ${char.entry_phase}</span>` : '';
+                const motivationText = characterFieldHtml(motivationValue, '待設定');
+                const arcText = characterFieldHtml(arcValue, '待設定');
+                const entryText = entryPhaseText ? `<span class="char-entry-phase">🚪 ${escapeHtml(entryPhaseText)}</span>` : '';
 
                 return `
                 <div class="character-card-modern" data-index="${idx}">
                     <div class="char-card-header">
                         <div class="char-meta-info">
-                            <span class="char-role-badge ${roleClass}">${char.role || '配角'}</span>
+                            <span class="char-role-badge ${roleClass}">${escapeHtml(roleText)}</span>
                             ${entryText}
                         </div>
                         <div class="char-card-actions">
@@ -636,7 +714,7 @@ export function renderCharactersTab() {
                     </div>
                     
                     <div class="char-card-title-section">
-                        <h3 class="char-name-heading">${char.name || `角色 ${idx + 1}`}</h3>
+                        <h3 class="char-name-heading">${escapeHtml(nameText)}</h3>
                     </div>
                     
                     <div class="char-card-body-section">
@@ -650,10 +728,10 @@ export function renderCharactersTab() {
                             <p class="char-detail-text">${arcText}</p>
                         </div>
                         
-                        ${char.speech_style ? `
+                        ${speechStyleText ? `
                         <div class="char-detail-row">
                             <span class="char-detail-label">🗣️ 語言風格</span>
-                            <p class="char-detail-text speech-style-text">「${char.speech_style}」</p>
+                            <p class="char-detail-text speech-style-text">「${escapeHtml(speechStyleText).replace(/\n/g, '<br>')}」</p>
                         </div>
                         ` : ''}
                     </div>

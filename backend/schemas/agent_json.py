@@ -5,6 +5,8 @@ AI 小說工廠流程 JSON Schema 定義
 可直接引用使用的各流程 JSON 格式模組
 """
 
+import json
+
 # =============================================================================
 # 1. worldview (世界觀架構師 Story Architect Agent)
 # =============================================================================
@@ -13,6 +15,19 @@ WORLDVIEW_SCHEMA = {
     "theme": "",
     "main_conflict": "",
     "worldview": "",
+    "setting": "",
+    "power_system": "",
+    "rules": [],
+    "factions": [
+        {
+            "name": "勢力/組織名稱",
+            "position": "立場與利益",
+            "resources": "掌握資源或制度權力",
+            "relationship_to_protagonist": "與主角/核心衝突的關係"
+        }
+    ],
+    "locations": [],
+    "timeline": [],
     "macro_outline": "",
     "multi_act_structure": [
         {"title": "第一幕 (Setup)", "content": ""},
@@ -27,7 +42,7 @@ WORLDVIEW_SCHEMA = {
 }
 
 WORLDVIEW_REQUIRED_FIELDS = ["theme", "main_conflict", "worldview", "macro_outline"]
-WORLDVIEW_RECOMMENDED_FIELDS = ["setting", "power_system", "multi_act_structure", "progressive_character_plan"]
+WORLDVIEW_RECOMMENDED_FIELDS = ["setting", "power_system", "rules", "factions", "locations", "timeline", "multi_act_structure", "progressive_character_plan"]
 
 WORLDVIEW_CHAPTER_PATCH = {
     "category": "",
@@ -60,6 +75,34 @@ FORESHADOWING_OUTPUT_SCHEMA = {
     ]
 }
 
+# 伏筆與轉折通過標準（總監評判用）
+FORESHADOWING_APPROVAL_CRITERIA = {
+    "name": "foreshadowing",
+    "display_name": "伏筆與轉折編織師",
+    "criteria": {
+        "required_top_level_keys": {
+            "description": "輸出必須包含 foreshadowing_seeds 與 key_turning_points；分批生成時只能輸出本批指定的其中一個頂層鍵"
+        },
+        "foreshadowing_seed_count": {
+            "description": "foreshadowing_seeds 必須至少 50 個；id 必須是從 1 開始連續的 JSON number / integer"
+        },
+        "turning_point_count": {
+            "description": "key_turning_points 必須至少 50 個；id 必須是從 1 開始連續的 JSON number / integer"
+        },
+        "foreshadowing_seed_fields": {
+            "required_fields": ["id", "name", "description", "setup_hint", "payoff_hint", "related_characters", "thematic_link"],
+            "description": "每個伏筆種子必須有具體載體、表層偽裝、埋設提示、回收方向、關聯角色與主題連結"
+        },
+        "turning_point_fields": {
+            "required_fields": ["id", "turning_point_name", "description", "trigger_condition", "structural_impact", "emotional_stakes", "related_characters"],
+            "description": "每個關鍵轉折點必須有觸發條件、結構性影響、情感代價與關聯角色"
+        },
+        "content_quality": {
+            "description": "伏筆不能只是抽象概念或同義改寫湊數；轉折點必須造成局勢、關係或角色弧線的實質改變"
+        },
+    },
+}
+
 # 世界觀通過標準（總監評判用）
 WORLDVIEW_APPROVAL_CRITERIA = {
     "name": "worldview",
@@ -80,6 +123,9 @@ WORLDVIEW_APPROVAL_CRITERIA = {
         },
         "macro_outline": {
             "description": "建議整體故事大綱能完整描述故事的開端、發展與高潮走向，為後續寫作指引清晰的方向"
+        },
+        "factions": {
+            "description": "勢力/組織設定需列出主要陣營、立場、利益、資源與彼此衝突，供角色 Bible、篇卷、骨架與正文維持一致"
         },
         "multi_act_structure": {
             "description": "【格式強硬要求：幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等不一致的編號標記】多幕結構建議規劃數十個幕，每幕均有清晰的起承轉合功能與精彩內容"
@@ -102,6 +148,8 @@ CHARACTER_SCHEMA = {
     "name": "",
     "role": "",
     "entry_phase": "",
+    "faction": "",
+    "affiliation": "",
     "personality": [],
     "want": "",
     "need": "",
@@ -134,6 +182,8 @@ CHARACTER_BASIC_FIELDS = [
     "name",
     "role",
     "entry_phase",
+    "faction",
+    "affiliation",
     "personality",
     "want",
     "need",
@@ -185,6 +235,9 @@ CHARACTER_APPROVAL_CRITERIA = {
         },
         "entry_phases": {
             "description": "角色登場階段需明確標註，分布需配合multi_act_structure的波次安排"
+        },
+        "faction_alignment": {
+            "description": "主要角色需能對應世界觀 factions / 勢力設定，標明 faction 或 affiliation，並在關係網中呈現勢力利益衝突"
         },
         "consistency": {
             "description": "角色設定需與世界觀保持一致，關係網需邏輯連貫"
@@ -314,15 +367,15 @@ SKELETON_APPROVAL_CRITERIA = {
         },
         "chapter_structure": {
             "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "events", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
-            "description": "每章需具備完整結構，所有欄位不可為空，且 events、allocated_tasks 需包含具體詳細大綱內容"
+            "description": "每章需具備輕量骨架結構，欄位需可供 writer 承接；events 只需核心事件，不要求詳細場景大綱"
         },
         "time_setting": {
             "description": "每章需有清晰的時間設定與前章的時間跨度"
         },
         "events": {
             "min_scenes": 0,
-            "max_scenes": 4,
-            "description": "每章需包含0-4個具體場景事件，描述動作衝突與後果，且 events 內結構必須包含 scene_index, location, characters, content"
+            "max_scenes": 1,
+            "description": "每章 events 建議只含 1 個核心事件，短句描述行動與結果；詳細場景由 writer 展開"
         },
         "foreshadowing_sync": {
             "description": "伏筆種植(foreshadowing_plants)與回收(foreshadowing_payoffs)需與骨架分配的allocated_tasks一致"
@@ -331,7 +384,7 @@ SKELETON_APPROVAL_CRITERIA = {
             "description": "turning_points需與世界觀設定的key_turning_points呼應"
         },
         "cliffhanger": {
-            "description": "章末需有懸念鉤子(Cliffhanger)，確保閱讀張力"
+            "description": "章末需有短鉤子或下一章推進提示，不要求強行製造誇張懸念"
         },
         "character_consistency": {
             "description": "活躍角色需符合角色聖經設定，不可出現角色行為衝突"
@@ -340,7 +393,7 @@ SKELETON_APPROVAL_CRITERIA = {
             "description": "每章需有明確的敘事目的，拒絕流水帳"
         },
         "character_presence": {
-            "description": "【角色出場深度規劃】詳細骨架大綱階段必須詳細規劃並產生詳細內容，且要確實安排角色活躍場景以滿足全局人設分佈（例如：確保核心主角與關鍵配角活躍於適當的篇卷與情節，在情節中明確展示角色出場與重要戲劇張力）。"
+            "description": "【角色出場輕量規劃】骨架階段只需列出本章真正活躍角色，並保持與角色 Bible 相容；角色戲劇細節由 writer 展開。"
         }
     },
 }
@@ -457,11 +510,31 @@ EDITOR_APPROVAL_CRITERIA = {
 
 APPROVAL_CRITERIA_REGISTRY = {
     "worldview": WORLDVIEW_APPROVAL_CRITERIA,
+    "foreshadowing": FORESHADOWING_APPROVAL_CRITERIA,
     "characters": CHARACTER_APPROVAL_CRITERIA,
     "volumes": VOLUME_APPROVAL_CRITERIA,
     "volume_skeleton": SKELETON_APPROVAL_CRITERIA,
     "writer": WRITER_APPROVAL_CRITERIA,
     "editor": EDITOR_APPROVAL_CRITERIA,
+}
+
+
+OUTPUT_SCHEMA_REGISTRY = {
+    "worldview": WORLDVIEW_SCHEMA,
+    "worldview_core": {
+        "theme": "核心主題，深入且具哲學命題（50-500字）",
+        "main_conflict": "核心衝突與多陣營拉扯情節張力網（100-800字）",
+        "worldview": "世界觀核心設定，包含力量體系、地理、社會結構（300字以上）",
+        "macro_outline": "全書宏觀整體大綱，支撐百萬字長篇",
+    },
+    "multi_act_structure": {"multi_act_structure": WORLDVIEW_SCHEMA["multi_act_structure"]},
+    "progressive_character_plan": {"progressive_character_plan": WORLDVIEW_SCHEMA["progressive_character_plan"]},
+    "foreshadowing": FORESHADOWING_OUTPUT_SCHEMA,
+    "characters": {"characters": [CHARACTER_SCHEMA]},
+    "volumes": {"volumes": [VOLUME_SCHEMA]},
+    "volume_skeleton": {"volume_index": 1, "chapters_skeleton": [CHAPTER_SKELETON_WITH_ALLOC_SCHEMA]},
+    "writer": WRITER_OUTPUT_SCHEMA,
+    "editor": EDITOR_OUTPUT_SCHEMA,
 }
 
 
@@ -508,6 +581,26 @@ def format_criteria_for_prompt(stage_name):
     #     lines.append(f"{criteria['auto_regenerate_hint']}")
     
     return "\n".join(lines)
+
+
+def get_output_schema(stage_name):
+    """Return the canonical output schema/example for a generation stage."""
+    return OUTPUT_SCHEMA_REGISTRY.get(stage_name)
+
+
+def format_output_schema_for_prompt(stage_name, *, label=None):
+    """Format the canonical schema/example from this module for agent system prompts."""
+    schema = get_output_schema(stage_name)
+    if schema is None:
+        return ""
+    heading = label or stage_name
+    return (
+        f"\n## 【{heading} 輸出 JSON 格式（來源：backend/schemas/agent_json.py）】\n"
+        "請嚴格依照下列 JSON key 與資料形狀輸出；value 可使用繁體中文，但 key 不可翻譯或改名。\n"
+        "```json\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "```\n"
+    )
 
 
 # =============================================================================

@@ -1653,6 +1653,85 @@ def _collect_volume_skeleton_chapters(novel_id):
     return _normalize_chapter_list(skeleton_chapters)
 
 
+GENERIC_ACTIVE_CHARACTER_MARKERS = (
+    "路人", "群眾", "乘客", "學生", "同學", "老師", "教授", "導師", "守衛", "士兵",
+    "特務", "警衛", "工作人員", "店員", "醫護", "司機", "記者", "眾人", "旁觀者",
+    "巡邏", "黑衣人", "未知人物", "不明", "站靈", "妖魔", "傀儡", "手下", "部下",
+)
+
+
+def _active_character_names_from_outline(outline):
+    if not isinstance(outline, dict):
+        return []
+    raw = outline.get("characters_active") or outline.get("characters") or []
+    if isinstance(raw, str):
+        parts = raw.replace("，", ",").replace("、", ",").split(",")
+    elif isinstance(raw, list):
+        parts = raw
+    else:
+        parts = []
+    names = []
+    for item in parts:
+        text = str(item).strip()
+        if text:
+            names.append(text)
+    return names
+
+
+def _character_alias_set(characters_bible):
+    aliases = set()
+    try:
+        parsed = characters_bible
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+        chars = parsed.get("characters", []) if isinstance(parsed, dict) else parsed
+        if not isinstance(chars, list):
+            return aliases
+        for char in chars:
+            if not isinstance(char, dict):
+                continue
+            for key in ("name", "alias", "aliases", "nickname", "nicknames", "also_known_as"):
+                value = char.get(key)
+                if isinstance(value, str):
+                    for part in value.replace("，", ",").replace("、", ",").split(","):
+                        part = part.strip()
+                        if part:
+                            aliases.add(part)
+                elif isinstance(value, list):
+                    aliases.update(str(v).strip() for v in value if str(v).strip())
+    except Exception:
+        pass
+    return aliases
+
+
+def _is_generic_active_character_name(name):
+    clean = str(name or "").strip()
+    if not clean:
+        return True
+    if len(clean) <= 1:
+        return True
+    return any(marker in clean for marker in GENERIC_ACTIVE_CHARACTER_MARKERS)
+
+
+def _missing_named_active_characters(outline, characters_bible):
+    aliases = _character_alias_set(characters_bible)
+    missing = []
+    for name in _active_character_names_from_outline(outline):
+        if _is_generic_active_character_name(name):
+            continue
+        if name in aliases:
+            continue
+        if any(alias and (alias in name or name in alias) for alias in aliases):
+            continue
+        missing.append(name)
+    seen = set()
+    result = []
+    for name in missing:
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
 # =============================================================================
 # 6. Chapter Writer Agent
 # =============================================================================
@@ -1744,6 +1823,34 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             "characters_active": []
         }
 
+    missing_active_chars = _missing_named_active_characters(current_outline, characters_bible)
+    if missing_active_chars:
+        missing_text = "、".join(missing_active_chars)
+        decision = {
+            "action": "INCREMENTAL_APPEND_CHARACTER",
+            "target": "characters",
+            "hint": (
+                f"正文寫作第 {chapter_index} 章前偵測到章節大綱使用未建卡命名角色：{missing_text}。"
+                "請根據世界觀、目前章節大綱、本卷設定與角色庫，為這些角色追加完整角色卡；"
+                "補卡後重新回到原章節 writer。"
+            ),
+            "agent_prompt": (
+                f"請追加以下缺失角色的完整角色卡：{missing_text}。"
+                f"角色首次/本次使用章節為第 {chapter_index} 章，章節大綱如下："
+                f"{json.dumps(current_outline, ensure_ascii=False, indent=2)}"
+            ),
+            "agent_context": "命名角色若沒有角色卡，不得進入正文寫作；補卡必須保存到角色庫，供後續卷章再次使用。",
+            "user_intent_summary": "",
+            "reason": "章節大綱引用了未存在於角色 Bible 的命名角色，若直接寫作會造成人設缺失與跨卷不一致。",
+            "volume_index": curr_vol_idx,
+            "chapter_index": chapter_index,
+        }
+        msg = f"正文寫作暫停：缺失命名角色 {missing_text}。請先追加角色卡。"
+        db.save_chat_message(novel_id, "assistant", msg, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "error", "message": msg + "\n```json\n" + json.dumps(decision, ensure_ascii=False, indent=2) + "\n```"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+        
     pre_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
     nxt_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
     

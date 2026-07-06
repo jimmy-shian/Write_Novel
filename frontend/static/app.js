@@ -63,6 +63,70 @@ function buildPatchTaskPayload(stage, hint, extra = {}) {
     });
 }
 
+function isEmptyDisplayValue(value) {
+    if (value === null || value === undefined) return true;
+    if (typeof value === 'string') return value.trim() === '';
+    if (Array.isArray(value)) return value.every(isEmptyDisplayValue);
+    if (typeof value === 'object') return Object.keys(value).length === 0 || Object.values(value).every(isEmptyDisplayValue);
+    return false;
+}
+
+const CHARACTER_FIELD_LABELS = {
+    want: '外在目標',
+    need: '內在需求',
+    motivation: '動機',
+    arc: '成長弧線',
+    goal: '目標',
+    desire: '欲求',
+    external_goal: '外在目標',
+    internal_need: '內在需求',
+    conflict: '衝突',
+    reason: '原因',
+    summary: '摘要',
+    description: '描述',
+    content: '內容',
+    text: '內容',
+    value: '內容'
+};
+
+function characterFieldToText(value, fallback = '') {
+    if (isEmptyDisplayValue(value)) return fallback;
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+        return value.map(item => characterFieldToText(item, '')).filter(Boolean).join('、') || fallback;
+    }
+    if (typeof value === 'object') {
+        for (const key of ['text', 'value', 'content', 'description', 'summary']) {
+            if (!isEmptyDisplayValue(value[key])) {
+                const direct = characterFieldToText(value[key], '');
+                if (direct) return direct;
+            }
+        }
+        return Object.entries(value)
+            .map(([key, val]) => {
+                const text = characterFieldToText(val, '');
+                if (!text) return '';
+                const label = CHARACTER_FIELD_LABELS[key] || key;
+                return `${label}: ${text}`;
+            })
+            .filter(Boolean)
+            .join('\n') || fallback;
+    }
+    return String(value);
+}
+
+function firstDisplayValue(...values) {
+    return values.find(value => !isEmptyDisplayValue(value));
+}
+
+function normalizeCharacterListText(value) {
+    const rawItems = Array.isArray(value) ? value : (isEmptyDisplayValue(value) ? [] : [value]);
+    return rawItems
+        .flatMap(item => characterFieldToText(item, '').split(/[，,、;；\n]+/).map(part => part.trim()).filter(Boolean))
+        .join(', ');
+}
+
 function resolveMissingDecisionIndexes(decision) {
     const target = (decision?.target || '').toString().trim().toLowerCase();
     const next = { ...(decision || {}) };
@@ -2316,21 +2380,20 @@ function openCharacterEditModal(index, character) {
     }
     
     // Populate fields
-    document.getElementById('edit-char-name').value = char.name || '';
-    document.getElementById('edit-char-role').value = char.role || '配角';
-    document.getElementById('edit-char-motivation').value = char.motivation || char.want || '';
-    document.getElementById('edit-char-arc').value = char.arc || char.need || '';
-    document.getElementById('edit-char-personality').value = (char.personality || []).join(', ');
+    document.getElementById('edit-char-name').value = characterFieldToText(char.name, '');
+    const roleValue = characterFieldToText(char.role, '配角');
+    const roleSelect = document.getElementById('edit-char-role');
+    if (roleSelect && !Array.from(roleSelect.options).some(option => option.value === roleValue)) {
+        roleSelect.add(new Option(roleValue, roleValue));
+    }
+    if (roleSelect) roleSelect.value = roleValue;
+    document.getElementById('edit-char-motivation').value = characterFieldToText(firstDisplayValue(char.motivation, char.want), '');
+    document.getElementById('edit-char-arc').value = characterFieldToText(firstDisplayValue(char.arc, char.need), '');
+    document.getElementById('edit-char-personality').value = normalizeCharacterListText(char.personality);
     
     // Support flaws as array or string or fatal_flaw
     let flawsText = '';
-    if (Array.isArray(char.flaws)) {
-        flawsText = char.flaws.join(', ');
-    } else if (typeof char.flaws === 'string') {
-        flawsText = char.flaws;
-    } else if (char.fatal_flaw) {
-        flawsText = char.fatal_flaw;
-    }
+    flawsText = normalizeCharacterListText(firstDisplayValue(char.flaws, char.fatal_flaw));
     document.getElementById('edit-char-flaws').value = flawsText;
     
     // Save handler - 直接保存，不要觸發其他事件

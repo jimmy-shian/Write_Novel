@@ -220,14 +220,15 @@ function isPlaceholderOutline(outline) {
 function isShallowOutline(outline) {
     if (!outline || typeof outline !== 'object') return true;
     const summary = (outline.chapter_summary || outline.summary || '').toString().trim();
-    const scene = (outline.scene || outline.chapter_scene || '').toString().trim();
-    const purpose = (outline.purpose || '').toString().trim();
+    const scene = (outline.scene_setting || outline.scene || outline.chapter_scene || '').toString().trim();
+    const time = (outline.time_setting || '').toString().trim();
     const cliffhanger = (outline.cliffhanger || '').toString().trim();
     const events = Array.isArray(outline.events) ? outline.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
 
-    const hasSummary = summary.length >= 20;
-    const hasExtraDetail = scene.length >= 20 || purpose.length >= 20 || cliffhanger.length >= 20 || events;
-    return !(hasSummary && hasExtraDetail);
+    const hasSummary = summary.length >= 18;
+    const hasContext = scene.length > 0 || time.length > 0;
+    const hasProgression = events || cliffhanger.length > 0;
+    return !(hasSummary && hasContext && hasProgression);
 }
 
 function getPlotReviewBatchSize() {

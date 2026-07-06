@@ -32,7 +32,7 @@ TOOL_REGISTRY = {
         "parameters": ["target", "novel_id", "volume_index", "chapter_index", "reason", "agent_prompt", "agent_context"],
     },
     "inspect_content_block": {
-        "description": "檢視指定區塊；依總監指定的 stage/block/range 展開資料庫內容，預設每次 15 筆",
+        "description": "檢視指定區塊；依總監指定的 stage/block/range 展開資料庫內容，預設每次 15 筆。卷骨架請用 block_name=chapters_outline 與 start_index/end_index。",
         "parameters": ["stage_name", "block_name", "novel_id", "volume_index", "chapter_index", "start_index", "end_index"],
     },
     "invoke_sub_agent": {
@@ -270,8 +270,8 @@ def _validate_volume_skeleton(parsed: Any) -> List[str]:
         events = chapter.get("events")
         if not isinstance(events, list):
             _append_limited_issue(issues, f"chapters[{idx}].events 必須是陣列")
-        elif len(events) > 4:
-            _append_limited_issue(issues, f"chapters[{idx}].events 不可超過 4 個場景")
+        elif len(events) > 2:
+            _append_limited_issue(issues, f"chapters[{idx}].events 應保持輕量，不可超過 2 個核心事件")
         else:
             for event_idx, event in enumerate(events):
                 if not isinstance(event, dict):
@@ -280,6 +280,9 @@ def _validate_volume_skeleton(parsed: Any) -> List[str]:
                 for field in ("scene_index", "location", "characters", "content"):
                     if not _non_empty_text(event.get(field)):
                         _append_limited_issue(issues, f"chapters[{idx}].events[{event_idx}].{field} 不可為空")
+                content = _text_value(event.get("content"))
+                if len(content) > 80:
+                    _append_limited_issue(issues, f"chapters[{idx}].events[{event_idx}].content 過長；骨架只需短句")
 
         allocated = chapter.get("allocated_tasks")
         if not isinstance(allocated, dict):
@@ -353,9 +356,20 @@ def evaluate_output(stage_name: str, output_content: str, novel_id: str) -> Dict
     parsed = extract_json_block(output_content)
 
     if stage_name == "foreshadowing":
-        normalized = normalize_foreshadowing_output(parsed)
-        seeds = normalized.get("foreshadowing_seeds", [])
-        turns = normalized.get("key_turning_points", [])
+        if isinstance(parsed, dict):
+            seeds = parsed.get("foreshadowing_seeds") or parsed.get("seeds") or parsed.get("foreshadowings") or []
+            turns = parsed.get("key_turning_points") or parsed.get("turning_points") or parsed.get("twists") or []
+        else:
+            seeds = []
+            turns = []
+        if isinstance(seeds, dict):
+            seeds = [seeds]
+        if isinstance(turns, dict):
+            turns = [turns]
+        if not isinstance(seeds, list):
+            seeds = []
+        if not isinstance(turns, list):
+            turns = []
         q_err = foreshadowing_quantity_error(seeds, turns)
         if q_err:
             issues.append(q_err)
@@ -551,13 +565,13 @@ def _page_items(items: List[Any], start_index: int, end_index: int) -> Dict[str,
 
 def inspect_content_block(
     stage_name: str,
-    block_name: str,
-    novel_id: str,
+    block_name: str = "",
+    novel_id: str = "",
     volume_index: Optional[int] = None,
     chapter_index: Optional[int] = None,
     start_index: int = 1,
     end_index: Optional[int] = None,
-    **_: Any,
+    **extra: Any,
 ) -> Dict[str, Any]:
     """
     [Tool] Inspect a concrete persisted block chosen by the Director.
@@ -566,6 +580,24 @@ def inspect_content_block(
     """
     stage = (stage_name or "").strip()
     block = (block_name or "").strip()
+
+    if stage in ("volumes", "volume_skeleton") and not block:
+        block = "volumes" if stage == "volumes" else "chapters_outline"
+
+    if stage == "volume_skeleton" and volume_index is not None:
+        start_chapter = extra.get("start_chapter")
+        end_chapter = extra.get("end_chapter")
+        if start_chapter is not None or end_chapter is not None:
+            try:
+                vols_for_range = db.get_volumes(novel_id)
+                vol_start, vol_end = db.get_volume_chapter_range(vols_for_range, int(volume_index))
+                if start_chapter is not None:
+                    start_index = max(1, int(start_chapter) - vol_start + 1)
+                if end_chapter is not None:
+                    end_index = max(start_index, min(vol_end, int(end_chapter)) - vol_start + 1)
+            except Exception:
+                pass
+
     start, end = _coerce_range(start_index, end_index)
 
     if stage in ("worldview", "foreshadowing"):
