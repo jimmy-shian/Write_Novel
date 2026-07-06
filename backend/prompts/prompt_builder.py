@@ -35,6 +35,9 @@ from backend.prompts.prompt_instructions import (
 )
 from backend.prompts.output_contracts import (
     DIRECTOR_DECISION_KEY_CONTRACT,
+    DIRECTOR_HARD_VALIDATION_POLICY,
+    DIRECTOR_MANDATORY_INSPECTION_POLICY,
+    DIRECTOR_TOOL_CALL_CONTRACT,
     STRICT_JSON_KEY_CONTRACT,
     format_json_schema_prompt,
 )
@@ -550,23 +553,41 @@ def extract_worldview_summary(worldview_text):
     return compact_context_text(worldview_text, MAX_WORLDVIEW_SUMMARY_LENGTH, "世界觀摘要")
 
 def get_json_schema_prompt_snippet(schema_name):
-    """取得 JSON 格式綱要說明字串，已徹底移除非法 Python set literal {...} 以防 JSON 序列化失敗。"""
-    schema_map = {
-        "worldview": agent_json.WORLDVIEW_SCHEMA,
-        "character": agent_json.CHARACTERS_ROOT_SCHEMA,
-        "volumes": {"volumes": [agent_json.VOLUME_SCHEMA]},
-        "skeleton": {"volume_index": 1, "chapters_skeleton": [agent_json.CHAPTER_SKELETON_WITH_ALLOC_SCHEMA]},
-        "writer": agent_json.WRITER_OUTPUT_SCHEMA,
-        "editor": agent_json.EDITOR_OUTPUT_SCHEMA
+    """Return canonical output schema + approval criteria from agent_json.py."""
+    stage_map = {
+        "worldview": "worldview",
+        "worldview_core": "worldview_core",
+        "multi_act_structure": "multi_act_structure",
+        "progressive_character_plan": "progressive_character_plan",
+        "foreshadowing": "foreshadowing",
+        "character": "characters",
+        "characters": "characters",
+        "volumes": "volumes",
+        "skeleton": "volume_skeleton",
+        "volume_skeleton": "volume_skeleton",
+        "writer": "writer",
+        "editor": "editor",
     }
-    schema = schema_map.get(schema_name, {})
-    return format_json_schema_prompt(schema, label="this schema")
+    criteria_stage_map = {
+        "worldview_core": "worldview",
+        "multi_act_structure": "worldview",
+        "progressive_character_plan": "worldview",
+        "skeleton": "volume_skeleton",
+        "character": "characters",
+    }
+    stage_name = stage_map.get(schema_name, schema_name)
+    criteria_stage = criteria_stage_map.get(schema_name, stage_name)
+    return (
+        f"{STRICT_JSON_KEY_CONTRACT}\n"
+        f"{agent_json.format_output_schema_for_prompt(stage_name, label=schema_name)}\n"
+        f"{agent_json.format_criteria_for_prompt(criteria_stage)}"
+    )
 
 
 def build_story_architect_messages(genre, style, user_prompt):
     """世界觀架構師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("worldview")
-    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n"
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{STORY_ARCHITECT_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect / 世界觀架構師",
         "- 類型、風格基調、作者原始創作需求。\n- 若是重跑或局部調整，會在使用者內容中明確提供指定要求。",
@@ -580,8 +601,6 @@ def build_story_architect_messages(genre, style, user_prompt):
 風格基調：{style}
 詳細故事描述/要求：{user_prompt}
 
-{STORY_ARCHITECT_GUIDELINES}
-
 請根據以上設定，為本作品生成符合結構的完整世界觀 JSON 設定。
 """
     return [
@@ -592,14 +611,8 @@ def build_story_architect_messages(genre, style, user_prompt):
 def build_worldview_core_messages(genre, style, user_prompt):
     """僅生成世界觀核心設定（theme, main_conflict, worldview, macro_outline）的提示詞"""
     from backend.prompts.prompt_main import STORY_ARCHITECT_PROMPT, STORY_ARCHITECT_GUIDELINES
-    core_schema = {
-        "theme": "核心主題，深入且具哲學命題（50-500字）",
-        "main_conflict": "核心衝突與多陣營拉扯情節張力網（100-800字）",
-        "worldview": "世界觀核心設定，包含力量體系、地理、社會結構（300字以上）",
-        "macro_outline": "全書宏觀整體大綱，支撐百萬字長篇"
-    }
-    schema_snippet = format_json_schema_prompt(core_schema, label="this core worldview schema")
-    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n"
+    schema_snippet = get_json_schema_prompt_snippet("worldview_core")
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{STORY_ARCHITECT_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect Core / 核心世界觀架構師",
         "- 類型、風格基調、作者原始創作需求。\n- 本階段尚未有多幕結構、角色策略、角色 Bible、篇卷與正文。",
@@ -612,8 +625,6 @@ def build_worldview_core_messages(genre, style, user_prompt):
 風格基調：{style}
 詳細故事描述/要求：{user_prompt}
 
-{STORY_ARCHITECT_GUIDELINES}
-
 請根據以上設定，僅生成核心世界觀（theme、main_conflict、worldview、macro_outline）的 JSON 設定。
 """
     return [
@@ -624,7 +635,8 @@ def build_worldview_core_messages(genre, style, user_prompt):
 def build_multi_act_structure_messages(worldview_core_json, user_prompt):
     """基於核心世界觀，獨立生成多幕式起伏結構的提示詞"""
     from backend.prompts.prompt_main import MULTI_ACT_STRUCTURE_PROMPT, MULTI_ACT_STRUCTURE_GUIDELINES
-    system_prompt = f"{MULTI_ACT_STRUCTURE_PROMPT}\n\n{STRICT_JSON_KEY_CONTRACT}\n\n{MULTI_ACT_STRUCTURE_GUIDELINES}\n"
+    schema_snippet = get_json_schema_prompt_snippet("multi_act_structure")
+    system_prompt = f"{MULTI_ACT_STRUCTURE_PROMPT}\n\n{schema_snippet}\n\n{MULTI_ACT_STRUCTURE_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Drama Structure Specialist / 多幕式結構師",
         "- 已生成的核心世界觀 JSON。\n- 作者原始要求只作為風格與方向參考。",
@@ -649,7 +661,8 @@ def build_multi_act_structure_messages(worldview_core_json, user_prompt):
 def build_progressive_character_plan_messages(worldview_core_json, multi_act_json, user_prompt):
     """基於核心世界觀與多幕式結構，獨立生成角色漸進登場規劃策略的提示詞"""
     from backend.prompts.prompt_main import PROGRESSIVE_CHARACTER_PLAN_PROMPT, PROGRESSIVE_CHARACTER_PLAN_GUIDELINES
-    system_prompt = f"{PROGRESSIVE_CHARACTER_PLAN_PROMPT}\n\n{STRICT_JSON_KEY_CONTRACT}\n\n{PROGRESSIVE_CHARACTER_PLAN_GUIDELINES}\n"
+    schema_snippet = get_json_schema_prompt_snippet("progressive_character_plan")
+    system_prompt = f"{PROGRESSIVE_CHARACTER_PLAN_PROMPT}\n\n{schema_snippet}\n\n{PROGRESSIVE_CHARACTER_PLAN_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Character Progression Planner / 角色登場策略規劃師",
         "- 已生成的核心世界觀 JSON。\n- 已生成的 multi_act_structure。\n- 作者原始要求只作為風格與方向參考。",
@@ -677,12 +690,12 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
 def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index):
     """角色設計師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("character")
-    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Character Designer / 角色設計師",
-        "- 經後端挑選的世界觀背景與角色漸進規劃。\n- generate 模式：通常只有世界觀，沒有現有角色。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
-        "根據可見世界觀設計或修補角色 Bible。角色要服務於世界觀衝突、登場策略與作者需求；不得用空世界觀硬編角色。",
-        "輸出完整合法的 characters JSON。generate/expand 應保留既有角色並補充；modify 應融入指定修正，避免刪除無關角色。"
+        "- 經後端挑選的世界觀背景，必須包含或摘要呈現 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：通常只有世界觀，沒有現有角色；這是建立角色聖經與關係網的第一次定稿。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
+        "根據可見世界觀設計或修補角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者需求；不得用空世界觀硬編角色。",
+        "輸出完整合法的 characters JSON。generate 必須建立核心角色表、勢力歸屬、角色之間的關聯與可供卷/骨架/writer 使用的生成設定；expand/modify 應保留既有角色並補充或修正，避免刪除無關角色。"
     )
     
     if mode == "generate":
@@ -693,6 +706,11 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 {user_prompt or "請根據世界觀，為我們設計核心角色與配角群像。"}
 
 請為本作品生成符合結構的角色 Bible JSON 設定。
+硬性要求：
+1. 必須讀取並落實世界觀中的 `factions` / 勢力設定，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
+2. 必須讀取並落實 `progressive_character_plan` / 角色登場策略，讓角色功能、首次登場階段與群像節奏對齊。
+3. 必須建立可供後續 volumes、volume_skeleton、writer 使用的角色關係資料，例如 relationships / relationship_matrix / role / faction / entry_phase 等 schema 允許欄位。
+4. 不要只列人物簡介；每位核心角色都要有可寫作的動機、弱點、成長弧線、聲音/行為特徵與關係張力。
 """
     elif mode == "expand":
         user_content = f"""【世界觀背景】
@@ -708,6 +726,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 {user_prompt or "請在現有角色基礎上進行增量擴展，追加新角色。"}
 
 請根據總監提示，追加新角色並輸出完整的角色 Bible JSON 設定。
+擴增角色時仍必須遵守世界觀勢力設定；新角色的 faction、登場功能與關係網必須能回接既有角色聖經，不能只新增孤立人物。
 """
     else:  # modify
         target_char_content = ""
@@ -734,8 +753,8 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 {user_prompt or "請對指定角色進行內容調整。"}
 
 請將以上修改與該角色的完整內容融會貫通，修正後輸出完整的角色 Bible JSON 設定。
+修改時保留角色既有關係網與勢力一致性；若總監要求補關係或勢力，請同步修正 relationships / relationship_matrix 等相關欄位。
 """
-    user_content += f"\n\n{CHARACTER_DESIGNER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -790,8 +809,12 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
             "10. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。"
         )
 
-    schema_snippet = format_json_schema_prompt(schema, label="this foreshadowing schema")
-    system_prompt = f"{FORESHADOWING_ORCHESTRATOR_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    schema_snippet = (
+        format_json_schema_prompt(schema, label="this foreshadowing schema from backend/schemas/agent_json.py")
+        + "\n"
+        + agent_json.format_criteria_for_prompt("foreshadowing")
+    )
+    system_prompt = f"{FORESHADOWING_ORCHESTRATOR_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{target_instruction}\n\n{FORESHADOWING_ORCHESTRATOR_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Foreshadowing Orchestrator / 伏筆與轉折編織師",
         "- 經後端挑選的世界觀背景。\n- 角色 Bible 或角色摘要。\n- 總監可能透過 [BATCH: foreshadowing_seeds] 或 [BATCH: key_turning_points] 指定本批目標。",
@@ -804,9 +827,7 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
         "【世界觀背景】\n" + worldview_text + "\n\n"
         "【角色 Bible 與人設】\n" + characters_json + "\n\n"
         "【額外設計指令】\n" + (user_prompt or default_task) + "\n\n"
-        + target_instruction + "\n"
     )
-    user_content += f"\n\n{FORESHADOWING_ORCHESTRATOR_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -815,7 +836,7 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
 def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx):
     """篇卷規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("volumes")
-    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUMES_PLANNER_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Volumes Planner / 篇卷規劃師",
         "- 經後端挑選的世界觀、macro_outline、多幕結構與必要設定。\n- patch 模式會提供目標卷前後卷概要與總監提示。",
@@ -857,7 +878,6 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 
 請僅針對第 {v_idx} 卷進行精細化生成/修補，並回傳格式完全合法的 volumes JSON，列表中應僅包含第 {v_idx} 卷的新/修改內容。
 """
-    user_content += f"\n\n{VOLUMES_PLANNER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -866,38 +886,77 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 def build_volume_skeleton_planner_messages(worldview_text, volume_index, current_vol, start_ch, end_ch, vol_chapter_count, surrounding_context, precalc_clues, user_prompt):
     """卷骨架大綱規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
-    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUME_SKELETON_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Volume Skeleton Planner / 卷章節骨架規劃師",
-        "- 經後端挑選的世界觀背景。\n- 指定卷的標題、概要與本次章節範圍。\n- 相鄰卷/章節脈絡與 Python 預計算的 allocated_tasks。",
-        "只為本次指定卷與章節範圍建立章節骨架，並把預計算任務填入對應章節。",
-        "輸出 chapters_skeleton JSON；chapter_index 必須連續且只在指定範圍內。不得新增未分配伏筆任務，不得生成正文。"
+        "- 經後端挑選的世界觀背景。\n- 指定卷的標題、概要、時間線、序列上下文、適用規則與完整章節範圍。\n- 相鄰卷/章節脈絡與 Python 預計算的逐章 allocated_tasks 表。",
+        "一次生成本卷完整輕量章節骨架，並把預計算任務填入對應章節；不得自行切段或只輸出局部缺章。",
+        "輸出 chapters_skeleton JSON；chapter_index 必須完整連續覆蓋指定整卷範圍。每章只寫短骨架，不得生成詳細大綱或正文。"
     )
+    volume_context = {
+        "volume_index": volume_index,
+        "title": current_vol.get("title"),
+        "summary": current_vol.get("summary"),
+        "chapter_range": [start_ch, end_ch],
+        "chapter_count": vol_chapter_count,
+        "factions": current_vol.get("factions"),
+        "time_timeline": current_vol.get("time_timeline"),
+        "sequence_context": current_vol.get("sequence_context"),
+        "applicable_rules": current_vol.get("applicable_rules"),
+    }
     
     user_content = f"""【世界觀背景】
 {worldview_text}
 
-【當前特定篇卷任務】
-- 當前篇卷序號：第 {volume_index} 卷
-- 篇卷標題：{current_vol['title']}
-- 篇卷概要：{current_vol['summary']}
-- 本次輸出章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {vol_chapter_count} 章）
-請務必只輸出此範圍內的章節骨架；不得輸出範圍外章節，不得重寫同卷其他已存在章節。
+【當前特定篇卷任務：整卷一次生成】
+{json.dumps(volume_context, ensure_ascii=False, indent=2)}
+
+請務必一次輸出第 {start_ch} 章至第 {end_ch} 章的完整「輕量章節骨架」（共 {vol_chapter_count} 章）。
+不得切成多段，不得只輸出局部章節，不得要求總監補「本卷章節範圍」或「allocated_tasks」：這些資料已在本訊息中完整提供。
+輸出完整性優先於細節量：每章請短，不要詳細。
 
 {surrounding_context}
 {precalc_clues}
 
 【allocated_tasks 硬性填寫規則】
 - 你不得自行挑選、推測、複製或新增任何伏筆 Seed / turning point 到未指定章節。
-- 只有上方清單明確列出的章節，才可在 allocated_tasks 對應陣列填入該任務。
-- 未列出任務的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
+- 每一章都必須依「本卷逐章伏筆/轉折硬性操作表」填寫 allocated_tasks。
+- 表中空陣列的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
 - 若同一 Seed 看似同時需要埋設與回收，視為錯誤；請以章節清單中的單一操作為準。
-【使用者額外提示詞 (Prompt)】
-{user_prompt or "請為本卷精心設計簡易骨架大綱。"}
+- 若某章有 plant/payoff/turning point，該任務不能只放在 allocated_tasks；chapter_summary 或 events[0].content 必須用短句點出其劇情落點。
 
-請只為本次指定章節範圍生成符合 JSON 結構的 chapters_skeleton 清單。輸出章數必須等於上方指定範圍的章數，chapter_index 必須連續且不可缺漏。
+【每章輕量輸出格式限制】
+- 不要寫正文、對白、心理描寫、詳細動作、感官描述、完整場景調度。
+- 每章只需要點出：本章承接/推進、任務落點、時間、地點、活躍角色、相關勢力。
+- events 僅 1 個核心事件物件；content 用「行動 -> 結果」短句，35 字內。
+- chapter_summary 35-70 字；cliffhanger 30 字內；scene_setting/time_setting 都用短語。
+- characters_active 只列本章真正活躍角色，通常 1-4 名。
+- 若某章牽涉勢力，請放在 scene_setting、events.content 或 chapter_summary 的短句中；不要另寫長篇勢力說明。
+
+【單章輸出長度範例（只示意格式，不可照抄內容）】
+{{
+  "chapter_index": {start_ch},
+  "chapter_title": "月台異訊",
+  "chapter_summary": "主角追查末班車異常，首次接觸乘客手冊線索，將危機推向車廂深處。",
+  "time_setting": "深夜末班前",
+  "scene_setting": "舊站月台",
+  "events": [{{"scene_index": 1, "location": "舊站月台", "characters": ["主角"], "content": "追查異訊 -> 取得手冊線索"}}],
+  "characters_active": ["主角"],
+  "emotional_tone": "懸疑",
+  "cliffhanger": "車門在無人處自行開啟。",
+  "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
+}}
+
+【勢力與角色一致性規則】
+- 勢力/組織的定義、立場、利益、制度背景以【世界觀背景】中的 factions / 世界觀設定為準；本卷 factions 只是本卷活躍勢力子集，不得重新發明或改寫勢力設定。
+- 若章節需要使用既有命名角色，characters_active 必須使用既有角色名冊中的名稱。
+- 若劇情確實需要新增命名角色，可以在骨架中提出，但總監審核時必須先補角色卡再進入正文；不得把缺角色卡的命名角色當作已完備角色使用。
+
+【使用者額外提示詞 (Prompt)】
+{user_prompt or "請為本卷生成完整、連貫、短句化的輕量章節骨架。"}
+
+請生成符合 JSON 結構的 chapters_skeleton 清單。輸出章數必須等於 {vol_chapter_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。不要因追求細節導致輸出中斷。
 """
-    user_content += f"\n\n{VOLUME_SKELETON_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -917,7 +976,7 @@ def build_volume_skeleton_completion_messages(
     讓模型以續寫方式產出後半，達成真正的 completion 補全。
     """
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
-    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n"
+    system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUME_SKELETON_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Volume Skeleton Completion / 卷骨架補全師",
         "- 經後端挑選的世界觀背景。\n- 指定卷的標題、概要、已完成前段章節與本次補全範圍。\n- Python 預計算的 allocated_tasks。",
@@ -953,8 +1012,6 @@ def build_volume_skeleton_completion_messages(
 
 請以 completion（續寫）方式，只輸出第 {start_ch} 章至第 {end_ch} 章的 chapters_skeleton JSON 陣列。輸出章數必須等於 {batch_count}，chapter_index 必須連續且不可缺漏。
 """
-    user_content += f"\n\n{VOLUME_SKELETON_GUIDELINES}"
-
     # 為促成真正的 completion，把前段成果作為 assistant 前綴（role=assistant），
     # 讓模型以「自己先前已開始產出此 JSON」的續寫方式補完剩餘章節。
     # 注意：以下字串刻意不以 f-string 撰寫，避免 JSON 花括號被當成 f-string 表達式。
@@ -981,11 +1038,11 @@ def build_volume_skeleton_completion_messages(
 
 def build_chapter_writer_messages(worldview_text, characters_bible, current_outline, surrounding_plot, vol_outline_context, clue_payoff_details, custom_style, chapter_index, user_prompt=None):
     """正文作家寫作提示詞拼接"""
-    system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
+    system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE + "\n\n" + CHAPTER_WRITER_GUIDELINES
     system_prompt += build_agent_context_contract(
         "Chapter Writer / 正文作家",
-        "- 經後端挑選的世界觀背景。\n- 本章大綱、前後章節脈絡、本卷概要。\n- 本章命中的角色完整卡與其他角色基本關係。\n- 本章與附近章節的伏筆/轉折分配。",
-        "只撰寫指定 chapter_index 的正式正文，嚴格落實本章大綱與已分配任務。",
+        "- 經後端挑選的世界觀背景，包含 factions / 勢力設定。\n- 本章大綱、前後章節脈絡、本卷概要、本卷活躍勢力與規則。\n- 本章命中的角色完整卡與其他角色基本關係。\n- 本章與附近章節的伏筆/轉折分配。",
+        "只撰寫指定 chapter_index 的正式正文，嚴格落實本章大綱、已分配任務、角色卡與世界觀勢力設定。",
         "正式正文前必須輸出 [START_OF_PROSE]；不要改寫世界觀、角色 Bible、卷章大綱，不要輸出 JSON。"
     )
     
@@ -1017,11 +1074,15 @@ def build_chapter_writer_messages(worldview_text, characters_bible, current_outl
 {clue_payoff_details}
 {extra_prompt_block}
 
+【勢力與角色一致性硬性規則】
+- 勢力/組織描寫以世界觀 factions、世界觀背景與當前卷設定為準；不得臨時改寫勢力立場、制度、資源、敵友關係或名稱。
+- 本卷 factions 代表本章可活躍的勢力範圍；若正文需要引入其他勢力，必須與世界觀既有設定相容，不能憑空新增制度背景。
+- 本章命名角色必須依角色 Bible 行動、說話與做決策；若缺少角色卡，應回報上下文不足，不要硬寫。
+
 請根據以上豐富的上下文細節，展開本章正文寫作；正文目標字數為 1500 至 2000 字左右，不要寫成摘要或短章。
 【寫作風格基調】
 {custom_style}
 """
-    user_content += f"\n\n{CHAPTER_WRITER_GUIDELINES}"
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -1115,14 +1176,7 @@ def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_
     from backend.services.diagnostics import diagnose_all_phases
     diags = diagnose_all_phases(novel_id)
     
-    # 填充 CO_PILOT_ORCHESTRATOR_PROMPT
-    system_prompt = CO_PILOT_ORCHESTRATOR_PROMPT.format(
-        worldview=diags["worldview"],
-        characters=diags["characters"],
-        plot=diags["plot"],
-        written_chapters=diags["written_chapters"],
-        validation_report=validation_report
-    )
+    system_prompt = CO_PILOT_ORCHESTRATOR_PROMPT
     
     # Select task-relevant context first; length limits are only overflow guards.
     context_query = _context_query_text(user_message, plot_text, history_context)
@@ -1149,6 +1203,10 @@ def build_copilot_chat_messages(novel_id, worldview_text, characters_text, plot_
 - 世界觀：{diags["worldview"]}
 - 角色 Bible：{diags["characters"]}
 - 大綱概要：{diags["plot"]}
+- 已完稿正文：{diags["written_chapters"]}
+
+【系統底層結構完整性與邏輯校驗報告】
+{validation_report}
 
 【最近對話歷史】
 {history_context}
@@ -1312,13 +1370,19 @@ def build_director_decision_messages(
     if director_context_block:
         director_context_block = compact_context_text(director_context_block, 16000, "總監補充上下文")
 
-    director_input_policy = """
+    director_input_policy = f"""
 
 ## Director 輸入與展開政策
 1. 本輪輸入可能包含「硬指標計數」與「預設視圖」。硬指標由 Python 校驗報告直接計算；預設視圖只用於定位，不可把未展開項目當成已審查。
 2. 對上一個 Agent 輸出先用 `TOOL_CALL evaluate_output` 做硬性檢查；該工具統一檢查 worldview、foreshadowing、characters、volumes、volume_skeleton、writer、editor。
-3. 若需要查看長列表或指定章節/卷/欄位的完整內容，請用 `TOOL_CALL inspect_content_block` 指定 stage_name、block_name、volume_index/chapter_index、start_index/end_index；首次預設檢視 1~15，後續由你決定下一段。
+3. 只要本階段包含長列表、完整角色表、卷骨架或正文，放行前都必須用工具展開檢閱內容品質；不能只因 Python 硬性校驗通過就 `CONTINUE`。
 4. 若遇到前端回報的 system_event（錯誤、阻斷、索引缺失、執行失敗），請把它當作事實封包，根據 validation_report 與工具檢視結果決定下一步；前端不負責判斷流程。
+
+{DIRECTOR_HARD_VALIDATION_POLICY}
+
+{DIRECTOR_TOOL_CALL_CONTRACT}
+
+{DIRECTOR_MANDATORY_INSPECTION_POLICY}
 """
                     
     # 總監評斷世界觀與進行伏筆審查時需要完整傳入，而其他階段已經通過審核，將其內部的伏筆與轉折欄位改為 "此區塊通過審核不需評判"
@@ -1412,12 +1476,19 @@ def build_director_decision_messages(
 """
     
     elif current_stage == "volume_skeleton":
-        # 骨架階段：完整骨架(每2卷一組) + 世界觀的 macro_outline
+        # 骨架階段：完整骨架 + 世界觀的 macro_outline + Python 分配表
         system_prompt = f"""你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前卷骨架的創作質量，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（篇卷骨架規劃師）。
-2. 檢查骨架是否和該卷的設定相關。
+2. 檢查骨架是否和該卷標題、概要、時間線、序列上下文與適用規則一致。
+3. 檢查各章是否依「Python 預計算本卷伏筆/轉折分配表」自然埋設、回收或承載 turning point；沒有分配任務的章節不可要求硬塞伏筆。
+4. 通過標準：劇情能完整根據該卷伏筆/轉折分配自然鋪陳與回收，章節之間沒有內容跳痛，角色行為與卷設定不衝突，即可放行。
+5. 骨架階段只需輕量脈絡，不負責正文細節。若每章已點出承接/推進、時間、地點、活躍角色/勢力與 allocated_tasks 落點，不得因細節量少或場景未展開而退回；正文展開交給 writer。
+6. 合理的非線性時間敘事可以接受，例如穿越、回憶、夢境、異界時間差或其他劇情設定明確支持的時間跳躍；不要只因時間不是線性遞進就退回。
+7. 若需要繼續生成缺失卷，必須輸出 `CONTINUE` + `target: "volume_skeleton"` + 明確 `volume_index`，且 `agent_prompt` 必須要求一次生成該卷完整「輕量」章節骨架；不得輸出 SEGMENT_GENERATE、SEGMENT_COMPLETE 或要求分段生成。
+8. 若骨架使用了角色 Bible 中不存在的命名角色，優先輸出 `INCREMENTAL_APPEND_CHARACTER` 補角色卡；補卡完成後再回到該卷骨架或原章節，不得跳到下一卷。
+9. 勢力/組織設定以世界觀 factions 為準；若骨架中的勢力立場、制度、目標與世界觀不一致，指出具體不一致並要求修正，不要讓下游臨時改寫勢力設定。
  
 {stage_criteria}
  
@@ -1445,6 +1516,8 @@ def build_director_decision_messages(
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
 4. ⚠️【後三章伏筆預埋審查】：請特別注意檢查「clue_payoff_upcoming_3_chapters」中預告的後三章即將回收之伏筆，是否已在本章正文中有合理的前置鋪墊與自然埋入。
 5. 角色聖經的配角欄位缺失不是 writer 階段阻斷理由；除非主角資料缺失已明顯造成正文無法寫作，否則不得改派角色修補，應繼續 writer/editor 流程。
+6. 但若正文或章節大綱使用了角色 Bible 中不存在的命名角色，必須先 `INCREMENTAL_APPEND_CHARACTER` 追加角色卡，再回到本章 writer；不得讓 writer 硬寫無角色卡人物。
+7. 勢力/組織描寫必須以世界觀 factions 與當前卷 factions 為準；若正文把勢力立場、制度、敵友關係寫錯，應退回 writer 修正或回 worldview 修正源資料。
 
 {stage_criteria}
 
@@ -1557,7 +1630,7 @@ def build_director_decision_messages(
     system_prompt += director_input_policy
 
     if gold_rules_context:
-        system_prompt += f"""
+        user_content += f"""
 
 ## 既有會議討論聖經 / 創作金律
 以下內容來自本作品先前輸出的 retrospective gold rules。它是總監下指令時的參考規則，應用於判斷風格、避坑與流程建議；若與系統底層剛性校驗報告衝突，仍以 Python 校驗報告為準。
@@ -1577,9 +1650,9 @@ def build_director_decision_messages(
 
     if suggested_next_chapter is not None:
         if current_stage in ("writer", "editor"):
-            system_prompt += f"\n\n💡【系統寫作計畫指引】：若本次審核放行並準備繼續正文寫作，系統建請下一章前往：第 {suggested_next_chapter} 章（這可能是一般的順序下一章，或是為了補齊斷檔/缺漏的章節）。請在輸出 JSON 決策時，優先將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`。\n"
+            user_content += f"\n\n💡【系統寫作計畫指引】：若本次審核放行並準備繼續正文寫作，系統建請下一章前往：第 {suggested_next_chapter} 章（這可能是一般的順序下一章，或是為了補齊斷檔/缺漏的章節）。請在輸出 JSON 決策時，優先將 `chapter_index` 設為 {suggested_next_chapter}，並將 `target` 設為 `writer`。\n"
         elif current_stage == "volume_skeleton":
-            system_prompt += f"\n\n💡【系統寫作計畫指引】：若剛性校驗報告確認【所有卷】的骨架皆已完全生成且無缺漏，準備放行進入正文寫作階段時，系統建請從第 {suggested_next_chapter} 章開始寫作。請在決策放行且 target 為 writer 時，將 `chapter_index` 設為 {suggested_next_chapter}。\n"
+            user_content += f"\n\n💡【系統寫作計畫指引】：若剛性校驗報告確認【所有卷】的骨架皆已完全生成且無缺漏，準備放行進入正文寫作階段時，系統建請從第 {suggested_next_chapter} 章開始寫作。請在決策放行且 target 為 writer 時，將 `chapter_index` 設為 {suggested_next_chapter}。\n"
 
     system_prompt += f"\n\n{DIRECTOR_CONTEXT_REQUEST_RULE}\n"
     
@@ -1627,7 +1700,20 @@ def build_director_decision_messages(
 3. 若該 Agent 的輸出有缺失、格式錯誤、欄位缺失或不足量，請在 JSON 決策中將其退回至該 Agent，並在 `reason` 與 `hint` 中明確指出其原始輸出的不足之處，供其重新生成。
 """
 
-    system_prompt += f"\n\n## 系統底層剛性校驗報告（Python 計算絕對事實，請以此為準）\n{validation_report}\n"
+    system_prompt += """
+
+## 檢查報告解讀規則
+1. 「待生成」「待補」「佇列」「缺少章節」代表流程進度尚未完成，不等於上一輪 Agent 內容品質不合格。
+2. 只有格式無法解析、必填欄位缺失、章節索引錯誤、allocated_tasks 與 Python 分配表不一致、角色/勢力設定明顯衝突，才屬於需要退回修正的內容問題。
+3. 若報告同時列出多個未完成卷，請依報告中的「下一步建議」或最早未完整卷前進；不要因後續卷完全缺失而跳過較早的缺章卷。
+4. 若上一輪輸出本身合格但全書仍有缺卷/缺章，請用 CONTINUE 派發下一個正確生成目標，不要把流程未完成寫成內容不合格或中止理由。
+"""
+
+    user_content += f"""
+
+## 系統底層結構/進度檢查報告（Python 計算事實，請以此為準）
+{validation_report}
+"""
     
     if director_context_block:
         user_content += f"\n\n{director_context_block}"
@@ -1876,7 +1962,7 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
             pass
 
     system_prompt = f"""你是一位頂尖的角色設計大師（Character Designer）。
-請根據世界觀背景與新角色首次登場的詳細章節大綱，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
+請根據世界觀背景與新角色首次登場的章節骨架，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
 
 ⚠️【剛性約束項目】：
 1. 輸出格式必須嚴格是 JSON，符合以下角色 Schema：
