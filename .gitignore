@@ -19,3 +19,5 @@ data/
 
 # 排除封存工具之子模組/未追蹤內容
 _archive/tools/superpowers
+.gitmodules
+

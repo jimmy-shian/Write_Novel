@@ -961,6 +961,237 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
+def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False):
+    """
+    Volume Skeleton Stage — full-volume generation.
+
+    This definition intentionally overrides the historical batch implementation
+    above. A normal volume_skeleton generate/regenerate call now asks the LLM for
+    one complete volume in a single request; incremental patch remains separate.
+    """
+    from backend.models.parsers import extract_json_block
+
+    volume_index = int(volume_index)
+    char_data = db.get_latest_characters(novel_id)
+    char_count = 0
+    if char_data and char_data.get("json_data"):
+        try:
+            parsed_chars = json.loads(char_data["json_data"]) if isinstance(char_data["json_data"], str) else char_data["json_data"]
+            char_count = len(parsed_chars.get("characters", []))
+        except Exception:
+            char_count = 0
+    min_chars_for_skeleton = 3
+    if char_count < min_chars_for_skeleton:
+        msg = f"第 {volume_index} 卷骨架生成前偵測到角色數量不足（目前 {char_count} 位，建議至少 {min_chars_for_skeleton} 位）。"
+        yield "data: " + json.dumps({
+            "type": "need_characters",
+            "volume_index": volume_index,
+            "current_char_count": char_count,
+            "minimum_required": min_chars_for_skeleton,
+            "message": msg,
+        }, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "status", "message": msg}, ensure_ascii=False) + "\n\n"
+        db.save_chat_message(novel_id, "assistant", msg, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    wb = db.get_latest_worldbuilding(novel_id)
+    worldview_text = select_worldview_context(wb["content"], current_stage="volume_skeleton") if wb else "尚無世界觀設定"
+    worldview_parsed = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    all_vols = db.get_volumes(novel_id)
+    current_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index), None)
+    if not current_vol:
+        raise ValueError(f"Volume index {volume_index} not found!")
+
+    start_ch, end_ch = db.get_volume_chapter_range(all_vols, volume_index)
+    full_indexes = list(range(start_ch, end_ch + 1))
+    missing_indexes = _volume_missing_chapter_indexes(all_vols, volume_index)
+    if not missing_indexes:
+        db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架已完整，沒有需要補生成的章節。", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "content", "delta": f"第 {volume_index} 卷骨架已完整，沒有需要補生成的章節。"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    pre_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index - 1), None)
+    next_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index + 1), None)
+    surrounding_context = ""
+    if pre_vol:
+        surrounding_context += f"\n【前 1 卷 (卷 {volume_index - 1}) 大綱概要】\n{pre_vol.get('summary', '')}\n"
+    if next_vol:
+        surrounding_context += f"\n【後 1 卷 (卷 {volume_index + 1}) 大綱概要】\n{next_vol.get('summary', '')}\n"
+    surrounding_context += _build_nearby_skeleton_context(current_vol, full_indexes)
+    char_data_for_skeleton = db.get_latest_characters(novel_id)
+    existing_character_names = []
+    if char_data_for_skeleton and char_data_for_skeleton.get("json_data"):
+        try:
+            existing_character_names = extract_character_names_list(char_data_for_skeleton["json_data"])
+        except Exception:
+            existing_character_names = []
+    surrounding_context += (
+        "\n【既有角色名冊與使用規則】\n"
+        + json.dumps({
+            "existing_character_names": existing_character_names,
+            "rule": (
+                "characters_active 優先使用此名冊中的既有命名角色。若本卷劇情確實需要新增命名角色，"
+                "可在章節骨架中使用具體姓名，但不得假裝已有角色卡；總監審核時必須先補角色卡再進入正文。"
+                "功能性群眾、守衛、路人可作為非命名角色使用。"
+            ),
+        }, ensure_ascii=False, indent=2)
+        + "\n"
+    )
+
+    all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
+    all_turns = worldview_parsed.get("key_turning_points", [])
+    blueprint = db.get_global_foreshadowing_blueprint(novel_id)
+    foreshadowing_allocations = blueprint.get("foreshadowing_allocations", [])
+    turning_allocations = blueprint.get("turning_allocations", [])
+
+    def task_text(item):
+        if isinstance(item, dict):
+            for key in ("name", "title", "summary", "description", "content", "seed", "setup_hint", "payoff_hint"):
+                if item.get(key):
+                    return str(item.get(key))
+            return json.dumps(item, ensure_ascii=False)
+        return str(item)
+
+    table = {
+        ch: {
+            "chapter_index": ch,
+            "foreshadowing_plants": [],
+            "foreshadowing_payoffs": [],
+            "turning_points": [],
+        }
+        for ch in full_indexes
+    }
+    chapter_set = set(full_indexes)
+    for idx, seed in enumerate(all_seeds if isinstance(all_seeds, list) else []):
+        if idx >= len(foreshadowing_allocations):
+            continue
+        try:
+            plant_ch, payoff_ch = foreshadowing_allocations[idx]
+        except Exception:
+            continue
+        seed_id = f"Seed-{idx + 1}"
+        seed_value = task_text(seed)
+        if plant_ch in chapter_set:
+            table[int(plant_ch)]["foreshadowing_plants"].append({
+                "seed_id": seed_id,
+                "seed": seed_value,
+                "plant_chapter": int(plant_ch),
+                "payoff_chapter": int(payoff_ch),
+                "instruction": "在本章自然埋設此線索，不能提前揭露答案；須服務本章劇情。",
+            })
+        if payoff_ch in chapter_set:
+            table[int(payoff_ch)]["foreshadowing_payoffs"].append({
+                "seed_id": seed_id,
+                "seed": seed_value,
+                "plant_chapter": int(plant_ch),
+                "payoff_chapter": int(payoff_ch),
+                "instruction": "在本章回收此線索，需讓此前鋪墊與本章結果形成清楚因果。",
+            })
+    for idx, turn in enumerate(all_turns if isinstance(all_turns, list) else []):
+        if idx >= len(turning_allocations):
+            continue
+        try:
+            turn_ch = int(turning_allocations[idx])
+        except Exception:
+            continue
+        if turn_ch in chapter_set:
+            table[turn_ch]["turning_points"].append({
+                "turn_id": f"Turn-{idx + 1}",
+                "turn": task_text(turn),
+                "chapter": turn_ch,
+                "instruction": "本章必須承載此關鍵轉折，事件因果要從前文自然推導。",
+            })
+
+    task_rows = [table[ch] for ch in full_indexes]
+    non_empty_rows = [
+        row for row in task_rows
+        if row["foreshadowing_plants"] or row["foreshadowing_payoffs"] or row["turning_points"]
+    ]
+    precalc_clues = "【Python 預先計算好的本卷逐章伏筆/轉折硬性操作表】\n" + json.dumps({
+        "source_of_truth": "Python deterministic foreshadowing_blueprint",
+        "volume_index": volume_index,
+        "chapter_range": [start_ch, end_ch],
+        "rule": "每章 allocated_tasks 必須逐字依此表填寫；空陣列代表該章沒有硬性伏筆/轉折任務，不得自行新增。",
+        "all_chapter_allocated_tasks": task_rows,
+        "non_empty_task_summary": non_empty_rows,
+    }, ensure_ascii=False, indent=2)
+
+    prompt = (
+        f"{user_prompt or '請生成本卷完整章節骨架。'}\n\n"
+        f"【本次後端整卷生成任務】一次輸出第 {start_ch} 至第 {end_ch} 章的完整卷骨架，"
+        f"必須包含這些 chapter_index：{full_indexes}。不得切段、不得只輸出缺失片段。"
+    )
+    messages = build_volume_skeleton_planner_messages(
+        worldview_text, volume_index, current_vol, start_ch, end_ch, len(full_indexes),
+        surrounding_context, precalc_clues, prompt
+    )
+
+    db.save_chat_message(
+        novel_id,
+        "user",
+        f"生成第 {volume_index} 卷完整骨架大綱。完整章節範圍：第 {start_ch}-{end_ch} 章；目前缺失章節：{missing_indexes[:80]}{'...' if len(missing_indexes) > 80 else ''}",
+        message_type="pipeline",
+    )
+
+    full_text = ""
+    saved_count = 0
+    for attempt in range(1, VOLUME_SKELETON_BATCH_RETRIES + 1):
+        yield "data: " + json.dumps({"type": "content", "delta": f"\n[整卷骨架] 第 {volume_index} 卷：一次生成第 {start_ch}-{end_ch} 章（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
+        llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
+        accumulated = []
+        saw_error = False
+        for chunk in llm_stream:
+            if chunk.startswith("data:"):
+                try:
+                    data = json.loads(chunk[5:].strip())
+                    if data.get("type") == "done":
+                        continue
+                    if data.get("type") == "content":
+                        accumulated.append(data.get("delta", ""))
+                    elif data.get("type") == "error":
+                        saw_error = True
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+            yield chunk
+
+        full_text = "".join(accumulated)
+        if full_text.strip() and _handle_director_context_request(novel_id, "篇卷骨架規劃師", full_text):
+            yield "data: " + json.dumps({"type": "error", "message": "篇卷骨架規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        if not full_text.strip() or saw_error:
+            if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
+                yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷完整骨架生成失敗，未取得有效內容。"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+            continue
+
+        parsed_skeleton = extract_json_block(full_text)
+        chapters_skeleton = _extract_chapters_in_range(parsed_skeleton, full_indexes)
+        parsed_indexes = {chapter_index_or_none(ch) for ch in chapters_skeleton}
+        missing_after_parse = sorted(set(full_indexes) - parsed_indexes)
+        if missing_after_parse:
+            if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
+                yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷完整骨架仍缺失章節：{missing_after_parse}。"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+            continue
+
+        canonical_map = db.apply_canonical_allocated_tasks_to_chapters(novel_id, chapters_skeleton)
+        chapters_skeleton = list(canonical_map.values())
+        chapters_skeleton.sort(key=lambda ch: int(ch.get("chapter_index", 0)))
+        db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
+        saved_count = len(chapters_skeleton)
+        break
+
+    db.save_last_agent_run(novel_id, "volume_skeleton", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
+    db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷完整骨架生成完成，一次保存/更新 {saved_count} 章。", message_type="pipeline")
+    yield "data: " + json.dumps({"type": "content", "delta": f"\n第 {volume_index} 卷完整骨架生成完成，一次保存/更新 {saved_count} 章。"}, ensure_ascii=False) + "\n\n"
+    yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
+
 # build_missing_character_designer_messages → 已移至 prompts/prompt_builder.py
 # 本檔透過頂層 import 直接使用，無需額外別名
 
@@ -1421,6 +1652,7 @@ def _collect_volume_skeleton_chapters(novel_id):
             skeleton_chapters.extend(ch_list)
     return _normalize_chapter_list(skeleton_chapters)
 
+
 # =============================================================================
 # 6. Chapter Writer Agent
 # =============================================================================
@@ -1511,7 +1743,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             "purpose": "推進情節",
             "characters_active": []
         }
-        
+
     pre_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
     nxt_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
     
@@ -1527,10 +1759,21 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     next_vol = next((v for v in all_vols if v["volume_index"] == curr_vol_idx + 1), None)
     
     vol_outline_context = ""
+    if current_vol:
+        current_volume_context = {
+            "volume_index": curr_vol_idx,
+            "title": current_vol.get("title"),
+            "summary": current_vol.get("summary"),
+            "factions": current_vol.get("parsed_factions") or current_vol.get("factions"),
+            "time_timeline": current_vol.get("time_timeline"),
+            "sequence_context": current_vol.get("sequence_context"),
+            "applicable_rules": current_vol.get("applicable_rules"),
+        }
+        vol_outline_context += "\n【當前卷設定與勢力上下文（必須遵守）】\n" + json.dumps(current_volume_context, ensure_ascii=False, indent=2) + "\n"
     if pre_vol:
-        vol_outline_context += f"\n【前一卷 (第 {curr_vol_idx - 1} 卷) 全卷概要】\n標題：{pre_vol['title']}\n大綱：{pre_vol['summary']}\n"
+        vol_outline_context += f"\n【前一卷 (第 {curr_vol_idx - 1} 卷) 全卷概要】\n標題：{pre_vol['title']}\n大綱：{pre_vol['summary']}\n勢力：{pre_vol.get('parsed_factions') or pre_vol.get('factions') or ''}\n"
     if next_vol:
-        vol_outline_context += f"\n【後一卷 (第 {curr_vol_idx + 1} 卷) 全卷概要】\n標題：{next_vol['title']}\n大綱：{next_vol['summary']}\n"
+        vol_outline_context += f"\n【後一卷 (第 {curr_vol_idx + 1} 卷) 全卷概要】\n標題：{next_vol['title']}\n大綱：{next_vol['summary']}\n勢力：{next_vol.get('parsed_factions') or next_vol.get('factions') or ''}\n"
         
     clue_payoff_details = ""
     next_three_chaps = [ch for ch in normalized_outlines if chapter_index < ch["chapter_index"] <= chapter_index + 3]
@@ -1681,8 +1924,6 @@ EXECUTABLE_DIRECTOR_ACTIONS = {
     "INCREMENTAL_MODIFY_SKELETON",
     "INCREMENTAL_MODIFY_CHARACTER_FULL",
     "TOOL_CALL",
-    "SEGMENT_GENERATE",
-    "SEGMENT_COMPLETE",
 }
 
 
@@ -1899,7 +2140,6 @@ def _record_director_review_status(novel_id, current_stage, parsed, volume_index
         )
     except Exception as exc:
         print(f"[WARN] Failed to save director review status: {exc}")
-
 
 
 def re_search_batch_marker(text):
@@ -2144,88 +2384,7 @@ def run_director_decision(
             }, ensure_ascii=False) + "\n\n"
             parsed = recovery_decision
 
-        # --- 總監調度：volume_skeleton 自動分段保險 ---
-        # 當總監針對 volume_skeleton 階段下達 CONTINUE 前往骨架生成，但該卷仍有
-        # 缺失章節時，由 Python 依「分段生成 + 補全」策略自動決定切段點，
-        # 覆寫為 SEGMENT_GENERATE / SEGMENT_COMPLETE 決策，並附加在最後輸出，
-        # 讓前端以本覆寫決策執行分段 task（嚴禁回到整卷批次模式）。
-        if current_stage == "volume_skeleton":
-            try:
-                _act = str(parsed.get("action", "")).upper() if isinstance(parsed, dict) else ""
-                _tgt = str(parsed.get("target", "")).lower() if isinstance(parsed, dict) else ""
-            except Exception:
-                _act, _tgt = "", ""
-            seg_vol = volume_index
-            if seg_vol is None and isinstance(parsed, dict):
-                try:
-                    seg_vol = int(parsed.get("volume_index")) if parsed.get("volume_index") is not None else None
-                except Exception:
-                    seg_vol = None
-            if seg_vol is None:
-                vols_for_seg = db.get_volumes(novel_id)
-                for v in vols_for_seg:
-                    if not v.get("chapters_outline"):
-                        try:
-                            seg_vol = int(v.get("volume_index"))
-                        except Exception:
-                            seg_vol = None
-                        break
-            _is_skeleton_target = _tgt and any(k in _tgt for k in ("volume_skeleton", "skeleton", "骨架", "macro_skeleton"))
-            if _act == "CONTINUE" and _is_skeleton_target and seg_vol is not None:
-                seg_vol = int(seg_vol)
-                _vols = db.get_volumes(novel_id)
-                _missing = _volume_missing_chapter_indexes(_vols, seg_vol)
-                if _missing:
-                    # 判斷本段目標與是否已有前段成果，決定「分段生成」或「補全」
-                    _cur_vol = next((v for v in _vols if int(v.get("volume_index", 0)) == seg_vol), None)
-                    first_half, second_half = suggest_segment_split(_missing)
-                    # 優先處理前半段；前半段完成後，下次總監評估會看到前半已存在，
-                    # 此時 _missing 只剩後半，suggest_segment_split 的前半即為後半 → 自動走 completion。
-                    seg_range = first_half or second_half
-                    seg_action = None
-
-                    has_prior = False
-                    raw_ol = _cur_vol.get("chapters_outline") if _cur_vol else None
-                    if isinstance(raw_ol, str):
-                        try:
-                            raw_ol = json.loads(raw_ol)
-                        except Exception:
-                            raw_ol = []
-                    existing_idx = set()
-                    if isinstance(raw_ol, list):
-                        for _ch in raw_ol:
-                            _idx = chapter_index_or_none(_ch)
-                            if _idx is not None:
-                                existing_idx.add(_idx)
-                    if seg_range:
-                        # 若本段起點之前已有已生成章節，走 completion（補全）；否則走 segment_generate
-                        seg_start = min(seg_range)
-                        has_prior = any(idx < seg_start for idx in existing_idx)
-                        seg_action = "SEGMENT_COMPLETE" if has_prior else "SEGMENT_GENERATE"
-
-                    if seg_action and seg_range:
-                        override = {
-                            "action": seg_action,
-                            "target": "volume_skeleton",
-                            "volume_index": seg_vol,
-                            "chapter_range": [min(seg_range), max(seg_range)],
-                            "selection": [{"chapter_index": i} for i in seg_range],
-                            "reason": f"由 Python 分段調度器覆寫：{seg_action} 第 {seg_vol} 卷 第 {min(seg_range)}-{max(seg_range)} 章（共 {len(seg_range)} 章），避免一次生成整卷造成截斷。剩餘缺失：{_missing}",
-                            "hint": "",
-                            "agent_prompt": "",
-                            "agent_context": "",
-                            "user_intent_summary": "",
-                            "chapter_index": None,
-                        }
-                        yield "data: " + json.dumps({
-                            "type": "content",
-                            "delta": "\n\n```json\n" + json.dumps(override, ensure_ascii=False, indent=2) + "\n```\n"
-                        }, ensure_ascii=False) + "\n\n"
-                        yield _emit_status(f"🏗️ 總監分段調度：{seg_action} 第 {seg_vol} 卷 第 {min(seg_range)}-{max(seg_range)} 章…")
-                        # 更新 parsed 以防後續 tool_call 處理
-                        parsed = override
-
-                _record_director_review_status(
+        _record_director_review_status(
             novel_id,
             current_stage,
             parsed,
@@ -2233,7 +2392,7 @@ def run_director_decision(
             chapter_index=chapter_index,
         )
 
-if parsed and isinstance(parsed, dict) and (parsed.get("action") == "TOOL_CALL" or "tool_call" in parsed):
+        if parsed and isinstance(parsed, dict) and (parsed.get("action") == "TOOL_CALL" or "tool_call" in parsed):
             tool_call = parsed.get("tool_call") or {}
             tool_name = tool_call.get("tool_name")
             params = tool_call.get("parameters") or {}

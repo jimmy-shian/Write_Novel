@@ -455,7 +455,7 @@ async function executeDirectorAction(decision, userPrompt) {
     
     updateDirectorMessage(`🎯 總監決策：${action || '分析中'}...`);
     
-    // 🔴 硬性阻斷門檻：若總監指示進入 writer 但任何卷的骨架尚未完成，強制退回骨架生成
+    // 正文前置流程導引：若總監指示進入 writer 但仍有卷骨架未完成，先補最早缺失卷。
     const isWriterContinue = (action === 'CONTINUE' && ['writer', '正文寫作', '寫故事'].includes((decision.target || '').toString().trim().toLowerCase())) || action === 'WRITE_ALL_CHAPTERS';
     if (isWriterContinue) {
         const volumes = state.currentNovelData?.volumes || [];
@@ -471,9 +471,9 @@ async function executeDirectorAction(decision, userPrompt) {
         });
         if (missingSkeletonVols.length > 0 && volumes.length > 0) {
             const missingIdxs = missingSkeletonVols.map(v => v.volume_index || '?');
-            appendChatMessage('system', `🚫 **[系統硬性阻斷]** 總監指示進入正文寫作，但以下卷的骨架尚未完成：卷 ${missingIdxs.join(', ')}。\n⛔ 系統已自動覆寫總監決策，強制退回骨架生成階段。`);
-            showToast(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回骨架生成`);
-            updateDirectorMessage(`⛔ 硬性阻斷：卷 ${missingIdxs.join(', ')} 骨架缺失，退回第 ${missingIdxs[0]} 卷骨架生成階段...`);
+            appendChatMessage('system', `⚠️ **[骨架待生成佇列]** 總監指示進入正文寫作，但以下卷的骨架尚未完成：卷 ${missingIdxs.join(', ')}。\n這是流程進度提示，不代表上一輪內容不合格；系統將先補最早未完整卷的輕量骨架。`);
+            showToast(`骨架待生成：先補卷 ${missingIdxs[0]} 輕量骨架`);
+            updateDirectorMessage(`骨架待生成佇列：先生成第 ${missingIdxs[0]} 卷完整輕量骨架...`);
             
             const firstMissingVol = missingSkeletonVols[0].volume_index;
             state.activeVolumeIndex = firstMissingVol;
@@ -481,7 +481,8 @@ async function executeDirectorAction(decision, userPrompt) {
                 action: 'CONTINUE',
                 target: 'volume_skeleton',
                 volume_index: firstMissingVol,
-                hint: `請為第 ${firstMissingVol} 卷生成簡易章節骨架大綱`
+                hint: `請為第 ${firstMissingVol} 卷生成完整輕量章節骨架`,
+                agent_prompt: `請一次生成第 ${firstMissingVol} 卷的完整輕量章節骨架；每章只需短摘要、時間、地點、活躍角色/勢力、1 個核心事件與 allocated_tasks，不要切段生成，不要擴寫成詳細大綱或正文。`
             };
             setTimeout(() => executeDirectorAction(fakeDecision, userPrompt), 1000);
             return;
@@ -890,20 +891,22 @@ async function executeDirectorAction(decision, userPrompt) {
         
         case 'SEGMENT_GENERATE':
         case 'SEGMENT_COMPLETE': {
-            // 總監分段調度：生成/補全指定卷的某一段章節
             const volIdx = decision.volume_index || state.activeVolumeIndex || 1;
             state.activeVolumeIndex = parseInt(volIdx) || 1;
             updatePipelineStage('volume_skeleton', 'running');
-            updateDirectorMessage(`🏗️ 總監分段調度：${action} 第 ${state.activeVolumeIndex} 卷骨架…`);
+            updateDirectorMessage(`🏗️ 已停用分段調度，改為一次生成第 ${state.activeVolumeIndex} 卷完整骨架…`);
 
-            // 組裝章節範圍；decision.chapter_range 或 decision.selection 擇一
-            const segDecision = {
+            const fullVolumeDecision = {
                 ...decision,
+                action: 'CONTINUE',
                 target: 'volume_skeleton',
                 volume_index: state.activeVolumeIndex,
-                task_type: action === 'SEGMENT_COMPLETE' ? 'segment_complete' : 'segment_generate',
+                task_type: 'generate',
+                chapter_range: null,
+                selection: null,
+                hint: decision.agent_prompt || decision.hint || `請一次生成第 ${state.activeVolumeIndex} 卷完整章節骨架。`
             };
-            await executePipelineStage('volume_skeleton', userPrompt, segDecision);
+            await executePipelineStage('volume_skeleton', userPrompt, fullVolumeDecision);
             break;
         }
 
@@ -943,13 +946,14 @@ function isDetailedPlotOutline(chapter) {
     if (!chapter || typeof chapter !== 'object') return false;
     const summary = (chapter.chapter_summary || chapter.summary || '').toString().trim();
     const scene = (chapter.scene_setting || chapter.scene || '').toString().trim();
-    const purpose = (chapter.purpose || '').toString().trim();
+    const time = (chapter.time_setting || '').toString().trim();
     const cliffhanger = (chapter.cliffhanger || '').toString().trim();
     const events = Array.isArray(chapter.events) ? chapter.events.filter(e => Boolean(e && String(e).trim())).length > 0 : false;
 
-    const hasSummary = summary.length >= 20;
-    const hasExtraDetail = scene.length >= 20 || purpose.length >= 20 || cliffhanger.length >= 20 || events;
-    return hasSummary && hasExtraDetail;
+    const hasSummary = summary.length >= 18;
+    const hasContext = scene.length > 0 || time.length > 0;
+    const hasProgression = events || cliffhanger.length > 0;
+    return hasSummary && hasContext && hasProgression;
 }
 
 async function executeNextMissingStage(userPrompt) {

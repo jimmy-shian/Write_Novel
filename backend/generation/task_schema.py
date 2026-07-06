@@ -16,7 +16,7 @@ from .stage_registry import (
 )
 
 
-TASK_TYPES = ("generate", "regenerate", "patch", "batch_generate", "refine", "evaluate", "segment_generate", "segment_complete")
+TASK_TYPES = ("generate", "regenerate", "patch", "batch_generate", "refine", "evaluate")
 TASK_SCOPES = ("global", "volume", "chapter", "section", "selection")
 CONTEXT_MODES = ("full", "compact", "minimal")
 

@@ -474,8 +474,8 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let task_type = null;
     
     // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } 或是 \\\json ... ）
-    // 取「最後」一個 JSON 區塊：後端 Python 分段調度器會在總監原始輸出之後
-    // 附加覆寫決策（SEGMENT_GENERATE / SEGMENT_COMPLETE），最後一個才是最終決策。
+    // 取「最後」一個 JSON 區塊：工具追問或後端自癒可能在總監原始輸出之後
+    // 附加標準化決策，最後一個才是最終決策。
     const jsonBlockMatches = [...responseText.matchAll(/(?:```json|\\+json)\s*(\{[\s\S]*?\})\s*(?:```|\\+)/gi)];
     const jsonBlockMatch = jsonBlockMatches.length ? jsonBlockMatches[jsonBlockMatches.length - 1] : null;
     if (jsonBlockMatch) {
