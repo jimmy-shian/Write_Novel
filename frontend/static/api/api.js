@@ -2,123 +2,6 @@
 // API WRAPPERS & STREAMING CORE
 // ==========================================
 
-function mapEndpointAndBody(endpoint, body) {
-    let mappedEndpoint = endpoint;
-    let mappedBody = body;
-
-    // Check if it matches the old agent endpoints or director-decision
-    const isAgent = endpoint.includes('/api/agent/');
-    const isDirectorDecision = endpoint.includes('/director-decision') && !endpoint.includes('/resolve-missing-index') && !endpoint.includes('/help');
-
-    if (isAgent || isDirectorDecision) {
-        mappedEndpoint = '/api/generation-task';
-        const newBody = {
-            novel_id: body ? body.novel_id : '',
-            task_type: 'generate',
-            stage: '',
-            scope: 'global',
-            target: {},
-            options: {
-                stream: (body && body.stream !== undefined) ? body.stream : true,
-                force_json: (body && body.force_json !== undefined) ? body.force_json : false
-            }
-        };
-
-        if (body) {
-            // copy all fields of body to newBody to preserve extra parameters
-            Object.assign(newBody, body);
-        }
-
-        if (isDirectorDecision) {
-            // Extracts novel_id from url if it was `/api/novels/{novel_id}/director-decision`
-            const match = endpoint.match(/\/api\/novels\/([^/]+)\/director-decision/);
-            if (match && match[1]) {
-                newBody.novel_id = match[1];
-            }
-            newBody.task_type = 'evaluate';
-            newBody.stage = 'evaluate';
-            newBody.scope = 'global';
-            newBody.target = {
-                volume_index: body ? body.volume_index : null,
-                chapter_index: body ? body.chapter_index : null
-            };
-            newBody.user_prompt = body ? body.user_prompt : '';
-        } else if (endpoint.includes('story-architect')) {
-            newBody.stage = 'worldview';
-            newBody.scope = 'global';
-        } else if (endpoint.includes('character-designer')) {
-            newBody.stage = 'characters';
-            newBody.scope = 'global';
-        } else if (endpoint.includes('foreshadowing-orchestrator')) {
-            newBody.stage = 'foreshadowing';
-            newBody.scope = 'global';
-        } else if (endpoint.includes('volumes-planner')) {
-            newBody.stage = 'volumes';
-            newBody.scope = 'global';
-        } else if (endpoint.includes('volume-skeleton')) {
-            newBody.stage = 'volume_skeleton';
-            newBody.scope = 'volume';
-            // 預設 generate；分段模式由 body.task_type 覆蓋為 segment_generate / segment_complete
-            newBody.task_type = (body && body.task_type) ? body.task_type : 'generate';
-            newBody.target = {
-                volume_index: body ? body.volume_index : null,
-            }
-            // 若 body 帶 chapter_range 或 selection（總監分段調度），傳入供後端解析
-            if (body) {
-                if (Array.isArray(body.chapter_range) && body.chapter_range.length === 2) {
-                    newBody.target.selection = [{
-                        chapter_range: [parseInt(body.chapter_range[0]), parseInt(body.chapter_range[1])]
-                    }];
-                } else if (Array.isArray(body.selection)) {
-                    newBody.target.selection = body.selection;
-                }
-            }
-        } else if (endpoint.includes('write-chapter')) {
-            newBody.stage = 'writer';
-            newBody.scope = 'chapter';
-            newBody.target = {
-                chapter_index: body ? body.chapter_index : null
-            };
-        } else if (endpoint.includes('edit-chapter')) {
-            newBody.stage = 'editor';
-            newBody.task_type = 'refine';
-            newBody.scope = 'chapter';
-            newBody.target = {
-                chapter_index: body ? body.chapter_index : null
-            };
-            newBody.user_prompt = body ? body.edit_instructions : '';
-        } else if (endpoint.includes('copilot-chat')) {
-            newBody.stage = 'evaluate';
-            newBody.task_type = 'evaluate';
-            newBody.scope = 'global';
-            newBody.user_prompt = body ? body.user_message : '';
-            newBody.is_copilot_chat = true;
-        } else if (endpoint.includes('incremental-architect')) {
-            newBody.stage = 'worldview';
-            newBody.task_type = 'patch';
-            newBody.scope = 'global';
-            newBody.user_prompt = body ? body.user_hint : '';
-        } else if (endpoint.includes('incremental-character')) {
-            newBody.stage = 'characters';
-            newBody.task_type = 'patch';
-            newBody.scope = 'global';
-            newBody.user_prompt = body ? body.user_hint : '';
-        } else if (endpoint.includes('incremental-skeleton')) {
-            newBody.stage = 'volume_skeleton';
-            newBody.task_type = 'patch';
-            newBody.scope = 'volume';
-            newBody.target = {
-                volume_index: body ? body.volume_index : null
-            };
-            newBody.user_prompt = body ? body.user_hint : '';
-        }
-
-        mappedBody = newBody;
-    }
-
-    return { mappedEndpoint, mappedBody };
-}
-
 /**
  * 發送一般 API 請求（非串流）
  * @param {string} url - API 端點
@@ -127,16 +10,15 @@ function mapEndpointAndBody(endpoint, body) {
  * @returns {Promise<object>} 解析後的 JSON 回應
  */
 export async function requestAPI(url, method = 'GET', body = null) {
-    const { mappedEndpoint, mappedBody } = mapEndpointAndBody(url, body);
     try {
         const options = {
-            method: (mappedEndpoint !== url) ? 'POST' : method,
+            method,
             headers: { 'Content-Type': 'application/json' }
         };
-        if (mappedBody) {
-            options.body = JSON.stringify(mappedBody);
+        if (body) {
+            options.body = JSON.stringify(body);
         }
-        const response = await fetch(mappedEndpoint, options);
+        const response = await fetch(url, options);
         
         if (!response.ok) {
             const errData = await response.json().catch(() => ({ detail: response.statusText }));
@@ -160,25 +42,15 @@ export async function requestAPI(url, method = 'GET', body = null) {
  * @param {function|null} onRetrying - 重試中回呼（可選）
  */
 export async function streamAPI(endpoint, body, onThinking, onContent, onError, onDone, onRetrying, onEvent) {
-    const { mappedEndpoint, mappedBody } = mapEndpointAndBody(endpoint, body);
-    endpoint = mappedEndpoint;
-    body = mappedBody;
-
-    const MAX_RETRIES = 10;
     let attempt = 0;
     let streamHadFinalError = false;
 
     // Auto-inject stream and force_json settings
     if (body && typeof body === 'object') {
-        body.stream = true;
-        const structuredEndpoints = [
-            'story-architect',
-            'character-designer',
-            'volumes-planner',
-            'volume-skeleton'
-        ];
-        const isStructured = structuredEndpoints.some(ep => endpoint.includes(ep));
-        body.force_json = isStructured;
+        body.options = {
+            ...(body.options || {}),
+            stream: true
+        };
     }
 
     // Trigger start callback
@@ -240,6 +112,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
             let localHadError = false;
+            let sawTerminalEnvelope = false;
             
             while (true) {
                 const { value, done } = await reader.read();
@@ -271,6 +144,10 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         
                         if (typeof onEvent === 'function') {
                             try { onEvent(parsed); } catch(err) { console.error(err); }
+                        }
+
+                        if (parsed.type === 'done' || parsed.status === 'completed' || parsed.status === 'failed') {
+                            sawTerminalEnvelope = true;
                         }
 
                         if (parsed.type === 'reset') {
@@ -315,13 +192,17 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                     if (typeof onContent === 'function') onContent(accumulatedContent);
                 }
             }
+
+            if (!sawTerminalEnvelope) {
+                throw new Error('串流未收到後端完成封包即中斷');
+            }
             
             if (activityTimer) clearTimeout(activityTimer);
 
             // Trigger end callback
             if (typeof window.onStreamAPIEnd === 'function') {
                 try {
-                    window.onStreamAPIEnd(endpoint);
+                    window.onStreamAPIEnd(endpoint, body);
                 } catch (e) {}
             }
 
@@ -333,25 +214,29 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
 
             const isAborted = err.name === 'AbortError';
             const isServerError = err.message.includes('HTTP 錯誤 5');
-            const isConnectionError = isAborted || err.message.includes('FetchError') || err.message.includes('網路連接') || isServerError;
-            if (isConnectionError && attempt <= MAX_RETRIES) {
-                console.warn(`[streamAPI] Attempt ${attempt} failed or aborted (${err.message}). Retrying in 3 seconds...`);
-                // Wait 3 seconds before retrying
-                await new Promise(r => setTimeout(r, 3000));
+            const isInterruptedStream = err.message.includes('串流未收到後端完成封包');
+            const isConnectionError = isAborted || isInterruptedStream || err.message.includes('FetchError') || err.message.includes('網路連接') || isServerError;
+            if (isConnectionError) {
+                const delayMs = Math.min(30000, 2000 + Math.min(attempt, 14) * 2000);
+                console.warn(`[streamAPI] Stream interrupted at attempt ${attempt} (${err.message}). Retrying in ${delayMs / 1000}s...`);
+                if (typeof onRetrying === 'function') {
+                    onRetrying(`串流中斷，正在自動重送第 ${attempt + 1} 次`);
+                }
+                await new Promise(r => setTimeout(r, delayMs));
                 return makeAttempt();
             }
 
             // Trigger end callback on error
             if (typeof window.onStreamAPIEnd === 'function') {
                 try {
-                    window.onStreamAPIEnd(endpoint);
+                    window.onStreamAPIEnd(endpoint, body);
                 } catch (e) {}
             }
 
             streamHadFinalError = true;
             if (typeof onError === 'function') {
                 onError(
-                    isAborted ? `生成超時卡死，已嘗試 ${attempt} 次重新請求失敗。` : `網路連接錯誤: ${err.message}`,
+                    isAborted ? `生成超時卡死，已中斷。` : `網路連接錯誤: ${err.message}`,
                     isConnectionError
                 );
             }

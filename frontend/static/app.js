@@ -2,6 +2,8 @@ import { state } from './core/state.js';
 import { el } from './core/dom.js';
 import { showToast } from './core/toast.js';
 import { requestAPI, streamAPI } from './api/api.js';
+import { buildGenerationTaskPayload } from './generation/generationTaskSchema.js';
+import { buildFrontendStateReference } from './generation/generationStateMapper.js';
 import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown } from './core/utils.js';
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage } from './ui/renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './ui/novelLifecycle.js';
@@ -10,6 +12,112 @@ import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgen
 import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage } from './pipeline/pipeline.js';
 // Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
 window.state = state;
+
+function buildTaskPayload({
+    taskType = 'generate',
+    stage,
+    scope = null,
+    target = {},
+    instruction = '',
+    userPrompt = '',
+    hint = '',
+    options = {},
+    extraContext = null,
+    summaryContext = null,
+    conversationContext = null,
+    extra = {}
+} = {}) {
+    return {
+        ...buildGenerationTaskPayload({
+            novelId: state.currentNovelId,
+            taskType,
+            stage,
+            scope,
+            target,
+            contextMode: 'compact',
+            options: { stream: true, ...options },
+            frontendState: buildFrontendStateReference(state),
+            instruction,
+            userPrompt,
+            hint,
+            extraContext,
+            summaryContext,
+            conversationContext
+        }),
+        ...extra
+    };
+}
+
+function buildPatchTaskPayload(stage, hint, extra = {}) {
+    const target = {};
+    if (extra.volume_index !== undefined) target.volume_index = extra.volume_index;
+    if (extra.chapter_index !== undefined) target.chapter_index = extra.chapter_index;
+    return buildTaskPayload({
+        taskType: 'patch',
+        stage,
+        target,
+        instruction: hint || '',
+        userPrompt: hint || '',
+        hint: hint || '',
+        extra
+    });
+}
+
+function resolveMissingDecisionIndexes(decision) {
+    const target = (decision?.target || '').toString().trim().toLowerCase();
+    const next = { ...(decision || {}) };
+    if ((target.includes('skeleton') || target === 'volume_skeleton') && (next.volume_index === null || next.volume_index === undefined)) {
+        const volumes = state.currentNovelData?.volumes || [];
+        const missing = volumes.find(vol => {
+            const outline = vol.chapters_outline;
+            if (!outline) return true;
+            try {
+                const parsed = typeof outline === 'string' ? JSON.parse(outline) : outline;
+                return !Array.isArray(parsed) || parsed.length === 0;
+            } catch (e) {
+                return true;
+            }
+        });
+        next.volume_index = missing?.volume_index || state.activeVolumeIndex || 1;
+    }
+    if ((target === 'writer' || target === 'editor') && (next.chapter_index === null || next.chapter_index === undefined)) {
+        next.chapter_index = state.activeChapterIndex || 1;
+    }
+    return next;
+}
+
+function parseCurrentWorldviewJson() {
+    const raw = state.currentNovelData?.worldbuilding?.content ?? state.currentNovelData?.worldbuilding ?? '';
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    const text = String(raw);
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
+        if (match?.[1]) {
+            try {
+                return JSON.parse(match[1]);
+            } catch (_) {
+                return {};
+            }
+        }
+    }
+    return {};
+}
+
+function buildForeshadowingBatchInstruction() {
+    const worldview = parseCurrentWorldviewJson();
+    const seedCount = Array.isArray(worldview.foreshadowing_seeds) ? worldview.foreshadowing_seeds.length : 0;
+    const turnCount = Array.isArray(worldview.key_turning_points) ? worldview.key_turning_points.length : 0;
+    if (seedCount < 50) {
+        return '[BATCH: foreshadowing_seeds]\n本次只生成伏筆種子，至少 50 個，輸出必須符合 foreshadowing_seeds JSON schema。';
+    }
+    if (turnCount < 50) {
+        return '[BATCH: key_turning_points]\n本次只生成關鍵轉折點，至少 50 個，輸出必須符合 key_turning_points JSON schema。';
+    }
+    return '[BATCH: foreshadowing_seeds]\n本次只生成伏筆種子，至少 50 個。';
+}
 
 function getPlotReviewBatchSize() {
     const raw = state.settingsData?.plot?.plot_review_batch_size
@@ -309,8 +417,15 @@ async function executeChapterProseEditFlow(targetChapterIndex, editInstructions)
         };
 
         startAgentStream(
-            '/api/agent/edit-chapter',
-            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex, edit_instructions: editInstructions },
+            '/api/generation-task',
+            buildTaskPayload({
+                taskType: 'refine',
+                stage: 'editor',
+                scope: 'chapter',
+                target: { chapter_index: targetChapterIndex },
+                instruction: editInstructions,
+                userPrompt: editInstructions
+            }),
             virtualTarget,
             async () => {
                 showToast(`第 ${targetChapterIndex} 章正文精細編輯完畢`);
@@ -485,16 +600,40 @@ async function executeDirectorAction(decision, userPrompt) {
                 }
             }
 
-            if (target === 'worldview' || target === '世界觀設定' || (!checkStageHasContent('worldview') && !target)) {
+            const worldviewReady = checkWorldviewIsReady();
+
+            if (target === 'worldview' || target === '世界觀設定' || (!worldviewReady && !target)) {
                 updatePipelineStage('worldview', 'running');
                 updateDirectorMessage('🌍 開始生成世界觀設定...');
                 await executePipelineStage('worldview', userPrompt, decision);
             } else if (target === 'characters' || target === '角色設計') {
+                if (!worldviewReady) {
+                    updatePipelineStage('worldview', 'running');
+                    updateDirectorMessage('🌍 世界觀尚未完成，先生成世界觀設定...');
+                    showToast('🌍 世界觀尚未完成，已先導向世界觀生成');
+                    await executePipelineStage('worldview', userPrompt, {
+                        ...decision,
+                        target: 'worldview',
+                        reason: '角色設計需要完整世界觀作為前置資料；目前世界觀為空或核心欄位不足。'
+                    });
+                    return;
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'running');
                 updateDirectorMessage('👥 開始生成角色設定...');
                 await executePipelineStage('characters', userPrompt, decision);
             } else if (target === 'foreshadowing' || target === '伏筆' || target === '伏筆轉折' || target === 'foreshadowing_orchestrate' || target === 'foreshadowing_orchestration') {
+                if (!worldviewReady) {
+                    updatePipelineStage('worldview', 'running');
+                    updateDirectorMessage('🌍 世界觀尚未完成，先生成世界觀設定...');
+                    showToast('🌍 世界觀尚未完成，已先導向世界觀生成');
+                    await executePipelineStage('worldview', userPrompt, {
+                        ...decision,
+                        target: 'worldview',
+                        reason: '伏筆與轉折設計需要完整世界觀作為前置資料；目前世界觀為空或核心欄位不足。'
+                    });
+                    return;
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('foreshadowing', 'running');
@@ -785,8 +924,8 @@ async function executeDirectorAction(decision, userPrompt) {
         }
 
         default: {
-            // 無法解析的 ACTION — 回退到智能狀態檢測
-            console.warn('Unknown director action:', action, '— falling back to state detection');
+            // 無法解析的 ACTION：依本地已載入資料推進下一個缺失階段
+            console.warn('Unknown director action:', action, '— continuing from loaded state');
             await executeNextMissingStage(userPrompt);
             break;
         }
@@ -821,19 +960,10 @@ async function executeNextMissingStage(userPrompt) {
     let hasForeshadowing = false;
     if (hasWorldview) {
         try {
-            const text = state.currentNovelData.worldbuilding;
-            let parsed = null;
-            try {
-                parsed = JSON.parse(text);
-            } catch (e) {
-                const match = text.match(/```json\s*([\s\S]*?)\s*```/);
-                if (match && match[1]) {
-                    parsed = JSON.parse(match[1]);
-                }
-            }
-            if (parsed && Array.isArray(parsed.foreshadowing_seeds) && parsed.foreshadowing_seeds.length > 0) {
-                hasForeshadowing = true;
-            }
+            const parsed = parseCurrentWorldviewJson();
+            const seedCount = Array.isArray(parsed.foreshadowing_seeds) ? parsed.foreshadowing_seeds.length : 0;
+            const turnCount = Array.isArray(parsed.key_turning_points) ? parsed.key_turning_points.length : 0;
+            hasForeshadowing = seedCount >= 50 && turnCount >= 50;
         } catch (e) {}
     }
 
@@ -859,7 +989,13 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('foreshadowing', 'running');
         updateDirectorMessage('🎭 開始編織全書伏筆與轉折...');
-        await executePipelineStage('foreshadowing', userPrompt);
+        const batchInstruction = buildForeshadowingBatchInstruction();
+        await executePipelineStage('foreshadowing', userPrompt, {
+            action: 'CONTINUE',
+            target: 'foreshadowing',
+            hint: batchInstruction,
+            agent_prompt: batchInstruction
+        });
     } else if (!hasCharacters) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('foreshadowing', 'done');
@@ -914,8 +1050,12 @@ async function executeArchitectAgent() {
         `風格：${state.currentNovelData?.novel?.style || '待設定'}\n`;
     
     streamAPI(
-        `/api/agent/story-architect`,
-        { novel_id: state.currentNovelId, user_prompt: userPrompt },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'worldview',
+            instruction: userPrompt,
+            userPrompt
+        }),
         null,
         (content) => {
             if (content === null) { el.editorWorldview.value = ''; return; }
@@ -947,8 +1087,12 @@ async function executeCharacterAgent() {
     showGeneratingIndicator('characters');
     
     streamAPI(
-        `/api/agent/character-designer`,
-        { novel_id: state.currentNovelId },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'characters',
+            instruction: '',
+            userPrompt: ''
+        }),
         null,
         (content) => {
             if (content === null) { el.editorCharactersJson.value = ''; return; }
@@ -972,16 +1116,16 @@ async function executeCharacterAgent() {
 
 
 /**
- * 🚀 [新功能] 具備 10 次自動重試與對話框同步紀錄的高級 SSE 守護引擎
+ * SSE 守護引擎：串流中斷時持續重送同一請求，直到收到後端完成封包。
  * @param {string} url - 後端 API 路徑
  * @param {object} body - 請求參數
  * @param {function} onThinking - 思考串流回呼
  * @param {function} onContent - 內容串流回呼
  * @param {function} onError - 錯誤回呼
  * @param {function} onDone - 成功完成回呼
- * @param {number} maxRetries - 最大重試次數（預設 10 次）
+ * @param {number} maxRetries - 保留相容參數；傳入有限數值時仍會被忽略，串流中斷無上限重試。
  */
-window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = 10, onRetrying = null, onRetryRecovered = null) {
+window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, onDone, maxRetries = Infinity, onRetrying = null, onRetryRecovered = null) {
     let currentRetry = 0;
     let hadPreviousError = false;
     
@@ -1014,35 +1158,22 @@ window.streamAPIWithRetry = function(url, body, onThinking, onContent, onError, 
                     return;
                 }
                 
-                console.warn(`[GUARD] Pipeline connection error at ${url}. Retry attempt: ${currentRetry}/${maxRetries}`);
+                console.warn(`[GUARD] Pipeline connection error at ${url}. Retry attempt: ${currentRetry}`);
                 
-                if (currentRetry <= maxRetries) {
-                    hadPreviousError = true;
-                    if (typeof onRetrying === 'function') {
-                        onRetrying(error, currentRetry, maxRetries);
-                    }
-                    appendChatMessage('system', 
-                        `⚠️ **[系統防禦中斷]** 管線在執行 \`${endpointName}\` 時發生異常中斷。\n` +
-                        `❌ 錯誤回報: *${error}*\n` +
-                        `🔄 **正在自動嘗試第 ${currentRetry}/${maxRetries} 次重送指令...** (等待 ${currentRetry * 2} 秒)`
-                    );
-                    
-                    setTimeout(() => {
-                        attemptExecute();
-                    }, currentRetry * 2000);
-                } else {
-                    appendChatMessage('system', 
-                        `🚨 **[管線徹底崩潰]** 已連續重試送指令達最大上限 ${maxRetries} 次，管線保護性中止。\n` +
-                        `請檢查後端終端機環境或點擊「重新生成」！`
-                    );
-                    showToast(`🚨 管線重試次數已達上限 (${maxRetries}次)`);
-                    
-                    if (typeof onError === 'function') {
-                        onError(`管線重試 ${maxRetries} 次後依然失敗`);
-                    }
-                    
-                    try { hideAllAgentProcessingIndicators(); } catch(e) {}
+                hadPreviousError = true;
+                if (typeof onRetrying === 'function') {
+                    onRetrying(error, currentRetry, null);
                 }
+                const delaySeconds = Math.min(30, currentRetry * 2);
+                appendChatMessage('system', 
+                    `⚠️ **[系統防禦中斷]** 管線在執行 \`${endpointName}\` 時發生串流中斷。\n` +
+                    `❌ 錯誤回報: *${error}*\n` +
+                    `🔄 **正在自動重送第 ${currentRetry} 次指令...** (等待 ${delaySeconds} 秒)`
+                );
+                
+                setTimeout(() => {
+                    attemptExecute();
+                }, delaySeconds * 1000);
             },
             async (success) => {
                 if (hasError || success === false) return;
@@ -2008,12 +2139,11 @@ async function generateWorldviewSeedsWithAI() {
     showAgentProcessingIndicator('worldview', 'Story Architect');
     
     streamAPI(
-        '/api/agent/incremental-architect',
-        {
-            novel_id: state.currentNovelId,
+        '/api/generation-task',
+        buildPatchTaskPayload('worldview', hint || '生成3個與主角成長相關的伏筆線索', {
             target_section: 'foreshadowing_seeds',
             user_hint: hint || '生成3個與主角成長相關的伏筆線索'
-        },
+        }),
         null,
         (delta) => {
             if (delta === null) { el.editorWorldview.value = ''; return; }
@@ -2091,13 +2221,12 @@ function openCharacterAIEnhanceModal(charIndex, charName) {
         showToast(`正在為「${charName}」進行 AI 局部增強...`);
         
         streamAPI(
-            '/api/agent/incremental-character',
-            {
-                novel_id: state.currentNovelId,
+            '/api/generation-task',
+            buildPatchTaskPayload('characters', userHint, {
                 target_char_index: charIndex,
                 field_name: fieldName,
                 user_hint: userHint
-            },
+            }),
             null,
             (delta) => {
                 if (delta === null) { el.editorCharactersJson.value = ''; return; }
@@ -2782,12 +2911,11 @@ async function executeIncrementalUpdate(target, params) {
             showAgentProcessingIndicator('worldview', 'Story Architect (增量新增伏筆種子)');
             return new Promise((resolve) => {
 streamAPI(
-        '/api/agent/incremental-architect',
-        { 
-            novel_id: state.currentNovelId, 
+        '/api/generation-task',
+        buildPatchTaskPayload('worldview', user_hint || params.hint || '新增一個伏筆', {
             target_section: 'foreshadowing_seeds',
             user_hint: user_hint || params.hint || '新增一個伏筆'
-        },
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
@@ -2817,12 +2945,11 @@ streamAPI(
             showAgentProcessingIndicator('worldview', 'Story Architect (增量更新多幕式結構)');
             return new Promise((resolve) => {
 streamAPI(
-        '/api/agent/incremental-architect',
-        { 
-            novel_id: state.currentNovelId, 
+        '/api/generation-task',
+        buildPatchTaskPayload('worldview', user_hint || params.hint || '更新多幕式結構', {
             target_section: 'multi_act_structure',
             user_hint: user_hint || params.hint || '更新多幕式結構'
-        },
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
@@ -2853,13 +2980,12 @@ streamAPI(
             showAgentProcessingIndicator('characters', 'Character Designer (增量更新角色欄位)');
             return new Promise((resolve) => {
 streamAPI(
-        '/api/agent/incremental-character',
-        { 
-            novel_id: state.currentNovelId, 
+        '/api/generation-task',
+        buildPatchTaskPayload('characters', user_hint || params.hint || '修改角色', {
             target_char_index: target_char_index,
             field_name: field_name,
             user_hint: user_hint || params.hint || '修改角色'
-        },
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
             window.updateAgentStreamOutput('characters', delta);
@@ -2889,13 +3015,12 @@ streamAPI(
             showAgentProcessingIndicator('characters', 'Character Designer (新增角色)');
             return new Promise((resolve) => {
 streamAPI(
-        '/api/agent/incremental-character',
-        { 
-            novel_id: state.currentNovelId, 
+        '/api/generation-task',
+        buildPatchTaskPayload('characters', user_hint || params.hint || '新增一個新角色', {
             target_char_index: null, // 表示新增
             field_name: null,
             user_hint: user_hint || params.hint || '新增一個新角色'
-        },
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
             window.updateAgentStreamOutput('characters', delta);
@@ -2928,12 +3053,11 @@ streamAPI(
             showAgentProcessingIndicator('volume_skeleton', 'Volume Skeleton Planner (增量更新卷骨架)');
             return new Promise((resolve) => {
                 streamAPI(
-                    '/api/agent/incremental-skeleton',
-                    { 
-                        novel_id: state.currentNovelId, 
+                    '/api/generation-task',
+                    buildPatchTaskPayload('volume_skeleton', user_hint || params.hint || '修改卷骨架', {
                         volume_index: params.volume_index || 1,
                         user_hint: user_hint || params.hint || '修改卷骨架'
-                    },
+                    }),
                     (delta) => {
                         window.updateAgentStreamOutput('volume_skeleton', delta);
                     },
@@ -2978,8 +3102,12 @@ async function executeToolCall(tool, params) {
             return new Promise((resolve) => {
                 el.editorWorldview.value = '';
 streamAPI(
-        '/api/agent/story-architect',
-        { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'worldview',
+            instruction: user_prompt || params.hint || '',
+            userPrompt: user_prompt || params.hint || ''
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
@@ -3007,8 +3135,12 @@ streamAPI(
             return new Promise((resolve) => {
                 el.editorCharactersJson.value = '';
 streamAPI(
-        '/api/agent/character-designer',
-        { novel_id: state.currentNovelId, user_prompt: user_prompt || params.hint },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'characters',
+            instruction: user_prompt || params.hint || '',
+            userPrompt: user_prompt || params.hint || ''
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('characters', null); return; }
             window.updateAgentStreamOutput('characters', delta);
@@ -3097,8 +3229,14 @@ streamAPI(
                 };
 
 streamAPI(
-        '/api/agent/write-chapter',
-        { novel_id: state.currentNovelId, chapter_index: chapter_index || 1 },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'writer',
+            scope: 'chapter',
+            target: { chapter_index: chapter_index || 1 },
+            instruction: user_prompt || params.hint || '',
+            userPrompt: user_prompt || params.hint || ''
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('writer', null); return; }
             window.updateAgentStreamOutput('writer', delta);
@@ -3149,8 +3287,13 @@ async function executeAutoRegenerate(target, params) {
                 el.editorWorldview.value = '';
                 const prompt = hint || "請重新設計世界觀";
                 streamAPI(
-                    '/api/agent/story-architect',
-                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    '/api/generation-task',
+                    buildTaskPayload({
+                        taskType: 'regenerate',
+                        stage: 'worldview',
+                        instruction: prompt,
+                        userPrompt: prompt
+                    }),
                     (delta) => {
                         window.updateAgentStreamOutput('worldview', delta);
                     },
@@ -3178,8 +3321,13 @@ async function executeAutoRegenerate(target, params) {
                 el.editorCharactersJson.value = '';
                 const prompt = hint || "請重新設計角色";
                 streamAPI(
-                    '/api/agent/character-designer',
-                    { novel_id: state.currentNovelId, user_prompt: prompt },
+                    '/api/generation-task',
+                    buildTaskPayload({
+                        taskType: 'regenerate',
+                        stage: 'characters',
+                        instruction: prompt,
+                        userPrompt: prompt
+                    }),
                     (delta) => {
                         window.updateAgentStreamOutput('characters', delta);
                     },
@@ -3222,6 +3370,7 @@ async function executeAutoRegenerate(target, params) {
 function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, options = {}) {
     const tabName = options.tabName || 'worldview';
     const agentName = options.agentName || 'AI Agent';
+    const taskEndpoint = endpoint || '/api/generation-task';
     
     // Reset thinking text, show streaming box
     el.aiThinkingStream.classList.remove('hidden');
@@ -3236,7 +3385,7 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
     let hasError = false; // Track error to prevent done callback
     
     streamAPI(
-        endpoint,
+        taskEndpoint,
         body,
         // onThinking
         (delta) => {
@@ -3315,8 +3464,9 @@ async function resumePipelineWithDecision(activeTab, parsed, choice) {
         showToast('▶️ 用戶強制繼續下一階段');
         let nextTarget = decisionResult.target;
         if (!nextTarget) {
-            if (activeTab === 'worldview') nextTarget = 'characters';
-            else if (activeTab === 'characters') nextTarget = 'plot';
+            if (activeTab === 'worldview') nextTarget = 'foreshadowing';
+            else if (activeTab === 'foreshadowing') nextTarget = 'characters';
+            else if (activeTab === 'characters') nextTarget = 'volumes';
             else if (activeTab === 'plot') nextTarget = 'writer';
         }
         await executeDirectorAction({ 
@@ -3401,10 +3551,6 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
     switchToDirectorTab();
     if (state.isAutoExecuteMode) {
         state.directorLoopCount++;
-        if (state.directorLoopCount >= 5) {
-            showToast("自動流程已安全停駐，請手動決定下一步。");
-            return { action: 'WAIT_USER', continue: false };
-        }
     }
     return new Promise((resolve) => {
         const directorResponseContainer = document.createElement('div');
@@ -3438,13 +3584,20 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
             || '';
         
         // 組織 API 請求體，包含新的評斷上下文參數
-        const requestBody = {
-            current_stage: currentStage,
-            user_prompt: userPrompt,
-            chapter_index: state.activeChapterIndex || 1,
-            extra_context: buildDirectorExtraContext(reviewContext),
-            loop_count: state.directorLoopCount || 0
-        };
+        const requestBody = buildTaskPayload({
+            taskType: 'evaluate',
+            stage: 'evaluate',
+            scope: 'global',
+            target: { chapter_index: state.activeChapterIndex || 1 },
+            instruction: userPrompt,
+            userPrompt,
+            extraContext: buildDirectorExtraContext(reviewContext),
+            extra: {
+                current_stage: currentStage,
+                chapter_index: state.activeChapterIndex || 1,
+                loop_count: state.directorLoopCount || 0
+            }
+        });
         
         // 計算建議的下一章（用於處理缺漏或補充章節）
         const currentIdx = state.activeChapterIndex || 1;
@@ -3490,6 +3643,10 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
         // 骨架審查時自動帶入當前卷索引
         if (currentStage === 'volume_skeleton' && state.activeVolumeIndex) {
             requestBody.volume_index = state.activeVolumeIndex;
+            requestBody.target = {
+                ...(requestBody.target || {}),
+                volume_index: state.activeVolumeIndex
+            };
         }
         
         // 若有主動傳入的 reviewContext（角色審查用），則附加
@@ -3519,7 +3676,7 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
         let thinkingText = ""; // 新增此行
         let pipelineLockBusy = false;
         streamAPI(
-            '/api/novels/' + state.currentNovelId + '/director-decision',
+            '/api/generation-task',
             requestBody,
             // onThinking
             (thinkingDelta) => {
@@ -3586,27 +3743,23 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 // 檢查是否呼叫失敗或解析無效
                 const isFailed = (success === false) || !action;
                 if (isFailed) {
-                    const MAX_RETRIES = 3;
-                    if (retryCount < MAX_RETRIES) {
-                        const nextRetry = retryCount + 1;
-                        console.warn(`[Director] Call failed or unparseable. Retrying attempt ${nextRetry}/${MAX_RETRIES}...`);
-                        appendChatMessage('system', `⚠️ **[總監決策異常]** 連線失敗或無法解析決策指令。將在 3 秒後進行第 ${nextRetry} 次重試重新呼叫總監...`);
-                        showToast(`⚠️ 總監呼叫失敗，將在 3 秒後重試第 ${nextRetry} 次...`);
-                        
-                        setTimeout(async () => {
-                            try {
-                                const retryResult = await runDirectorDecision(currentStage, providedUserPrompt, reviewContext, nextRetry);
-                                resolve(retryResult);
-                            } catch (e) {
-                                console.error('Director retry error:', e);
-                                resolve({ action: null, target: null, reason: 'Retry error: ' + e.message });
-                            }
-                        }, 3000);
-                        return;
-                    } else {
-                        appendChatMessage('system', `❌ **[總監決策失敗]** 已達到最大重試次數 (${MAX_RETRIES})，總監呼叫仍失敗。回退到智能狀態檢測。`);
-                        showToast(`❌ 總監呼叫失敗已達上限，回退至狀態檢測`);
-                    }
+                    const nextRetry = retryCount + 1;
+                    const delayMs = Math.min(30000, 3000 + Math.min(nextRetry, 9) * 2000);
+                    console.warn(`[Director] Call failed or unparseable. Retrying attempt ${nextRetry}...`);
+                    appendChatMessage('system', `⚠️ **[總監決策異常]** 連線失敗或無法解析決策指令。將在 ${Math.round(delayMs / 1000)} 秒後進行第 ${nextRetry} 次重新呼叫總監...`);
+                    showToast(`⚠️ 總監呼叫失敗，將重試第 ${nextRetry} 次...`);
+                    
+                    setTimeout(async () => {
+                        try {
+                            const retryResult = await runDirectorDecision(currentStage, providedUserPrompt, reviewContext, nextRetry);
+                            resolve(retryResult);
+                        } catch (e) {
+                            console.error('Director retry error:', e);
+                            const retryResult = await runDirectorDecision(currentStage, providedUserPrompt, reviewContext, nextRetry);
+                            resolve(retryResult);
+                        }
+                    }, delayMs);
+                    return;
                 }
                 
                 // 【自動補正 volume_index / chapter_index】
@@ -3648,31 +3801,14 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 const missingChapterIdx = needsChapterIdx && (decisionResult.chapter_index === null || decisionResult.chapter_index === undefined);
                 
                 if ((missingVolumeIdx || missingChapterIdx) && state.currentNovelId && decisionResult.target) {
-                    try {
-                        const resolveResp = await fetch(
-                            `/api/novels/${state.currentNovelId}/director-decision/resolve-missing-index`,
-                            {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ target: decisionResult.target, action: decisionResult.action })
-                            }
-                        );
-                        if (resolveResp.ok) {
-                            const resolveData = await resolveResp.json();
-                            if (missingVolumeIdx && resolveData.resolved_volume_index !== null) {
-                                decisionResult = { ...decisionResult, volume_index: resolveData.resolved_volume_index };
-                                appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 volume_index，系統自動補正為第 ${resolveData.resolved_volume_index} 卷。`);
-                            }
-                            if (missingChapterIdx && resolveData.resolved_chapter_index !== null) {
-                                decisionResult = { ...decisionResult, chapter_index: resolveData.resolved_chapter_index };
-                                if (resolveData.resolved_volume_index !== null) {
-                                    decisionResult = { ...decisionResult, volume_index: resolveData.resolved_volume_index };
-                                }
-                                appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 chapter_index，系統自動補正為第 ${resolveData.resolved_chapter_index} 章。`);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('[AutoResolve] Failed to resolve missing index:', e);
+                    const resolvedDecision = resolveMissingDecisionIndexes(decisionResult);
+                    if (missingVolumeIdx && resolvedDecision.volume_index !== null && resolvedDecision.volume_index !== undefined) {
+                        decisionResult = { ...decisionResult, volume_index: resolvedDecision.volume_index };
+                        appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 volume_index，系統自動補正為第 ${resolvedDecision.volume_index} 卷。`);
+                    }
+                    if (missingChapterIdx && resolvedDecision.chapter_index !== null && resolvedDecision.chapter_index !== undefined) {
+                        decisionResult = { ...decisionResult, chapter_index: resolvedDecision.chapter_index };
+                        appendChatMessage('system', `🔧 **[索引補正]** 總監未指定 chapter_index，系統自動補正為第 ${resolvedDecision.chapter_index} 章。`);
                     }
                 }
                 
@@ -3772,9 +3908,21 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
         
         let responseText = "";
         let thinkingText = "";
+        const helpRequestBody = buildTaskPayload({
+            taskType: 'evaluate',
+            stage: 'evaluate',
+            scope: 'global',
+            instruction: helpReason || '',
+            userPrompt: helpReason || '',
+            extra: {
+                current_stage: currentStage,
+                help_action: helpAction,
+                help_reason: helpReason
+            }
+        });
         streamAPI(
-            '/api/novels/' + state.currentNovelId + '/director-decision/help',
-            { current_stage: currentStage, help_action: helpAction, help_reason: helpReason },
+            '/api/generation-task',
+            helpRequestBody,
             // onThinking
             (thinkingDelta) => {
                 if (thinkingDelta === null) { thinkingText = ''; if (thinkingPre) thinkingPre.textContent = ''; return; }
@@ -3957,6 +4105,33 @@ function checkStageHasContent(stage) {
     }
 }
 
+function checkWorldviewIsReady() {
+    const raw = state.currentNovelData?.worldbuilding?.content ?? state.currentNovelData?.worldbuilding ?? '';
+    if (!raw) return false;
+    if (typeof raw === 'string' && ['尚無世界觀設定', '（空）', '（尚無世界觀設定）'].includes(raw.trim())) {
+        return false;
+    }
+    let parsed = raw;
+    if (typeof raw === 'string') {
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            const match = raw.match(/```json\s*([\s\S]*?)\s*```/i);
+            if (!match?.[1]) return raw.trim().length > 80;
+            try {
+                parsed = JSON.parse(match[1]);
+            } catch (_) {
+                return false;
+            }
+        }
+    }
+    if (!parsed || typeof parsed !== 'object') return false;
+    return ['theme', 'main_conflict', 'worldview', 'macro_outline'].every(key => {
+        const value = parsed[key];
+        return value !== null && value !== undefined && String(value).trim().length > 0;
+    });
+}
+
 async function savePipelinePrompt(prompt) {
     if (!state.currentNovelId) return;
     try {
@@ -3990,8 +4165,12 @@ async function handleDrawerPromptSubmit() {
     
     if (state.activeDrawerAction === 'architect') {
         startAgentStream(
-            '/api/agent/story-architect',
-            { novel_id: state.currentNovelId, user_prompt: userPrompt },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'worldview',
+                instruction: userPrompt,
+                userPrompt
+            }),
             el.editorWorldview,
             async () => {
                 showToast("世界觀結構起草完畢");
@@ -4004,8 +4183,12 @@ async function handleDrawerPromptSubmit() {
     if (state.activeDrawerAction === 'character') {
         // Stream back to JSON textarea
         startAgentStream(
-            '/api/agent/character-designer',
-            { novel_id: state.currentNovelId, user_prompt: userPrompt },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'characters',
+                instruction: userPrompt,
+                userPrompt
+            }),
             el.editorCharactersJson,
             async () => {
                 showToast("角色 Bible 生成完畢");
@@ -4018,12 +4201,14 @@ async function handleDrawerPromptSubmit() {
     if (state.activeDrawerAction === 'plot') {
         const volIdx = state.activeVolumeIdx || state.activeVolumeIndex || 1;
         startAgentStream(
-            '/api/agent/volume-skeleton',
-            { 
-                novel_id: state.currentNovelId, 
-                volume_index: volIdx, 
-                user_prompt: userPrompt 
-            },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'volume_skeleton',
+                scope: 'volume',
+                target: { volume_index: volIdx },
+                instruction: userPrompt,
+                userPrompt
+            }),
             el.editorPlotJson,
             async () => {
                 showToast(`第 ${volIdx} 卷骨架大綱生成完畢`);
@@ -4087,8 +4272,15 @@ async function handleDrawerPromptSubmit() {
         };
 
         startAgentStream(
-            '/api/agent/edit-chapter',
-            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex, edit_instructions: userPrompt },
+            '/api/generation-task',
+            buildTaskPayload({
+                taskType: 'refine',
+                stage: 'editor',
+                scope: 'chapter',
+                target: { chapter_index: targetChapterIndex },
+                instruction: userPrompt,
+                userPrompt
+            }),
             virtualTarget,
             async () => {
                 showToast("本章正文精細編輯完畢");
@@ -4597,8 +4789,14 @@ function setupEventListeners() {
         };
 
         startAgentStream(
-            '/api/agent/write-chapter',
-            { novel_id: state.currentNovelId, chapter_index: targetChapterIndex },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'writer',
+                scope: 'chapter',
+                target: { chapter_index: targetChapterIndex },
+                instruction: '',
+                userPrompt: ''
+            }),
             virtualTarget,
             async () => {
                 showToast(`第 ${targetChapterIndex} 章正文撰寫完畢`);
@@ -4674,8 +4872,17 @@ function setupEventListeners() {
         let responseText = "";
         // Start streaming copilot response
         streamAPI(
-            '/api/agent/copilot-chat',
-            { novel_id: state.currentNovelId, user_message: text },
+            '/api/generation-task',
+            buildTaskPayload({
+                taskType: 'evaluate',
+                stage: 'evaluate',
+                instruction: text,
+                userPrompt: text,
+                extra: {
+                    user_message: text,
+                    is_copilot_chat: true
+                }
+            }),
             // onThinking
             (thinkingDelta) => {
                 if (thinkingDelta === null) { if (thinkingPre) thinkingPre.textContent = ''; return; }
@@ -4720,6 +4927,13 @@ function setupEventListeners() {
                         const chIdx = decisionResult.chapter_index;
                         
                         if (target) {
+                            const normalizedRequestedTarget = String(target).toLowerCase();
+                            if (['characters', 'foreshadowing', 'foreshadowing_orchestrate', 'foreshadowing_orchestration'].includes(normalizedRequestedTarget) && !checkWorldviewIsReady()) {
+                                target = 'worldview';
+                                decisionResult.target = 'worldview';
+                                decisionResult.reason = `${decisionResult.reason || ''}\n前置檢查：世界觀尚未完成，先導向世界觀生成。`.trim();
+                                showToast('🌍 世界觀尚未完成，先導向世界觀生成');
+                            }
                             showToast(`💡 總監指示呼叫 ${target} Agent 進行更新...`);
                             
                             // Check if state.isAutoExecuteMode is true
@@ -5045,8 +5259,13 @@ async function handleGoBack(targetStage, hint = null, volume_index = null, chapt
                 showToast("🔮 正在對世界觀進行局部精細修改...");
                 // 根據總監提示修改世界觀
                 streamAPI(
-                    '/api/agent/story-architect',
-                    { novel_id: state.currentNovelId, user_prompt: `請根據以下指示修改世界觀：\n\n${effectiveHint}\n\n現有世界觀：\n${state.currentNovelData.worldbuilding || ''}` },
+                    '/api/generation-task',
+                    buildTaskPayload({
+                        taskType: 'regenerate',
+                        stage: 'worldview',
+                        instruction: `請根據以下指示修改世界觀：\n\n${effectiveHint}\n\n現有世界觀：\n${state.currentNovelData.worldbuilding || ''}`,
+                        userPrompt: `請根據以下指示修改世界觀：\n\n${effectiveHint}\n\n現有世界觀：\n${state.currentNovelData.worldbuilding || ''}`
+                    }),
                     () => {},
                     (delta) => {
                         if (el.editorWorldview) {
@@ -5129,12 +5348,14 @@ function startStage3_Plot(regenerate = false, hint = null) {
     }
     
     streamAPI(
-        '/api/agent/plot-planner',
-        { 
-            novel_id: state.currentNovelId, 
-            chapter_index: state.activeChapterIndex || 1,
-            user_prompt: plotPrompt 
-        },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'volume_skeleton',
+            scope: 'volume',
+            target: { volume_index: state.activeVolumeIndex || 1 },
+            instruction: plotPrompt,
+            userPrompt: plotPrompt
+        }),
         () => {},
         (delta) => {
             if (delta === null) { if (el.editorPlotJson) el.editorPlotJson.value = ''; return; }
@@ -5262,8 +5483,14 @@ function startStage4_Writer(regenerate = false) {
     };
 
     streamAPI(
-        '/api/agent/write-chapter',
-        { novel_id: state.currentNovelId, chapter_index: targetChapterIndex },
+        '/api/generation-task',
+        buildTaskPayload({
+            stage: 'writer',
+            scope: 'chapter',
+            target: { chapter_index: targetChapterIndex },
+            instruction: '',
+            userPrompt: ''
+        }),
         () => {},
         (delta) => {
             if (delta === null) {
@@ -5456,21 +5683,21 @@ window.smartScrollToBottom = function(container, force = false) {
     });
 };
 
-function getAgentDetails(endpoint) {
-    if (endpoint.includes('story-architect') || endpoint.includes('incremental-architect')) {
+function getAgentDetails(endpointOrStage, body = null) {
+    const stage = body?.stage || endpointOrStage || '';
+    const taskType = body?.task_type || '';
+    if (stage === 'worldview') {
         return { name: '故事結構架構師 (Story Architect)', icon: '🌍' };
-    } else if (endpoint.includes('character-designer')) {
+    } else if (stage === 'characters') {
         return { name: '角色設計大師 (Character Designer)', icon: '👥' };
-    } else if (endpoint.includes('plot-planner')) {
+    } else if (stage === 'volumes' || stage === 'volume_skeleton') {
         return { name: '章節劇情規劃師 (Plot Planner)', icon: '📋' };
-    } else if (endpoint.includes('write-chapter')) {
+    } else if (stage === 'writer') {
         return { name: '章節寫作作家 (Chapter Writer)', icon: '✍️' };
-    } else if (endpoint.includes('edit-chapter')) {
+    } else if (stage === 'editor' || taskType === 'refine') {
         return { name: '正文編輯編審 (Editor Agent)', icon: '✏️' };
-    } else if (endpoint.includes('copilot-chat')) {
+    } else if (stage === 'evaluate') {
         return { name: '協同總監 (Co-pilot Novel Director)', icon: '🧠' };
-    } else if (endpoint.includes('director-decision')) {
-        return { name: '創意總監 (Creative Director)', icon: '🎬' };
     }
     return { name: 'AI Agent', icon: '🤖' };
 }
@@ -5494,7 +5721,7 @@ window.onStreamAPIStart = function(endpoint, body) {
     const emptyState = container.querySelector('.stream-empty-state');
     if (emptyState) emptyState.style.display = 'none';
     
-    const details = getAgentDetails(endpoint);
+    const details = getAgentDetails(endpoint, body);
     window.lastStreamAgentTab = details.name; // Keep track of active agent tab!
     
     // 2. 活化並控制原生的「當前 Agent 標籤」
@@ -5526,8 +5753,8 @@ window.onStreamAPIStart = function(endpoint, body) {
  * 串流結束監聽器
  * 僅將唯一顯示名稱的狀態更新為「已完成」
  */
-window.onStreamAPIEnd = function(endpoint) {
-    const details = getAgentDetails(endpoint);
+window.onStreamAPIEnd = function(endpoint, body) {
+    const details = getAgentDetails(endpoint, body);
     const agentLabelText = document.getElementById('stream-agent-label-text');
     if (agentLabelText) {
         // 原地更改標題狀態
@@ -5595,12 +5822,11 @@ window.enhanceWorldviewSectionWithAI = async function(field, title) {
     showAgentProcessingIndicator('worldview', `Story Architect (AI 規劃: ${title})`);
     
     streamAPI(
-        '/api/agent/incremental-architect',
-        {
-            novel_id: state.currentNovelId,
+        '/api/generation-task',
+        buildPatchTaskPayload('worldview', hint || `請為「${title}」生成或擴展深度設定，確保與目前小說的風格和背景完美相容。`, {
             target_section: field,
             user_hint: hint || `請為「${title}」生成或擴展深度設定，確保與目前小說的風格和背景完美相容。`
-        },
+        }),
         (delta) => {
             if (delta === null) { window.updateAgentStreamOutput('worldview', null); return; }
             window.updateAgentStreamOutput('worldview', delta);
@@ -5982,12 +6208,14 @@ window.runVolumeSkeletonPlannerDirect = function(volumeIndex, userPrompt = null)
         
         let hasError = false;
         streamAPI(
-            '/api/agent/volume-skeleton',
-            { 
-                novel_id: state.currentNovelId, 
-                volume_index: volumeIndex,
-                user_prompt: userPrompt // 可選，讓用戶/總監傳入自訂提示
-            },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'volume_skeleton',
+                scope: 'volume',
+                target: { volume_index: volumeIndex },
+                instruction: userPrompt || '',
+                userPrompt: userPrompt || ''
+            }),
             null, // onThinking - volume skeleton 通常不需要思考過程
             (delta) => {
                 window.updateAgentStreamOutput('plot', delta);
@@ -6032,11 +6260,13 @@ window.runForeshadowingOrchestratorDirect = function() {
         updateDirectorMessage('🎭 全局伏筆調度導演啟動，正在編織跨卷長線張力網...');
         
         streamAPI(
-            '/api/agent/foreshadowing-orchestrator',
-            { 
-                novel_id: state.currentNovelId,
-                user_prompt: null // 可選
-            },
+            '/api/generation-task',
+            buildTaskPayload({
+                stage: 'foreshadowing',
+                instruction: '[BATCH: foreshadowing_seeds]\n本次只生成伏筆種子，至少 50 個。',
+                userPrompt: '[BATCH: foreshadowing_seeds]\n本次只生成伏筆種子，至少 50 個。',
+                hint: '[BATCH: foreshadowing_seeds]'
+            }),
             null, // onThinking
             (delta) => {
                 window.updateAgentStreamOutput('plot', delta);

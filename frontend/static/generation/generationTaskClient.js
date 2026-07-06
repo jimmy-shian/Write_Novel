@@ -104,7 +104,13 @@ async function runStreamingAttempt(endpoint, body, {
         if (activityTimer) clearTimeout(activityTimer);
 
         if (!finalEnvelope) {
-            finalEnvelope = extractFinalGenerationEnvelope([]);
+            return {
+                success: false,
+                retryable: true,
+                error: '串流未收到後端完成封包即中斷',
+                notifiedError: false,
+                notifiedDone: false
+            };
         }
 
         if (typeof onDone === 'function') {
@@ -134,7 +140,7 @@ async function runStreamingAttempt(endpoint, body, {
 
 export async function submitGenerationTask(payload, callbacks = {}) {
     const endpoint = callbacks.endpoint || '/api/generation-task';
-    const maxRetries = callbacks.maxRetries ?? 10;
+    const maxRetries = Number.isFinite(callbacks.maxRetries) ? callbacks.maxRetries : Infinity;
     const requestBody = {
         ...payload,
         options: {
@@ -174,9 +180,10 @@ export async function submitGenerationTask(payload, callbacks = {}) {
 
         hadPreviousError = true;
         if (typeof callbacks.onRetrying === 'function') {
-            callbacks.onRetrying(`重試第 ${attempt}/${maxRetries} 次`);
+            const maxLabel = Number.isFinite(maxRetries) ? `/${maxRetries}` : '';
+            callbacks.onRetrying(`串流中斷，重試第 ${attempt}${maxLabel} 次`);
         }
-        await sleep(Math.min(3000, attempt * 2000));
+        await sleep(Math.min(30000, attempt * 2000));
     }
 
     throw new Error(lastError || 'generation-task failed');

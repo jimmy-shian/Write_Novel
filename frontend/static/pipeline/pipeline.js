@@ -3,6 +3,36 @@ import { el } from '../core/dom.js';
 import { showToast } from '../core/toast.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator } from '../pipeline/agentProcessing.js';
 import { renderSubAgentStatus } from '../pipeline/status_panel.js';
+import { buildGenerationTaskPayload } from '../generation/generationTaskSchema.js';
+import { buildFrontendStateReference } from '../generation/generationStateMapper.js';
+
+function buildPipelineTaskPayload({
+    stage,
+    taskType = 'generate',
+    scope = null,
+    target = {},
+    instruction = '',
+    userPrompt = '',
+    hint = '',
+    options = {},
+    extra = {}
+} = {}) {
+    return {
+        ...buildGenerationTaskPayload({
+            novelId: state.currentNovelId,
+            taskType,
+            stage,
+            scope,
+            target,
+            options: { stream: true, ...options },
+            frontendState: buildFrontendStateReference(state),
+            instruction,
+            userPrompt,
+            hint
+        }),
+        ...extra
+    };
+}
 
 // 顯示/隱藏管道進度條與子代理人面板
 export function showPipelineProgress(show) {
@@ -31,30 +61,7 @@ export function startPipelineHeartbeat(novelId) {
     state.pipelineHeartbeatMisses = 0;
     
     if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
-    
-    state.heartbeatTimer = setInterval(async () => {
-        const elapsed = Date.now() - state.pipelineStartTime;
-        if (elapsed > state.maxPipelineTimeout) {
-            clearInterval(state.heartbeatTimer);
-            await recoverPipelineFromHeartbeat('pipeline_timeout', '管線已超時，正在請求總監重新判斷下一步');
-            return;
-        }
-        
-        try {
-            const res = await fetch(`/api/novels/${novelId}/pipeline-status`);
-            const data = await res.json();
-            if (!data.running) {
-                state.pipelineHeartbeatMisses = (state.pipelineHeartbeatMisses || 0) + 1;
-                if (state.pipelineHeartbeatMisses >= 3) {
-                    await recoverPipelineFromHeartbeat('pipeline_lock_lost', '後端管線狀態中斷，正在請求總監重新接續');
-                }
-            } else {
-                state.pipelineHeartbeatMisses = 0;
-            }
-        } catch (e) {
-            // ignore transient network errors
-        }
-    }, 15000);
+    state.heartbeatTimer = null;
 }
 
 function getRunningPipelineStage() {
@@ -307,6 +314,49 @@ function buildDirectorDrivenPrompt(basePrompt, decision = null) {
     return sections.join('\n\n').trim();
 }
 
+function getWorldviewJson() {
+    const raw = state.currentNovelData?.worldbuilding?.content ?? state.currentNovelData?.worldbuilding ?? '';
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    const text = String(raw);
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        const match = String(text).match(/```json\s*([\s\S]*?)\s*```/i);
+        if (match?.[1]) {
+            try {
+                return JSON.parse(match[1]);
+            } catch (_) {
+                return {};
+            }
+        }
+    }
+    return {};
+}
+
+function ensureForeshadowingBatchPrompt(prompt, decision = null) {
+    const existingText = [
+        prompt,
+        decision?.hint,
+        decision?.agent_prompt,
+        decision?.agent_context
+    ].filter(Boolean).join('\n');
+    if (/\[BATCH:\s*(foreshadowing_seeds|key_turning_points)\]/i.test(existingText)) {
+        return prompt;
+    }
+
+    const worldview = getWorldviewJson();
+    const seedCount = Array.isArray(worldview.foreshadowing_seeds) ? worldview.foreshadowing_seeds.length : 0;
+    const turnCount = Array.isArray(worldview.key_turning_points) ? worldview.key_turning_points.length : 0;
+    const targetField = seedCount < 50 ? 'foreshadowing_seeds' : (turnCount < 50 ? 'key_turning_points' : 'foreshadowing_seeds');
+    const label = targetField === 'foreshadowing_seeds' ? '伏筆種子' : '關鍵轉折點';
+    return [
+        `[BATCH: ${targetField}]`,
+        `本次只生成 ${label}，至少 50 個，輸出必須符合該批次 JSON schema。`,
+        prompt || ''
+    ].join('\n\n').trim();
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt, decision = null) {
     // Confirmation gate for volumes stage in generate (non-patch) mode
@@ -331,31 +381,54 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
         let endpoint, body, targetTextarea;
         let agentName = '';
         const directorDrivenPrompt = buildDirectorDrivenPrompt(userPrompt, decision);
+        endpoint = '/api/generation-task';
         switch (stage) {
             case 'worldview':
-                endpoint = '/api/agent/story-architect';
-                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                body = buildPipelineTaskPayload({
+                    stage: 'worldview',
+                    taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                    instruction: directorDrivenPrompt,
+                    userPrompt: directorDrivenPrompt
+                });
                 targetTextarea = el.editorWorldview;
                 state.activeTab = 'worldview';
                 agentName = 'Story Architect (故事結構架構師)';
                 break;
             case 'characters':
-                endpoint = '/api/agent/character-designer';
-                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                body = buildPipelineTaskPayload({
+                    stage: 'characters',
+                    taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                    instruction: directorDrivenPrompt,
+                    userPrompt: directorDrivenPrompt
+                });
                 targetTextarea = el.editorCharactersJson;
                 state.activeTab = 'characters';
                 agentName = 'Character Designer (角色設計大師)';
                 break;
             case 'foreshadowing':
-                endpoint = '/api/agent/foreshadowing-orchestrator';
-                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt };
+                {
+                    const batchPrompt = ensureForeshadowingBatchPrompt(directorDrivenPrompt, decision);
+                    body = buildPipelineTaskPayload({
+                        stage: 'foreshadowing',
+                        taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                        instruction: batchPrompt,
+                        userPrompt: batchPrompt,
+                        hint: batchPrompt
+                    });
+                }
                 targetTextarea = el.editorWorldview;
                 state.activeTab = 'worldview';
                 agentName = 'Foreshadowing Orchestrator (伏筆與轉折編織師)';
                 break;
             case 'volumes':
-                endpoint = '/api/agent/volumes-planner';
-                body = { novel_id: state.currentNovelId, user_prompt: directorDrivenPrompt, confirm_wipe: true };
+                body = buildPipelineTaskPayload({
+                    stage: 'volumes',
+                    taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                    instruction: directorDrivenPrompt,
+                    userPrompt: directorDrivenPrompt,
+                    options: { overwrite: true },
+                    extra: { confirm_wipe: true }
+                });
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
                 agentName = 'Volumes Planner (篇卷結構規劃師)';
@@ -365,39 +438,30 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 const volIdx = decision?.volume_index || state.activeVolumeIndex || 1;
                 state.activeVolumeIndex = volIdx;
                 const hint = decision?.hint || '';
-
-                endpoint = '/api/agent/volume-skeleton';
-                const baseBody = {
-                    novel_id: state.currentNovelId,
-                    volume_index: volIdx,
-                    user_prompt: buildDirectorDrivenPrompt(hint || userPrompt, decision)
-                };
-                // 總監分段調度：若 decision 帶 segment_generate / segment_complete，
-                // 則轉送 task_type 與章節範圍給後端分段 runner
-                const segTaskType = decision?.task_type || (decision?.action === 'SEGMENT_COMPLETE' ? 'segment_complete' : (decision?.action === 'SEGMENT_GENERATE' ? 'segment_generate' : null));
-                if (segTaskType) {
-                    baseBody.task_type = segTaskType;
-                    if (Array.isArray(decision.chapter_range) && decision.chapter_range.length === 2) {
-                        baseBody.chapter_range = decision.chapter_range;
-                    } else if (Array.isArray(decision.selection)) {
-                        baseBody.selection = decision.selection;
-                    }
-                }
-                body = baseBody;
+                const target = { volume_index: volIdx };
+                const prompt = buildDirectorDrivenPrompt(hint || userPrompt, decision);
+                body = buildPipelineTaskPayload({
+                    stage: 'volume_skeleton',
+                    taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                    target,
+                    instruction: prompt,
+                    userPrompt: prompt,
+                    hint: prompt
+                });
                 targetTextarea = el.editorPlotJson;
                 state.activeTab = 'plot';
-                agentName = segTaskType
-                    ? `Volume Skeleton Segment (第 ${volIdx} 卷${segTaskType === 'segment_complete' ? ' 補全' : ' 分段'})`
-                    : `Volume Skeleton Planner (第 ${volIdx} 卷骨架規劃)`;
+                agentName = `Volume Skeleton Planner (第 ${volIdx} 卷完整骨架規劃)`;
                 break;
             }
             case 'writer':
-                endpoint = '/api/agent/write-chapter';
-                body = {
-                    novel_id: state.currentNovelId,
-                    chapter_index: state.activeChapterIndex || 1,
-                    user_prompt: directorDrivenPrompt || undefined
-                };
+                body = buildPipelineTaskPayload({
+                    stage: 'writer',
+                    taskType: decision?.regenerate ? 'regenerate' : 'generate',
+                    scope: 'chapter',
+                    target: { chapter_index: state.activeChapterIndex || 1 },
+                    instruction: directorDrivenPrompt,
+                    userPrompt: directorDrivenPrompt
+                });
                 targetTextarea = el.editorProse;
                 state.activeTab = 'writer';
                 agentName = 'Chapter Writer (小說正文寫作作家)';
@@ -405,12 +469,14 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 state.currentlyWritingChapterIndex = state.activeChapterIndex || 1;
                 break;
             case 'editor':
-                endpoint = '/api/agent/edit-chapter';
-                body = {
-                    novel_id: state.currentNovelId,
-                    chapter_index: state.activeChapterIndex || 1,
-                    edit_instructions: directorDrivenPrompt || undefined
-                };
+                body = buildPipelineTaskPayload({
+                    stage: 'editor',
+                    taskType: 'refine',
+                    scope: 'chapter',
+                    target: { chapter_index: state.activeChapterIndex || 1 },
+                    instruction: directorDrivenPrompt,
+                    userPrompt: directorDrivenPrompt
+                });
                 targetTextarea = el.editorProse;
                 state.activeTab = 'editor';
                 agentName = 'Chapter Editor (小說正文編輯作家)';
@@ -609,7 +675,8 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
             },
             10,
             (error, retry, maxRetries) => {
-                window.updateAgentStreamOutput(stage, `\n[Retry ${retry}/${maxRetries}: ${error}]\n`);
+                const retryLabel = maxRetries ? `${retry}/${maxRetries}` : `${retry}`;
+                window.updateAgentStreamOutput(stage, `\n[Retry ${retryLabel}: ${error}]\n`);
             },
             async () => {
                 failed = false;

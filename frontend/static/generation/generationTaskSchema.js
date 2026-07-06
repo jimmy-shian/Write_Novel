@@ -5,7 +5,8 @@ const GENERATION_STAGES = [
     'volumes',
     'volume_skeleton',
     'writer',
-    'editor'
+    'editor',
+    'evaluate'
 ];
 
 const GENERATION_TASK_TYPES = [
@@ -13,6 +14,8 @@ const GENERATION_TASK_TYPES = [
     'regenerate',
     'patch',
     'batch_generate',
+    'segment_generate',
+    'segment_complete',
     'refine',
     'evaluate'
 ];
@@ -24,6 +27,8 @@ const DEFAULT_STAGE_BY_TASK_TYPE = {
     regenerate: 'worldview',
     patch: 'worldview',
     batch_generate: 'volume_skeleton',
+    segment_generate: 'volume_skeleton',
+    segment_complete: 'volume_skeleton',
     refine: 'editor',
     evaluate: 'evaluate'
 };
@@ -134,4 +139,3 @@ export {
     GENERATION_TASK_TYPES,
     GENERATION_CONTEXT_MODES
 };
-

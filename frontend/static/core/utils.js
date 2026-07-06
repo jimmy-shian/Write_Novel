@@ -583,10 +583,37 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             target = 'writer';
         } else if (responseText.includes('FINISH') || responseText.includes('全部完成')) {
             action = 'FINISH';
+        } else if (
+            (responseText.includes('foreshadowing') || responseText.includes('伏筆') || responseText.includes('轉折')) &&
+            (responseText.includes('下一步') || responseText.includes('進入') || responseText.includes('啟動') || responseText.includes('導向'))
+        ) {
+            action = 'CONTINUE';
+            target = 'foreshadowing';
         } else if (responseText.includes('繼續') && !responseText.includes('暫停')) {
             action = 'CONTINUE';
         } else if (responseText.includes('暫停') || responseText.includes('等待用戶')) {
             action = 'WAIT_USER';
+        }
+    }
+
+    if (action === 'CONTINUE' && !target) {
+        const lowerText = responseText.toLowerCase();
+        if (lowerText.includes('foreshadowing') || responseText.includes('伏筆') || responseText.includes('轉折')) {
+            target = 'foreshadowing';
+        } else {
+            const normalizedStage = (currentStage || '').toString().toLowerCase();
+            const nextByStage = {
+                init: 'worldview',
+                worldview: 'foreshadowing',
+                foreshadowing: 'characters',
+                characters: 'volumes',
+                volumes: 'volume_skeleton',
+                plot: 'volume_skeleton',
+                volume_skeleton: 'writer',
+                writer: 'editor',
+                editor: 'writer'
+            };
+            target = nextByStage[normalizedStage] || null;
         }
     }
     

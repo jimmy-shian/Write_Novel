@@ -240,19 +240,7 @@ function runActiveStageStep() {
                 eventSource.close();
                 
                 if (isOneClick) {
-                    if (directorLoopCount >= 5) {
-                        const toastMsg = "自動流程已安全停駐，請手動決定下一步。";
-                        logTerminal(`\n⏸️ [系統] ${toastMsg}`);
-                        const toastEl = document.getElementById("toastContainer");
-                        if (toastEl) {
-                            toastEl.textContent = toastMsg;
-                            toastEl.classList.add("show");
-                            setTimeout(() => { toastEl.classList.remove("show"); }, 4000);
-                        }
-                        refreshNovelInfo();
-                    } else {
-                        runDirectorDecision();
-                    }
+                    runDirectorDecision();
                 } else {
                     refreshNovelInfo();
                 }
@@ -276,17 +264,6 @@ function runActiveStageStep() {
 function runDirectorDecision() {
     if (isOneClick) {
         directorLoopCount++;
-        if (directorLoopCount >= 5) {
-            const toastMsg = "自動流程已安全停駐，請手動決定下一步。";
-            logTerminal(`\n⏸️ [系統] ${toastMsg}`);
-            const toastEl = document.getElementById("toastContainer");
-            if (toastEl) {
-                toastEl.textContent = toastMsg;
-                toastEl.classList.add("show");
-                setTimeout(() => { toastEl.classList.remove("show"); }, 4000);
-            }
-            return;
-        }
     }
     logTerminal(`\n> [總監審查] 正在調度創意總監進行本輪產出品質評估...`);
     
@@ -309,7 +286,7 @@ function runDirectorDecision() {
     };
 
     window.streamAPI(
-        `/api/novels/${activeNovelId}/director-decision`,
+        `/api/generation-task`,
         requestBody,
         // onThinking
         (delta) => {
