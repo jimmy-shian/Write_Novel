@@ -13,10 +13,6 @@ VALID_TASK_TYPES = {"generate", "regenerate", "patch", "batch_generate", "refine
 STAGE_ALIASES = {
     "character": "characters",
     "characters": "characters",
-    "foreshadowing_orchestrator": "foreshadowing",
-    "foreshadowing_orchestration": "foreshadowing",
-    "foreshadowing-orchestrator": "foreshadowing",
-    "volume-skeleton": "volume_skeleton",
     "skeleton": "volume_skeleton",
     "macro_skeleton": "volume_skeleton",
     "plot": "volumes",
@@ -141,4 +137,3 @@ def stage_to_agent_name(stage: Optional[str]) -> str:
 
 def is_terminal_stage(stage: Optional[str]) -> bool:
     return normalize_stage_name(stage) == "editor"
-

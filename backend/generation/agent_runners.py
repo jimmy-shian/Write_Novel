@@ -23,7 +23,8 @@ import backend.services.director_context as director_context
 from backend.llm import call_llm_stream
 
 from backend.config import (
-    MAX_AUTO_LOOPS,
+    MIN_FORESHADOWING_SEEDS,
+    MIN_KEY_TURNING_POINTS,
     VOLUME_SKELETON_BATCH_SIZE,
     VOLUME_SKELETON_BATCH_RETRIES,
     VOLUME_SKELETON_SEGMENT_RETRIES,
@@ -544,6 +545,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
                 return
             wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
+            if not wb_dict:
+                error_message = "世界觀內容為空或無法解析，禁止以空資料覆蓋既有設定。請先完成或修復世界觀生成後再繼續。"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                return
             if wb and wb_dict is None:
                 error_message = "伏筆種子生成已完成，但既有世界觀不是可安全合併的 JSON；本次不保存。請先修復世界觀後再生成。"
                 db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
@@ -572,6 +578,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
                 return
             wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
+            if not wb_dict:
+                error_message = "世界觀內容為空或無法解析，禁止以空資料覆蓋既有設定。請先完成或修復世界觀生成後再繼續。"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                return
             if wb and wb_dict is None:
                 error_message = "關鍵轉折點生成已完成，但既有世界觀不是可安全合併的 JSON；本次不保存。請先修復世界觀後再生成。"
                 db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
@@ -608,6 +619,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             return
 
         wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
+        if not wb_dict:
+            error_message = "世界觀內容為空或無法解析，為避免空資料覆蓋既有設定，本次不保存。請先完成或修復核心世界觀生成後再繼續。"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            return
         if wb and wb_dict is None:
             error_message = "伏筆與轉折生成已完成，但既有世界觀不是可安全合併的 JSON；為避免覆蓋前面的世界觀資料，本次不保存。請先修復/重新保存世界觀 JSON 後再生成。"
             db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
@@ -1652,6 +1668,212 @@ def run_copilot_chat(novel_id, user_message, stream=False, force_json=False):
 # 9. Director Decision Checks (Pipeline Gatekeeper)
 # =============================================================================
 
+EXECUTABLE_DIRECTOR_ACTIONS = {
+    "CONTINUE",
+    "AUTO_REGENERATE",
+    "GO_BACK_TO_WORLDVIEW",
+    "GO_BACK_TO_CHARACTERS",
+    "GO_BACK_TO_SKELETON_EXPANSION",
+    "WAIT_USER",
+    "FINISH",
+    "INCREMENTAL_MODIFY_CHARACTER",
+    "INCREMENTAL_APPEND_CHARACTER",
+    "INCREMENTAL_MODIFY_SKELETON",
+    "INCREMENTAL_MODIFY_CHARACTER_FULL",
+    "TOOL_CALL",
+    "SEGMENT_GENERATE",
+    "SEGMENT_COMPLETE",
+}
+
+
+def _first_missing_skeleton_volume(novel_id):
+    vols = db.get_volumes(novel_id)
+    for v in sorted(vols, key=lambda item: item.get("volume_index", 0)):
+        outline = v.get("chapters_outline")
+        if not outline:
+            return v.get("volume_index") or 1
+        if isinstance(outline, str):
+            try:
+                outline = json.loads(outline or "[]")
+            except Exception:
+                return v.get("volume_index") or 1
+        if not isinstance(outline, list) or len(outline) == 0:
+            return v.get("volume_index") or 1
+    return None
+
+
+def _next_missing_chapter_index(novel_id):
+    vols = db.get_volumes(novel_id)
+    total_planned = sum(db._get_clean_chapter_count(v) for v in vols) if vols else 0
+    if total_planned <= 0:
+        total_planned = 1
+    written = set()
+    for ch in db.get_all_chapters_latest(novel_id):
+        try:
+            idx = int(ch.get("chapter_index"))
+        except Exception:
+            continue
+        content = ch.get("content") or ""
+        if len(content.strip()) >= 100 and "保底" not in content and "占位" not in content:
+            written.add(idx)
+    for idx in range(1, total_planned + 1):
+        if idx not in written:
+            return idx
+    return total_planned
+
+
+def _volume_for_chapter(novel_id, chapter_index):
+    vols = db.get_volumes(novel_id)
+    for v in sorted(vols, key=lambda item: item.get("volume_index", 0)):
+        try:
+            start, end = db.get_volume_chapter_range(vols, v["volume_index"])
+        except Exception:
+            continue
+        if start <= chapter_index <= end:
+            return v.get("volume_index")
+    return 1 if vols else None
+
+
+def _foreshadowing_counts(novel_id):
+    wb = db.get_latest_worldbuilding(novel_id)
+    if not wb:
+        return 0, 0
+    try:
+        parsed = db.parse_worldview_to_json(wb["content"])
+    except Exception:
+        parsed = {}
+    seeds = parsed.get("foreshadowing_seeds") if isinstance(parsed, dict) else []
+    turns = parsed.get("key_turning_points") if isinstance(parsed, dict) else []
+    return (
+        len(seeds) if isinstance(seeds, list) else 0,
+        len(turns) if isinstance(turns, list) else 0,
+    )
+
+
+def _foreshadowing_batch_decision(novel_id, reason_prefix):
+    seeds_count, turns_count = _foreshadowing_counts(novel_id)
+    if seeds_count < MIN_FORESHADOWING_SEEDS:
+        field = "foreshadowing_seeds"
+        label = "伏筆種子"
+        count_text = f"{seeds_count}/{MIN_FORESHADOWING_SEEDS}"
+    elif turns_count < MIN_KEY_TURNING_POINTS:
+        field = "key_turning_points"
+        label = "關鍵轉折點"
+        count_text = f"{turns_count}/{MIN_KEY_TURNING_POINTS}"
+    else:
+        return None
+    prompt = (
+        f"[BATCH: {field}]\n"
+        f"本次只生成{label}，至少 50 個，必須嚴格輸出該批次 JSON schema；"
+        "不得同時輸出另一類資料。"
+    )
+    return {
+        "action": "CONTINUE",
+        "target": "foreshadowing",
+        "hint": prompt,
+        "agent_prompt": prompt,
+        "agent_context": f"{label}目前數量：{count_text}。{reason_prefix}",
+        "user_intent_summary": "",
+        "reason": f"{reason_prefix}後端依剛性門檻補正：{label}仍未達標（{count_text}），派發 foreshadowing 分批生成。",
+        "volume_index": None,
+        "chapter_index": None,
+    }
+
+
+def _build_recovery_director_decision(novel_id, current_stage, parsed):
+    stage = current_stage or diagnostics.detect_current_stage(novel_id)
+    reason_prefix = "總監輸出缺少可執行 action/target；"
+
+    if stage in ("worldview", "foreshadowing"):
+        batch = _foreshadowing_batch_decision(novel_id, reason_prefix)
+        if batch:
+            return batch
+        return {
+            "action": "CONTINUE",
+            "target": "characters",
+            "hint": "伏筆與關鍵轉折已達標，進入角色聖經生成。",
+            "agent_prompt": "請根據已完成的世界觀、伏筆種子與關鍵轉折點，生成完整角色聖經。",
+            "agent_context": "",
+            "user_intent_summary": "",
+            "reason": reason_prefix + "世界觀與伏筆層已達標，補正前往 characters。",
+            "volume_index": None,
+            "chapter_index": None,
+        }
+
+    detected = diagnostics.detect_current_stage(novel_id)
+    if detected == "worldview":
+        target = "worldview"
+    elif detected == "foreshadowing":
+        return _foreshadowing_batch_decision(novel_id, reason_prefix) or {
+            "action": "CONTINUE", "target": "characters", "hint": "", "agent_prompt": "", "agent_context": "",
+            "user_intent_summary": "", "reason": reason_prefix + "補正前往 characters。", "volume_index": None, "chapter_index": None
+        }
+    elif detected == "characters":
+        target = "characters"
+    elif detected == "volumes":
+        target = "volumes"
+    elif detected == "volume_skeleton":
+        vol_idx = _first_missing_skeleton_volume(novel_id) or 1
+        return {
+            "action": "CONTINUE",
+            "target": "volume_skeleton",
+            "hint": f"請生成第 {vol_idx} 卷章節骨架。",
+            "agent_prompt": f"請生成第 {vol_idx} 卷章節骨架。",
+            "agent_context": "",
+            "user_intent_summary": "",
+            "reason": reason_prefix + f"補正前往第 {vol_idx} 卷 volume_skeleton。",
+            "volume_index": vol_idx,
+            "chapter_index": None,
+        }
+    elif detected == "writer":
+        chapter_idx = _next_missing_chapter_index(novel_id)
+        return {
+            "action": "CONTINUE",
+            "target": "writer",
+            "hint": f"請撰寫第 {chapter_idx} 章正文。",
+            "agent_prompt": f"請撰寫第 {chapter_idx} 章正文。",
+            "agent_context": "",
+            "user_intent_summary": "",
+            "reason": reason_prefix + f"補正前往 writer 第 {chapter_idx} 章。",
+            "volume_index": _volume_for_chapter(novel_id, chapter_idx),
+            "chapter_index": chapter_idx,
+        }
+    else:
+        target = "editor"
+
+    return {
+        "action": "CONTINUE",
+        "target": target,
+        "hint": "",
+        "agent_prompt": "",
+        "agent_context": "",
+        "user_intent_summary": "",
+        "reason": reason_prefix + f"依偵測階段補正前往 {target}。",
+        "volume_index": None,
+        "chapter_index": None,
+    }
+
+
+def _director_decision_needs_recovery(parsed):
+    if not isinstance(parsed, dict):
+        return True
+    action = str(parsed.get("action") or "").upper().strip()
+    if action not in EXECUTABLE_DIRECTOR_ACTIONS:
+        return True
+    if action in {"CONTINUE", "AUTO_REGENERATE"} and not parsed.get("target"):
+        return True
+    target = str(parsed.get("target") or "").lower()
+    text = json.dumps(parsed, ensure_ascii=False)
+    if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
+        return True
+    return False
+
+
+def re_search_batch_marker(text):
+    import re
+    return bool(re.search(r"\[BATCH:\s*(foreshadowing_seeds|key_turning_points)\]", text or "", flags=re.IGNORECASE))
+
+
 def run_director_decision(
     novel_id,
     current_stage,
@@ -1673,24 +1895,6 @@ def run_director_decision(
     Gateway review after a stage completes. Returns next action:
     CONTINUE, GO_BACK_TO_WORLDVIEW, GO_BACK_TO_CHARACTERS, GO_BACK_TO_PLOT, WAIT_USER, FINISH.
     """
-    # Circuit breaker: if loop_count exceeds MAX_AUTO_LOOPS, force WAIT_USER
-    if loop_count >= MAX_AUTO_LOOPS:
-        override_text = "data: " + json.dumps({
-            "type": "content",
-            "delta": json.dumps({
-                "action": "WAIT_USER",
-                "target": "user",
-                "reason": f"自動循環已達上限 ({MAX_AUTO_LOOPS} 次)，為避免無限循環，強制切換為等待用戶確認模式。請人工介入決定下一步。",
-                "hint": "",
-                "agent_prompt": "",
-                "agent_context": "",
-                "loop_limited": True
-            }, ensure_ascii=False)
-        }, ensure_ascii=False) + "\n\n"
-        yield override_text
-        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-        return
-
     detected_stage = diagnostics.detect_current_stage(novel_id)
     if not current_stage or current_stage == "init":
         current_stage = detected_stage
@@ -1896,6 +2100,16 @@ def run_director_decision(
         # Intercept tool call
         from backend.models.parsers import extract_json_block
         parsed = extract_json_block(full_text)
+
+        if _director_decision_needs_recovery(parsed):
+            recovery_decision = _build_recovery_director_decision(novel_id, current_stage, parsed)
+            yield "data: " + json.dumps({
+                "type": "content",
+                "delta": "\n\n【後端決策自癒】總監未輸出可執行標準決策，系統依剛性校驗補上最終決策。\n```json\n"
+                + json.dumps(recovery_decision, ensure_ascii=False, indent=2)
+                + "\n```\n"
+            }, ensure_ascii=False) + "\n\n"
+            parsed = recovery_decision
 
         # --- 總監調度：volume_skeleton 自動分段保險 ---
         # 當總監針對 volume_skeleton 階段下達 CONTINUE 前往骨架生成，但該卷仍有
@@ -2318,5 +2532,3 @@ def run_global_foreshadowing_precompute(novel_id):
     [新功能] 預計算全域伏筆與轉折絕對分配藍圖的包裝函數
     """
     db.precompute_global_foreshadowing(novel_id)
-
-
