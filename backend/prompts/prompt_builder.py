@@ -867,7 +867,9 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 【一般提示詞 (Prompt)】
 {user_prompt or "請在現有角色基礎上進行增量擴展，追加新角色。"}
 
-請根據總監提示，追加新角色並輸出完整的角色 Bible JSON 設定。
+請根據總監提示，追加新角色。
+[極重要要求]：
+請只生成本次需要「新增/追加」的角色清單，並回傳格式完全合法的 characters JSON（例如 `{{ "characters": [...] }}`），列表中應「僅」包含本次新增的角色，千萬不要重寫、輸出或複製任何未修改的既有角色。
 擴增角色時仍必須遵守世界觀勢力設定；新角色的 faction、登場功能與關係網必須能回接既有角色聖經，不能只新增孤立人物。
 """
     else:  # modify
@@ -894,9 +896,12 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 【一般提示詞 (Prompt)】
 {user_prompt or "請對指定角色進行內容調整。"}
 
-請將以上修改與該角色的完整內容融會貫通，修正後輸出完整的角色 Bible JSON 設定。
+請將以上修改與該角色的完整內容融會貫通。
+[極重要要求]：
+請只生成「受修改後」的角色清單，並回傳格式完全合法的 characters JSON（例如 `{{ "characters": [...] }}`），列表中應「僅」包含本次被修改的角色的全新設定，千萬不要複製或重寫其他無關、未修改的角色。
 修改時保留角色既有關係網與勢力一致性；若總監要求補關係或勢力，請同步修正 relationships / relationship_matrix 等相關欄位。
 """
+
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
@@ -1821,9 +1826,14 @@ def build_director_decision_messages(
         # 清理思考過程標記 (不放入思考)
         import re
         clean_last_output = re.sub(r"<think>.*?</think>", "", _last_output, flags=re.DOTALL).strip()
-        is_structural_stage = _last_stage in ("worldview", "foreshadowing", "characters", "volumes", "volume_skeleton")
-        limit = 50000 if is_structural_stage else 5000
-        _output_summary = compact_context_text(clean_last_output, limit, "上一輪 Agent output")
+        # 一律使用收合函數：JSON list 欄位「前5項展示 + 其餘收合 + 工具指令」
+        # 純文字輸出時自動 fallback 截斷 6000 字元
+        _output_summary = collapse_json_output_for_director(
+            clean_last_output,
+            stage_name=_last_stage,
+            preview_count=5
+        )
+
         last_run_block = f"""
 
 【上一個運行的 Agent 執行記錄 (Last Agent Run)】

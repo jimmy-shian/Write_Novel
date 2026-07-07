@@ -431,6 +431,49 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
         if _handle_director_context_request(novel_id, "角色設計師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "角色設計師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             return
+            
+        # 💡 增量合併邏輯：在 expand / modify 模式下，LLM 只回傳新增/修改的局部角色清單，將其與現有角色合併後再保存
+        if mode in ("expand", "modify"):
+            try:
+                from backend.models.parsers import extract_json_block
+                
+                new_parsed = extract_json_block(full_text)
+                new_chars = new_parsed.get("characters", []) if isinstance(new_parsed, dict) else (new_parsed if isinstance(new_parsed, list) else [])
+                if isinstance(new_chars, dict):
+                    new_chars = [new_chars]
+                
+                # 讀取現有角色
+                if existing_char_data and existing_chars_json:
+                    try:
+                        existing_parsed = json.loads(existing_chars_json)
+                        existing_chars = existing_parsed.get("characters", []) if isinstance(existing_parsed, dict) else (existing_parsed if isinstance(existing_parsed, list) else [])
+                    except Exception:
+                        existing_chars = []
+                else:
+                    existing_chars = []
+                
+                if mode == "expand":
+                    merged_chars = existing_chars + new_chars
+                else: # modify
+                    if target_char_index is not None:
+                        try:
+                            # 正常化索引
+                            parsed_chars_len = len(existing_chars)
+                            norm_idx = db.normalize_char_index(int(target_char_index), parsed_chars_len, source='character_designer')
+                            if 0 <= norm_idx < parsed_chars_len and len(new_chars) > 0:
+                                existing_chars[norm_idx] = new_chars[0]
+                        except Exception:
+                            pass
+                        merged_chars = existing_chars
+                    else:
+                        # 依照姓名核心去重合併（db.save_characters 內部已有去重，這裡直接合併）
+                        merged_chars = existing_chars + new_chars
+                
+                merged_json = {"characters": merged_chars}
+                full_text = json.dumps(merged_json, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[WARN] 增量角色合併失敗，使用原始輸出: {e}")
+                
         db.save_characters(novel_id, full_text)
         db.save_last_agent_run(novel_id, "characters", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"角色聖經更新完畢！版本已更新。", message_type="pipeline")
@@ -2217,6 +2260,33 @@ def _director_decision_needs_recovery(parsed):
     return False
 
 
+def _get_director_decision_error_message(parsed, raw_text):
+    if not isinstance(parsed, dict):
+        return (
+            f"輸出格式非 JSON 物件。請確保以 ```json ... ``` 包裹合規的 JSON 物件，"
+            f"且最外層必須是包含 'action' 等欄位的物件，不得將 JSON 包裹在空白鍵或其他鍵值（例如 `\"\"`）底下。\n"
+            f"您產生的原始輸出內容為：\n{raw_text}"
+        )
+    action = str(parsed.get("action") or "").upper().strip()
+    if action not in EXECUTABLE_DIRECTOR_ACTIONS:
+        return (
+            f"action 欄位值 '{action}' 不在合法動作清單中。\n"
+            f"合法 action 清單：{list(EXECUTABLE_DIRECTOR_ACTIONS)}\n"
+            f"請修正 'action' 欄位。"
+        )
+    if action in {"CONTINUE", "AUTO_REGENERATE"} and not parsed.get("target"):
+        return "當 action 為 CONTINUE 或 AUTO_REGENERATE 時，必須指定 'target' 欄位（例如：'target': 'volume_skeleton'）。請指定 target。"
+    target = str(parsed.get("target") or "").lower()
+    text = json.dumps(parsed, ensure_ascii=False)
+    if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
+        return (
+            "當前往 foreshadowing 階段時，必須在 'hint' 或 'agent_prompt' 中指定分批生成標籤：\n"
+            "- 若要生成伏筆種子，請在 prompt 中加入 [BATCH: foreshadowing_seeds]\n"
+            "- 若要生成關鍵轉折，請在 prompt 中加入 [BATCH: key_turning_points]"
+        )
+    return "JSON 格式不符合總監決策合約，請確認頂層欄位與命名規範。"
+
+
 def _record_director_review_status(novel_id, current_stage, parsed, volume_index=None, chapter_index=None):
     if not isinstance(parsed, dict):
         return
@@ -2482,14 +2552,40 @@ def run_director_decision(
         parsed = extract_json_block(full_text)
 
         if _director_decision_needs_recovery(parsed):
-            recovery_decision = _build_recovery_director_decision(novel_id, current_stage, parsed)
-            yield "data: " + json.dumps({
-                "type": "content",
-                "delta": "\n\n【後端決策自癒】總監未輸出可執行標準決策，系統依剛性校驗補上最終決策。\n```json\n"
-                + json.dumps(recovery_decision, ensure_ascii=False, indent=2)
-                + "\n```\n"
-            }, ensure_ascii=False) + "\n\n"
-            parsed = recovery_decision
+            err_msg = _get_director_decision_error_message(parsed, full_text)
+            if loop_count < 30:
+                yield "data: " + json.dumps({
+                    "type": "status",
+                    "message": f"【後端決策校驗】總監決策未通過剛性校驗，準備進行自我修正第 {loop_count + 1}/30 次..."
+                }, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({
+                    "type": "content",
+                    "delta": f"\n\n【決策校驗失敗】偵測到以下錯誤：\n- {err_msg}\n正在請總監進行自我修正...\n"
+                }, ensure_ascii=False) + "\n\n"
+                
+                combined_extra = "\n\n".join(part for part in (extra_context, f"【系統決策校驗回報 - 自我修正第 {loop_count + 1} 次】\n請修正以下錯誤並重新輸出決策 JSON：\n{err_msg}") if part)
+                yield from run_director_decision(
+                    novel_id,
+                    current_stage=current_stage,
+                    user_prompt=user_prompt,
+                    chapter_index=chapter_index,
+                    volume_index=volume_index,
+                    character_review_mode=character_review_mode,
+                    character_review_hint=character_review_hint,
+                    character_review_target_content=character_review_target_content,
+                    suggested_next_chapter=suggested_next_chapter,
+                    conversation_context=conversation_context,
+                    summary_context=summary_context,
+                    extra_context=combined_extra,
+                    loop_count=loop_count + 1,
+                    stream=stream,
+                    force_json=force_json,
+                )
+                return
+            else:
+                terminal_msg = "總監連續 30 次決策自癒失敗，已達重試上限。請檢查系統 Prompt 或手動干預。"
+                yield "data: " + json.dumps({"type": "error", "message": terminal_msg}, ensure_ascii=False) + "\n\n"
+                raise Exception(terminal_msg)
 
         _record_director_review_status(
             novel_id,
