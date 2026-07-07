@@ -22,20 +22,23 @@ def api_novel_retrospective(novel_id: str):
     char = db.get_latest_characters(novel_id)
     stitched_plot = db.get_stitched_plot(novel_id)
     chapters = db.get_all_chapters_latest(novel_id)
-    chapter_samples = []
-    if chapters:
-        sample_rows = chapters[:3]
-        if len(chapters) > 6:
-            sample_rows += chapters[-3:]
-        else:
-            sample_rows = chapters
-        for ch in sample_rows:
-            content = ch.get("content", "") or ""
-            chapter_samples.append({
+    chapter_samples = {
+        "director_payload_view": "collapsed_json",
+        "payload_kind": "written_chapters",
+        "total_count": len(chapters or []),
+        "chapters": [
+            {
                 "chapter_index": ch.get("chapter_index"),
                 "synopsis": ch.get("synopsis", ""),
-                "content_excerpt": content[:900]
-            })
+                "content_char_count": len(ch.get("content", "") or ""),
+                "content": (ch.get("content", "") or "") if len(ch.get("content", "") or "") <= 1200 else {
+                    "__collapsed_text__": True,
+                    "message": "章節正文已收合；復盤若需精讀，應由總監指定章節展開。",
+                },
+            }
+            for ch in (chapters or [])
+        ],
+    }
 
     from backend.prompts.prompt_builder import extract_worldview_summary, extract_character_names_list
     from backend.llm import call_llm_stream

@@ -431,7 +431,17 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
             failed_output = "".join(accumulated_content)
             director_content = f"【系統通知】代理人「{agent_name}」在執行創作任務時發生錯誤。錯誤訊息：\n{error_msg}"
             if failed_output.strip():
-                director_content += f"\n\n【該代理人的失敗輸出】\n{failed_output[:2000]}"
+                failed_payload = {
+                    "director_payload_view": "collapsed_json",
+                    "payload_kind": "agent_failed_output",
+                    "agent_name": agent_name,
+                    "char_count": len(failed_output),
+                    "data": failed_output if len(failed_output) <= 2000 else {
+                        "__collapsed_text__": True,
+                        "message": "代理人失敗輸出已收合為 metadata；請總監依錯誤、完整對話紀錄與後續工具結果決定是否重發指令。",
+                    },
+                }
+                director_content += f"\n\n【該代理人的失敗輸出 JSON 收合封包】\n{json.dumps(failed_payload, ensure_ascii=False, indent=2)}"
             director_content += f"\n\n以下是該代理人的完整對話紀錄。請你（創意總監）根據這些資訊判斷下一步該如何處理。"
             
             director_msgs = [{"role": "system", "content": director_content}]

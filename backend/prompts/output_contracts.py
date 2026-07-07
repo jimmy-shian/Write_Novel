@@ -40,6 +40,7 @@ DIRECTOR_DECISION_KEY_CONTRACT = """## 總監 JSON 欄位命名合約
 
 DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
 工具呼叫必須使用 `action: "TOOL_CALL"`，並把工具名稱與參數放在 `tool_call` 內；不要把工具參數攤平成頂層欄位。
+每次 `TOOL_CALL` 最外層都必須填寫 `reason`，說明「為什麼要查這段、正在驗證哪個風險、工具結果將用來決定什麼」。後端會把此 reason 鎖進下一輪工具 follow-up context，避免總監跨輪忘記原本的工作。
 
 ```json
 {
@@ -48,11 +49,11 @@ DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
     "tool_name": "evaluate_output",
     "parameters": {
       "stage_name": "volume_skeleton",
-      "output_content": "若可見輸出內容完整，放入完整輸出；若不可見，改用 inspect_content_block 展開資料庫內容。",
+      "output_content": "通常省略。除非後端明確提供了一段短小且完整的未持久化輸出，否則不要放入大段 JSON 或正文；後端會依 stage_name 從資料庫讀取完整輸出。",
       "novel_id": "由後端自動注入時可省略"
     }
   },
-  "reason": "先做硬性校驗，避免由 LLM 自己計算數量、索引或必填欄位。"
+  "reason": "先做硬性校驗：確認 volume_skeleton 的 JSON 結構、必填欄位與章節索引是否可通過；若通過，再展開指定章節做內容品質審查。"
 }
 ```
 
@@ -95,7 +96,7 @@ DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
 
 
 DIRECTOR_HARD_VALIDATION_POLICY = """## Python 硬性校驗的用途與邊界
-`validation_report` 與 `evaluate_output` 是 Python 計算出的硬性結果，用來回答 LLM 不應自行猜算的問題：
+`validation_report` 與 `evaluate_output` 是 Python 計算出的硬性結果，用來回答 LLM 不應自行猜算的問題。呼叫 `evaluate_output` 時優先只傳 `stage_name`；不要把收合封包、長列表、完整角色表、完整卷骨架或正文塞進 `output_content`：
 - JSON 是否可解析。
 - 必填欄位是否存在且非空。
 - 數量是否達標，例如伏筆/轉折至少 50 個、篇卷數量範圍。
@@ -117,7 +118,7 @@ DIRECTOR_HARD_VALIDATION_POLICY = """## Python 硬性校驗的用途與邊界
 
 
 DIRECTOR_MANDATORY_INSPECTION_POLICY = """## 必須展開檢閱的資料
-當輸入出現摘要、保護性收合、只顯示開頭結尾、`...摘要...`、或本階段資料本質上是長列表/長文本時，放行前必須先用工具展開。
+當輸入出現摘要、保護性收合、`director_payload_view: "collapsed_json"`、`__collapsed_text__`、`...摘要...`、或本階段資料本質上是長列表/長文本時，放行前必須先用工具展開。
 
 必查區塊：
 - `worldview`: `multi_act_structure`、`progressive_character_plan`、`factions`、`macro_outline`；若已存在，也要查 `foreshadowing_seeds`、`key_turning_points`。

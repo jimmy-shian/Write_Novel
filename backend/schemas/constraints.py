@@ -27,7 +27,7 @@ def load_retrospective_gold_rules(novel_id: str, limit: int = 16000) -> str:
     """
     載入指定小說的 Retrospective Gold Rules（創作金律回顧文件）。
     若無對應檔案則回傳空字串。
-    若檔案過長，會保留首尾並插入省略標記以節省 Token。
+    不在此處輸出片段摘要；呼叫端若要送入總監，必須用 JSON 收合封包處理。
 
     Args:
         novel_id: 小說的唯一 ID。
@@ -64,9 +64,4 @@ def load_retrospective_gold_rules(novel_id: str, limit: int = 16000) -> str:
             content = f.read().strip()
     except OSError:
         return ""
-    if len(content) <= limit:
-        return content
-    marker = f"\n\n...[創作金律過長，已省略 {len(content) - limit} 字，保留開頭與結尾]...\n\n"
-    head_len = max(1, (limit - len(marker)) * 2 // 3)
-    tail_len = max(1, limit - len(marker) - head_len)
-    return content[:head_len] + marker + content[-tail_len:]
+    return content

@@ -41,7 +41,17 @@ def build_director_conversation_context(novel_id, limit=1):
         if content:
             lines.append(f"[{role}] {content}")
         if thinking:
-            lines.append(f"[{role}思考摘錄] {thinking[:400]}")
+            thinking_payload = {
+                "director_payload_view": "collapsed_json",
+                "payload_kind": "director_thinking",
+                "role": role,
+                "char_count": len(thinking),
+                "data": thinking if len(thinking) <= 800 else {
+                    "__collapsed_text__": True,
+                    "message": "思考內容已收合；此區只作連續性參考，不作內容審查依據。",
+                },
+            }
+            lines.append(f"[{role}思考收合封包] {json.dumps(thinking_payload, ensure_ascii=False)}")
         if len(lines) >= max(limit, 4):
             break
     return "\n\n".join(lines)
@@ -271,19 +281,11 @@ def _chapter_versions(novel_id, chapter_index, limit=2):
 
 
 def _snippet(text, head=600, tail=900):
-    text = (text or "").strip()
-    if len(text) <= head + tail + 80:
-        return text
-    if tail <= 0:
-        return text[:head] + "\n...（後文省略）"
-    return text[:head] + "\n...（中段省略，保留首尾供連貫性評估）...\n" + text[-tail:]
+    return (text or "").strip()
 
 
 def _tail(text, limit=1200):
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[-limit:]
+    return (text or "").strip()
 
 
 def _filter_active_characters(characters_text, outline):
@@ -303,7 +305,7 @@ def _filter_active_characters(characters_text, outline):
     if not chars:
         return parsed
     if not active_names:
-        return {"characters": chars[:8], "selection_basis": "no_active_character_hint_limited_to_first_8"}
+        return {"characters": chars, "selection_basis": "no_active_character_hint_all_characters_collapsible"}
 
     selected = []
     for char in chars:
@@ -311,7 +313,7 @@ def _filter_active_characters(characters_text, outline):
         if name and any(name in active or active in name for active in active_names):
             selected.append(char)
 
-    return {"characters": selected or chars[:8], "selection_basis": active_names}
+    return {"characters": selected or chars, "selection_basis": active_names}
 
 
 def build_writer_review_context(novel_id, chapter_index, characters_text):

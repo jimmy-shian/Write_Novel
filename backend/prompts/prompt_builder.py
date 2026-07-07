@@ -92,14 +92,46 @@ def compact_context_text(value, limit, label="context"):
             value = str(value)
     if limit is None or limit <= 0 or len(value) <= limit:
         return value
-    marker = (
-        f"\n\n...[{label} 超過單次傳輸上限，這是後端保護性收合而非審查依據；"
-        f"請總監用 inspect_content_block/expand_collapsed_json 指定位置展開，未展開前不得臆測。"
-        f"保留開頭與結尾，收合 {len(value) - limit} 字]...\n\n"
-    )
-    head_len = max(1, (limit - len(marker)) * 2 // 3)
-    tail_len = max(1, limit - len(marker) - head_len)
-    return value[:head_len] + marker + value[-tail_len:]
+
+    # Map label to specific tools
+    tool_ref = "inspect_content_block"
+    params = {}
+    if label in ("foreshadowing_seeds", "key_turning_points"):
+        tool_ref = "expand_collapsed_json"
+        params = {"stage_name": "foreshadowing", "field_name": label}
+    elif "上一輪" in label:
+        block_name = "input_data" if "input" in label.lower() or "指示" in label.lower() or "user" in label.lower() else "output_data"
+        params = {"stage_name": "last_agent_run", "block_name": block_name}
+    else:
+        # Default fallback
+        params = {"stage_name": "當前審核階段名稱"}
+        if "角色" in label or label == "characters":
+            params["stage_name"] = "characters"
+            params["block_name"] = "characters"
+        elif "世界觀" in label or label == "worldview":
+            params["stage_name"] = "worldview"
+        elif "大綱" in label or "骨架" in label:
+            params["stage_name"] = "volume_skeleton"
+            params["block_name"] = "chapters_outline"
+        elif "正文" in label:
+            params["stage_name"] = "writer"
+            params["block_name"] = "chapter"
+
+    collapse_info = {
+        "director_payload_view": "collapsed_json",
+        "payload_kind": label,
+        "char_count": len(value),
+        "message": f"該 {label} 已由後端收合以防止原始截斷。",
+        "tool_call_instruction": {
+            "action": "TOOL_CALL",
+            "tool_call": {
+                "tool_name": tool_ref,
+                "parameters": params
+            },
+            "reason": f"展開已被收合的 {label}，以進行品質審核。"
+        }
+    }
+    return json.dumps(collapse_info, ensure_ascii=False, indent=2)
 
 def compact_json_data(data, max_list_items=10):
     """
@@ -136,6 +168,116 @@ def compact_json_data(data, max_list_items=10):
             return [compact_json_data(item, max_list_items) for item in data]
     else:
         return data
+
+
+def collapse_json_output_for_director(raw_output, stage_name, preview_count=5):
+    """
+    對 Director 的 last_run_block Output 進行「一律前N項展示 + 其餘收合」處理。
+    無論原始字數多少，只要是 JSON 且含有 list 欄位，就執行收合。
+    非 JSON 或無 list 的純文字輸出，保留原文（最多 6000 字元）。
+
+    回傳值：
+      - 若成功解析 JSON 且含列表 → 回傳結構化摘要字串（JSON 格式，含工具指令）
+      - 若純文字或解析失敗 → 回傳原文前 6000 字元
+    """
+    if not raw_output or not isinstance(raw_output, str):
+        return raw_output or ""
+
+    # --- Step 1: 嘗試解析 JSON ---
+    parsed = None
+    stripped = raw_output.strip()
+    # 移除 markdown code fence
+    import re as _re
+    _fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", stripped, flags=_re.IGNORECASE)
+    if _fence_match:
+        stripped = _fence_match.group(1).strip()
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        parsed = None
+
+    # --- Step 2: 若無法解析為 JSON，回傳純文字截斷 ---
+    if parsed is None:
+        truncated = raw_output[:6000]
+        suffix = f"\n...[純文字輸出已截斷，共 {len(raw_output)} 字元]..." if len(raw_output) > 6000 else ""
+        return truncated + suffix
+
+    # --- Step 3: 欄位對應工具映射 ---
+    FIELD_TOOL_MAP = {
+        "foreshadowing_seeds": {"tool_name": "expand_collapsed_json", "params": {"stage_name": "foreshadowing", "field_name": "foreshadowing_seeds"}},
+        "key_turning_points":  {"tool_name": "expand_collapsed_json", "params": {"stage_name": "foreshadowing", "field_name": "key_turning_points"}},
+        "characters":          {"tool_name": "inspect_content_block", "params": {"stage_name": "characters",      "block_name": "characters"}},
+        "volumes":             {"tool_name": "inspect_content_block", "params": {"stage_name": "volumes",         "block_name": "volumes"}},
+        "chapters_outline":    {"tool_name": "inspect_content_block", "params": {"stage_name": "volume_skeleton", "block_name": "chapters_outline"}},
+        "chapters":            {"tool_name": "inspect_content_block", "params": {"stage_name": "volume_skeleton", "block_name": "chapters"}},
+    }
+
+    def _default_tool(field_name):
+        return {"tool_name": "inspect_content_block", "params": {"stage_name": stage_name, "block_name": field_name}}
+
+    def _build_collapse_marker(field_name, total, tool_info):
+        return {
+            "...收合標記...": (
+                f"⚠️ 此 {field_name} 共 {total} 筆項目；此處僅展示前 {preview_count} 筆供快速審閱，"
+                f"已收合其餘 {total - preview_count} 筆。"
+            ),
+            "_director_note": (
+                f"若需逐項審查第 {preview_count + 1}~{total} 筆，"
+                f"請呼叫工具：{tool_info['tool_name']}，"
+                f"params={json.dumps({**tool_info['params'], 'start_index': preview_count, 'end_index': total - 1}, ensure_ascii=False)}"
+            ),
+            "tool_call_instruction": {
+                "action": "TOOL_CALL",
+                "tool_call": {
+                    "tool_name": tool_info["tool_name"],
+                    "parameters": {
+                        **tool_info["params"],
+                        "start_index": preview_count,
+                        "end_index": total - 1
+                    }
+                },
+                "reason": f"展開 {field_name} 第 {preview_count + 1}~{total} 項以進行完整品質審核。"
+            }
+        }
+
+    def _collapse_list_field(field_name, lst):
+        total = len(lst)
+        if total <= preview_count:
+            return lst  # 不需要收合
+        tool_info = FIELD_TOOL_MAP.get(field_name) or _default_tool(field_name)
+        return lst[:preview_count] + [_build_collapse_marker(field_name, total, tool_info)]
+
+    # --- Step 4: 根據頂層型別處理 ---
+    if isinstance(parsed, dict):
+        result = {}
+        has_collapsed = False
+        for key, val in parsed.items():
+            if isinstance(val, list) and len(val) > preview_count:
+                result[key] = _collapse_list_field(key, val)
+                has_collapsed = True
+            else:
+                result[key] = val
+        if has_collapsed:
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        else:
+            # 沒有需要收合的 list → 原始 JSON，但限 8000 字元
+            raw_json = json.dumps(parsed, ensure_ascii=False, indent=2)
+            return raw_json[:8000] + ("\n...[JSON 已截斷]..." if len(raw_json) > 8000 else "")
+
+    elif isinstance(parsed, list):
+        # 頂層直接是 list（較少見，如舊格式 characters）
+        total = len(parsed)
+        if total > preview_count:
+            tool_info = _default_tool(stage_name)
+            marker = _build_collapse_marker(stage_name, total, tool_info)
+            result_list = parsed[:preview_count] + [marker]
+            return json.dumps(result_list, ensure_ascii=False, indent=2)
+        else:
+            return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+    else:
+        # 純量值（不太可能是 Output，但做保底）
+        return str(parsed)[:6000]
 
 
 def _parse_jsonish(text):

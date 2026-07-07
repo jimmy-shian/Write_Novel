@@ -34,7 +34,15 @@ class RetryContext:
 
     def record_attempt(self, output: str, error: str):
         self.attempt += 1
-        self.accumulated_outputs.append(output[:500])
+        self.accumulated_outputs.append({
+            "director_payload_view": "collapsed_json",
+            "payload_kind": "retry_attempt_output",
+            "char_count": len(output or ""),
+            "data": output if output and len(output) <= 500 else {
+                "__collapsed_text__": True,
+                "message": "本次 retry 輸出已收合；請依錯誤訊息修正格式，不要依片段猜測內容。",
+            },
+        })
         if error:
             self.errors.append(error)
 
@@ -88,7 +96,7 @@ def execute_with_retry(
             if on_retry:
                 on_retry(attempt, err_msg)
 
-            messages = _inject_retry_feedback(messages, err_msg, attempt, full_output[:300])
+            messages = _inject_retry_feedback(messages, err_msg, attempt, full_output)
 
         except Exception as e:
             err_msg = f"呼叫異常: {str(e)}"
@@ -106,13 +114,24 @@ def execute_with_retry(
 
 def _inject_retry_feedback(messages: list, error: str, attempt: int, last_output: str) -> list:
     """將 retry feedback 注入 messages"""
+    output_payload = None
+    if last_output:
+        output_payload = {
+            "director_payload_view": "collapsed_json",
+            "payload_kind": "retry_last_output",
+            "char_count": len(last_output),
+            "data": last_output if len(last_output) <= 800 else {
+                "__collapsed_text__": True,
+                "message": "上次輸出已收合；本輪只需依錯誤訊息與原始 schema 重新輸出完整合法 JSON。",
+            },
+        }
     feedback = {
         "role": "user",
         "content": (
             f"【系統回報 - 第 {attempt} 次重試】\n"
             f"上次輸出格式不符要求：{error}\n"
             f"請嚴格遵守 JSON 輸出格式，使用 ```json ... ``` 包裹。\n"
-            + (f"上次輸出節錄：{last_output}" if last_output else "")
+            + (f"上次輸出 JSON 收合封包：{json.dumps(output_payload, ensure_ascii=False, indent=2)}" if output_payload else "")
         ),
     }
     return messages + [feedback]
