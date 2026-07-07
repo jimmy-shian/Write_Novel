@@ -533,6 +533,10 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 role = c.get("role", "未設定")
                 if not _is_primary_protagonist(c, idx):
                     ignored_count += 1
+                    # check minor fields
+                    missing_minor = [f for f in ["name", "role", "entry_phase"] if not c.get(f)]
+                    if missing_minor:
+                        report_lines.append(f"    * 配角 [{name}] ({role}) ⚠️ [欄位缺失，非阻斷]：缺少 {', '.join(missing_minor)}")
                     continue
                 missing_fields = _character_missing_fields(c)
                 if missing_fields:
@@ -541,6 +545,32 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                     report_lines.append(f"    * 主角 [{name}] ({role}) ✅ 核心欄位足夠")
             if ignored_count:
                 report_lines.append(f"    * 其餘 {ignored_count} 位配角/支線角色：不檢查非必要欄位，不作為流程阻斷。")
+
+            # 世界觀勢力與登場計畫比對
+            try:
+                wb = db.get_latest_worldbuilding(novel_id)
+                if wb:
+                    parsed_wb = db.parse_worldview_to_json(wb["content"])
+                    w_factions = parsed_wb.get("factions", [])
+                    if isinstance(w_factions, list) and w_factions:
+                        char_factions = set()
+                        for char_item in chars_list:
+                            for key in ("faction", "affiliation"):
+                                val = char_item.get(key)
+                                if val:
+                                    char_factions.add(str(val).strip().lower())
+                        
+                        missing_wf = []
+                        for wf in w_factions:
+                            wf_name = wf.get("name") if isinstance(wf, dict) else str(wf)
+                            if wf_name:
+                                wf_clean = wf_name.strip().lower()
+                                if not any(wf_clean in cf or cf in wf_clean for cf in char_factions):
+                                    missing_wf.append(wf_name)
+                        if missing_wf:
+                            report_lines.append(f"    * ⚠️ 勢力覆蓋警示：世界觀勢力 {', '.join(missing_wf)} 尚無對應設定之角色歸屬。")
+            except Exception as e:
+                pass
         except Exception as e:
             report_lines.append("  - 狀態：⚠️ 角色聖經非標準 JSON 格式，無法解析。")
     report_lines.append("")
@@ -627,6 +657,39 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                     })
                 if duplicate_indexes:
                     report_lines.append(f"      - ⚠️ [大綱骨架重複] 重複章節：{duplicate_indexes}")
+
+        # 檢查篇卷骨架中是否有未建卡命名角色
+        try:
+            char_data = db.get_latest_characters(novel_id)
+            if char_data:
+                from backend.generation.agent_runners import _character_alias_set, _active_character_names_from_outline, _is_generic_active_character_name
+                bible_aliases = _character_alias_set(char_data["json_data"])
+                missing_chars_in_skeleton = []
+                for v in vols:
+                    vol_idx = v["volume_index"]
+                    skeleton_list = v.get("chapters_outline") or []
+                    if isinstance(skeleton_list, str):
+                        try:
+                            skeleton_list = json.loads(skeleton_list)
+                        except:
+                            skeleton_list = []
+                    if isinstance(skeleton_list, list):
+                        for ch in skeleton_list:
+                            ch_idx = ch.get("chapter_index") or ch.get("chapter") or ch.get("id") or 1
+                            for name in _active_character_names_from_outline(ch):
+                                if not _is_generic_active_character_name(name) and name not in bible_aliases:
+                                    if not any(alias and (alias in name or name in alias) for alias in bible_aliases):
+                                        missing_chars_in_skeleton.append((vol_idx, ch_idx, name))
+                if missing_chars_in_skeleton:
+                    report_lines.append("  - ⚠️ 偵測到篇卷骨架中使用了角色 Bible 中不存在的命名角色：")
+                    from collections import defaultdict
+                    missing_by_name = defaultdict(list)
+                    for vol_idx, ch_idx, name in missing_chars_in_skeleton:
+                        missing_by_name[name].append(f"卷 {vol_idx} 第 {ch_idx} 章")
+                    for name, refs in missing_by_name.items():
+                        report_lines.append(f"    * 角色 [{name}] 於 {', '.join(refs[:5])} 出現，但未建卡")
+        except Exception as e:
+            print(f"[REPORT ERROR] Failed to check missing characters in skeletons: {e}")
         
         if incomplete_skeleton_items:
             incomplete_skeleton_items.sort(key=lambda item: int(item["volume_index"]))
