@@ -70,26 +70,14 @@ def normalize_seed_item(item, index: int) -> dict:
         
     description = first_foreshadowing_text(item, ("description", "detail", "content", "summary", "seed", "foreshadowing", "伏筆內容", "內容說明"))
     name = first_foreshadowing_text(item, ("name", "title", "seed_name", "伏筆名稱", "名稱"))
-    if not name and description:
-        name = description[:20] if len(description) > 20 else description
-    if not name:
-        name = f"伏筆種子 #{index + 1}"
-    if not description and name:
-        description = name
 
     setup_hint = first_foreshadowing_text(item, ("setup_hint", "setup", "plant", "plant_hint", "setup_timing", "埋設章節", "埋設位置"))
-    if not setup_hint:
-        setup_hint = "前言章節"
 
     payoff_hint = first_foreshadowing_text(item, ("payoff_hint", "payoff", "reveal", "resolution", "callback", "回收章節", "回收位置"))
-    if not payoff_hint:
-        payoff_hint = "後續章節"
 
     related_characters = foreshadowing_text_list(item.get("related_characters") or item.get("characters") or item.get("related_roles") or item.get("對應角色") or item.get("相關角色"))
     
     thematic_link = first_foreshadowing_text(item, ("thematic_link", "theme", "theme_link", "symbolic_meaning", "回收方式", "主題關聯"))
-    if not thematic_link:
-        thematic_link = "與核心主題呼應"
 
     return {
         "id": index + 1,
@@ -109,24 +97,12 @@ def normalize_turning_point_item(item, index: int) -> dict:
         
     description = first_foreshadowing_text(item, ("description", "detail", "content", "summary", "event", "轉折內容", "內容說明"))
     turning_point_name = first_foreshadowing_text(item, ("turning_point_name", "name", "title", "turning_point", "twist", "轉折名稱", "名稱"))
-    if not turning_point_name and description:
-        turning_point_name = description[:20] if len(description) > 20 else description
-    if not turning_point_name:
-        turning_point_name = f"關鍵轉折 #{index + 1}"
-    if not description and turning_point_name:
-        description = turning_point_name
 
     trigger_condition = first_foreshadowing_text(item, ("trigger_condition", "trigger", "condition", "cause", "inciting_event", "所屬幕次", "觸發條件"))
-    if not trigger_condition:
-        trigger_condition = "情節推進至適當時機"
 
     structural_impact = first_foreshadowing_text(item, ("structural_impact", "global_impact", "impact", "consequence", "plot_impact", "影響範圍"))
-    if not structural_impact:
-        structural_impact = "推進下一幕劇情"
 
     emotional_stakes = first_foreshadowing_text(item, ("emotional_stakes", "stakes", "cost", "emotional_cost", "情感代價"))
-    if not emotional_stakes:
-        emotional_stakes = structural_impact if structural_impact else "角色命運的轉折與成長"
 
     related_characters = foreshadowing_text_list(item.get("related_characters") or item.get("characters") or item.get("related_roles") or item.get("對應角色") or item.get("相關角色"))
 
@@ -184,30 +160,7 @@ def normalize_foreshadowing_output(parsed: dict) -> dict:
         turns = []
 
     normalized_seeds = [normalize_seed_item(item, idx) for idx, item in enumerate(seeds)]
-    while len(normalized_seeds) < MIN_FORESHADOWING_SEEDS:
-        idx = len(normalized_seeds)
-        normalized_seeds.append({
-            "id": idx + 1,
-            "name": f"系統自動補足之伏筆種子 #{idx + 1}",
-            "description": "主角的身世線索或隱秘事件在後續情節中逐步展開，揭示地鐵與世界封印規則的深層聯繫。",
-            "setup_hint": f"第1卷第{(idx % 10) + 1}章",
-            "payoff_hint": f"第10卷第{(idx % 10) + 1}章",
-            "related_characters": ["林深"],
-            "thematic_link": "世界觀核心命題與抉擇共鳴"
-        })
-
     normalized_turns = [normalize_turning_point_item(item, idx) for idx, item in enumerate(turns)]
-    while len(normalized_turns) < MIN_KEY_TURNING_POINTS:
-        idx = len(normalized_turns)
-        normalized_turns.append({
-            "id": idx + 1,
-            "turning_point_name": f"系統自動補足之關鍵轉折 #{idx + 1}",
-            "description": "主角或重要配角在此情節點面臨認知重構或抉擇，導致故事走向發生重大偏移。",
-            "trigger_condition": f"第{(idx % 18) + 1}幕",
-            "structural_impact": "推進核心衝突與情節節奏",
-            "emotional_stakes": "角色成長弧與命運軌跡改變",
-            "related_characters": ["林深"]
-        })
 
     return {
         "foreshadowing_seeds": normalized_seeds,
@@ -242,6 +195,22 @@ def foreshadowing_schema_error(seeds, turns) -> str:
     problems = []
     seed_required = ("name", "description", "setup_hint", "payoff_hint", "thematic_link")
     turn_required = ("turning_point_name", "description", "trigger_condition", "structural_impact", "emotional_stakes")
+    banned_markers = (
+        "系統自動補足",
+        "自動補足",
+        "伏筆種子 #",
+        "關鍵轉折 #",
+        "待補充",
+        "暫無",
+        "placeholder",
+        "佔位",
+        "占位",
+    )
+
+    def has_placeholder_marker(value) -> bool:
+        text = clean_foreshadowing_text(value)
+        lowered = text.lower()
+        return any(marker.lower() in lowered for marker in banned_markers)
 
     for idx, seed in enumerate(seeds if isinstance(seeds, list) else []):
         if not isinstance(seed, dict):
@@ -252,6 +221,8 @@ def foreshadowing_schema_error(seeds, turns) -> str:
         for field in seed_required:
             if not clean_foreshadowing_text(seed.get(field)):
                 problems.append(f"foreshadowing_seeds[{idx}].{field} 不可為空，文字內容不可放錯欄位")
+            elif has_placeholder_marker(seed.get(field)):
+                problems.append(f"foreshadowing_seeds[{idx}].{field} 含系統補足/佔位內容，必須由 Agent 重新生成")
         if not isinstance(seed.get("related_characters"), list):
             problems.append(f"foreshadowing_seeds[{idx}].related_characters 必須是文字陣列")
 
@@ -264,14 +235,18 @@ def foreshadowing_schema_error(seeds, turns) -> str:
         for field in turn_required:
             if not clean_foreshadowing_text(turn.get(field)):
                 problems.append(f"key_turning_points[{idx}].{field} 不可為空，文字內容不可放錯欄位")
+            elif has_placeholder_marker(turn.get(field)):
+                problems.append(f"key_turning_points[{idx}].{field} 含系統補足/佔位內容，必須由 Agent 重新生成")
         if not isinstance(turn.get("related_characters"), list):
             problems.append(f"key_turning_points[{idx}].related_characters 必須是文字陣列")
 
     if problems:
-        shown = "；".join(problems[:12])
-        if len(problems) > 12:
-            shown += f"；另有 {len(problems) - 12} 個欄位錯誤"
-        return shown
+        return json.dumps({
+            "director_payload_view": "collapsed_json",
+            "payload_kind": "foreshadowing_schema_errors",
+            "total_count": len(problems),
+            "items": problems,
+        }, ensure_ascii=False)
     return ""
 
 
@@ -299,7 +274,12 @@ def volume_plan_validation_error(volumes, mode: str = "generate") -> str:
     if bad_counts:
         return (
             f"每卷章節數不合規：每卷必須 {MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME} 章；"
-            + "、".join(bad_counts[:10])
+            + json.dumps({
+                "director_payload_view": "collapsed_json",
+                "payload_kind": "bad_volume_chapter_counts",
+                "total_count": len(bad_counts),
+                "items": bad_counts,
+            }, ensure_ascii=False)
         )
     return ""
 
