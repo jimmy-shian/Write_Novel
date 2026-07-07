@@ -17,6 +17,15 @@ def _try_parse_json_with_repair(json_str: str) -> dict:
             
     return None
 
+def _unwrap_single_nested_key(parsed: any) -> any:
+    if isinstance(parsed, dict) and len(parsed) == 1:
+        key = list(parsed.keys())[0]
+        if key.strip() == "":
+            val = parsed[key]
+            if isinstance(val, dict):
+                return _unwrap_single_nested_key(val)
+    return parsed
+
 def extract_json_block(text: str) -> dict:
     """
     Robustly extracts a JSON object or array from response text.
@@ -29,47 +38,46 @@ def extract_json_block(text: str) -> dict:
     # 1. Strip thinking blocks
     cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
+    parsed_result = None
+
     # 2. Match markdown codeblocks if they exist (can be array or dict)
     json_match = re.search(r"```(?:json)?\s*([\{\[].*?)\s*```", cleaned_text, flags=re.DOTALL)
     if json_match:
-        parsed = _try_parse_json_with_repair(json_match.group(1).strip())
-        if parsed is not None:
-            return parsed
+        parsed_result = _try_parse_json_with_repair(json_match.group(1).strip())
 
-    # 3. Fallback: try finding first '{' or '[' and last '}' or ']'
-    first_brace = cleaned_text.find("{")
-    first_bracket = cleaned_text.find("[")
-    
-    # Determine the start based on whichever comes first (and exists)
-    start_idx = -1
-    if first_brace != -1 and first_bracket != -1:
-        start_idx = min(first_brace, first_bracket)
-    else:
-        start_idx = max(first_brace, first_bracket)
+    if parsed_result is None:
+        # 3. Fallback: try finding first '{' or '[' and last '}' or ']'
+        first_brace = cleaned_text.find("{")
+        first_bracket = cleaned_text.find("[")
         
-    if start_idx != -1:
-        # Check matching end character based on what we started with
-        if cleaned_text[start_idx] == "{":
-            end_idx = cleaned_text.rfind("}")
+        # Determine the start based on whichever comes first (and exists)
+        start_idx = -1
+        if first_brace != -1 and first_bracket != -1:
+            start_idx = min(first_brace, first_bracket)
         else:
-            end_idx = cleaned_text.rfind("]")
+            start_idx = max(first_brace, first_bracket)
             
-        if end_idx != -1 and end_idx >= start_idx:
-            json_str = cleaned_text[start_idx:end_idx + 1].strip()
-            parsed = _try_parse_json_with_repair(json_str)
-            if parsed is not None:
-                return parsed
-        else:
-            # Maybe it was truncated, try parsing from start to end of string with repair
-            json_str = cleaned_text[start_idx:].strip()
-            parsed = _try_parse_json_with_repair(json_str)
-            if parsed is not None:
-                return parsed
+        if start_idx != -1:
+            # Check matching end character based on what we started with
+            if cleaned_text[start_idx] == "{":
+                end_idx = cleaned_text.rfind("}")
+            else:
+                end_idx = cleaned_text.rfind("]")
+                
+            if end_idx != -1 and end_idx >= start_idx:
+                json_str = cleaned_text[start_idx:end_idx + 1].strip()
+                parsed_result = _try_parse_json_with_repair(json_str)
+            else:
+                # Maybe it was truncated, try parsing from start to end of string with repair
+                json_str = cleaned_text[start_idx:].strip()
+                parsed_result = _try_parse_json_with_repair(json_str)
 
-    # 4. Fallback: try standard raw loads
-    parsed = _try_parse_json_with_repair(cleaned_text)
-    if parsed is not None:
-        return parsed
+    if parsed_result is None:
+        # 4. Fallback: try standard raw loads
+        parsed_result = _try_parse_json_with_repair(cleaned_text)
+
+    if parsed_result is not None:
+        return _unwrap_single_nested_key(parsed_result)
 
     return {}
 
