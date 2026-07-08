@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 
-from backend import db
+from backend import persistence as db
 
-from .. import agent_runners
-from ..task_schema import GenerationTaskRequest
+from backend.generation.routing.schema import GenerationTaskRequest
+from backend.agents.character_designer.runner import run_character_designer
+from backend.agents.incremental.runner import run_incremental_character_designer
 
 
 def _resolve_mode(task: GenerationTaskRequest) -> str:
@@ -61,7 +62,7 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
         field_name = getattr(task, "field_name", None)
         target_char_idx = getattr(task, "target_char_index", None)
         if target_char_idx is not None or field_name:
-            return agent_runners.run_incremental_character_designer(
+            return run_incremental_character_designer(
                 task.novel_id,
                 target_char_idx,
                 field_name,
@@ -69,7 +70,7 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
                 stream=task.options.stream,
                 force_json=True,
             )
-        return agent_runners.run_incremental_character_designer(
+        return run_incremental_character_designer(
             task.novel_id,
             None,
             None,
@@ -83,7 +84,7 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
     if target_char_index is None and task.target.chapter_index is not None:
         target_char_index = task.target.chapter_index
 
-    return agent_runners.run_character_designer(
+    return run_character_designer(
         task.novel_id,
         user_prompt=prompt or None,
         hint=task.hint,

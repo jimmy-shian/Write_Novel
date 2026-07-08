@@ -5,7 +5,7 @@ import json
 # Add parent directory to path so we can import llm.py
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.llm import call_llm_stream
+from backend.common.llm import call_llm_stream
 from backend.models.parsers import extract_json_block
 
 def call_llm_sync(agent_name: str, messages: list) -> str:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from .. import agent_runners
 
-from ..task_schema import GenerationTaskRequest
+from backend.generation.routing.schema import GenerationTaskRequest
+from backend.agents.volumes_planner.runner import run_volumes_planner
 
 
 def _resolve_mode(task: GenerationTaskRequest) -> str:
@@ -24,7 +24,7 @@ def run_volumes_task(task: GenerationTaskRequest, context=None):
     if target_vol_idx is None and task.target.section_index is not None:
         target_vol_idx = task.target.section_index
 
-    return agent_runners.run_volumes_planner(
+    return run_volumes_planner(
         task.novel_id,
         user_prompt=prompt or None,
         hint=task.hint,

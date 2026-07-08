@@ -8,8 +8,8 @@ agents.py 不應包含任何此類邏輯，一律委由此模組處理。
 import json
 import re
 
-from backend import db
-from backend.config import (
+from backend import persistence as db
+from backend.common.config import (
     MIN_FORESHADOWING_SEEDS,
     MIN_KEY_TURNING_POINTS,
     MIN_VOLUME_COUNT,
@@ -409,7 +409,7 @@ def suggest_segment_split(indexes: list, suggested_size: int = None) -> tuple:
     回傳 (first_half, second_half)，皆為排序後的章節索引列表。
     前半段長度取 min(suggested_size, len//2)，剩餘歸後半段。
     """
-    from backend.config import VOLUME_SKELETON_SEGMENT_SUGGESTED
+    from backend.common.config import VOLUME_SKELETON_SEGMENT_SUGGESTED
     if suggested_size is None:
         suggested_size = VOLUME_SKELETON_SEGMENT_SUGGESTED
     if not indexes:
@@ -427,8 +427,8 @@ def resolve_single_volume_index(task: "GenerationTaskRequest") -> int:
     優先順序：task.target.volume_index > task.target.selection[0] > DB 第一個缺失卷 > 1
     注意：不再自動批量遍歷所有缺失卷，卷的派發順序完全由總監決定。
     """
-    from backend import db
-    from backend.generation.task_schema import GenerationTaskRequest
+    from backend import persistence as db
+    from backend.generation.routing.schema import GenerationTaskRequest
     
     # 1. 直接指定 volume_index
     if task.target.volume_index is not None:

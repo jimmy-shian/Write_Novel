@@ -32,10 +32,14 @@ from fastapi.responses import StreamingResponse
 import os
 
 # Import route modules
-from backend.api import novels, settings, export, volume_routes, diagnostics_routes
+from backend.api.novels.routes import router as novels_router
+from backend.api.settings.routes import router as settings_router
+from backend.api.export.routes import router as export_router
+from backend.api.volumes.routes import router as volumes_router
+from backend.api.diagnostics.routes import router as diagnostics_router
 
 # Initialize database (must happen before routes)
-from backend import db
+from backend import persistence as db
 db.db_init()
 
 app = FastAPI(title="AI Novel Factory API", version="3.0.0")
@@ -50,11 +54,11 @@ app.add_middleware(
 )
 
 # Include route modules
-app.include_router(novels.router, prefix="/api")
-app.include_router(settings.router, prefix="/api")
-app.include_router(export.router, prefix="/api")
-app.include_router(volume_routes.router, prefix="/api")
-app.include_router(diagnostics_routes.router, prefix="/api")
+app.include_router(novels_router, prefix="/api")
+app.include_router(settings_router, prefix="/api")
+app.include_router(export_router, prefix="/api")
+app.include_router(volumes_router, prefix="/api")
+app.include_router(diagnostics_router, prefix="/api")
 
 # --- GENERATION TASK ENDPOINT (kept inline for now as core feature) ---
 @app.post("/api/generation-task")

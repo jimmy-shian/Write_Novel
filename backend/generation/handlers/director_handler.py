@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from .. import agent_runners
 from backend.services.diagnostics import detect_current_stage
 
-from ..task_schema import GenerationTaskRequest
+from backend.generation.routing.schema import GenerationTaskRequest
+from backend.agents.copilot.runner import run_copilot_chat
+from backend.agents.director.runner import run_director_decision, run_director_decision_help
 
 
 def run_director_task(task: GenerationTaskRequest, context=None):
@@ -13,7 +14,7 @@ def run_director_task(task: GenerationTaskRequest, context=None):
     
     if getattr(task, "is_copilot_chat", False) or getattr(task, "user_message", None) is not None:
         user_message = getattr(task, "user_message", None) or task.user_prompt or ""
-        return agent_runners.run_copilot_chat(
+        return run_copilot_chat(
             task.novel_id,
             user_message,
             stream=task.options.stream,
@@ -21,7 +22,7 @@ def run_director_task(task: GenerationTaskRequest, context=None):
         )
 
     if getattr(task, "help_action", None):
-        return agent_runners.run_director_decision_help(
+        return run_director_decision_help(
             task.novel_id,
             current_stage=getattr(task, "current_stage", None) or task.stage,
             help_action=getattr(task, "help_action", ""),
@@ -34,7 +35,7 @@ def run_director_task(task: GenerationTaskRequest, context=None):
     if not current_stage or current_stage == "evaluate":
         current_stage = detect_current_stage(task.novel_id)
         
-    return agent_runners.run_director_decision(
+    return run_director_decision(
         task.novel_id,
         current_stage=current_stage,
         user_prompt=prompt or None,

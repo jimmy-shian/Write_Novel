@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 from typing import List
 
-from .. import agent_runners
-from backend import db
+from backend import persistence as db
 
-from ..task_schema import GenerationTaskRequest
+from backend.generation.routing.schema import GenerationTaskRequest
+from backend.agents.volume_skeleton.runner import run_volume_skeleton_planner, run_volume_skeleton_segment, run_volume_skeleton_completion
+from backend.agents.incremental.runner import run_incremental_volume_skeleton
 
 
 def _resolve_single_volume_index(task: GenerationTaskRequest) -> int:
@@ -66,7 +67,7 @@ def run_volume_skeleton_task(task: GenerationTaskRequest, context=None):
     # --- patch 模式：增量修正單卷骨架 ---
     if task.task_type == "patch":
         volume_index = _resolve_single_volume_index(task)
-        return agent_runners.run_incremental_volume_skeleton(
+        return run_incremental_volume_skeleton(
             task.novel_id,
             volume_index,
             prompt,
@@ -76,7 +77,7 @@ def run_volume_skeleton_task(task: GenerationTaskRequest, context=None):
 
     # --- 一般生成模式：一次只處理一卷，卷號由總監指定 ---
     volume_index = _resolve_single_volume_index(task)
-    return agent_runners.run_volume_skeleton_planner(
+    return run_volume_skeleton_planner(
         task.novel_id,
         volume_index=volume_index,
         user_prompt=prompt or None,

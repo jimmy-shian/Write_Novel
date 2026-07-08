@@ -10,8 +10,8 @@ import time
 import traceback
 from typing import Any, Callable, Dict, Generator, Optional
 
-from backend.llm import call_llm_stream
-from backend.utils import StreamAccumulator
+from backend.common.llm import call_llm_stream
+from backend.common.utils import StreamAccumulator
 from backend.models.parsers import extract_json_block
 
 MAX_RETRIES = 10

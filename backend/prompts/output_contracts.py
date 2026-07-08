@@ -16,6 +16,57 @@ STRICT_JSON_KEY_CONTRACT = """## JSON 欄位命名合約
 - 不得新增 schema 未列出的頂層 key 或 alias key。"""
 
 
+JSON_OBJECT_OUTPUT_CONTRACT = """## JSON 物件輸出契約
+1. 只輸出一個格式完全合法、可被 Python `json.loads()` 直接解析的標準 JSON 物件。
+2. 必須使用 ```json ... ``` code block 包裹。
+3. 不得在 JSON block 之前或之後輸出寒暄、摘要、評語、修改說明或任何自然語言。
+4. 不得輸出多個 JSON 物件、半截 JSON、註解、尾逗號或 schema 未允許的頂層 key。
+__STRICT_JSON_KEY_CONTRACT__""".replace("__STRICT_JSON_KEY_CONTRACT__", STRICT_JSON_KEY_CONTRACT)
+
+
+COPILOT_FLOW_OUTPUT_CONTRACT = """## Co-Pilot Flow JSON 契約
+如果要呼叫 Agent，請在回應末尾輸出單一 JSON 物件：
+{
+  "action": "TRIGGER_AGENT",
+  "target": "worldview",
+  "hint": "簡短任務指示",
+  "agent_prompt": "直接交給下游 Agent 的完整任務說明，必須保留作者核心需求。",
+  "agent_context": "可附上作者素材、既有片段或總監整理的上下文。",
+  "user_intent_summary": "一到三句總結作者真正想達成的效果。",
+  "reason": "你選擇此 target 的理由。",
+  "volume_index": null,
+  "chapter_index": null
+}
+
+如果只是聊天或給建議，不呼叫 Agent，請在回應末尾輸出單一 JSON 物件：
+{
+  "action": "chat",
+  "target": null,
+  "hint": "",
+  "agent_prompt": "",
+  "agent_context": "",
+  "user_intent_summary": "",
+  "reason": "單純與作者討論，不執行生成。",
+  "volume_index": null,
+  "chapter_index": null
+}
+"""
+
+
+CONTEXT_REQUEST_JSON_CONTRACT = """## Context Request JSON 契約
+只有在資料真的不足以完成任務時才使用。此時請只輸出以下 JSON，讓系統與總監補齊資料後再生成：
+__STRICT_JSON_KEY_CONTRACT__
+```json
+{
+  "_needs_director_context": true,
+  "context_request": "請總監補充哪些資料，以及為什麼缺這些資料會阻斷本次生成。",
+  "missing_data": ["缺少的資料項目 1", "缺少的資料項目 2"],
+  "why_it_blocks_generation": "若直接生成會造成的人設、世界觀或流程風險。"
+}
+```
+""".replace("__STRICT_JSON_KEY_CONTRACT__", STRICT_JSON_KEY_CONTRACT)
+
+
 DIRECTOR_DECISION_KEY_CONTRACT = """## 總監 JSON 欄位命名合約
 系統只解析最後一個 JSON block，且只接受下列英文 snake_case key：
 - action
@@ -41,6 +92,8 @@ DIRECTOR_DECISION_KEY_CONTRACT = """## 總監 JSON 欄位命名合約
 DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
 工具呼叫必須使用 `action: "TOOL_CALL"`，並把工具名稱與參數放在 `tool_call` 內；不要把工具參數攤平成頂層欄位。
 每次 `TOOL_CALL` 最外層都必須填寫 `reason`，說明「為什麼要查這段、正在驗證哪個風險、工具結果將用來決定什麼」。後端會把此 reason 鎖進下一輪工具 follow-up context，避免總監跨輪忘記原本的工作。
+同一輪工具 follow-up context 內若已出現相同 `tool_signature`，代表同一工具同一參數已執行過；禁止再次輸出相同 TOOL_CALL，必須根據既有工具結果做流程決策，或改查尚未查過的不同範圍。
+絕對禁止只輸出工具參數物件，例如 `{ "stage_name": "...", "field_name": "..." }`。工具參數必須被包在下列完整 envelope 的 `tool_call.parameters` 之內。
 
 ```json
 {
@@ -75,7 +128,7 @@ DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
 }
 ```
 
-`expand_collapsed_json` 只用於世界觀 JSON 內長列表；參數只能使用：
+`expand_collapsed_json` 用於展開世界觀 JSON 內被收合的長列表，包括 `multi_act_structure`、`progressive_character_plan`、`foreshadowing_seeds`、`key_turning_points` 等；參數只能使用：
 ```json
 {
   "action": "TOOL_CALL",
@@ -83,12 +136,12 @@ DIRECTOR_TOOL_CALL_CONTRACT = """## 總監工具 JSON 契約
     "tool_name": "expand_collapsed_json",
     "parameters": {
       "stage_name": "worldview",
-      "field_name": "foreshadowing_seeds",
+      "field_name": "progressive_character_plan",
       "start_index": 1,
       "end_index": 15
     }
   },
-  "reason": "展開伏筆種子第 1-15 筆做內容審查。"
+  "reason": "展開角色漸進規劃第 1-15 筆做內容審查。"
 }
 ```
 
@@ -128,7 +181,8 @@ DIRECTOR_MANDATORY_INSPECTION_POLICY = """## 必須展開檢閱的資料
 - `volume_skeleton`: `chapters_outline`，針對當前審查卷分頁檢查完整章節骨架；不能只看第 1-15 筆就放行整卷，除非其餘筆已在工具結果或完整輸入中可見。
 - `writer` / `editor`: `chapter`，檢查本章完整正文。
 
-推薦分頁大小 10-15 筆。工具結果會回傳 `total_count` 與 `returned_count`；若 `returned_count < total_count`，而你尚未看過剩餘內容，就不能把整個區塊判為內容通過。"""
+推薦分頁大小 10-15 筆。若一次展開 1-50 且工具回傳成功，該欄位視為已完整展開，不得再重複展開同一範圍。
+工具結果會回傳 `total_count` 與 `returned_count`；若 `returned_count < total_count`，而你尚未看過剩餘內容，就不能把整個區塊判為內容通過。"""
 
 
 def format_json_schema_prompt(schema, *, label="this schema"):

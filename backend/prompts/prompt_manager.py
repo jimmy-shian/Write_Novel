@@ -45,10 +45,10 @@ def build_runtime_prompt(
 
 def save_prompt_override(template_name: str, key: str, value: str):
     """持久化 prompt override 到資料庫"""
-    from backend import db
+    from backend import persistence as db
     db.save_prompt_override(template_name, key, value)
 
 
 def get_prompt_override(template_name: str, key: str) -> Optional[str]:
-    from backend import db
+    from backend import persistence as db
     return db.get_prompt_override(template_name, key)

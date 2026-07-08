@@ -26,6 +26,21 @@ def _unwrap_single_nested_key(parsed: any) -> any:
                 return _unwrap_single_nested_key(val)
     return parsed
 
+
+def _parse_last_json_value(text: str):
+    decoder = json.JSONDecoder()
+    last_value = None
+    for match in re.finditer(r"[\{\[]", text or ""):
+        candidate = text[match.start():].lstrip()
+        try:
+            value, _ = decoder.raw_decode(candidate)
+            last_value = value
+        except json.JSONDecodeError:
+            repaired = _try_parse_json_with_repair(candidate)
+            if repaired is not None:
+                last_value = repaired
+    return last_value
+
 def extract_json_block(text: str) -> dict:
     """
     Robustly extracts a JSON object or array from response text.
@@ -40,37 +55,20 @@ def extract_json_block(text: str) -> dict:
 
     parsed_result = None
 
-    # 2. Match markdown codeblocks if they exist (can be array or dict)
-    json_match = re.search(r"```(?:json)?\s*([\{\[].*?)\s*```", cleaned_text, flags=re.DOTALL)
-    if json_match:
+    # 2. Match markdown codeblocks if they exist (can be array or dict).
+    # Director prompts promise that the last JSON block is authoritative; earlier
+    # blocks may be examples, tool calls, or tool results.
+    json_matches = list(re.finditer(r"```(?:json)?\s*([\{\[].*?)\s*```", cleaned_text, flags=re.DOTALL))
+    for json_match in reversed(json_matches):
         parsed_result = _try_parse_json_with_repair(json_match.group(1).strip())
+        if parsed_result is not None:
+            break
 
     if parsed_result is None:
-        # 3. Fallback: try finding first '{' or '[' and last '}' or ']'
-        first_brace = cleaned_text.find("{")
-        first_bracket = cleaned_text.find("[")
-        
-        # Determine the start based on whichever comes first (and exists)
-        start_idx = -1
-        if first_brace != -1 and first_bracket != -1:
-            start_idx = min(first_brace, first_bracket)
-        else:
-            start_idx = max(first_brace, first_bracket)
-            
-        if start_idx != -1:
-            # Check matching end character based on what we started with
-            if cleaned_text[start_idx] == "{":
-                end_idx = cleaned_text.rfind("}")
-            else:
-                end_idx = cleaned_text.rfind("]")
-                
-            if end_idx != -1 and end_idx >= start_idx:
-                json_str = cleaned_text[start_idx:end_idx + 1].strip()
-                parsed_result = _try_parse_json_with_repair(json_str)
-            else:
-                # Maybe it was truncated, try parsing from start to end of string with repair
-                json_str = cleaned_text[start_idx:].strip()
-                parsed_result = _try_parse_json_with_repair(json_str)
+        # 3. Fallback: scan for the last standalone JSON value. Using first "{"
+        # through last "}" breaks when Director output contains tool JSON plus
+        # tool-result JSON in one transcript.
+        parsed_result = _parse_last_json_value(cleaned_text)
 
     if parsed_result is None:
         # 4. Fallback: try standard raw loads

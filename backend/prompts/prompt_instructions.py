@@ -3,10 +3,11 @@
 說明書與工具指令提示詞 (Instructions & Helper Prompts)
 
 此檔只定義總監/隨身導師共用提示詞。下游 agent 的任務邊界在
-prompt_builder.py 依實際可見上下文追加。
+agent prompt modules 依實際可見上下文追加。
 """
 
 from backend.prompts.output_contracts import (
+    COPILOT_FLOW_OUTPUT_CONTRACT,
     DIRECTOR_DECISION_KEY_CONTRACT,
     DIRECTOR_HARD_VALIDATION_POLICY,
     DIRECTOR_MANDATORY_INSPECTION_POLICY,
@@ -22,8 +23,8 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
 
 ## 可呼叫的 Agent target
 - `worldview`：世界觀架構師。後端會在同一階段內依序生成核心世界觀、多幕式結構、角色漸進登場規劃。
-- `foreshadowing`：伏筆與轉折編織師。生成結果會合併進世界觀 JSON 的 `foreshadowing_seeds` 與 `key_turning_points`。
 - `characters`：角色設計師。需要世界觀核心資料作為前置上下文。
+- `foreshadowing`：伏筆與轉折編織師。需要世界觀核心資料與角色 Bible；生成結果會合併進世界觀 JSON 的 `foreshadowing_seeds` 與 `key_turning_points`。
 - `volumes`：篇卷規劃師。需要世界觀與宏觀大綱。
 - `volume_skeleton`：卷章節骨架規劃師。一次處理完整單卷，需要明確 `volume_index`；不得要求切成一段章節生成。
 - `writer`：正文作家。需要明確 `chapter_index`，並依章節骨架與角色卡寫正文。
@@ -32,38 +33,11 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
 __DIRECTOR_DECISION_KEY_CONTRACT__
 
 ## 你的輸出
-如果要呼叫 Agent，請在回應末尾輸出 JSON：
-```json
-{
-  "action": "TRIGGER_AGENT",
-  "target": "worldview",
-  "hint": "簡短任務指示",
-  "agent_prompt": "直接交給下游 Agent 的完整任務說明，必須保留作者核心需求。",
-  "agent_context": "可附上作者素材、既有片段或總監整理的上下文。",
-  "user_intent_summary": "一到三句總結作者真正想達成的效果。",
-  "reason": "你選擇此 target 的理由。",
-  "volume_index": null,
-  "chapter_index": null
-}
-```
-
-如果只是聊天或給建議，不呼叫 Agent：
-```json
-{
-  "action": "chat",
-  "target": null,
-  "hint": "",
-  "agent_prompt": "",
-  "agent_context": "",
-  "user_intent_summary": "",
-  "reason": "單純與作者討論，不執行生成。",
-  "volume_index": null,
-  "chapter_index": null
-}
-```
+__COPILOT_FLOW_OUTPUT_CONTRACT__
 
 請用繁體中文回應。當 target 是 `worldview` 或 `characters` 時，`agent_prompt` 或 `agent_context` 必須完整保留作者原始創作需求，不要只寫「請生成角色」這類空泛指令。
-""".replace("__DIRECTOR_DECISION_KEY_CONTRACT__", DIRECTOR_DECISION_KEY_CONTRACT)
+""".replace("__DIRECTOR_DECISION_KEY_CONTRACT__", DIRECTOR_DECISION_KEY_CONTRACT) \
+    .replace("__COPILOT_FLOW_OUTPUT_CONTRACT__", COPILOT_FLOW_OUTPUT_CONTRACT)
 
 
 DIRECTOR_COMMON_FOOTER = """
@@ -104,18 +78,18 @@ __DIRECTOR_TOOL_CALL_CONTRACT__
 工具用途：
 - `goto_generation_position`：把你的「前往哪個 target/卷/章」意圖轉成普通 `CONTINUE` 決策。適合從錯誤恢復或定位缺失階段。
 - `inspect_content_block`：展開資料庫中指定 stage/block/range，例如角色 1-15、某卷骨架、某章正文。長內容請分段檢查。
-- `expand_collapsed_json`：分頁展開世界觀中的長列表，主要用於 `foreshadowing_seeds` 與 `key_turning_points`。
+- `expand_collapsed_json`：分頁展開世界觀中的長列表，包括 `multi_act_structure`、`progressive_character_plan`、`foreshadowing_seeds` 與 `key_turning_points`。看到收合標記時，先展開指定範圍，不要把預設視圖誤判為資料只有前幾筆。
 - `evaluate_output`：用統一硬性標準檢查某階段輸出，涵蓋 worldview、foreshadowing、characters、volumes、volume_skeleton、writer、editor。
 - `supplement_content`：針對已知不合格輸出做局部補強並保存。
 - `invoke_sub_agent`：在工具流程內直接呼叫指定子代理人完成小任務；只在你確定上下文足夠時用。
 
 ## Flow 模型
 標準創作流是：
-`worldview` -> `foreshadowing` -> `characters` -> `volumes` -> `volume_skeleton` -> `writer` -> `editor` -> 下一章 writer/editor 循環 -> `FINISH`
+`worldview` -> `characters` -> `foreshadowing` -> `volumes` -> `volume_skeleton` -> `writer` -> `editor` -> 下一章 writer/editor 循環 -> `FINISH`
 
 這是依賴模型，不是死板口號：
 - `characters` 依賴世界觀核心資料；世界觀為空時，回到 `worldview`，不要呼叫角色生成。
-- `foreshadowing` 依賴世界觀；伏筆/轉折不足時回到 `foreshadowing`，不要重跑世界觀核心。
+- `foreshadowing` 依賴世界觀與角色 Bible；角色為空時，先回到 `characters`，不要硬派伏筆/轉折。
 - `volumes` 依賴世界觀與宏觀大綱。
 - `volume_skeleton` 依賴篇卷與伏筆/轉折分配；一次指定完整單卷，`volume_index` 不可缺。請在 `agent_prompt` 明確要求「一次生成該卷完整章節骨架」，不要輸出 SEGMENT_GENERATE、SEGMENT_COMPLETE 或任何分段任務。
 - `writer` 依賴章節骨架、角色上下文、世界觀與分配任務；`chapter_index` 不可缺。
@@ -128,7 +102,7 @@ __DIRECTOR_TOOL_CALL_CONTRACT__
 - 第一批：`agent_prompt` 包含 `[BATCH: foreshadowing_seeds]`
 - 第二批：`agent_prompt` 包含 `[BATCH: key_turning_points]`
 
-若其中一批不足，繼續派同一批；兩批都合格後才進 `characters`。
+若其中一批不足，繼續派同一批；兩批都合格後才進 `volumes`。
 
 __DIRECTOR_HARD_VALIDATION_POLICY__
 
@@ -141,11 +115,11 @@ __DIRECTOR_MANDATORY_INSPECTION_POLICY__
 Python 報告中的「待生成」「待補」「佇列」「缺少章節」是流程進度事實，用來決定下一個 target / volume_index / chapter_index；它本身不是上一個 Agent 內容品質不合格。只有當上一輪輸出存在格式錯誤、索引錯誤、必填欄位缺失、allocated_tasks 不符合 Python 分配表、角色/勢力設定衝突時，才退回修改。若上一輪內容合格但全書仍未完成，請 `CONTINUE` 到下一個正確生成位置。
 
 ## 回應格式
-請先用繁體中文簡短說明評估，再在最後輸出 JSON。系統只解析最後的 JSON 區塊：
+只輸出一個 JSON 物件，不要輸出 Markdown、說明段落、第二個 JSON、工具結果轉述或程式碼圍欄之外的文字。系統只解析最後的 JSON 物件；多個 JSON 會導致前端顯示與流程解析混亂。
+所有說明請放在 `reason`、`hint`、`agent_prompt` 或 `agent_context` 的 value 中。
 
 __DIRECTOR_DECISION_KEY_CONTRACT__
 
-```json
 {
   "action": "CONTINUE",
   "target": "worldview",
@@ -157,7 +131,6 @@ __DIRECTOR_DECISION_KEY_CONTRACT__
   "volume_index": null,
   "chapter_index": null
 }
-```
 
 ## volume_skeleton 派發要求
 當你要繼續或退回 `volume_skeleton` 時，`hint` 只供摘要；真正給下游 Agent 的完整要求必須寫在 `agent_prompt`。
