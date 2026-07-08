@@ -15,6 +15,9 @@ TABLES_TO_CLEAR = [
     "plot_chapters",
     "chapters",
     "chat_memory",
+    "director_reviews",
+    "chapter_memory",
+    "arc_summaries",
     "foreshadowing_blueprints",
     "pipeline_locks",
     "chapters_backup",
@@ -106,9 +109,11 @@ def confirm_clear(conn, selected_ids):
         print(f"    - {title} ({nid})")
 
     print("\n  將保留：novels 表（標題、類型、風格、一鍵提示等設定）")
+    print("  將重置：novels.worldview_patches（避免舊世界觀補丁污染下一輪）")
     print("  將刪除：worldbuilding, characters, volumes, plot_chapters,")
-    print("          chapters, chat_memory, foreshadowing_blueprints,")
-    print("          pipeline_locks, chapters_backup, last_agent_run")
+    print("          chapters, chat_memory, director_reviews, chapter_memory,")
+    print("          arc_summaries, foreshadowing_blueprints, pipeline_locks,")
+    print("          chapters_backup, last_agent_run")
 
     while True:
         try:
@@ -134,6 +139,11 @@ def clear_novel(conn, novel_id):
             print(f"    {table}: 刪除 {deleted} 筆")
         except Exception as e:
             print(f"    {table}: 跳過 ({e})")
+    try:
+        conn.execute("UPDATE novels SET worldview_patches = '[]' WHERE id = ?", (novel_id,))
+        print("    novels.worldview_patches: 重置為 []")
+    except Exception as e:
+        print(f"    novels.worldview_patches: 跳過 ({e})")
     conn.commit()
     print(f"  「{title}」清除完成，共刪除 {total} 筆。")
     return total
@@ -171,7 +181,7 @@ def main():
     conn.close()
 
     print(f"\n  全部完成！共清除 {len(selected_ids)} 本小說，刪除 {grand_total} 筆資料。")
-    print("  已保留：novels 表（小說基本設定）\n")
+    print("  已保留：novels 表（小說基本設定與一鍵生成提示）\n")
 
 
 if __name__ == "__main__":

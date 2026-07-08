@@ -1,4 +1,4 @@
-import { requestAPI } from '../api/api.js';
+import { assertCanonicalGenerationPayload, requestAPI } from '../api/api.js';
 import { parseGenerationTaskEventChunk, extractFinalGenerationEnvelope } from './generationSseHandler.js';
 
 function sleep(ms) {
@@ -13,6 +13,7 @@ async function runStreamingAttempt(endpoint, body, {
     onRetrying = null,
     onEvent = null
 } = {}) {
+    assertCanonicalGenerationPayload(endpoint, body);
     const controller = new AbortController();
     const signal = controller.signal;
     const CONNECT_TIMEOUT = 600000;
@@ -150,6 +151,7 @@ export async function submitGenerationTask(payload, callbacks = {}) {
             ...(payload?.options || {})
         }
     };
+    assertCanonicalGenerationPayload(endpoint, requestBody);
 
     if (!requestBody.options.stream) {
         return requestAPI(endpoint, 'POST', requestBody);

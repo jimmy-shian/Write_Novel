@@ -699,6 +699,18 @@ async function executeDirectorAction(decision, userPrompt) {
                     });
                     return;
                 }
+                if (!checkCharactersIsReady()) {
+                    updatePipelineStage('worldview', 'done');
+                    updatePipelineStage('characters', 'running');
+                    updateDirectorMessage('👥 角色設定尚未完成，先生成角色 Bible...');
+                    showToast('👥 伏筆與轉折需要角色 Bible，已先導向角色生成');
+                    await executePipelineStage('characters', userPrompt, {
+                        ...decision,
+                        target: 'characters',
+                        reason: '伏筆與轉折設計需要角色 Bible 提供 related_characters；目前角色資料為空或不可用。'
+                    });
+                    return;
+                }
                 updatePipelineStage('worldview', 'done');
                 updatePipelineStage('characters', 'done');
                 updatePipelineStage('foreshadowing', 'running');
@@ -1021,8 +1033,8 @@ function isDetailedPlotOutline(chapter) {
 }
 
 async function executeNextMissingStage(userPrompt) {
-    const hasWorldview = state.currentNovelData?.worldbuilding && state.currentNovelData.worldbuilding.trim().length > 50;
-    const hasCharacters = state.currentNovelData?.characters && state.currentNovelData.characters.characters?.length > 0;
+    const hasWorldview = checkWorldviewIsReady();
+    const hasCharacters = checkCharactersIsReady();
     
     // 剛性判斷是否已有伏筆與轉折
     let hasForeshadowing = false;
@@ -1053,8 +1065,18 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('worldview', 'running');
         updateDirectorMessage('🌍 開始生成世界觀設定...');
         await executePipelineStage('worldview', userPrompt);
+    } else if (!hasCharacters) {
+        updatePipelineStage('worldview', 'done');
+        updatePipelineStage('characters', 'running');
+        updateDirectorMessage('👥 開始生成角色設定...');
+        await executePipelineStage('characters', userPrompt, {
+            action: 'CONTINUE',
+            target: 'characters',
+            reason: '世界觀已完成，下一步先建立角色 Bible，供伏筆與轉折階段引用。'
+        });
     } else if (!hasForeshadowing) {
         updatePipelineStage('worldview', 'done');
+        updatePipelineStage('characters', 'done');
         updatePipelineStage('foreshadowing', 'running');
         updateDirectorMessage('🎭 開始編織全書伏筆與轉折...');
         const batchInstruction = buildForeshadowingBatchInstruction();
@@ -1064,20 +1086,17 @@ async function executeNextMissingStage(userPrompt) {
             hint: batchInstruction,
             agent_prompt: batchInstruction
         });
-    } else if (!hasCharacters) {
-        updatePipelineStage('worldview', 'done');
-        updatePipelineStage('foreshadowing', 'done');
-        updatePipelineStage('characters', 'running');
-        updateDirectorMessage('👥 開始生成角色設定...');
-        await executePipelineStage('characters', userPrompt);
-    } else if (!hasVolumes) {
+    } else {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('foreshadowing', 'done');
         updatePipelineStage('characters', 'done');
+    }
+
+    if (hasWorldview && hasCharacters && hasForeshadowing && !hasVolumes) {
         updatePipelineStage('volumes', 'running');
         updateDirectorMessage('📚 開始規劃篇卷結構...');
         await executePipelineStage('volumes', userPrompt);
-    } else if (!hasSkeletons) {
+    } else if (hasWorldview && hasCharacters && hasForeshadowing && hasVolumes && !hasSkeletons) {
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('foreshadowing', 'done');
         updatePipelineStage('characters', 'done');
@@ -1085,7 +1104,7 @@ async function executeNextMissingStage(userPrompt) {
         updatePipelineStage('volume_skeleton', 'running');
         updateDirectorMessage('🏗️ 開始生成全書卷骨架...');
         await executePipelineStage('volume_skeleton', userPrompt);
-    } else {
+    } else if (hasWorldview && hasCharacters && hasForeshadowing && hasVolumes && hasSkeletons) {
         // 所有前期準備完成，開始寫作
         updatePipelineStage('worldview', 'done');
         updatePipelineStage('foreshadowing', 'done');
@@ -3709,7 +3728,6 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
         
         // 骨架審查時自動帶入當前卷索引
         if (currentStage === 'volume_skeleton' && state.activeVolumeIndex) {
-            requestBody.volume_index = state.activeVolumeIndex;
             requestBody.target = {
                 ...(requestBody.target || {}),
                 volume_index: state.activeVolumeIndex
@@ -4197,6 +4215,51 @@ function checkWorldviewIsReady() {
         const value = parsed[key];
         return value !== null && value !== undefined && String(value).trim().length > 0;
     });
+}
+
+function checkCharactersIsReady() {
+    const raw = state.currentNovelData?.characters;
+    const rawText = state.currentNovelData?.characters_raw || '';
+    if (!raw && !rawText) return false;
+
+    const candidates = [];
+    if (raw.parsed_data && typeof raw.parsed_data === 'object') {
+        candidates.push(raw.parsed_data);
+    } else if (typeof raw === 'object') {
+        candidates.push(raw);
+    }
+    if (typeof raw === 'string') {
+        candidates.push(raw);
+    }
+    if (rawText) {
+        candidates.push(rawText);
+    }
+
+    for (const candidate of candidates) {
+        let parsed = candidate;
+        if (typeof candidate === 'string') {
+            if (!candidate.trim() || candidate.trim() === "{'characters': []}") continue;
+            try {
+                parsed = JSON.parse(candidate);
+            } catch (_) {
+                continue;
+            }
+        }
+        const list = Array.isArray(parsed)
+            ? parsed
+            : (Array.isArray(parsed?.characters) ? parsed.characters : []);
+        if (list.length > 0) return true;
+    }
+
+    if (typeof rawText === 'string' && rawText.trim().length > 80) {
+        try {
+            const parsed = JSON.parse(rawText);
+            return Array.isArray(parsed?.characters) && parsed.characters.length > 0;
+        } catch (_) {
+            return rawText.includes('characters');
+        }
+    }
+    return false;
 }
 
 async function savePipelinePrompt(prompt) {

@@ -18,7 +18,7 @@ export const state = {
     // 當前正在操作的大綱卷索引（用於 volume_skeleton 階段）
     activeVolumeIndex: 1,
     
-    // Director pipeline stage control（四階段漏斗流）
+    // Director pipeline stage control
     pipelineStages: ['worldview', 'characters', 'foreshadowing', 'volumes', 'volume_skeleton', 'writer', 'editor'],
     currentPipelineStageIndex: 0,
     

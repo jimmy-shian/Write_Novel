@@ -2,6 +2,43 @@
 // API WRAPPERS & STREAMING CORE
 // ==========================================
 
+const GENERATION_TASK_LEGACY_KEYS = [
+    'taskType',
+    'userPrompt',
+    'contextMode',
+    'frontendState',
+    'extraContext',
+    'summaryContext',
+    'conversationContext'
+];
+
+const GENERATION_TASK_REQUIRED_KEYS = [
+    'novel_id',
+    'task_type',
+    'stage',
+    'scope',
+    'target',
+    'context_mode',
+    'options',
+    'frontend_state',
+    'instruction',
+    'user_prompt'
+];
+
+export function assertCanonicalGenerationPayload(endpoint, body) {
+    if (!endpoint || !String(endpoint).includes('/api/generation-task') || !body || typeof body !== 'object') {
+        return;
+    }
+    const legacyKeys = GENERATION_TASK_LEGACY_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(body, key));
+    if (legacyKeys.length) {
+        throw new Error(`generation-task payload contains obsolete keys: ${legacyKeys.join(', ')}`);
+    }
+    const missingKeys = GENERATION_TASK_REQUIRED_KEYS.filter((key) => !Object.prototype.hasOwnProperty.call(body, key));
+    if (missingKeys.length) {
+        throw new Error(`generation-task payload missing canonical keys: ${missingKeys.join(', ')}`);
+    }
+}
+
 /**
  * 發送一般 API 請求（非串流）
  * @param {string} url - API 端點
@@ -11,6 +48,7 @@
  */
 export async function requestAPI(url, method = 'GET', body = null) {
     try {
+        assertCanonicalGenerationPayload(url, body);
         const options = {
             method,
             headers: { 'Content-Type': 'application/json' }
@@ -21,12 +59,15 @@ export async function requestAPI(url, method = 'GET', body = null) {
         const response = await fetch(url, options);
         
         if (!response.ok) {
-            const errData = await response.json().catch(() => ({ detail: response.statusText }));
-            throw new Error(errData.detail || response.statusText);
+            const errText = await response.text();
+            let errData = null;
+            try { errData = JSON.parse(errText); } catch (_) {}
+            const detail = errData?.detail || errData?.message || errData?.error || errText || response.statusText;
+            throw new Error(`${method} ${url} failed (${response.status}): ${detail}`);
         }
         return await response.json();
     } catch (e) {
-        console.error(`API Error: ${e.message}`);
+        console.error(`API Error [${method} ${url}]: ${e.message}`);
         throw e;
     }
 }
@@ -52,6 +93,7 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
             stream: true
         };
     }
+    assertCanonicalGenerationPayload(endpoint, body);
 
     // Trigger start callback
     if (typeof window.onStreamAPIStart === 'function') {
@@ -159,7 +201,13 @@ export async function streamAPI(endpoint, body, onThinking, onContent, onError, 
                         } else if (parsed.type === 'error') {
                             localHadError = true;
                             streamHadFinalError = true;
-                            if (typeof onError === 'function') onError(parsed.message, false);
+                            const msg = parsed.message
+                                || parsed.error
+                                || parsed.detail
+                                || parsed.result?.error
+                                || parsed.result?.message
+                                || '生成失敗';
+                            if (typeof onError === 'function') onError(msg, false);
                         } else if (parsed.type === 'retrying') {
                             if (typeof onRetrying === 'function') onRetrying(parsed.message);
                         } else if (parsed.type === 'partial_state' || parsed.type === 'status' || parsed.type === 'need_characters') {

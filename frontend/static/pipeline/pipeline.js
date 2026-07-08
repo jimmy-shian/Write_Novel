@@ -358,6 +358,11 @@ function ensureForeshadowingBatchPrompt(prompt, decision = null) {
     ].join('\n\n').trim();
 }
 
+function extractForeshadowingBatchTarget(prompt = '') {
+    const match = String(prompt || '').match(/\[BATCH:\s*(foreshadowing_seeds|key_turning_points)\]/i);
+    return match ? match[1].toLowerCase() : null;
+}
+
 // 執行單一管道階段 → 完成後詢問總監 → 根據總監決策繼續
 export async function executePipelineStage(stage, userPrompt, decision = null) {
     // Confirmation gate for volumes stage in generate (non-patch) mode
@@ -409,12 +414,14 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
             case 'foreshadowing':
                 {
                     const batchPrompt = ensureForeshadowingBatchPrompt(directorDrivenPrompt, decision);
+                    const targetField = extractForeshadowingBatchTarget(batchPrompt);
                     body = buildPipelineTaskPayload({
                         stage: 'foreshadowing',
                         taskType: decision?.regenerate ? 'regenerate' : 'generate',
                         instruction: batchPrompt,
                         userPrompt: batchPrompt,
-                        hint: batchPrompt
+                        hint: batchPrompt,
+                        extra: targetField ? { target_field: targetField } : {}
                     });
                 }
                 targetTextarea = el.editorWorldview;

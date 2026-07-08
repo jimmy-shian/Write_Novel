@@ -472,6 +472,87 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     let chapter_range = null;
     let selection = null;
     let task_type = null;
+
+    const applyJsonCommand = (jsonCmd) => {
+        action = (jsonCmd.action || '').toUpperCase() || action;
+        target = jsonCmd.target || target;
+        hint = jsonCmd.hint || jsonCmd.reason || hint;
+        reason = jsonCmd.reason || reason;
+        agent_prompt = jsonCmd.agent_prompt || agent_prompt;
+        agent_context = jsonCmd.agent_context || agent_context;
+        user_intent_summary = jsonCmd.user_intent_summary || user_intent_summary;
+        if (jsonCmd.volume_index !== undefined && jsonCmd.volume_index !== null) {
+            volume_index = parseInt(jsonCmd.volume_index);
+        }
+        if (jsonCmd.chapter_index !== undefined && jsonCmd.chapter_index !== null) {
+            chapter_index = parseInt(jsonCmd.chapter_index);
+        }
+        if (jsonCmd.insert_after_index !== undefined && jsonCmd.insert_after_index !== null) {
+            insert_after_index = parseInt(jsonCmd.insert_after_index);
+        }
+        if (Array.isArray(jsonCmd.chapter_range) && jsonCmd.chapter_range.length === 2) {
+            chapter_range = [parseInt(jsonCmd.chapter_range[0]), parseInt(jsonCmd.chapter_range[1])];
+        }
+        if (Array.isArray(jsonCmd.selection)) {
+            selection = jsonCmd.selection
+                .map(item => {
+                    if (item && typeof item === 'object') {
+                        const ci = parseInt(item.chapter_index ?? item.chapter ?? item.index);
+                        return Number.isFinite(ci) ? { chapter_index: ci } : null;
+                    }
+                    const v = parseInt(item);
+                    return Number.isFinite(v) ? { chapter_index: v } : null;
+                })
+                .filter(Boolean);
+        }
+        if (jsonCmd.task_type) {
+            task_type = String(jsonCmd.task_type);
+        }
+    };
+
+    const parseLastStandaloneJsonObject = (text) => {
+        const source = String(text || '');
+        const starts = [];
+        for (let i = 0; i < source.length; i += 1) {
+            if (source[i] === '{') starts.push(i);
+        }
+        for (let s = starts.length - 1; s >= 0; s -= 1) {
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+            for (let i = starts[s]; i < source.length; i += 1) {
+                const ch = source[i];
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (ch === '\\') {
+                        escaped = true;
+                    } else if (ch === '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (ch === '"') {
+                    inString = true;
+                } else if (ch === '{') {
+                    depth += 1;
+                } else if (ch === '}') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        try {
+                            const parsed = JSON.parse(source.slice(starts[s], i + 1));
+                            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                                return parsed;
+                            }
+                        } catch (_) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    };
     
     // 1) 嘗試解析 JSON 區塊（新格式：```json { "action": "...", ... } 或是 \\\json ... ）
     // 取「最後」一個 JSON 區塊：工具追問或後端自癒可能在總監原始輸出之後
@@ -480,43 +561,7 @@ export function parseDirectorDecisionText(responseText, currentStage) {
     const jsonBlockMatch = jsonBlockMatches.length ? jsonBlockMatches[jsonBlockMatches.length - 1] : null;
     if (jsonBlockMatch) {
         try {
-            const jsonCmd = JSON.parse(jsonBlockMatch[1]);
-            action = (jsonCmd.action || '').toUpperCase();
-            target = jsonCmd.target || null;
-            hint = jsonCmd.hint || jsonCmd.reason || '';
-            reason = jsonCmd.reason || '';
-            agent_prompt = jsonCmd.agent_prompt || '';
-            agent_context = jsonCmd.agent_context || '';
-            user_intent_summary = jsonCmd.user_intent_summary || '';
-
-            if (jsonCmd.volume_index !== undefined && jsonCmd.volume_index !== null) {
-                volume_index = parseInt(jsonCmd.volume_index);
-            }
-            if (jsonCmd.chapter_index !== undefined && jsonCmd.chapter_index !== null) {
-                chapter_index = parseInt(jsonCmd.chapter_index);
-            }
-            if (jsonCmd.insert_after_index !== undefined && jsonCmd.insert_after_index !== null) {
-                insert_after_index = parseInt(jsonCmd.insert_after_index);
-            }
-            // 分段調度專屬欄位
-            if (Array.isArray(jsonCmd.chapter_range) && jsonCmd.chapter_range.length === 2) {
-                chapter_range = [parseInt(jsonCmd.chapter_range[0]), parseInt(jsonCmd.chapter_range[1])];
-            }
-            if (Array.isArray(jsonCmd.selection)) {
-                selection = jsonCmd.selection
-                    .map(item => {
-                        if (item && typeof item === 'object') {
-                            const ci = parseInt(item.chapter_index ?? item.chapter ?? item.index);
-                            return Number.isFinite(ci) ? { chapter_index: ci } : null;
-                        }
-                        const v = parseInt(item);
-                        return Number.isFinite(v) ? { chapter_index: v } : null;
-                    })
-                    .filter(Boolean);
-            }
-            if (jsonCmd.task_type) {
-                task_type = String(jsonCmd.task_type);
-            }
+            applyJsonCommand(JSON.parse(jsonBlockMatch[1]));
         } catch (e) {
             console.warn('Failed to parse Director JSON command:', e);
         }
@@ -546,33 +591,11 @@ export function parseDirectorDecisionText(responseText, currentStage) {
         if (insMatch) insert_after_index = parseInt(insMatch[1]);
     }
     
-    // 2.5) 額外解析：如果 AI 直接輸出原始 JSON 物件，嘗試從整體字串中解析第一個 JSON 對象
+    // 2.5) 額外解析：如果 AI 直接輸出原始 JSON 物件，從後往前取最後一個完整 JSON 對象
     if (!action) {
-        const firstBrace = responseText.indexOf('{');
-        const lastBrace = responseText.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-            const rawJsonCandidate = responseText.slice(firstBrace, lastBrace + 1);
-            try {
-                const rawJson = JSON.parse(rawJsonCandidate);
-                action = (rawJson.action || '').toUpperCase() || action;
-                target = rawJson.target || target;
-                hint = rawJson.hint || rawJson.reason || hint;
-                reason = rawJson.reason || reason;
-                agent_prompt = rawJson.agent_prompt || agent_prompt;
-                agent_context = rawJson.agent_context || agent_context;
-                user_intent_summary = rawJson.user_intent_summary || user_intent_summary;
-                if (rawJson.volume_index !== undefined && rawJson.volume_index !== null) {
-                    volume_index = parseInt(rawJson.volume_index);
-                }
-                if (rawJson.chapter_index !== undefined && rawJson.chapter_index !== null) {
-                    chapter_index = parseInt(rawJson.chapter_index);
-                }
-                if (rawJson.insert_after_index !== undefined && rawJson.insert_after_index !== null) {
-                    insert_after_index = parseInt(rawJson.insert_after_index);
-                }
-            } catch (e) {
-                // 无效 JSON，不处理
-            }
+        const rawJson = parseLastStandaloneJsonObject(responseText);
+        if (rawJson) {
+            applyJsonCommand(rawJson);
         }
     }
     
@@ -604,9 +627,9 @@ export function parseDirectorDecisionText(responseText, currentStage) {
             const normalizedStage = (currentStage || '').toString().toLowerCase();
             const nextByStage = {
                 init: 'worldview',
-                worldview: 'foreshadowing',
-                foreshadowing: 'characters',
-                characters: 'volumes',
+                worldview: 'characters',
+                characters: 'foreshadowing',
+                foreshadowing: 'volumes',
                 volumes: 'volume_skeleton',
                 plot: 'volume_skeleton',
                 volume_skeleton: 'writer',
