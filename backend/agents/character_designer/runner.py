@@ -111,6 +111,96 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
         except Exception as e:
             print(f"[WARN] Failed to parse existing characters: {e}")
 
+    # 💡 自動增量掃描：偵測大綱中存在但角色 Bible 中缺失的命名角色，進行一對一補卡循環
+    if mode in ("expand", "generate") and existing_char_data:
+        try:
+            from backend.agents.chapter_writer.runner import _character_alias_set, _active_character_names_from_outline, _is_generic_active_character_name
+            from backend.models.parsers import extract_json_block
+
+            bible_aliases = set()
+            if existing_chars_json:
+                bible_aliases = _character_alias_set(existing_chars_json)
+
+            vols = db.get_volumes(novel_id)
+            missing_characters_info = []
+            seen_missing_names = set()
+
+            if vols:
+                for v in vols:
+                    skeleton_list = v.get("chapters_outline") or []
+                    if isinstance(skeleton_list, str):
+                        try:
+                            skeleton_list = json.loads(skeleton_list)
+                        except:
+                            skeleton_list = []
+                    if isinstance(skeleton_list, list):
+                        for ch in skeleton_list:
+                            for name in _active_character_names_from_outline(ch):
+                                if not _is_generic_active_character_name(name):
+                                    if name not in bible_aliases and not any(alias and (alias in name or name in alias) for alias in bible_aliases):
+                                        if name not in seen_missing_names:
+                                            seen_missing_names.add(name)
+                                            missing_characters_info.append({
+                                                "name": name,
+                                                "volume_index": v.get("volume_index"),
+                                                "chapter_outline": ch
+                                            })
+
+            if missing_characters_info:
+                print(f"[CHARACTER DESIGNER] Auto-expanding missing characters: {[item['name'] for item in missing_characters_info]}")
+                yield "data: " + json.dumps({"type": "status", "message": f"偵測到未建卡命名角色：{', '.join(seen_missing_names)}，啟動自動增量補卡機制..."}, ensure_ascii=False) + "\n\n"
+
+                for item in missing_characters_info:
+                    char_name = item["name"]
+                    vol_idx = item["volume_index"]
+                    ch_outline = item["chapter_outline"]
+
+                    latest_char_data = db.get_latest_characters(novel_id)
+                    latest_chars_json = latest_char_data["json_data"] if latest_char_data else '{"characters": []}'
+
+                    yield "data: " + json.dumps({"type": "status", "message": f"正在為角色【{char_name}】設計角色卡 (參考第 {vol_idx} 卷第 {ch_outline.get('chapter_index')} 章)..."}, ensure_ascii=False) + "\n\n"
+
+                    messages = build_missing_character_designer_messages(worldview_text, latest_chars_json, char_name, ch_outline)
+
+                    stream_missing = call_llm_stream("character", messages, stream=stream, force_json=force_json)
+                    acc_missing = StreamAccumulator(stream_missing)
+                    for chunk in acc_missing:
+                        yield chunk
+                    full_text_missing = acc_missing.content
+
+                    if full_text_missing.strip():
+                        try:
+                            new_char_card = extract_json_block(full_text_missing)
+                            if isinstance(new_char_card, dict) and "characters" in new_char_card:
+                                new_chars_list = new_char_card["characters"]
+                            elif isinstance(new_char_card, dict):
+                                new_chars_list = [new_char_card]
+                            elif isinstance(new_char_card, list):
+                                new_chars_list = new_char_card
+                            else:
+                                new_chars_list = []
+
+                            latest_parsed = json.loads(latest_chars_json)
+                            existing_chars = latest_parsed.get("characters", []) if isinstance(latest_parsed, dict) else (latest_parsed if isinstance(latest_parsed, list) else [])
+
+                            merged_chars = existing_chars + new_chars_list
+                            merged_json = {"characters": merged_chars}
+                            full_merged_text = json.dumps(merged_json, ensure_ascii=False, indent=2)
+
+                            db.save_characters(novel_id, full_merged_text)
+                            print(f"[CHARACTER DESIGNER] Successfully expanded missing character: {char_name}")
+                        except Exception as e:
+                            print(f"[WARN] Failed to merge character {char_name}: {e}")
+                            yield "data: " + json.dumps({"type": "error", "message": f"角色【{char_name}】補卡合併失敗: {e}"}, ensure_ascii=False) + "\n\n"
+
+                yield "data: " + json.dumps({"type": "status", "message": f"所有缺失角色補卡完成！已成功補完：{', '.join(seen_missing_names)}。"}, ensure_ascii=False) + "\n\n"
+                db.save_chat_message(novel_id, "assistant", f"已成功為本卷缺少的角色補齊角色卡：{', '.join(seen_missing_names)}，角色庫已同步更新。", message_type="pipeline")
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+        except Exception as e:
+            print(f"[WARN] Auto-expand missing characters scan/loop failed: {e}")
+            traceback.print_exc()
+
     messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index)
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")

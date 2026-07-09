@@ -450,6 +450,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
     title = novel.get("title", "未命名")
     genre = novel.get("genre", "未分類")
     style = novel.get("style", "預設")
+    vols = db.get_volumes(novel_id)
     
     # 1. 創作需求與世界觀
     wb = db.get_latest_worldbuilding(novel_id)

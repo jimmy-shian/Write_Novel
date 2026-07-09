@@ -432,9 +432,12 @@ def _relationship_summary(char):
 
 def build_relevant_character_context(characters_data, query_text="", force_full_names=None, include_all_full=False, max_full_characters=12, max_character_tokens=8000):
     """Select full character cards only for characters named in the task context."""
+    if include_all_full:
+        max_full_characters = max(max_full_characters, 100)
     chars = _normalize_characters_list(characters_data)
     if not chars:
         return characters_data or "尚無角色設定"
+
 
     force_full_names = {str(name).strip() for name in (force_full_names or []) if str(name).strip()}
     matched = []
@@ -492,7 +495,8 @@ def build_relevant_character_context_text(characters_data, query_text="", force_
         include_all_full=include_all_full,
     )
     # Apply structural JSON compaction to prevent breaking JSON by simple string truncation
-    compacted_selected = compact_json_data(selected, max_list_items=10)
+    max_list_items = 100 if include_all_full else 10
+    compacted_selected = compact_json_data(selected, max_list_items=max_list_items)
     return compact_context_text(_json_text(compacted_selected), limit, "任務相關角色上下文")
 
 
