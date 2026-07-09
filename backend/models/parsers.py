@@ -64,15 +64,26 @@ def extract_json_block(text: str) -> dict:
         if parsed_result is not None:
             break
 
+    # 3. Fallback: try standard raw load of the entire cleaned text first
     if parsed_result is None:
-        # 3. Fallback: scan for the last standalone JSON value. Using first "{"
-        # through last "}" breaks when Director output contains tool JSON plus
-        # tool-result JSON in one transcript.
-        parsed_result = _parse_last_json_value(cleaned_text)
-
-    if parsed_result is None:
-        # 4. Fallback: try standard raw loads
         parsed_result = _try_parse_json_with_repair(cleaned_text)
+
+    # 4. Fallback: try extracting from first '{'/'[' to last '}'/']'
+    if parsed_result is None:
+        first_brace = cleaned_text.find("{")
+        last_brace = cleaned_text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            parsed_result = _try_parse_json_with_repair(cleaned_text[first_brace:last_brace + 1].strip())
+            
+        if parsed_result is None:
+            first_bracket = cleaned_text.find("[")
+            last_bracket = cleaned_text.rfind("]")
+            if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+                parsed_result = _try_parse_json_with_repair(cleaned_text[first_bracket:last_bracket + 1].strip())
+
+    # 5. Fallback: scan for the last standalone JSON value (e.g. for mixed content with tools/transcripts)
+    if parsed_result is None:
+        parsed_result = _parse_last_json_value(cleaned_text)
 
     if parsed_result is not None:
         return _unwrap_single_nested_key(parsed_result)

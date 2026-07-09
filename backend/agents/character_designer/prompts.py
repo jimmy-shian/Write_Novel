@@ -39,6 +39,7 @@ from backend.prompts.output_contracts import (
     DIRECTOR_MANDATORY_INSPECTION_POLICY,
     DIRECTOR_TOOL_CALL_CONTRACT,
     STRICT_JSON_KEY_CONTRACT,
+    JSON_OBJECT_OUTPUT_CONTRACT,
 )
 from backend.prompts.json_output import format_json_schema_prompt, get_json_schema_prompt_snippet
 
@@ -65,7 +66,7 @@ from backend.prompts.common.context import *
 def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index):
     """角色設計師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("character")
-    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n"
+    system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Designer / 角色設計師",
         "- 經後端挑選的世界觀背景，必須包含或摘要呈現 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：通常只有世界觀，沒有現有角色；這是建立角色聖經與關係網的第一次定稿。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
@@ -181,6 +182,7 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
 {schema_snippet}
 2. name 欄位必須是角色的具體姓名【{new_char_name}】，絕對禁止填寫無關名稱。
 3. 角色的人設、動機 (motivation)、致命缺陷 (fatal_flaw)、發聲風格 (speech_style) 必須與章節大綱的情境完全契合，且不可與現有的其他角色衝突。
+4. {JSON_OBJECT_OUTPUT_CONTRACT}
 """
     system_prompt += build_agent_context_contract(
         "Missing Character Designer / 缺失角色補卡師",

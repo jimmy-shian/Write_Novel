@@ -97,7 +97,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     worldview_text = select_worldview_context(wb["content"], current_stage="characters") if wb else "尚無世界觀設定"
     
     existing_char_data = db.get_latest_characters(novel_id)
-    existing_chars_json = existing_char_data["json_data"] if existing_char_data and mode != "generate" else "{'characters': []}"
+    existing_chars_json = existing_char_data["json_data"] if existing_char_data else '{"characters": []}'
     
     # 💡 安全防護：如果角色聖經已存在，只做增量/修補，不允許全量重跑覆蓋
     if mode == "generate" and existing_char_data:
@@ -108,8 +108,8 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
                 mode = "expand"
                 if not hint:
                     hint = "請在現有角色基礎上進行補充或優化設定，不要刪除或重置既有角色。"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse existing characters: {e}")
 
     messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index)
     
