@@ -340,7 +340,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
             for line in str(content).split("\n"):
                 _safe_debug_print(line)
     print("\n" + "=" * 80)
-    print("【API 請求即將發送】", agent_name, " | ", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+    print("【API 請求即將發送】", agent_name, " | Model:", actual_model_string, " | ", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     print("=" * 80 + "\n")
     # ==========================================
 

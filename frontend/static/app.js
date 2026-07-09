@@ -3484,9 +3484,9 @@ function startAgentStream(endpoint, body, onContentTarget, onDoneCallback, optio
             window.updateAgentStreamOutput(tabName, delta, 'thinking');
             // 智慧型滾動 ai-thinking-text（支援用戶回捲後不強行滾動）
             if (typeof window.smartScrollToBottom === 'function') {
-                window.smartScrollToBottom(el.aiThinkingText, false);
+                window.smartScrollToBottom(el.aiThinkingStream, false);
             } else {
-                el.aiThinkingText.scrollTop = el.aiThinkingText.scrollHeight;
+                el.aiThinkingStream.scrollTop = el.aiThinkingStream.scrollHeight;
             }
         },
         // onContent
@@ -5356,6 +5356,31 @@ async function reevaluateAfterRegression(modifiedStage) {
     }
 }
 
+window.smartScrollToBottom = function(container, force = false) {
+    if (!container) return;
+    
+    if (container._autoScrollEnabled === undefined) {
+        container._autoScrollEnabled = true;
+        container._isProgrammaticScroll = false;
+        
+        container.addEventListener('scroll', () => {
+            if (container._isProgrammaticScroll) {
+                container._isProgrammaticScroll = false;
+                return;
+            }
+            // Check if user scrolled up (more than 50px from bottom)
+            const threshold = 50;
+            const isAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= threshold;
+            container._autoScrollEnabled = isAtBottom;
+        });
+    }
+    
+    if (force || container._autoScrollEnabled) {
+        container._isProgrammaticScroll = true;
+        container.scrollTop = container.scrollHeight;
+    }
+};
+
 /**
  * 處理回頭修改的指令
  * @param {string} targetStage - 要回頭修改的階段
@@ -5794,24 +5819,7 @@ window.showCustomPrompt = function(msg, defaultValue = '', title = '輸入內容
     return window.showCustomDialog({ title, message: msg, type: 'prompt', defaultValue });
 };
 
-// smart scroll helper to support scroll-back with requestAnimationFrame throttling
-const scrollPending = new Set();
-window.smartScrollToBottom = function(container, force = false) {
-    if (!container) return;
-    if (force) {
-        container.scrollTop = container.scrollHeight;
-        return;
-    }
-    if (scrollPending.has(container)) return;
-    scrollPending.add(container);
-    requestAnimationFrame(() => {
-        const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 120;
-        if (isNearBottom) {
-            container.scrollTop = container.scrollHeight;
-        }
-        scrollPending.delete(container);
-    });
-};
+
 
 function getAgentDetails(endpointOrStage, body = null) {
     const stage = body?.stage || endpointOrStage || '';
@@ -5912,9 +5920,9 @@ window.updateAgentStreamOutput = function (tabName, delta, type = 'content') {
                 thinkingText.textContent += delta;
             }
             if (typeof window.smartScrollToBottom === 'function') {
-                window.smartScrollToBottom(thinkingText, false);
+                window.smartScrollToBottom(thinkingStream, false);
             } else {
-                thinkingText.scrollTop = thinkingText.scrollHeight;
+                thinkingStream.scrollTop = thinkingStream.scrollHeight;
             }
         }
     } else {
