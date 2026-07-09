@@ -26,9 +26,9 @@ SCHEMA_STAGE_MAP = {
 
 
 CRITERIA_STAGE_MAP = {
-    "worldview_core": "worldview",
-    "multi_act_structure": "worldview",
-    "progressive_character_plan": "worldview",
+    "worldview_core": "worldview_core",
+    "multi_act_structure": "multi_act_structure",
+    "progressive_character_plan": "progressive_character_plan",
     "skeleton": "volume_skeleton",
     "character": "characters",
 }

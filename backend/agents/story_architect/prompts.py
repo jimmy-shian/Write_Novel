@@ -5,6 +5,7 @@ Prompt Builder (隔離的提示詞構建與拼接層)
 """
 
 import json
+import re
 from backend.schemas import agent_json
 from backend import persistence as db
 from backend.schemas.agent_json import CHARACTER_BASIC_FIELDS
@@ -40,6 +41,7 @@ from backend.prompts.output_contracts import (
     DIRECTOR_TOOL_CALL_CONTRACT,
     STRICT_JSON_KEY_CONTRACT,
     format_json_schema_prompt,
+    JSON_OBJECT_OUTPUT_CONTRACT,
 )
 from backend.prompts.json_output import get_json_schema_prompt_snippet
 
@@ -63,10 +65,80 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
+def parse_quantity_constraints(prompt_text):
+    """
+    從使用者提示詞中辨識是否有特定項目清單數量限制要求。
+    """
+    constraints = {
+        "min_volumes": 10,
+        "max_volumes": 20,
+        "min_chapters": 40,
+        "max_chapters": 50,
+        "min_acts": 15,
+        "max_acts": 24,
+        "rec_acts": "15-20",
+        "min_waves": 18,
+        "max_waves": 24
+    }
+    if not prompt_text:
+        return constraints
+        
+    text = str(prompt_text)
+    match_50_plus = re.search(r'(?:5[0-9]|6[0-9]|7[0-9]|8[0-9]|9[0-9]|[1-9][0-9]{2,})(?:\+|以上|個|波|幕|卷|章|項|條)', text)
+    if match_50_plus or "50+" in text:
+        num = 50
+        num_match = re.search(r'(\d+)', text)
+        if num_match:
+            try:
+                num = int(num_match.group(1))
+            except ValueError:
+                num = 50
+        
+        if "幕" in text or "act" in text.lower():
+            constraints["min_acts"] = num
+            constraints["max_acts"] = int(num * 1.5)
+            constraints["rec_acts"] = f"{num}-{int(num * 1.2)}"
+        elif "波" in text or "wave" in text.lower():
+            constraints["min_waves"] = num
+            constraints["max_waves"] = int(num * 1.5)
+        elif "卷" in text or "volume" in text.lower():
+            constraints["min_volumes"] = num
+            constraints["max_volumes"] = int(num * 1.5)
+        elif "章" in text or "chapter" in text.lower():
+            constraints["min_chapters"] = num
+            constraints["max_chapters"] = int(num * 1.5)
+        else:
+            constraints["min_acts"] = num
+            constraints["max_acts"] = int(num * 1.5)
+            constraints["rec_acts"] = f"{num}-{int(num * 1.2)}"
+            constraints["min_waves"] = num
+            constraints["max_waves"] = int(num * 1.5)
+            constraints["min_volumes"] = num
+            constraints["max_volumes"] = int(num * 1.5)
+            constraints["min_chapters"] = num
+            constraints["max_chapters"] = int(num * 1.5)
+            
+    return constraints
+
+def format_prompt_constraints(prompt_template, c):
+    """將 placeholders 替換為 parsed 的數量限制"""
+    return (prompt_template
+            .replace("__MIN_VOLUMES__", str(c["min_volumes"]))
+            .replace("__MAX_VOLUMES__", str(c["max_volumes"]))
+            .replace("__MIN_CHAPTERS__", str(c["min_chapters"]))
+            .replace("__MAX_CHAPTERS__", str(c["max_chapters"]))
+            .replace("__MIN_ACTS__", str(c["min_acts"]))
+            .replace("__MAX_ACTS__", str(c["max_acts"]))
+            .replace("__REC_ACTS__", str(c["rec_acts"]))
+            .replace("__MIN_WAVES__", str(c["min_waves"]))
+            .replace("__MAX_WAVES__", str(c["max_waves"])))
+
 def build_story_architect_messages(genre, style, user_prompt):
     """世界觀架構師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("worldview")
-    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{STORY_ARCHITECT_GUIDELINES}\n"
+    c = parse_quantity_constraints(user_prompt)
+    guidelines_fmt = format_prompt_constraints(STORY_ARCHITECT_GUIDELINES, c)
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect / 世界觀架構師",
         "- 類型、風格基調、作者原始創作需求。\n- 若是重跑或局部調整，會在使用者內容中明確提供指定要求。",
@@ -89,9 +161,11 @@ def build_story_architect_messages(genre, style, user_prompt):
 
 def build_worldview_core_messages(genre, style, user_prompt):
     """僅生成世界觀核心設定（theme, main_conflict, worldview, macro_outline）的提示詞"""
-    from backend.prompts.prompt_main import STORY_ARCHITECT_PROMPT, STORY_ARCHITECT_GUIDELINES
+    from backend.prompts.prompt_main import STORY_ARCHITECT_PROMPT, WORLDVIEW_CORE_GUIDELINES
     schema_snippet = get_json_schema_prompt_snippet("worldview_core")
-    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{STORY_ARCHITECT_GUIDELINES}\n"
+    c = parse_quantity_constraints(user_prompt)
+    guidelines_fmt = format_prompt_constraints(WORLDVIEW_CORE_GUIDELINES, c)
+    system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect Core / 核心世界觀架構師",
         "- 類型、風格基調、作者原始創作需求。\n- 本階段尚未有多幕結構、角色策略、角色 Bible、篇卷與正文。",
@@ -115,7 +189,10 @@ def build_multi_act_structure_messages(worldview_core_json, user_prompt):
     """基於核心世界觀，獨立生成多幕式起伏結構的提示詞"""
     from backend.prompts.prompt_main import MULTI_ACT_STRUCTURE_PROMPT, MULTI_ACT_STRUCTURE_GUIDELINES
     schema_snippet = get_json_schema_prompt_snippet("multi_act_structure")
-    system_prompt = f"{MULTI_ACT_STRUCTURE_PROMPT}\n\n{schema_snippet}\n\n{MULTI_ACT_STRUCTURE_GUIDELINES}\n"
+    c = parse_quantity_constraints(user_prompt)
+    prompt_fmt = format_prompt_constraints(MULTI_ACT_STRUCTURE_PROMPT, c)
+    guidelines_fmt = format_prompt_constraints(MULTI_ACT_STRUCTURE_GUIDELINES, c)
+    system_prompt = f"{prompt_fmt}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Drama Structure Specialist / 多幕式結構師",
         "- 已生成的核心世界觀 JSON。\n- 作者原始要求只作為風格與方向參考。",
@@ -147,13 +224,22 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
         parsed_acts = None
     acts_payload = parsed_acts.get("multi_act_structure") if isinstance(parsed_acts, dict) else parsed_acts
     act_count = len(acts_payload) if isinstance(acts_payload, list) else None
+    
+    c = parse_quantity_constraints(user_prompt)
+    if act_count:
+        c["min_waves"] = max(c["min_waves"], act_count)
+        c["max_waves"] = max(c["max_waves"], int(act_count * 1.5))
+        
     if act_count == 18:
         wave_count_rule = "本次 multi_act_structure 已明確為 18 幕，因此 progressive_character_plan 必須正好輸出 18 波，不能只輸出前 5 波或 15 波，也不能超過 18 波。"
     elif act_count:
-        wave_count_rule = f"本次 multi_act_structure 共 {act_count} 幕，progressive_character_plan 不得少於 {max(18, act_count)} 波，並需覆蓋所有主要幕次需求。"
+        wave_count_rule = f"本次 multi_act_structure 共 {act_count} 幕，progressive_character_plan 不得少於 {act_count} 波，並需覆蓋所有主要幕次需求。"
     else:
-        wave_count_rule = "若無法可靠計算幕數，progressive_character_plan 至少輸出 18 波，最多 24 波。"
-    system_prompt = f"{PROGRESSIVE_CHARACTER_PLAN_PROMPT}\n\n{schema_snippet}\n\n{PROGRESSIVE_CHARACTER_PLAN_GUIDELINES}\n"
+        wave_count_rule = f"若無法可靠計算幕數，progressive_character_plan 至少輸出 {c['min_waves']} 波，最多 {c['max_waves']} 波。"
+        
+    prompt_fmt = format_prompt_constraints(PROGRESSIVE_CHARACTER_PLAN_PROMPT, c)
+    guidelines_fmt = format_prompt_constraints(PROGRESSIVE_CHARACTER_PLAN_GUIDELINES, c)
+    system_prompt = f"{prompt_fmt}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Progression Planner / 角色登場策略規劃師",
         "- 已生成的核心世界觀 JSON。\n- 已生成的 multi_act_structure。\n- 作者原始要求只作為風格與方向參考。",
@@ -172,7 +258,7 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
 
 請根據上述設定，獨立規劃並生成群像劇的「角色漸進登場規劃策略（progressive_character_plan）」。
 {wave_count_rule}
-波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，使用中文數字編號，不允許出現『1.』、『1-0XX』、『Wave 1』等標號。
+波次 title 必須嚴格統一為『第一波 (自擬登場群體或階段主題)』、『第二波 (自擬登場群體或階段主題)』等格式，使用中文數字編號，不允許出現『1.』、『1-0XX』、『Wave 1』等標號。
 每一波 content 必須包含：主要登場角色、其關鍵功能（如導師、盟友、反派、中立者、情報源、情感錨點、理念代表、戰力支點）、與該波對應幕次/劇情階段的關係，以及對主角成長或群像關係的影響。
 角色設定需與 worldview factions、多幕結構起伏、伏筆與轉折需求緊密對應；允許引入新角色，但必須為後續角色 Bible 留出發展空間，不要一次定稿完整角色卡。
 """
@@ -180,3 +266,4 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
+

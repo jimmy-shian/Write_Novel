@@ -66,7 +66,11 @@ from backend.prompts.common.context import *
 def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx):
     """篇卷規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("volumes")
-    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUMES_PLANNER_GUIDELINES}\n"
+    from backend.agents.story_architect.prompts import parse_quantity_constraints, format_prompt_constraints
+    combined_prompt = f"{user_prompt or ''}\n{hint or ''}"
+    c = parse_quantity_constraints(combined_prompt)
+    guidelines_fmt = format_prompt_constraints(VOLUMES_PLANNER_GUIDELINES, c)
+    system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{guidelines_fmt}\n"
     system_prompt += build_agent_context_contract(
         "Volumes Planner / 篇卷規劃師",
         "- 經後端挑選的世界觀、macro_outline、多幕結構與必要設定。\n- patch 模式會提供目標卷前後卷概要與總監提示。",

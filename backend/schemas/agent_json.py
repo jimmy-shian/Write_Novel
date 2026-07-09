@@ -139,6 +139,53 @@ WORLDVIEW_APPROVAL_CRITERIA = {
     },
 }
 
+WORLDVIEW_CORE_APPROVAL_CRITERIA = {
+    "name": "worldview_core",
+    "display_name": "核心世界觀架構師",
+    "criteria": {
+        "structure": {
+            "required_fields": ["theme", "main_conflict", "worldview", "macro_outline"],
+            "description": "建議確保所有必填欄位完整填寫，以便為小說奠定穩固的基礎"
+        },
+        "theme": {
+            "description": "建議核心主題深入探討價值衝突與哲學命題，字數約在 50 至 500 字之間，能給予讀者更多餘韻"
+        },
+        "main_conflict": {
+            "description": "核心衝突若能精準刻劃多方陣營的拉扯與張力，將會更加精彩（建議 100 至 800 字左右）"
+        },
+        "worldview": {
+            "description": "世界觀設定如果能更詳盡地刻劃地理、力量體系與社會秩序，會更有沉浸感（建議在 300 字以上）"
+        },
+        "macro_outline": {
+            "description": "建議整體故事大綱能完整描述故事的開端、發展與高潮走向，為後續寫作指引清晰的方向"
+        },
+        "consistency": {
+            "description": "建議各欄位間保持完美的邏輯連貫性，讓主題、衝突與情節大綱互相呼應"
+        }
+    },
+}
+
+MULTI_ACT_STRUCTURE_APPROVAL_CRITERIA = {
+    "name": "multi_act_structure",
+    "display_name": "多幕式結構師",
+    "criteria": {
+        "multi_act_structure": {
+            "description": "【格式強硬要求：幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等不一致的編號標記】多幕結構建議規劃適當數量的幕次（依專案要求或大綱規劃），每幕均有清晰的起承轉合功能與精彩內容，不得有編號衝突。"
+        }
+    },
+}
+
+PROGRESSIVE_CHARACTER_PLAN_APPROVAL_CRITERIA = {
+    "name": "progressive_character_plan",
+    "display_name": "角色登場策略規劃師",
+    "criteria": {
+        "progressive_character_plan": {
+            "description": "【格式強硬要求：波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，不允許出現『1.』、『1-0XX』、『Wave 1』等不一致的編號】角色漸進規劃建議包含適當數量的登場波次（對齊多幕結構起伏），以體現群像角色的登場與階段性成長。"
+        }
+    },
+}
+
+
 
 # =============================================================================
 # 2. characters (角色設計師 Character Designer Agent)
@@ -510,6 +557,9 @@ EDITOR_APPROVAL_CRITERIA = {
 
 APPROVAL_CRITERIA_REGISTRY = {
     "worldview": WORLDVIEW_APPROVAL_CRITERIA,
+    "worldview_core": WORLDVIEW_CORE_APPROVAL_CRITERIA,
+    "multi_act_structure": MULTI_ACT_STRUCTURE_APPROVAL_CRITERIA,
+    "progressive_character_plan": PROGRESSIVE_CHARACTER_PLAN_APPROVAL_CRITERIA,
     "foreshadowing": FORESHADOWING_APPROVAL_CRITERIA,
     "characters": CHARACTER_APPROVAL_CRITERIA,
     "volumes": VOLUME_APPROVAL_CRITERIA,
