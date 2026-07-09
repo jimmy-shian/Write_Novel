@@ -261,12 +261,10 @@ def collapse_json_output_for_director(raw_output, stage_name, preview_count=5):
                 has_collapsed = True
             else:
                 result[key] = val
-        if has_collapsed:
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        else:
-            # 沒有需要收合的 list → 原始 JSON，但限 8000 字元
-            raw_json = json.dumps(parsed, ensure_ascii=False, indent=2)
-            return raw_json[:8000] + ("\n...[JSON 已截斷]..." if len(raw_json) > 8000 else "")
+        raw_json = json.dumps(result, ensure_ascii=False, indent=2)
+        if len(raw_json) > 8000:
+            return compact_context_text(raw_json, 8000, "上一輪 Agent output")
+        return raw_json
 
     elif isinstance(parsed, list):
         # 頂層直接是 list（較少見，如舊格式 characters）
@@ -275,13 +273,19 @@ def collapse_json_output_for_director(raw_output, stage_name, preview_count=5):
             tool_info = _default_tool(stage_name)
             marker = _build_collapse_marker(stage_name, total, tool_info)
             result_list = parsed[:preview_count] + [marker]
-            return json.dumps(result_list, ensure_ascii=False, indent=2)
+            raw_json = json.dumps(result_list, ensure_ascii=False, indent=2)
         else:
-            return json.dumps(parsed, ensure_ascii=False, indent=2)
+            raw_json = json.dumps(parsed, ensure_ascii=False, indent=2)
+        if len(raw_json) > 8000:
+            return compact_context_text(raw_json, 8000, "上一輪 Agent output")
+        return raw_json
 
     else:
         # 純量值（不太可能是 Output，但做保底）
-        return str(parsed)[:6000]
+        val_str = str(parsed)
+        if len(val_str) > 8000:
+            return compact_context_text(val_str, 8000, "上一輪 Agent output")
+        return val_str
 
 
 def _parse_jsonish(text):

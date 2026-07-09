@@ -324,7 +324,8 @@ def run_director_decision(
             except Exception:
                 pass
         if len(worldview_text) > MAX_DIRECTOR_WORLDVIEW_CHARS:
-            worldview_text = worldview_text[:MAX_DIRECTOR_WORLDVIEW_CHARS] + "\n...[世界觀已截斷]"
+            from backend.prompts.common.context import compact_context_text
+            worldview_text = compact_context_text(worldview_text, MAX_DIRECTOR_WORLDVIEW_CHARS, "worldview")
     char_data = db.get_latest_characters(novel_id)
     characters_text = char_data["json_data"] if char_data else "尚無角色設定"
     
