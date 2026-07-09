@@ -170,6 +170,11 @@ def _director_decision_needs_recovery(parsed):
         return True
     if action in {"CONTINUE", "AUTO_REGENERATE"} and not parsed.get("target"):
         return True
+    if action == "TOOL_CALL" or "tool_call" in parsed:
+        tool_call = parsed.get("tool_call") or {}
+        tool_name = tool_call.get("tool_name")
+        if not tool_name or tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position"}:
+            return True
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
     if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
@@ -223,6 +228,13 @@ def _get_director_decision_error_message(parsed, raw_text):
         )
     if action in {"CONTINUE", "AUTO_REGENERATE"} and not parsed.get("target"):
         return "當 action 為 CONTINUE 或 AUTO_REGENERATE 時，必須指定 'target' 欄位（例如：'target': 'volume_skeleton'）。請指定 target。"
+    if action == "TOOL_CALL" or "tool_call" in parsed:
+        tool_call = parsed.get("tool_call") or {}
+        tool_name = tool_call.get("tool_name")
+        if not tool_name:
+            return "當 action 為 TOOL_CALL 時，必須在 'tool_call' 下指定 'tool_name' 欄位。請指定有效的工具名稱。"
+        if tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position"}:
+            return f"未知的總監工具名稱：{tool_name}。請使用合法的工具名稱。"
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
     if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
