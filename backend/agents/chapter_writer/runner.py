@@ -263,33 +263,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             "characters_active": []
         }
 
-    missing_active_chars = _missing_named_active_characters(current_outline, characters_bible)
-    if missing_active_chars:
-        missing_text = "、".join(missing_active_chars)
-        decision = {
-            "action": "INCREMENTAL_APPEND_CHARACTER",
-            "target": "characters",
-            "hint": (
-                f"正文寫作第 {chapter_index} 章前偵測到章節大綱使用未建卡命名角色：{missing_text}。"
-                "請根據世界觀、目前章節大綱、本卷設定與角色庫，為這些角色追加完整角色卡；"
-                "補卡後重新回到原章節 writer。"
-            ),
-            "agent_prompt": (
-                f"請追加以下缺失角色的完整角色卡：{missing_text}。"
-                f"角色首次/本次使用章節為第 {chapter_index} 章，章節大綱如下："
-                f"{json.dumps(current_outline, ensure_ascii=False, indent=2)}"
-            ),
-            "agent_context": "命名角色若沒有角色卡，不得進入正文寫作；補卡必須保存到角色庫，供後續卷章再次使用。",
-            "user_intent_summary": "",
-            "reason": "章節大綱引用了未存在於角色 Bible 的命名角色，若直接寫作會造成人設缺失與跨卷不一致。",
-            "volume_index": curr_vol_idx,
-            "chapter_index": chapter_index,
-        }
-        msg = f"正文寫作暫停：缺失命名角色 {missing_text}。請先追加角色卡。"
-        db.save_chat_message(novel_id, "assistant", msg, message_type="pipeline")
-        yield "data: " + json.dumps({"type": "error", "message": msg + "\n```json\n" + json.dumps(decision, ensure_ascii=False, indent=2) + "\n```"}, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-        return
+
         
     pre_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
     nxt_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
@@ -342,11 +316,19 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         }
     narrative_memory_context = narrative_memory.memory_context_text(memory_packet)
 
+    vol_chars = set()
+    for ch in vol_chapters:
+        for name in _active_character_names_from_outline(ch):
+            if not _is_generic_active_character_name(name):
+                vol_chars.add(name)
+    required_character_set = sorted(list(vol_chars))
+
     messages = build_chapter_writer_messages(
         worldview_text, characters_bible, current_outline, surrounding_plot,
         vol_outline_context, clue_payoff_details, custom_style, chapter_index,
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
+        required_character_set=required_character_set,
     )
     
     db.save_chat_message(

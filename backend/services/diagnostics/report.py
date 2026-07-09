@@ -574,6 +574,74 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
         except Exception as e:
             report_lines.append("  - 狀態：⚠️ 角色聖經非標準 JSON 格式，無法解析。")
     report_lines.append("")
+
+    # 2.1. 本卷活躍角色建存校驗 (Active Character Integrity Check)
+    try:
+        act_vol_idx = active_volume_index
+        if act_vol_idx is None:
+            if active_chapter_index is not None:
+                from backend.agents.director.runner import _volume_for_chapter
+                act_vol_idx = _volume_for_chapter(novel_id, int(active_chapter_index))
+            else:
+                act_vol_idx = 1
+        
+        from backend.agents.chapter_writer.runner import _character_alias_set, _active_character_names_from_outline, _is_generic_active_character_name
+        bible_aliases = set()
+        if char_exists:
+            bible_aliases = _character_alias_set(char.get("json_data") or "")
+            
+        vol_chars = set()
+        active_v = None
+        if vols:
+            active_v = next((v for v in vols if v["volume_index"] == act_vol_idx), None)
+            if not active_v and len(vols) > 0:
+                active_v = vols[0]
+                act_vol_idx = active_v["volume_index"]
+                
+        if active_v:
+            skeleton_list = active_v.get("chapters_outline") or []
+            if isinstance(skeleton_list, str):
+                try:
+                    skeleton_list = json.loads(skeleton_list)
+                except:
+                    skeleton_list = []
+            if isinstance(skeleton_list, list):
+                for ch in skeleton_list:
+                    for name in _active_character_names_from_outline(ch):
+                        if not _is_generic_active_character_name(name):
+                            vol_chars.add(name)
+                            
+        required_character_set = sorted(list(vol_chars))
+        
+        # Also check current chapter outline dynamically
+        if active_chapter_index is not None:
+            plot_data = db.get_stitched_plot(novel_id)
+            from backend.common.utils import normalize_outlines
+            outlines = normalize_outlines(plot_data or {})
+            current_ch_outline = next((ch for ch in outlines if ch["chapter_index"] == int(active_chapter_index)), None)
+            if current_ch_outline:
+                for name in _active_character_names_from_outline(current_ch_outline):
+                    if not _is_generic_active_character_name(name):
+                        if name not in vol_chars:
+                            required_character_set.append(name)
+                            
+        missing_chars = []
+        for name in required_character_set:
+            if name not in bible_aliases:
+                if not any(alias and (alias in name or name in alias) for alias in bible_aliases):
+                    missing_chars.append(name)
+                    
+        report_lines.append("【2.1. 本卷活躍角色建存校驗】")
+        report_lines.append(f"  - 當前活躍篇卷：第 {act_vol_idx} 卷")
+        report_lines.append(f"  - 本卷命名角色清單 (required_character_set)：{', '.join(required_character_set) if required_character_set else '（無）'}")
+        if missing_chars:
+            report_lines.append(f"  - 狀態：❌ 偵測到未建卡命名角色，必須進行角色擴展 (INCREMENTAL_APPEND_CHARACTER)")
+            report_lines.append(f"  - 待追加角色：{', '.join(missing_chars)}")
+        else:
+            report_lines.append("  - 狀態：✅ 本卷所有命名角色皆已建卡")
+    except Exception as e:
+        report_lines.append(f"【2.1. 本卷活躍角色建存校驗】⚠️ 檢查過程發生錯誤：{e}")
+    report_lines.append("")
     
     # 3. 篇卷規劃與骨架大綱
     vols = db.get_volumes(novel_id)

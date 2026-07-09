@@ -92,7 +92,8 @@ Routing rules:
 - Characters complete but foreshadowing seeds/turning points missing => `CONTINUE` target `foreshadowing` with `[BATCH: foreshadowing_seeds]` or `[BATCH: key_turning_points]`.
 - Foreshadowing complete but volumes missing => `CONTINUE` target `volumes`.
 - Volumes complete but skeleton missing => `CONTINUE` target `volume_skeleton` with `volume_index`.
-- Skeleton complete but prose missing => `CONTINUE` target `writer` with `chapter_index`.
+- Missing characters in active volume skeleton (report shows ❌ under 【2.1. 本卷活躍角色建存校驗】) => immediately suspend and yield `INCREMENTAL_APPEND_CHARACTER` to batch-generate all missing characters before proceeding to writer.
+- Skeleton complete and characters fully registered but chapter prose missing => `CONTINUE` target `writer` with `chapter_index`.
 - Writer complete => `CONTINUE` target `editor` for the same chapter unless editor already exists.
 - Editor complete => next missing `writer`, or `FINISH` if all planned chapters are done.
 """
@@ -141,12 +142,14 @@ If complete, route to `volume_skeleton`.
 Check the active volume skeleton against volume range, allocated_tasks, continuity, and character/faction consistency.
 If a volume skeleton is missing, route to `volume_skeleton` with `volume_index`.
 Do not ask for segmented generation; request one complete lightweight volume skeleton.
+If the validation report shows missing characters (under 【2.1. 本卷活躍角色建存校驗】 showing ❌), you must immediately trigger `INCREMENTAL_APPEND_CHARACTER` to add ALL missing characters in batch.
 """,
     "writer": """
 ## Stage Review: writer
 Check the current chapter prose against outline, characters, style, and allocated tasks.
 If prose is missing or invalid, route to `writer` with `chapter_index`.
 If prose passes, route to `editor` for the same chapter.
+If the validation report shows missing characters (under 【2.1. 本卷活躍角色建存校驗】 showing ❌), you must immediately trigger `INCREMENTAL_APPEND_CHARACTER` to add ALL missing characters in batch before continuing writing or proceeding.
 """,
     "editor": """
 ## Stage Review: editor

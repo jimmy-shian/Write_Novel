@@ -74,6 +74,7 @@ def build_chapter_writer_messages(
     chapter_index,
     user_prompt=None,
     narrative_memory_context=None,
+    required_character_set=None,
 ):
     """正文作家寫作提示詞拼接"""
     system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE + "\n\n" + CHAPTER_WRITER_GUIDELINES
@@ -98,12 +99,20 @@ def build_chapter_writer_messages(
 {str(user_prompt).strip()}
 """
 
+    extra_required_block = ""
+    if required_character_set:
+        extra_required_block = f"""
+【本卷活躍命名角色清單 (required_character_set)】
+{', '.join(required_character_set)}
+*(寫作時原則上強烈推薦使用此清單中的命名角色；若確實有創作需要，可引進額外的命名角色，但不可憑空編造無卡角色的複雜設定)*
+"""
+
     user_content = f"""【世界觀背景】
 {worldview_text}
 
 【角色 Bible 聖經】(命中角色完整設定；其他角色名稱與基本關係)
 {json.dumps(characters_bible_filtered, ensure_ascii=False, indent=2)}
-
+{extra_required_block}
 【當前章節 (第 {chapter_index} 章) 大綱】
 {json.dumps(current_outline, ensure_ascii=False, indent=2)}
 
