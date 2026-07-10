@@ -11,12 +11,17 @@ from backend.common.utils import safe_filename
 
 
 # =============================================================================
-# Gold Rules File Naming
+# Gold Rules File Naming & Directory
 # =============================================================================
 
 def gold_rules_filename(title: str) -> str:
     """將小說標題轉換為安全的 gold rules 檔名前綴。"""
     return safe_filename(title)
+
+
+def gold_rules_directory() -> str:
+    """傳回 gold rules 的統一儲存目錄（backend/data/gold_rules/）。"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "gold_rules")
 
 
 # =============================================================================
@@ -39,7 +44,7 @@ def load_retrospective_gold_rules(novel_id: str, limit: int = 16000) -> str:
     novel = db.get_novel(novel_id)
     if not novel:
         return ""
-    gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gold_rules")
+    gold_rules_dir = gold_rules_directory()
     if not os.path.isdir(gold_rules_dir):
         return ""
 

@@ -57,17 +57,42 @@ def api_novel_retrospective(novel_id: str):
     }
 
     agents_to_call = {
-        "Story Architect": ("architect", "你作為故事結構架構師，請針對本次創作的世界觀底層設定，提出心得。列出3-5條避坑金律。"),
-        "Character Designer": ("character", "你作為角色設計大師，請針對本次角色人設，提出心得。列出3-5條人物避坑金律。"),
-        "Plot Planner": ("plot", "你作為章節劇情規劃師，請針對本次大綱規劃，提出大綱規劃心得。列出3-5條避坑金律。"),
-        "Chapter Writer": ("writer", "你作為小說正文寫作作家，請針對本章正文寫作，提出心得。列出3-5條正文創作金律。"),
-        "Co-pilot Director": ("copilot", "你作為首席創意總監，對整部作品進行評審，總結全局避坑指南與終極創作金律。")
+        "Story Architect": ("architect",
+            "你作為故事結構架構師，回顧本次創作的世界觀底層設定，輸出結構化創作金律。\n"
+            "請嚴格依以下三區塊輸出，每區塊 3-5 條，業務範圍限於「世界觀與故事結構」：\n"
+            "【必做規則】列出在建立世界觀時必須遵守的步驟與檢查項。\n"
+            "【禁止事項】列出在世界觀設計中曾導致問題、不得再犯的禁止事項。\n"
+            "【允許範圍】列出可由創作者自由發揮、不影響結構正確性的彈性區域。"),
+        "Character Designer": ("character",
+            "你作為角色設計大師，回顧本次角色人設的製作過程，輸出結構化創作金律。\n"
+            "請嚴格依以下三區塊輸出，每區塊 3-5 條，業務範圍限於「角色設計」：\n"
+            "【必做規則】列出角色設計時必須完成的步驟與必要欄位。\n"
+            "【禁止事項】列出角色設計中曾導致人設紊亂或矛盾的禁止事項。\n"
+            "【允許範圍】列出角色性格、背景等可由創作者自由調整的彈性區域。"),
+        "Plot Planner": ("plot",
+            "你作為章節劇情規劃師，回顧本次大綱規劃的製作過程，輸出結構化創作金律。\n"
+            "請嚴格依以下三區塊輸出，每區塊 3-5 條，業務範圍限於「大綱與劇情規劃」：\n"
+            "【必做規則】列出大綱規劃時必須遵守的步驟與結構檢查項。\n"
+            "【禁止事項】列出大綱規劃中曾導致劇情断裂或邏輯衝突的禁止事項。\n"
+            "【允許範圍】列出劇情細節、節奏等可由創作者自由調整的彈性區域。"),
+        "Chapter Writer": ("writer",
+            "你作為小說正文寫作作家，回顧本章正文的寫作過程，輸出結構化創作金律。\n"
+            "請嚴格依以下三區塊輸出，每區塊 3-5 條，業務範圍限於「正文寫作」：\n"
+            "【必做規則】列出正文寫作時必須遵守的寫作步驟與品質檢查項。\n"
+            "【禁止事項】列出正文寫作中曾導致品質問題的禁止事項（如視角混亂、語氣不一致等）。\n"
+            "【允許範圍】列出文風、修辭等可由創作者自由發揮的彈性區域。"),
+        "Co-pilot Director": ("copilot",
+            "你作為首席創意總監，對整部作品進行全局評審，輸出結構化終極創作金律。\n"
+            "請嚴格依以下三區塊輸出，每區塊 3-5 條，業務範圍涵蓋「全局品質與流程管控」：\n"
+            "【必做規則】列出跨階段協作時必須遵守的流程步驟與全局檢查項。\n"
+            "【禁止事項】列出曾導致跨階段衝突或全局品質問題的禁止事項。\n"
+            "【允許範圍】列出可由各階段創作者自行決定、不影響全局一致性的彈性區域。"),
     }
 
     def get_agent_retrospective(agent_key, config_tuple):
         agent_name, prompt_msg = config_tuple
         messages = [
-            {"role": "system", "content": "你是一位嚴謹的創作大師。請使用 zh-TW 繁體中文輸出簡潔、深刻、高水準的心得與金律。"},
+            {"role": "system", "content": "你是一位嚴謹的創作大師。請使用 zh-TW 繁體中文，以結構化規則格式輸出創作金律。每條規則必須具體、可操作、可被程式比對，不得輸出空泛心得。嚴格遵從【必做規則】【禁止事項】【允許範圍】三區塊結構。"},
             {"role": "user", "content": f"{prompt_msg}\n\n上下文：\n{json.dumps(context, ensure_ascii=False)}"}
         ]
         text = ""
@@ -91,16 +116,16 @@ def api_novel_retrospective(novel_id: str):
             except Exception as e:
                 retrospectives[key] = f"生成心得失敗：{str(e)}"
 
-    final_markdown = f"# 《{novel['title']}》AI 創作圓桌避坑金律說明書\n\n"
+    final_markdown = f"# 《{novel['title']}》AI 創作金律規則手冊\n\n"
     for agent_display_name in agents_to_call.keys():
-        val = retrospectives.get(agent_display_name, "生成心得失敗：未取得結果")
-        final_markdown += f"## {agent_display_name} 的復盤心得\n\n{val}\n\n---\n\n"
+        val = retrospectives.get(agent_display_name, "生成金律失敗：未取得結果")
+        final_markdown += f"## {agent_display_name} 的創作金律\n\n{val}\n\n---\n\n"
 
+    from backend.schemas.constraints import gold_rules_directory, gold_rules_filename
     import os
-    from backend.common.utils import safe_filename
-    gold_rules_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "gold_rules")
+    gold_rules_dir = gold_rules_directory()
     os.makedirs(gold_rules_dir, exist_ok=True)
-    safe_title = safe_filename(novel["title"])
+    safe_title = gold_rules_filename(novel["title"])
     filepath = os.path.join(gold_rules_dir, f"{safe_title}_retrospective_gold_rules.md")
 
     with open(filepath, "w", encoding="utf-8") as f:
