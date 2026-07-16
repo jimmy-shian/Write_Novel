@@ -33,5 +33,10 @@ export const state = {
     pipelineStartTime: null,        // 管線啟動時間戳
     heartbeatTimer: null,           // keep-alive 定時器
     maxPipelineTimeout: 600000,     // 10 分鐘 (ms)
-    receiveFinishCommand: false     // 前端是否收到 finish 指令
+    receiveFinishCommand: false,    // 前端是否收到 finish 指令
+
+    // 總監暫停狀態：WAIT_USER / 用戶暫停 / 一鍵模式被 WAIT_USER 卡住時，
+    // 用來在對話框顯示「繼續/下一步」恢復按鈕，讓用戶可重新觸發 pipeline。
+    // { paused: boolean, action: string|null, target: string|null, reason: string }
+    waitingForUserResume: { paused: false, action: null, target: null, reason: '' }
 };

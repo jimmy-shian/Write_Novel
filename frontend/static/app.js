@@ -333,11 +333,13 @@ function hideGeneratingIndicator(tabName) {
  * 啟動管道流程 — 統一入口
  * 同時支援一鍵自動模式 (isAutoExecuteMode=true) 和一般模式 (顯示互動按鈕)
  */
-async function runPipeline(pipelinePrompt = '') {
+async function runPipeline(pipelinePrompt = '', resumeOptions = null) {
     if (!state.currentNovelId) {
         showToast('請先選擇或建立一個小說專案');
         return;
     }
+    // 清除暫停狀態，開始/恢復執行 pipeline
+    state.waitingForUserResume = { paused: false, action: null, target: null, reason: '' };
     // 初始化並重置伏筆編織管線狀態
     state.foreshadowingOrchestrated = false;
     state.isPipelineRunning = true;
@@ -421,6 +423,16 @@ async function runPipeline(pipelinePrompt = '') {
         const decision = await runDirectorDecision('init', userPrompt);
         
         // 根據總監決策執行對應動作
+        // 若 resumeOptions 指定要「重新生成」某階段，覆寫決策為 AUTO_REGENERATE
+        if (resumeOptions && resumeOptions.regenerate && resumeOptions.regenerateStage) {
+            decision.action = 'AUTO_REGENERATE';
+            decision.regenerate = true;
+            decision.regenerateStage = resumeOptions.regenerateStage;
+            decision.target = resumeOptions.target || resumeOptions.regenerateStage;
+            decision.continue = true;
+            decision.shouldPause = false;
+            updateDirectorMessage(`🔄 恢復執行：重新生成 ${decision.target}...`);
+        }
         await executeDirectorAction(decision, userPrompt);
         
     } catch (err) {
@@ -888,10 +900,21 @@ async function executeDirectorAction(decision, userPrompt) {
             updateDirectorMessage('⏸️ 等待用戶確認...');
             state.directorLoopCount = 0;
             state.isPipelineRunning = false;
+            // 標記暫停狀態，供 renderChatMessages 重繪時顯示恢復按鈕
+            state.waitingForUserResume = {
+                paused: true,
+                action: 'WAIT_USER',
+                target: decision.target || state.activeTab || null,
+                reason: hint || decision.reason || ''
+            };
+            
+            // 立即在當前的總監訊息下方掛載恢復面板（即時回饋）
+            attachDirectorResumePanel(decision);
             
             if (state.currentNovelId) {
                 await loadNovelDetails(state.currentNovelId);
             }
+            // loadNovelDetails 會觸發重繪，恢復面板在 renderChatMessages 內統一掛載（持久版）
             break;
         }
         
@@ -905,6 +928,8 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('writer', 'done');
             state.directorLoopCount = 0;
             state.isPipelineRunning = false;
+            // 任務完成，清除暫停狀態，不顯示恢復按鈕
+            state.waitingForUserResume = { paused: false, action: null, target: null, reason: '' };
             setTimeout(() => showPipelineProgress(false), 3000);
             await loadNovelDetails(state.currentNovelId);
             break;
@@ -3541,6 +3566,8 @@ async function resumePipelineWithDecision(activeTab, parsed, choice) {
     let decisionResult = { ...parsed };
     
     state.isPipelineRunning = true;
+    // 重啟 pipeline，清除暫停等待狀態
+    state.waitingForUserResume = { paused: false, action: null, target: null, reason: '' };
     showPipelineProgress(true);
     
     if (choice === 'accept') {
@@ -3575,6 +3602,13 @@ async function resumePipelineWithDecision(activeTab, parsed, choice) {
     } else {
         showToast('⏸️ 管線已暫停');
         state.isPipelineRunning = false;
+        // 標記暫停狀態，讓 renderChatMessages 在一鍵模式下也顯示恢復按鈕
+        state.waitingForUserResume = {
+            paused: true,
+            action: decisionResult.action || 'WAIT_USER',
+            target: decisionResult.target || activeTab || null,
+            reason: decisionResult.hint || decisionResult.reason || ''
+        };
         showPipelineProgress(false);
         await loadNovelDetails(state.currentNovelId);
     }
@@ -3596,6 +3630,135 @@ function cacheDirectorDecisionMessage(content, thinking) {
     }
     state.currentNovelData.chat_memory.push(message);
     state.currentNovelData.chat_messages.push(message);
+}
+
+/**
+ * 總監暫停（WAIT_USER）後的恢復面板渲染函數
+ * 在一鍵/一般模式均顯示「繼續下一階段」按鈕，點擊即重啟 pipeline
+ * @param {object} decision - runDirectorDecision 返回的決策物件（含 action, target, hint 等）
+ * @returns {HTMLDivElement|null} 恢復面板 DOM，若無需顯示則返回 null
+ */
+function renderDirectorResumePanel(decision) {
+    // 只在用戶暫停 / 總監要求 WAIT_USER 時渲染恢復面板
+    if (!decision || (decision.action !== 'WAIT_USER' && !decision.shouldPause)) return null;
+    
+    const actionLabels = {
+        'CONTINUE': '繼續下一階段',
+        'AUTO_REGENERATE': '重新生成此階段',
+        'GO_BACK_TO_WORLDVIEW': '回退到世界觀',
+        'GO_BACK_TO_CHARACTERS': '回退到角色',
+        'GO_BACK_TO_PLOT': '回退到大綱',
+        'WRITE_ALL_CHAPTERS': '開始寫全書',
+        'WAIT_USER': '等待確認',
+        'FINISH': '任務完成'
+    };
+    
+    const originalAction = decision.action || 'WAIT_USER';
+    const target = decision.target || state.activeTab || 'volume_skeleton';
+    const hint = decision.hint || '';
+    const label = actionLabels[originalAction] || originalAction;
+    
+    // 判斷恢復時的目標階段
+    let resumeTarget = target;
+    const nextStageMap = {
+        'worldview': 'characters',
+        'characters': 'foreshadowing',
+        'foreshadowing': 'volumes',
+        'volumes': 'volume_skeleton',
+        'volume_skeleton': 'writer',
+        'writer': 'editor',
+        'plot': 'volume_skeleton',
+        'init': 'worldview'
+    };
+    if (resumeTarget === 'evaluate' || !resumeTarget) {
+        resumeTarget = nextStageMap[state.activeTab || 'init'] || 'worldview';
+    }
+    
+    const panel = document.createElement('div');
+    panel.className = 'director-resume-panel';
+    panel.style.cssText = `
+        margin-top: 12px; padding: 12px 16px;
+        background: linear-gradient(90deg, rgba(255,193,7,0.12), rgba(255,193,7,0.04));
+        border: 1px solid rgba(255,193,7,0.35);
+        border-radius: 10px;
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        font-size: var(--font-xs); line-height: 1.5;
+        color: var(--text-primary);
+    `;
+    
+    const infoSpan = document.createElement('span');
+    infoSpan.style.cssText = 'flex: 1 1 100%; font-weight: 600; color: var(--warning);';
+    // 使用 textContent 而非 innerHTML，避免 AI 生成的 hint 含有 HTML 導致破版或 XSS
+    infoSpan.textContent = `⏸️ 總監暫停：${label}${hint ? ` — ${hint}` : ''}`;
+    panel.appendChild(infoSpan);
+    
+    // 繼續按鈕
+    const btnContinue = document.createElement('button');
+    btnContinue.className = 'btn btn-primary btn-sm director-resume-btn';
+    btnContinue.textContent = '▶️ 繼續下一階段';
+    btnContinue.title = `執行：${resumeTarget}`;
+    btnContinue.style.cssText = 'font-weight: 600;';
+    btnContinue.addEventListener('click', () => {
+        btnContinue.disabled = true;
+        btnContinue.textContent = '⏳ 啟動中...';
+        showToast(`▶️ 手動繼續：${resumeTarget}`);
+        // 優先用 resumePipelineWithDecision 做精準的下一階段推進
+        if (typeof resumePipelineWithDecision === 'function' && decision) {
+            resumePipelineWithDecision(state.activeTab, decision, 'continue');
+        } else {
+            runPipeline(state.pipelinePrompt || '');
+        }
+    });
+    panel.appendChild(btnContinue);
+    
+    // 重新生成按鈕
+    const btnRegen = document.createElement('button');
+    btnRegen.className = 'btn btn-secondary btn-sm director-resume-btn';
+    btnRegen.textContent = '🔄 重新生成此階段';
+    btnRegen.title = `重新生成：${target}`;
+    btnRegen.addEventListener('click', () => {
+        btnRegen.disabled = true;
+        btnRegen.textContent = '⏳ 重新生成...';
+        showToast(`🔄 手動重新生成：${target}`);
+        runPipeline(state.pipelinePrompt || '', { regenerate: true, regenerateStage: target, target });
+    });
+    panel.appendChild(btnRegen);
+    
+    // 暫停按鈕（保持暫停，回到原樣）
+    const btnPause = document.createElement('button');
+    btnPause.className = 'btn btn-ghost btn-sm director-resume-btn';
+    btnPause.textContent = '⏸️ 保持暫停';
+    btnPause.title = '維持暫停狀態，稍後手動處理';
+    btnPause.addEventListener('click', () => {
+        btnPause.disabled = true;
+        btnPause.textContent = '✅ 已確認';
+        showToast('⏸️ 保持暫停，可稍後點擊「繼續」或輸入指令');
+    });
+    panel.appendChild(btnPause);
+    
+    return panel;
+}
+
+/**
+ * 將恢復面板掛載到最新的總監訊息下方（live 路徑用）
+ * @param {object} decision - 決策物件
+ */
+function attachDirectorResumePanel(decision) {
+    if (!el.chatMessagesContainer) return;
+    const msgs = el.chatMessagesContainer.querySelectorAll('.message.assistant-msg');
+    if (msgs.length === 0) return;
+    const latestMsg = msgs[msgs.length - 1];
+    const contentDiv = latestMsg.querySelector('.msg-content');
+    if (!contentDiv) return;
+    // 移除舊的同類面板（防重複）
+    contentDiv.querySelectorAll('.director-resume-panel').forEach(oldPanel => oldPanel.remove());
+    const panel = renderDirectorResumePanel(decision);
+    if (panel) {
+        contentDiv.appendChild(panel);
+        if (typeof window.smartScrollToBottom === 'function') {
+            window.smartScrollToBottom(el.chatMessagesContainer, true);
+        }
+    }
 }
 
 function buildDirectorExtraContext(reviewContext = null) {
@@ -6158,6 +6321,7 @@ window.executeNextMissingStage = executeNextMissingStage;
 window.selectWriterChapter = selectWriterChapter;
 window.parseDirectorDecisionText = parseDirectorDecisionText;
 window.resumePipelineWithDecision = resumePipelineWithDecision;
+window.runPipeline = runPipeline;
 
 window.alignVolume = async function(volIdx) {
     if (!state.currentNovelId) {

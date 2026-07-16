@@ -1731,9 +1731,17 @@ export function renderChatMessages() {
             }
             
             const isLatest = idx === messages.length - 1;
-            if (isLatest && !isUser && !isSystem && !state.isAutoExecuteMode) {
+            if (isLatest && !isUser && !isSystem) {
                 const parsed = parseDirectorDecisionText(msg.content, state.activeTab);
-                if (parsed && parsed.action && parsed.action !== 'FINISH') {
+                // 暫停恢復狀態：pipeline 未運行且該訊息是含可執行 action 的總監決策
+                // （一鍵模式下，總監 WAIT_USER 或用戶暫停後均以此面板恢復）
+                const isPausedResume = parsed
+                    && parsed.action
+                    && parsed.action !== 'FINISH'
+                    && !state.isPipelineRunning;
+                
+                // 一般模式（含完整互動按鈕）或非暫停決策：維持原本互動按鈕邏輯
+                if (parsed && parsed.action && parsed.action !== 'FINISH' && !state.isAutoExecuteMode) {
                     const actionLabels = {
                         'CONTINUE': '繼續下一階段',
                         'GO_BACK_TO_WORLDVIEW': '回退到世界觀',
@@ -1796,6 +1804,104 @@ export function renderChatMessages() {
                                     
                                     if (typeof window.resumePipelineWithDecision === 'function') {
                                         await window.resumePipelineWithDecision(state.activeTab, parsed, choice);
+                                    }
+                                });
+                            });
+                        }
+                    }, 0);
+                    
+                    el.chatMessagesContainer.appendChild(msgDiv);
+                    return;
+                }
+                
+                // 一鍵模式 / 暫停恢復：總監暫停（WAIT_USER）且 pipeline 未運行時，
+                // 顯示簡潔「繼續 / 重新生成」恢復按鈕，讓用戶可重新觸發下一步
+                if (isPausedResume) {
+                    const target = parsed.target || state.activeTab || 'volume_skeleton';
+                    let resumeTarget = target;
+                    const nextStageMap = {
+                        'worldview': 'characters',
+                        'characters': 'foreshadowing',
+                        'foreshadowing': 'volumes',
+                        'volumes': 'volume_skeleton',
+                        'volume_skeleton': 'writer',
+                        'writer': 'editor',
+                        'plot': 'volume_skeleton',
+                        'init': 'worldview'
+                    };
+                    if (resumeTarget === 'evaluate' || !resumeTarget) {
+                        resumeTarget = nextStageMap[state.activeTab || 'init'] || 'worldview';
+                    }
+                    
+                    const hint = parsed.hint || '';
+                    const resumeButtonsHtml = `
+                        <div class="director-resume-panel" style="margin-top: 12px; padding: 12px 16px; background: linear-gradient(90deg, rgba(255,193,7,0.12), rgba(255,193,7,0.04)); border: 1px solid rgba(255,193,7,0.35); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: var(--font-xs); line-height: 1.5; color: var(--text-primary);">
+                            <span style="flex: 1 1 100%; font-weight: 600; color: var(--warning);">⏸️ 總監暫停：等待確認${hint ? ` — ${escapeHtml(hint).substring(0, 200)}` : ''}</span>
+                            <button class="btn btn-primary btn-sm director-resume-btn" data-action="continue" title="執行：${resumeTarget}" style="font-weight: 600;">▶️ 繼續下一階段</button>
+                            <button class="btn btn-secondary btn-sm director-resume-btn" data-action="regen" title="重新生成：${target}">🔄 重新生成此階段</button>
+                        </div>
+                    `;
+                    
+                    let thinkingHtml = '';
+                    if (msg.thinking && msg.thinking.trim()) {
+                        thinkingHtml = `
+                            <details class="thinking-details" style="margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(255, 255, 255, 0.02); overflow: hidden;">
+                                <summary style="cursor: pointer; font-size: var(--font-2xs); padding: 6px 10px; color: var(--text-muted); font-weight: 600; background: rgba(0, 0, 0, 0.05); user-select: none; display: flex; align-items: center; gap: 6px; outline: none;">
+                                    <span>🧠 AI 思考過程 (點擊展開/收合)</span>
+                                </summary>
+                                <pre style="margin: 0; padding: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: var(--font-2xs); line-height: 1.5; color: var(--text-secondary); background: rgba(0, 0, 0, 0.1); white-space: pre-wrap; word-break: break-all;">${msg.thinking}</pre>
+                            </details>
+                        `;
+                    }
+                    
+                    msgDiv.innerHTML = `
+                        <div class="msg-sender-row">
+                            <div class="msg-sender">${sender}</div>
+                            ${formattedTime ? `<div class="msg-timestamp">${formattedTime}</div>` : ''}
+                        </div>
+                        <div class="msg-content">
+                            ${thinkingHtml}
+                <div class="msg-text-markdown">${renderMarkdown(escapeBackticks(msg.content))}</div>
+                            ${resumeButtonsHtml}
+                        </div>
+                    `;
+                    
+                    setTimeout(() => {
+                        const resumePanel = msgDiv.querySelector('.director-resume-panel');
+                        if (resumePanel) {
+                            resumePanel.querySelectorAll('.director-resume-btn').forEach(btn => {
+                                btn.addEventListener('click', async function() {
+                                    if (state.isPipelineRunning) {
+                                        showToast('⚠️ 管道正在運行中，請稍候...');
+                                        return;
+                                    }
+                                    const isRegen = this.dataset.action === 'regen';
+                                    resumePanel.querySelectorAll('.director-resume-btn').forEach(b => {
+                                        b.disabled = true;
+                                        b.style.opacity = '0.5';
+                                    });
+                                    this.style.opacity = '1';
+                                    this.style.fontWeight = '700';
+                                    
+                                    const pipelinePrompt = (state.pipelinePrompt || '').trim()
+                                        || (state.currentNovelData?.novel?.pipeline_prompt || '').trim()
+                                        || '';
+                                    
+                                    if (isRegen) {
+                                        // 重新生成指定的階段：透過 runPipeline 覆寫為 AUTO_REGENERATE 並使用 parsed.target
+                                        showToast(`🔄 重新生成：${target}`);
+                                        if (typeof window.runPipeline === 'function') {
+                                            await window.runPipeline(pipelinePrompt, { regenerate: true, regenerateStage: target, target });
+                                        }
+                                    } else {
+                                        // 繼續下一階段：優先用 resumePipelineWithDecision 進行精準推進
+                                        if (typeof window.resumePipelineWithDecision === 'function') {
+                                            showToast(`▶️ 繼續：${resumeTarget}`);
+                                            await window.resumePipelineWithDecision(state.activeTab, parsed, 'continue');
+                                        } else if (typeof window.runPipeline === 'function') {
+                                            showToast(`▶️ 繼續：${resumeTarget}`);
+                                            await window.runPipeline(pipelinePrompt);
+                                        }
                                     }
                                 });
                             });
