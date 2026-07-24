@@ -1596,7 +1596,21 @@ export function selectWriterChapter(chapterIndex) {
                 const formatEventItem = (e) => {
                     if (typeof e === 'string') return e;
                     if (typeof e === 'object' && e !== null) {
-                        return [e.action, e.scene, e.consequence].filter(Boolean).join(' • ') || JSON.stringify(e);
+                        // Handle multiple event formats
+                        // Format 1: action, scene, consequence
+                        const parts1 = [e.action, e.scene, e.consequence].filter(Boolean);
+                        if (parts1.length > 0) return parts1.join(' • ');
+                        
+                        // Format 2: scene_index, location, characters, content (user's format)
+                        const parts2 = [];
+                        if (e.scene_index !== undefined) parts2.push(`場景 ${e.scene_index}`);
+                        if (e.location) parts2.push(`地點：${e.location}`);
+                        if (e.characters && Array.isArray(e.characters) && e.characters.length > 0) parts2.push(`角色：${e.characters.join('、')}`);
+                        if (e.content) parts2.push(e.content);
+                        if (parts2.length > 0) return parts2.join(' → ');
+                        
+                        // Format 3: fallback to JSON
+                        return JSON.stringify(e, null, 2);
                     }
                     return String(e);
                 };
@@ -1611,10 +1625,18 @@ export function selectWriterChapter(chapterIndex) {
             
             let foreshadowHtml = '';
             if (Array.isArray(plotChapter.foreshadowing) && plotChapter.foreshadowing.length > 0) {
+                const formatForeshadowItem = (f) => {
+                    if (typeof f === 'string') return f;
+                    if (typeof f === 'object' && f !== null) {
+                        // Extract content from various possible fields
+                        return f.content || f.description || f.detail || f.name || f.title || f.summary || JSON.stringify(f, null, 2);
+                    }
+                    return String(f);
+                };
                 foreshadowHtml = `
                 <div class="insp-item">
                     <span class="insp-label">🌱 伏筆線索</span>
-                    <p class="insp-val foreshadows" style="font-size:0.8rem; color:#10b981; font-weight:500;">🌱 ${plotChapter.foreshadowing.map(f => typeof f === 'string' ? f : JSON.stringify(f)).join(' | ')}</p>
+                    <p class="insp-val foreshadows" style="font-size:0.8rem; color:#10b981; font-weight:500;">🌱 ${plotChapter.foreshadowing.map(f => formatForeshadowItem(f)).join(' | ')}</p>
                 </div>`;
             }
             
