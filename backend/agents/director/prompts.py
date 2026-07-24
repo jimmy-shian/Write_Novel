@@ -200,20 +200,6 @@ def build_director_decision_messages(
 2. 角色關係網是否邏輯連貫。
 3. 確認角色的心理深度、成長弧線是否完整。
  
-"""
-        character_extra_context = ""
-        if character_review_mode in ("modify", "expand") and character_review_hint:
-            character_extra_context += f"\n\n【本次修改/新增的總監指示 (Hint)】\n{character_review_hint}"
-        if character_review_mode in ("modify", "expand") and character_review_target_content:
-            character_extra_context += f"\n\n【被修改/新增角色的完整內容】\n{character_review_target_content}"
-        if character_review_mode == "generate":
-            character_extra_context = "\n\n【重要】此為世界觀生成後的首次角色生成，請確認角色陣容是否完整且與世界觀設定契合。"
-        
-        user_content = f"""{default_user_prompt_section}
- 
-【世界觀背景】
-{worldview_text}
- 
 【完整角色列表（完整設定）】
 {characters_text}
 {character_extra_context}
@@ -284,7 +270,7 @@ def build_director_decision_messages(
 1. 當前階段是「current_stage = {current_stage}」（正文寫作作家）。
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
-4. ⚠️【後三章伏筆預埋審查】：請特別注意檢查「clue_payoff_upcoming_3_chapters」中預告的後三章即將回收之伏筆，是否已在本章正文中有合理的前置鋪墊與自然埋入。
+4. ⚠️【伏筆與鋪墊審查】：請檢查當前章節大綱/任務中分配之伏筆與轉折點是否已在本章正文中有合理的前置鋪墊與自然埋入。
 5. 角色聖經的配角欄位缺失不是 writer 階段阻斷理由；除非主角資料缺失已明顯造成正文無法寫作，否則不得改派角色修補，應繼續 writer/editor 流程。
 6. 但若正文或章節大綱使用了角色 Bible 中不存在的命名角色，必須先 `INCREMENTAL_APPEND_CHARACTER` 追加角色卡，再回到本章 writer；不得讓 writer 硬寫無角色卡人物。
 7. 勢力/組織描寫必須以世界觀 factions 與當前卷 factions 為準；若正文把勢力立場、制度、敵友關係寫錯，應退回 writer 修正或回 worldview 修正源資料。
