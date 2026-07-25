@@ -128,6 +128,12 @@ def run_copilot_chat(novel_id, user_message, stream=False, force_json=False):
     full_text = acc.content
     full_thinking = acc.thinking
     if full_text.strip():
+        from backend.agents.shared.context_requests import _handle_director_context_request
+        if _handle_director_context_request(novel_id, "協作副手", full_text):
+            yield "data: " + json.dumps({"type": "error", "message": "協作副手需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         db.save_chat_message(novel_id, "assistant", full_text, thinking=full_thinking if full_thinking.strip() else None, message_type="chat")
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 

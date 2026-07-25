@@ -346,6 +346,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     if full_text.strip():
         if _handle_director_context_request(novel_id, "正文寫作作家", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "正文寫作作家需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
         prose_val = full_text
         thinking_val = ""
@@ -374,6 +375,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         )
         db.save_last_agent_run(novel_id, "writer", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文寫作完成！", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 # =============================================================================

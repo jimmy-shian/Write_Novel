@@ -124,6 +124,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
     if full_text.strip():
         if _handle_director_context_request(novel_id, "編輯姬", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
         outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
         memory_summary = narrative_memory.build_chapter_memory_summary(

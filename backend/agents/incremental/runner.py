@@ -102,12 +102,18 @@ def run_incremental_architect(novel_id, target_section, user_hint, stream=False,
         yield chunk
     full_text = acc.content
     if full_text.strip():
+        from backend.agents.shared.context_requests import _handle_director_context_request
+        if _handle_director_context_request(novel_id, "增量架構師", full_text):
+            yield "data: " + json.dumps({"type": "error", "message": "增量架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         from backend.services.incremental_patch.engine import validate_and_merge_incremental_patch
         success, version, err = validate_and_merge_incremental_patch(novel_id, target_section, "PATCH", full_text)
         if success:
             db.save_chat_message(novel_id, "assistant", f"增量世界觀更新完成 (版本 {version})", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"增量世界觀更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 def run_incremental_character_designer(novel_id, target_char_index, field_name, user_hint, stream=False, force_json=False):
@@ -148,6 +154,11 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
         yield chunk
     full_text = acc.content
     if full_text.strip():
+        from backend.agents.shared.context_requests import _handle_director_context_request
+        if _handle_director_context_request(novel_id, "增量角色設計師", full_text):
+            yield "data: " + json.dumps({"type": "error", "message": "增量角色設計師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         from backend.services.incremental_patch.engine import validate_and_merge_incremental_patch
         extra = {}
         if normalized_target_index is not None:
@@ -159,6 +170,7 @@ def run_incremental_character_designer(novel_id, target_char_index, field_name, 
             db.save_chat_message(novel_id, "assistant", f"角色增量更新完成 (版本 {version})", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": f"角色增量更新合併失敗: {err}"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 
@@ -188,6 +200,11 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint, stream=Fa
         yield chunk
     full_text = acc.content
     if full_text.strip():
+        from backend.agents.shared.context_requests import _handle_director_context_request
+        if _handle_director_context_request(novel_id, "增量骨架規劃師", full_text):
+            yield "data: " + json.dumps({"type": "error", "message": "增量骨架規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         from backend.models.parsers import extract_json_block
         parsed = extract_json_block(full_text)
         chapters_skeleton = _extract_incremental_skeleton_chapters(parsed)
@@ -197,5 +214,6 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint, stream=Fa
             db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架增量更新完成", message_type="pipeline")
         else:
             yield "data: " + json.dumps({"type": "error", "message": "卷骨架增量更新失敗: 未解析到含 chapter_index 的 chapters_skeleton patch"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 

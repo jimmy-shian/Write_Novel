@@ -213,6 +213,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     if full_text.strip():
         if _handle_director_context_request(novel_id, "角色設計師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "角色設計師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
             
         # 💡 增量合併邏輯：在 expand / modify 模式下，LLM 只回傳新增/修改的局部角色清單，將其與現有角色合併後再保存
@@ -260,7 +261,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
         db.save_characters(novel_id, full_text)
         db.save_last_agent_run(novel_id, "characters", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"角色聖經更新完畢！版本已更新。", message_type="pipeline")
-
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 # =============================================================================

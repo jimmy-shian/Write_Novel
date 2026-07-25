@@ -109,6 +109,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     if full_text.strip():
         if _handle_director_context_request(novel_id, "篇卷規劃師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "篇卷規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
         # Parse and save volumes
         from backend.models.parsers import extract_json_block
@@ -134,6 +135,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
                 error_message = f"篇卷規劃生成失敗：{validation_error}。請重新生成，不會保存本次不合規輸出。"
                 db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
                 yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
 
             if mode == "patch" and target_vol_idx is not None:
@@ -150,6 +152,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
                 
         db.save_last_agent_run(novel_id, "volumes", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 # =============================================================================

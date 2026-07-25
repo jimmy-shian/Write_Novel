@@ -229,10 +229,12 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     if full_text.strip():
         if _handle_director_context_request(novel_id, "世界觀架構師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "世界觀架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
         db.save_worldbuilding(novel_id, full_text, validate=False)
         db.save_last_agent_run(novel_id, "worldview", json.dumps(last_messages or [], ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"世界觀與大綱起伏結構、角色登場策略生成成功！版本已更新。", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
 # =============================================================================
