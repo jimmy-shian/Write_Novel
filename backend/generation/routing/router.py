@@ -107,14 +107,18 @@ def stream_generation_task(payload: Any):
         return _dry_run_generator()
 
     def _generator():
+        has_yielded = False
         with pipeline_lock(task.novel_id):
             try:
                 source_stream = route.handler(task, context_bundle)
-                yield from iter_post_processed_generation_stream(task, source_stream, warnings=warnings)
+                for chunk in iter_post_processed_generation_stream(task, source_stream, warnings=warnings):
+                    has_yielded = True
+                    yield chunk
             except Exception as exc:
                 error_message = str(exc)
-                failed_stream = [
-                    build_sse_data(
+                if has_yielded:
+                    # 已產出部分內容：統一送出錯誤封包 + 完成封包（與 safe_generator_wrapper 相同行為）
+                    yield build_sse_data(
                         build_task_envelope(
                             task,
                             status="failed",
@@ -127,12 +131,22 @@ def stream_generation_task(payload: Any):
                             extra={"type": "error"},
                         )
                     )
-                ]
-                yield from iter_post_processed_generation_stream(
-                    task,
-                    failed_stream,
-                    warnings=warnings + [error_message],
-                )
+                    yield build_sse_data(
+                        build_task_envelope(
+                            task,
+                            status="failed",
+                            result={"error": error_message},
+                            patches=[],
+                            warnings=warnings + [error_message],
+                            state_updates={},
+                            error=error_message,
+                            ok=False,
+                            extra={"type": "done", "lock_released": True},
+                        )
+                    )
+                else:
+                    # 尚未產出任何內容：直接拋出，讓 FastAPI 回傳標準 500
+                    raise
 
     return _generator()
 
