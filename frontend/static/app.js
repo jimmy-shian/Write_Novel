@@ -594,14 +594,19 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('characters', 'running');
             updateDirectorMessage(`⚡ 正在增量修改角色...`);
             
-            await executeIncrementalUpdate('character', {
+            const success = await executeIncrementalUpdate('character', {
                 target_char_index: charIdx,
                 field_name: field,
                 hint: hint
             });
             
             if (state.isPipelineRunning) {
-                updateDirectorMessage('🔄 角色增量修改完成，重新評估創作現狀中...');
+                if (success) {
+                    updateDirectorMessage('🔄 角色增量修改完成，重新評估創作現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 角色增量修改失敗，重新回退總監評估中...');
+                    showToast('角色增量修改失敗');
+                }
                 setTimeout(() => runPipeline(userPrompt), 2000);
             }
             break;
@@ -612,12 +617,17 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('characters', 'running');
             updateDirectorMessage(`⚡ 正在增量追加角色...`);
             
-            await executeIncrementalUpdate('new_character', {
+            const success = await executeIncrementalUpdate('new_character', {
                 hint: hint
             });
             
             if (state.isPipelineRunning) {
-                updateDirectorMessage('🔄 角色增量追加完成，重新評估創作現狀中...');
+                if (success) {
+                    updateDirectorMessage('🔄 角色增量追加完成，重新評估創作現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 角色增量追加失敗，重新回退總監評估中...');
+                    showToast('角色增量追加失敗');
+                }
                 setTimeout(() => runPipeline(userPrompt), 2000);
             }
             break;
@@ -629,13 +639,18 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('volume_skeleton', 'running');
             updateDirectorMessage(`⚡ 正在增量修正第 ${volIdx} 卷骨架...`);
             
-            await executeIncrementalUpdate('volume_skeleton', {
+            const success = await executeIncrementalUpdate('volume_skeleton', {
                 volume_index: volIdx,
                 hint: hint
             });
             
             if (state.isPipelineRunning) {
-                updateDirectorMessage('🔄 卷骨架增量修正完成，重新評估創作現狀中...');
+                if (success) {
+                    updateDirectorMessage('🔄 卷骨架增量修正完成，重新評估創作現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 卷骨架增量修正失敗，重新回退總監評估中...');
+                    showToast('卷骨架增量修正失敗');
+                }
                 setTimeout(() => runPipeline(userPrompt), 2000);
             }
             break;
@@ -647,14 +662,19 @@ async function executeDirectorAction(decision, userPrompt) {
             updatePipelineStage('characters', 'running');
             updateDirectorMessage(`⚡ 正在增量完整修改角色...`);
             
-            await executeIncrementalUpdate('character', {
+            const success = await executeIncrementalUpdate('character', {
                 target_char_index: charIdx,
                 field_name: null,
                 hint: hint
             });
             
             if (state.isPipelineRunning) {
-                updateDirectorMessage('🔄 角色增量完整修改完成，重新評估創作現狀中...');
+                if (success) {
+                    updateDirectorMessage('🔄 角色增量完整修改完成，重新評估創作現狀中...');
+                } else {
+                    updateDirectorMessage('⚠️ 角色增量完整修改失敗，重新回退總監評估中...');
+                    showToast('角色增量完整修改失敗');
+                }
                 setTimeout(() => runPipeline(userPrompt), 2000);
             }
             break;
@@ -3045,7 +3065,7 @@ streamAPI(
                     async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3077,10 +3097,10 @@ streamAPI(
                         showToast("Error: " + err);
                     },
                     async (success) => {
-                        showToast("多幕式結構更新完成");
+                        if (success) showToast("多幕式結構更新完成");
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3115,7 +3135,7 @@ streamAPI(
                     async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3151,7 +3171,7 @@ streamAPI(
                         if (success) showToast("新角色新增完成");
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3185,7 +3205,7 @@ streamAPI(
                         }
                         hideAgentProcessingIndicator('volume_skeleton');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     },
                     (msg) => {
                         window.updateAgentStreamOutput('volume_skeleton', `\n${msg}`);
@@ -3235,7 +3255,7 @@ streamAPI(
                     async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3268,7 +3288,7 @@ streamAPI(
                     async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3372,7 +3392,7 @@ streamAPI(
                         state.writingBuffer = "";
                         hideAgentProcessingIndicator('writer');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3419,7 +3439,7 @@ async function executeAutoRegenerate(target, params) {
                     async (success) => {
                         hideAgentProcessingIndicator('worldview');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
@@ -3453,7 +3473,7 @@ async function executeAutoRegenerate(target, params) {
                     async (success) => {
                         hideAgentProcessingIndicator('characters');
                         await loadNovelDetails(state.currentNovelId);
-                        resolve(true);
+                        resolve(Boolean(success));
                     }
                 );
             });
