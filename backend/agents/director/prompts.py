@@ -191,6 +191,13 @@ def build_director_decision_messages(
     
     elif current_stage == "characters":
         # 角色階段：完整角色列表
+        character_extra_context = ""
+        if character_review_mode:
+            character_extra_context += f"\n【角色審查模式】{character_review_mode}\n"
+        if character_review_hint:
+            character_extra_context += f"【角色修改提示】{character_review_hint}\n"
+        if character_review_target_content:
+            character_extra_context += f"【目標角色內容】{character_review_target_content}\n"
         system_prompt = f"""{director_contract}
 
 你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前角色設計的創作質量，並決定下一步的最佳動作。
@@ -199,7 +206,9 @@ def build_director_decision_messages(
 1. 當前階段是「current_stage = {current_stage}」（角色設計師）。
 2. 角色關係網是否邏輯連貫。
 3. 確認角色的心理深度、成長弧線是否完整。
- 
+"""
+        user_content = f"""{default_user_prompt_section}
+
 【完整角色列表（完整設定）】
 {characters_text}
 {character_extra_context}
