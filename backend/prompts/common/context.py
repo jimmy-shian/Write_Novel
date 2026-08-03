@@ -315,9 +315,17 @@ __CONTEXT_REQUEST_JSON_CONTRACT__
 
 DIRECTOR_CONTEXT_REQUEST_RULE = """
 ## 上下文不足時的總監回問規則
-系統會依目前階段挑選最相關的角色與世界觀資料。若你發現本次審查/下令缺少「已存在但未被提供」的必要資料，或需要總監/使用者補充關鍵決策後才能避免臆造，請使用 `WAIT_USER`，並讓 `reason` 以 `[REQUEST_DIRECTOR_CONTEXT]` 開頭，清楚列出缺少資料與需要補充的內容。
+系統會依目前階段挑選最相關的角色與世界觀資料。若你發現本次審查/下令缺少「已存在但未被提供」的必要資料，或需要使用者補充關鍵創作決策後才能避免臆造，請使用 `WAIT_USER`，並讓 `reason` 以 `[REQUEST_DIRECTOR_CONTEXT]` 開頭，清楚列出缺少資料與需要補充的內容。
 
-注意：若缺少的是前置階段尚未生成的作品資料，仍遵守黃金流程，使用 `CONTINUE` 或回退到對應 target 讓系統生成，不要把一般的未生成狀態誤判成 `WAIT_USER`。
+重要判斷順序（必須依序檢查，不可跳過）：
+1. 若缺少的資料「你自己可以用總監工具取得」，禁止使用 `WAIT_USER`；必須改用 `TOOL_CALL` 呼叫對應工具。屬於此類的常見情況：
+   - 需要某階段輸出的硬性校驗結果（結構、必填欄位、數量、索引連續性等）→ `TOOL_CALL` 呼叫 `evaluate_output`，參數帶 `stage_name`。
+   - 需要展開收合的長列表內容做內容品質審查 → `TOOL_CALL` 呼叫 `inspect_content_block` 或 `expand_collapsed_json`。
+   - 需要補強或局部修正不合格的輸出 → `TOOL_CALL` 呼叫 `supplement_content`。
+2. 若缺少的是前置階段尚未生成的作品資料，仍遵守黃金流程，使用 `CONTINUE` 或回退到對應 target 讓系統生成，不要把未生成狀態誤判成 `WAIT_USER`。
+3. 只有在「資料已全部生成且你自己用工具也無法取得、必須由作者本人裁決的創作歧義」時，才可以使用 `WAIT_USER`。
+
+換言之：凡是「需要 `evaluate_output` / `inspect_content_block` / `expand_collapsed_json` / `supplement_content` 等工具結果才能判斷」的需求，一律用 `TOOL_CALL`，絕對不要寫成 `WAIT_USER`。
 """
 
 WORLDVIEW_FIELD_LABELS = {
