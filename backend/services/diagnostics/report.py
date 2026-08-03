@@ -167,6 +167,7 @@ def diagnose_volumes_and_skeletons(volumes):
     """
     對篇卷骨架進行結構與進度診斷。
     """
+    from backend import persistence as db
     if not volumes:
         return "第1卷缺漏"
     if len(volumes) < MIN_VOLUME_COUNT or len(volumes) > MAX_VOLUME_COUNT:
