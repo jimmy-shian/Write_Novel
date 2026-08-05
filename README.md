@@ -56,6 +56,125 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 http://127.0.0.1:8000
 ```
 
+## 環境變數設定 (.env)
+
+在專案根目錄建立 `.env` 檔案，依照下方模板填入各代理的設定。
+
+### Agent 名稱
+
+設定檔使用以下代理名稱（與程式中 `agent_name` 對應）：
+
+`global`, `architect`, `character`, `volumes`, `volume_skeleton`, `plot`, `writer`, `editor`, `copilot`
+
+`ARCHITECT` 對應 Story Architect；`CHARACTER` 對應 Character Designer；`PLOT` 對應 Plot Planner；`VOLUME_SKELETON` 對應 Skeleton Planner；`COPILOT` 對應 AI Director Copilot。`VOLUMES` 若未提供 `NVIDIA_API_KEY_VOLUMES`，會 fallback 到 `NVIDIA_API_KEY_ARCHITECT`。
+
+### .env 模板
+
+```dotenv
+# ==========================================
+# AI Novel Factory - Environment Configuration
+# ==========================================
+
+# --- Agent API Keys (NVIDIA API Keys) ---
+# 每個代理使用獨立 key 以分散 rate limit
+NVIDIA_API_KEY_GLOBAL="nvapi-YOUR_KEY_HERE"
+NVIDIA_API_KEY_ARCHITECT="nvapi-YOUR_KEY_HERE"
+NVIDIA_API_KEY_CHARACTER="nvapi-YOUR_KEY_HERE"
+NVIDIA_API_KEY_PLOT="nvapi-YOUR_KEY_HERE"
+# NVIDIA_API_KEY_VOLUMES="nvapi-YOUR_KEY_HERE"  # 可選，未設則 fallback 到 ARCHITECT
+NVIDIA_API_KEY_VOLUME_SKELETON="nvapi-YOUR_KEY_HERE"  # 可選，未設則 fallback 到 PLOT
+NVIDIA_API_KEY_WRITER="nvapi-YOUR_KEY_HERE"
+NVIDIA_API_KEY_EDITOR="nvapi-YOUR_KEY_HERE"
+NVIDIA_API_KEY_COPILOT="nvapi-YOUR_KEY_HERE"
+
+# --- Global Agent Settings ---
+MODEL_GLOBAL="openai/gpt-oss-120b"
+BASE_URL_GLOBAL="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_GLOBAL=1.0
+TOP_P_GLOBAL=0.95
+MAX_TOKENS_GLOBAL=16384
+ENABLE_THINKING_GLOBAL=0
+
+# MODELS_CONFIG='{}'  # 可選：以 JSON 指定 model preset 覆寫
+
+# --- 1. Story Architect Agent ---
+MODEL_ARCHITECT="openai/gpt-oss-120b"
+BASE_URL_ARCHITECT="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_ARCHITECT=1.0
+TOP_P_ARCHITECT=0.95
+MAX_TOKENS_ARCHITECT=16384
+ENABLE_THINKING_ARCHITECT=0
+
+# --- 2. Character Designer Agent ---
+MODEL_CHARACTER="openai/gpt-oss-120b"
+BASE_URL_CHARACTER="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_CHARACTER=1.0
+TOP_P_CHARACTER=0.95
+MAX_TOKENS_CHARACTER=16384
+ENABLE_THINKING_CHARACTER=0
+
+# --- 3. Plot Planner Agent ---
+MODEL_PLOT="openai/gpt-oss-120b"
+BASE_URL_PLOT="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_PLOT=1.0
+TOP_P_PLOT=0.95
+MAX_TOKENS_PLOT=16384
+ENABLE_THINKING_PLOT=0
+
+# --- 3.1 Skeleton Planner Agent ---
+MODEL_VOLUME_SKELETON="openai/gpt-oss-120b"
+BASE_URL_VOLUME_SKELETON="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_VOLUME_SKELETON=1.0
+TOP_P_VOLUME_SKELETON=0.95
+MAX_TOKENS_VOLUME_SKELETON=16384
+ENABLE_THINKING_VOLUME_SKELETON=0
+
+# --- 4. Chapter Writer Agent ---
+MODEL_WRITER="openai/gpt-oss-120b"
+BASE_URL_WRITER="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_WRITER=1.0
+TOP_P_WRITER=0.95
+MAX_TOKENS_WRITER=16384
+ENABLE_THINKING_WRITER=0
+
+# --- 5. Editor Agent ---
+MODEL_EDITOR="openai/gpt-oss-120b"
+BASE_URL_EDITOR="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_EDITOR=1.0
+TOP_P_EDITOR=0.95
+MAX_TOKENS_EDITOR=16384
+ENABLE_THINKING_EDITOR=0
+
+# --- 6. AI Director Copilot Agent ---
+MODEL_COPILOT="openai/gpt-oss-120b"
+BASE_URL_COPILOT="https://integrate.api.nvidia.com/v1"
+TEMPERATURE_COPILOT=1.0
+TOP_P_COPILOT=0.95
+MAX_TOKENS_COPILOT=16384
+ENABLE_THINKING_COPILOT=0
+
+# --- Default Fallback Parameters ---
+DEFAULT_BASE_URL="https://integrate.api.nvidia.com/v1"
+DEFAULT_TEMPERATURE=1.0
+DEFAULT_TOP_P=0.95
+DEFAULT_MAX_TOKENS=16384
+DEFAULT_ENABLE_THINKING=0
+```
+
+### 欄位說明
+
+| 變數 | 說明 | 預設值 |
+|------|------|--------|
+| `NVIDIA_API_KEY_{AGENT}` | 該代理的 API key；未設時 fallback 到 `NVIDIA_API_KEY_GLOBAL` | - |
+| `MODEL_{AGENT}` | 該代理使用的模型；未設時 fallback 到 `MODEL_GLOBAL` | `patcher-main` |
+| `BASE_URL_{AGENT}` | 該代理的 API endpoint；未設時 fallback 到 `DEFAULT_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
+| `TEMPERATURE_{AGENT}` | 採樣溫度，範圍 0.0–2.0 | 1.0 |
+| `TOP_P_{AGENT}` | nucleus sampling 機率上限，範圍 0.0–1.0 | 0.95 |
+| `MAX_TOKENS_{AGENT}` | 單次回應最大 token 數，須為正整數 | 16384 |
+| `ENABLE_THINKING_{AGENT}` | 是否啟用 reasoning，`0`/`1` | 0 |
+| `MODEL_STORY` / `MODEL_CRITIC` | 舊別名，分別 fallback 到 `MODEL_CHARACTER` / `MODEL_PLOT` | - |
+| `MODELS_CONFIG` | JSON 字串，可指定 model preset 覆寫 payload 參數 | `{}` |
+
 ## 核心 API
 
 | 端點 | 說明 |
