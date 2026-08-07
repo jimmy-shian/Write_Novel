@@ -194,24 +194,18 @@ export function renderNovelsList() {
             </div>
         `;
         
-        // Delete novel handler
+        // Right-click context menu handler
+        li.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showNovelContextMenu(e.clientX, e.clientY, n);
+        });
+
+        // Delete novel button click handler
         li.querySelector('.delete-novel-btn').addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (await showCustomConfirm(`確定要刪除「${n.title}」專案嗎？此操作無法還原！`)) {
-                try {
-                    await requestAPI(`/api/novels/${n.id}`, 'DELETE');
-                    if (state.currentNovelId === n.id) {
-                        clearWorkspace();
-                        // 刪除當前選中的小說後，刷新頁面以清除殘留內容
-                        window.location.reload();
-                    } else {
-                        await loadNovels();
-                        showToast("專案已成功刪除");
-                    }
-                } catch (err) {
-                    showToast("刪除失敗: " + err.message);
-                }
-            }
+            closeNovelContextMenu();
+            await handleDeleteNovel(n);
         });
         
         // Select novel handler
@@ -219,10 +213,133 @@ export function renderNovelsList() {
             if (e.target.closest('.delete-novel-btn')) {
                 return;
             }
+            closeNovelContextMenu();
             loadNovelDetails(n.id);
         });
         
         el.novelsList.appendChild(li);
     });
 }
+
+/**
+ * 關閉右鍵選單
+ */
+export function closeNovelContextMenu() {
+    const existing = document.getElementById('novel-context-menu');
+    if (existing) {
+        existing.remove();
+    }
+}
+
+/**
+ * 顯示小說右鍵快顯選單
+ */
+export function showNovelContextMenu(x, y, novel) {
+    closeNovelContextMenu();
+
+    const menu = document.createElement('div');
+    menu.id = 'novel-context-menu';
+    menu.className = 'novel-context-menu';
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+
+    menu.innerHTML = `
+        <div class="context-menu-item" data-action="copy">
+            <span class="menu-icon">📋</span>
+            <span>複製專案 (空書目)</span>
+        </div>
+        <div class="context-menu-item danger" data-action="delete">
+            <span class="menu-icon">🗑️</span>
+            <span>刪除專案</span>
+        </div>
+    `;
+
+    document.body.appendChild(menu);
+
+    // 防止選單超出視窗邊界
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+        menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+    }
+
+    menu.addEventListener('click', async (e) => {
+        const item = e.target.closest('.context-menu-item');
+        if (!item) return;
+        const action = item.dataset.action;
+        closeNovelContextMenu();
+
+        if (action === 'copy') {
+            await handleCopyNovel(novel);
+        } else if (action === 'delete') {
+            await handleDeleteNovel(novel);
+        }
+    });
+
+    const onDocClick = (e) => {
+        if (!menu.contains(e.target)) {
+            closeNovelContextMenu();
+            document.removeEventListener('click', onDocClick);
+            document.removeEventListener('contextmenu', onDocClick);
+            document.removeEventListener('keydown', onKeyDown);
+        }
+    };
+
+    const onKeyDown = (e) => {
+        if (e.key === 'Escape') {
+            closeNovelContextMenu();
+            document.removeEventListener('click', onDocClick);
+            document.removeEventListener('contextmenu', onDocClick);
+            document.removeEventListener('keydown', onKeyDown);
+        }
+    };
+
+    setTimeout(() => {
+        document.addEventListener('click', onDocClick);
+        document.addEventListener('contextmenu', onDocClick);
+        document.addEventListener('keydown', onKeyDown);
+    }, 0);
+}
+
+/**
+ * 複製小說專案（同書名同風格之空書目）
+ */
+export async function handleCopyNovel(novel) {
+    try {
+        showToast(`正在複製「${novel.title}」為同風格空書目...`);
+        const res = await requestAPI(`/api/novels/${novel.id}/copy`, 'POST');
+        if (res && res.novel_id) {
+            showToast(`✅ 已成功複製專案：「${res.title}」`);
+            await loadNovels();
+            await loadNovelDetails(res.novel_id);
+        } else {
+            showToast("⚠️ 複製專案失敗");
+        }
+    } catch (err) {
+        showToast("複製失敗: " + (err.message || err));
+    }
+}
+
+/**
+ * 刪除小說專案
+ */
+export async function handleDeleteNovel(novel) {
+    if (await showCustomConfirm(`確定要刪除「${novel.title}」專案嗎？此操作無法還原！`)) {
+        try {
+            await requestAPI(`/api/novels/${novel.id}`, 'DELETE');
+            if (state.currentNovelId === novel.id) {
+                clearWorkspace();
+                window.location.reload();
+            } else {
+                await loadNovels();
+                showToast("專案已成功刪除");
+            }
+        } catch (err) {
+            showToast("刪除失敗: " + err.message);
+        }
+    }
+}
+
 

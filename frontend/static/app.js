@@ -4008,6 +4008,11 @@ async function runDirectorDecision(currentStage, providedUserPrompt = null, revi
                 let decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
 
+                const msgSenderEl = directorResponseContainer.querySelector('.msg-sender');
+                if (msgSenderEl) {
+                    msgSenderEl.textContent = action === 'FINISH' ? '🎬 AI 總監 (任務完成)' : 'Novel Director';
+                }
+
                 // 檢查是否呼叫失敗或解析無效
                 const isFailed = (success === false) || !action;
                 if (isFailed) {
@@ -4225,6 +4230,11 @@ async function runDirectorDecisionHelp(currentStage, helpAction, helpReason) {
                 cacheDirectorDecisionMessage(responseText, thinkingText);
                 const decisionResult = parseDirectorDecisionText(responseText, currentStage);
                 const action = decisionResult.action;
+                
+                const msgSenderEl = directorResponseContainer.querySelector('.msg-sender');
+                if (msgSenderEl) {
+                    msgSenderEl.textContent = action === 'FINISH' ? '🎬 AI 總監 (任務完成)' : 'Novel Director';
+                }
                 
                 // 顯示解析結果的 Toast
                 const actionLabels = {

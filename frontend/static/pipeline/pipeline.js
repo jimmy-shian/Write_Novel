@@ -674,6 +674,7 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                     const nextDecision = await window.runDirectorDecision(stage);
                     if (nextDecision && nextDecision.action === 'FINISH') {
                         state.receiveFinishCommand = true;
+                        await window.executeDirectorAction(nextDecision, userPrompt);
                         abortPipeline();
                     } else {
                         await window.executeDirectorAction(nextDecision, userPrompt);

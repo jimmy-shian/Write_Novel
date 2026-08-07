@@ -84,6 +84,29 @@ def api_delete_novel(novel_id: str):
     db.delete_novel(novel_id)
     return {"status": "success"}
 
+class NovelCopyRequest(BaseModel):
+    title: Optional[str] = None
+
+@router.post("/novels/{novel_id}/copy")
+def api_copy_novel(novel_id: str, payload: Optional[NovelCopyRequest] = None):
+    source = db.get_novel(novel_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    
+    new_id = str(uuid.uuid4())
+    custom_title = payload.title.strip() if (payload and payload.title and payload.title.strip()) else None
+    new_title = custom_title or f"{source['title']} (副本)"
+    genre = source.get("genre", "Fantasy")
+    style = source.get("style", "Classic Modernism")
+    pipeline_prompt = source.get("pipeline_prompt", "")
+    
+    db.create_novel(new_id, new_title, genre, style)
+    if pipeline_prompt:
+        db.update_novel_pipeline_prompt(new_id, pipeline_prompt)
+        
+    return {"status": "success", "novel_id": new_id, "title": new_title}
+
+
 
 # --- MANUAL SAVE OVERRIDES ---
 @router.post("/novels/{novel_id}/worldbuilding")
