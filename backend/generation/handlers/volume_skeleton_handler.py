@@ -23,9 +23,11 @@ from backend.agents.incremental.runner import run_incremental_volume_skeleton
 def _resolve_single_volume_index(task: GenerationTaskRequest) -> int:
     """
     解析出單一目標卷號。
-    優先順序：task.target.volume_index > task.target.selection[0] > DB 第一個缺失卷 > 1
+    優先順序：task.target.volume_index > task.target.selection[0] > task.frontend_state > instruction/hint 正規表達式 > DB 第一個缺失卷 > 1
     注意：不再自動批量遍歷所有缺失卷，卷的派發順序完全由總監決定。
     """
+    import re
+
     # 1. 直接指定 volume_index
     if task.target.volume_index is not None:
         try:
@@ -42,7 +44,27 @@ def _resolve_single_volume_index(task: GenerationTaskRequest) -> int:
         except Exception:
             pass
 
-    # 3. DB 第一個缺失骨架的卷（fallback）
+    # 3. 從 frontend_state 取 active_volume_index 或 selected_volume
+    if task.frontend_state:
+        fe_vol = getattr(task.frontend_state, "active_volume_index", None) or getattr(task.frontend_state, "selected_volume", None)
+        if fe_vol is not None:
+            try:
+                if isinstance(fe_vol, dict):
+                    fe_vol = fe_vol.get("volume_index") or fe_vol.get("id")
+                return int(fe_vol)
+            except Exception:
+                pass
+
+    # 4. 從 prompt / instruction / hint 內搜尋卷號
+    text_to_search = f"{task.instruction or ''} {task.user_prompt or ''} {task.hint or ''}"
+    vol_match = re.search(r'第\s*(\d+)\s*卷', text_to_search) or re.search(r'volume[_\s]*index[":=\s]*(\d+)', text_to_search, re.IGNORECASE)
+    if vol_match:
+        try:
+            return int(vol_match.group(1))
+        except Exception:
+            pass
+
+    # 5. DB 第一個缺失骨架的卷（fallback）
     volumes = db.get_volumes(task.novel_id) or []
     for vol in volumes:
         try:
@@ -52,7 +74,7 @@ def _resolve_single_volume_index(task: GenerationTaskRequest) -> int:
         if not vol.get("chapters_outline"):
             return idx
 
-    # 4. 第一卷
+    # 6. 第一卷
     if volumes:
         try:
             return int(volumes[0].get("volume_index", 1))

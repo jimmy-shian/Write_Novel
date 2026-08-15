@@ -1913,7 +1913,15 @@ export function renderChatMessages() {
                                         // 重新生成指定的階段：透過 runPipeline 覆寫為 AUTO_REGENERATE 並使用 parsed.target
                                         showToast(`🔄 重新生成：${target}`);
                                         if (typeof window.runPipeline === 'function') {
-                                            await window.runPipeline(pipelinePrompt, { regenerate: true, regenerateStage: target, target });
+                                            const volIdx = parsed.volume_index !== undefined && parsed.volume_index !== null ? parsed.volume_index : (state.activeVolumeIndex || 1);
+                                            const chIdx = parsed.chapter_index !== undefined && parsed.chapter_index !== null ? parsed.chapter_index : (state.activeChapterIndex || 1);
+                                            await window.runPipeline(pipelinePrompt, {
+                                                regenerate: true,
+                                                regenerateStage: target,
+                                                target,
+                                                volume_index: volIdx,
+                                                chapter_index: chIdx
+                                            });
                                         }
                                     } else {
                                         // 繼續下一階段：優先用 resumePipelineWithDecision 進行精準推進

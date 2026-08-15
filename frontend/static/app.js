@@ -429,6 +429,14 @@ async function runPipeline(pipelinePrompt = '', resumeOptions = null) {
             decision.regenerate = true;
             decision.regenerateStage = resumeOptions.regenerateStage;
             decision.target = resumeOptions.target || resumeOptions.regenerateStage;
+            if (resumeOptions.volume_index !== undefined && resumeOptions.volume_index !== null) {
+                decision.volume_index = resumeOptions.volume_index;
+                state.activeVolumeIndex = parseInt(resumeOptions.volume_index) || state.activeVolumeIndex;
+            }
+            if (resumeOptions.chapter_index !== undefined && resumeOptions.chapter_index !== null) {
+                decision.chapter_index = resumeOptions.chapter_index;
+                state.activeChapterIndex = parseInt(resumeOptions.chapter_index) || state.activeChapterIndex;
+            }
             decision.continue = true;
             decision.shouldPause = false;
             updateDirectorMessage(`🔄 恢復執行：重新生成 ${decision.target}...`);
@@ -791,6 +799,11 @@ async function executeDirectorAction(decision, userPrompt) {
                 // 此時若總監指示繼續前進到寫作階段，我們應該安全遞增 chapter index（除非總監在 decision 中已明確覆寫了一個更大的 index）
                 if (decision?.chapter_index) {
                     state.activeChapterIndex = parseInt(decision.chapter_index);
+                } else if (state.suspendedWriterContext?.chapterIndex) {
+                    state.activeChapterIndex = parseInt(state.suspendedWriterContext.chapterIndex);
+                    decision = { ...decision, chapter_index: state.activeChapterIndex };
+                    appendChatMessage('system', `🔄 **[寫作現場恢復]** 骨架/架構修補完成，系統自動恢復被打斷的第 ${state.activeChapterIndex} 章寫作進度。`);
+                    state.suspendedWriterContext = null;
                 }
                 if (state.activeTab === 'editor') {
                     showToast(`🎉 前一章審核通過！準備寫作第 ${state.activeChapterIndex} 章...`);
@@ -826,6 +839,14 @@ async function executeDirectorAction(decision, userPrompt) {
             const target = decision.target || decision.regenerateStage || '';
             showToast(`⚡ 總監指示重新生成：${hint || target}`);
             const enhancedPrompt = hint ? `【⚠️ 總監修改指示/修正要求】：\n${hint}` : userPrompt;
+
+            if (state.activeTab === 'writer' || state.currentlyWritingChapterIndex || state.activeChapterIndex) {
+                state.suspendedWriterContext = {
+                    chapterIndex: state.currentlyWritingChapterIndex || state.activeChapterIndex || 1,
+                    savedAt: Date.now(),
+                    target: target
+                };
+            }
             if (target.includes('worldview') || target.includes('世界觀')) {
                 updatePipelineStage('worldview', 'running');
                 await executePipelineStage('worldview', enhancedPrompt, decision);

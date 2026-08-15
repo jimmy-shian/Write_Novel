@@ -38,5 +38,9 @@ export const state = {
     // 總監暫停狀態：WAIT_USER / 用戶暫停 / 一鍵模式被 WAIT_USER 卡住時，
     // 用來在對話框顯示「繼續/下一步」恢復按鈕，讓用戶可重新觸發 pipeline。
     // { paused: boolean, action: string|null, target: string|null, reason: string }
-    waitingForUserResume: { paused: false, action: null, target: null, reason: '' }
+    waitingForUserResume: { paused: false, action: null, target: null, reason: '' },
+
+    // 寫作中斷掛起上下文：當正文寫作/編輯中途因全域骨架修補等操作被打斷時，保存打斷前目標章節
+    // { chapterIndex: number, savedAt: number, reason: string }
+    suspendedWriterContext: null
 };
