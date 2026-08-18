@@ -473,39 +473,68 @@
                         <button class="settings-tab-btn" data-agent="character">2️⃣ Character Designer</button>
                         <button class="settings-tab-btn" data-agent="volumes">📚 Volumes Planner</button>
                         <button class="settings-tab-btn" data-agent="volume_skeleton">🦴 Skeleton Planner</button>
-                        <button class="settings-tab-btn" data-agent="writer">4️⃣ Chapter Writer</button>
-                        <button class="settings-tab-btn" data-agent="editor">5️⃣ Editor Agent</button>
+                        <button class="settings-tab-btn" data-agent="plot">📑 Plot Planner</button>
+                        <button class="settings-tab-btn" data-agent="writer">✍️ Chapter Writer</button>
+                        <button class="settings-tab-btn" data-agent="editor">🎨 Editor Agent</button>
                         <button class="settings-tab-btn" data-agent="copilot">🧠 AI 總監 Copilot</button>
                     </div>
                     
                     <!-- Right: Config Panel -->
                     <div class="settings-fields-panel">
-                        <h3 id="settings-agent-title">Global 全域設置</h3>
+                        <div class="settings-panel-header">
+                            <h3 id="settings-agent-title">Global 全域設置</h3>
+                            <span class="settings-hint-badge" id="settings-agent-badge">若為空白則自動繼承全域設置</span>
+                        </div>
                         <input type="hidden" id="setting-agent-name" value="global">
                         
                         <div class="form-group">
-                            <label>API Key (NVIDIA / OpenAI / Custom)</label>
-                            <input type="text" id="setting-api-key" placeholder="輸入 API 金鑰 (例如 nvapi-xxx 或 sk-xxx)">
+                            <label for="setting-base-url">API Base URL (端點網址)</label>
+                            <div class="input-with-action">
+                                <input type="text" id="setting-base-url" placeholder="https://integrate.api.nvidia.com/v1">
+                                <button type="button" id="btn-fetch-models" class="btn btn-secondary btn-sm" title="向端點查詢可用模型清單">🔍 獲取模型清單</button>
+                            </div>
+                            <div id="models-fetch-status" class="settings-status-hint"></div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="setting-api-key">API Key (金鑰)</label>
+                            <input type="password" id="setting-api-key" placeholder="輸入 API 金鑰 (例如 nvapi-xxx 或 sk-xxx)">
                         </div>
                         
                         <div class="form-group">
-                            <label>API Base URL</label>
-                            <input type="text" id="setting-base-url" placeholder="https://integrate.api.nvidia.com/v1">
+                            <label for="setting-model">模型名稱 (可手動輸入或從清單快速選取)</label>
+                            <div class="model-selection-container">
+                                <select id="setting-model-select" class="form-control mb-2">
+                                    <option value="">-- 從模型清單快速選取 (或於下方手動輸入) --</option>
+                                </select>
+                                <input type="text" id="setting-model" list="models-datalist" placeholder="輸入或選擇模型 (例如 openai/gpt-oss-120b)" value="openai/gpt-oss-120b">
+                                <datalist id="models-datalist"></datalist>
+                            </div>
+                            <p class="settings-field-tip">提示：點擊「獲取模型清單」後即可直接於選單挑選，或自由手動修改/輸入任何自訂模型 ID。</p>
+                        </div>
+
+                        <div class="settings-params-grid">
+                            <div class="form-group">
+                                <label for="setting-max-tokens">Max Tokens (最大長度)</label>
+                                <input type="number" id="setting-max-tokens" placeholder="16384" value="16384">
+                            </div>
+                            <div class="form-group">
+                                <label for="setting-temperature">Temperature (溫度 0.0~2.0)</label>
+                                <input type="number" step="0.05" min="0" max="2" id="setting-temperature" placeholder="1.0" value="1.0">
+                            </div>
+                            <div class="form-group">
+                                <label for="setting-top-p">Top P (採樣 0.0~1.0)</label>
+                                <input type="number" step="0.01" min="0" max="1" id="setting-top-p" placeholder="0.95" value="0.95">
+                            </div>
+                            <div class="form-group settings-checkbox-group">
+                                <label class="checkbox-label" for="setting-enable-thinking">
+                                    <input type="checkbox" id="setting-enable-thinking">
+                                    <span>啟用思考模式 (Enable Thinking)</span>
+                                </label>
+                            </div>
                         </div>
                         
-                        <!-- 參數由本地網關自動預設，此處隱藏以簡化介面 -->
-                        <div style="display: none;">
-                            <select id="setting-preset-model">
-                                <option value="">-- 手動輸入或選擇預設 --</option>
-                            </select>
-                            <input type="text" id="setting-model" value="patcher-main">
-                            <input type="number" id="setting-max-tokens" value="16384">
-                            <input type="number" step="0.05" id="setting-temperature" value="1.0">
-                            <input type="number" step="0.01" id="setting-top-p" value="0.95">
-                            <input type="checkbox" id="setting-enable-thinking">
-                        </div>
-                        
-                        <button id="btn-save-agent-settings" class="btn btn-primary btn-full mt-4">儲存本項設定</button>
+                        <button id="btn-save-agent-settings" class="btn btn-primary btn-full mt-4">儲存本項設定 (同步更新 .env 檔案)</button>
                     </div>
                 </div>
             </div>

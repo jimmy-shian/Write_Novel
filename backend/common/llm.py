@@ -9,11 +9,11 @@ from backend.persistence import get_agent_configs, AGENT_DEFAULTS
 from dotenv import load_dotenv
 import time
 
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Load environment variables from .env file
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
-
 
 
 # --- Agent API Key Mapping from .env ---
@@ -46,9 +46,25 @@ def get_agent_model(agent_name):
         "plot": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC") or global_default,
         "writer": os.getenv("MODEL_WRITER") or global_default,
         "editor": os.getenv("MODEL_EDITOR") or global_default,
-        "copilot": os.getenv("MODEL_COPILOT") or global_default
+        "copilot": os.getenv("MODEL_COPILOT") or global_default,
     }
     return model_map.get(agent_name, global_default)
+
+def get_agent_base_url(agent_name):
+    """Get base URL for agent from environment variables."""
+    global_default = os.getenv("BASE_URL_GLOBAL") or os.getenv("DEFAULT_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    url_map = {
+        "global": global_default,
+        "architect": os.getenv("BASE_URL_ARCHITECT") or global_default,
+        "character": os.getenv("BASE_URL_CHARACTER") or global_default,
+        "volumes": os.getenv("BASE_URL_VOLUMES") or os.getenv("BASE_URL_ARCHITECT") or global_default,
+        "volume_skeleton": os.getenv("BASE_URL_VOLUME_SKELETON") or os.getenv("BASE_URL_PLOT") or global_default,
+        "plot": os.getenv("BASE_URL_PLOT") or global_default,
+        "writer": os.getenv("BASE_URL_WRITER") or global_default,
+        "editor": os.getenv("BASE_URL_EDITOR") or global_default,
+        "copilot": os.getenv("BASE_URL_COPILOT") or global_default,
+    }
+    return url_map.get(agent_name, global_default)
 
 def get_default_config():
     """Get default config values from .env."""
@@ -73,10 +89,10 @@ def get_config_for_agent(agent_name):
     # Get agent-specific defaults from AGENT_DEFAULTS (reads from .env for models)
     agent_defaults = AGENT_DEFAULTS.get(agent_name, AGENT_DEFAULTS["global"])
     
-    # Base fallback from agent-specific AGENT_DEFAULTS
+    # Base fallback from agent-specific AGENT_DEFAULTS and .env
     config = {
         "api_key": get_agent_api_key(agent_name) or "",
-        "base_url": agent_defaults.get("base_url", "https://integrate.api.nvidia.com/v1"),
+        "base_url": get_agent_base_url(agent_name),
         "model": get_agent_model(agent_name),
         "temperature": agent_defaults["temperature"],
         "top_p": agent_defaults["top_p"],
@@ -105,6 +121,7 @@ def get_config_for_agent(agent_name):
                 config[k] = agent_cfg[k]
                 
     return config
+
 
 def normalize_messages(messages):
     """

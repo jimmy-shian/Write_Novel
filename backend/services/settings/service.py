@@ -7,8 +7,10 @@ import math
 import os
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Tuple
 
+import requests
 from backend import persistence as db
 from backend.common.llm import get_config_for_agent, get_default_config
+from backend.services.settings.env_manager import sync_agent_settings_to_env
 
 
 CANONICAL_AGENT_NAMES = [
@@ -44,6 +46,80 @@ NUMERIC_RANGES = {
     "temperature": (0.0, 2.0),
     "top_p": (0.0, 1.0),
 }
+
+
+def fetch_available_models(base_url: str, api_key: Optional[str] = "") -> Dict[str, Any]:
+    """
+    Fetches the available model list from an OpenAI-compatible /models endpoint.
+    Handles OpenAI, NVIDIA NIM, Ollama, vLLM, and other proxy formats.
+    """
+    if not base_url or not str(base_url).strip():
+        raise ValueError("請輸入有效的 API Base URL")
+
+    raw_url = str(base_url).strip().rstrip("/")
+    if raw_url.endswith("/chat/completions"):
+        raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
+
+    if raw_url.endswith("/models"):
+        models_url = raw_url
+    else:
+        models_url = f"{raw_url}/models"
+
+    headers = {"Accept": "application/json"}
+    if api_key and str(api_key).strip():
+        headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+
+    try:
+        res = requests.get(models_url, headers=headers, timeout=12)
+        if res.status_code != 200:
+            raise ValueError(f"HTTP {res.status_code}: {res.text[:200]}")
+
+        data = res.json()
+        model_ids = []
+
+        # OpenAI standard format: {"data": [{"id": "model_id", ...}, ...]}
+        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+            for item in data["data"]:
+                if isinstance(item, dict) and "id" in item:
+                    model_ids.append(str(item["id"]))
+                elif isinstance(item, str):
+                    model_ids.append(item)
+        # Ollama / Other format: {"models": [{"name": "...", "model": "..."}, ...]}
+        elif isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
+            for item in data["models"]:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("model") or item.get("id")
+                    if name:
+                        model_ids.append(str(name))
+                elif isinstance(item, str):
+                    model_ids.append(item)
+        # Direct list format: [{"id": "..."}, ...] or ["model1", ...]
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "id" in item:
+                    model_ids.append(str(item["id"]))
+                elif isinstance(item, str):
+                    model_ids.append(item)
+
+        # Deduplicate while preserving order
+        unique_models = []
+        seen = set()
+        for m in model_ids:
+            clean_m = str(m).strip()
+            if clean_m and clean_m not in seen:
+                seen.add(clean_m)
+                unique_models.append(clean_m)
+
+        return {
+            "status": "success",
+            "models": unique_models,
+            "count": len(unique_models),
+            "endpoint": models_url,
+        }
+    except requests.exceptions.RequestException as e:
+        raise ValueError(f"無法連線至模型端點 ({models_url}): {str(e)}")
+    except Exception as e:
+        raise ValueError(f"獲取模型清單失敗: {str(e)}")
 
 
 def _get_plot_review_batch_size() -> int:
@@ -198,6 +274,8 @@ def _merge_patch_into_effective_config(agent_name: str, patch: Mapping[str, Any]
 def save_settings_patch(agent_name: str, patch: Mapping[str, Any]) -> Dict[str, Any]:
     normalized_agent = normalize_agent_name(agent_name) or agent_name
     effective_config, meta = _merge_patch_into_effective_config(normalized_agent, patch)
+    
+    # 1. Update SQLite database
     db.save_agent_config(
         normalized_agent,
         effective_config.get("api_key", ""),
@@ -208,10 +286,29 @@ def save_settings_patch(agent_name: str, patch: Mapping[str, Any]) -> Dict[str, 
         effective_config.get("max_tokens", get_default_config()["max_tokens"]),
         effective_config.get("enable_thinking", get_default_config()["enable_thinking"]),
     )
+
+    # 2. Update .env file and hot reload os.environ
+    env_updated = sync_agent_settings_to_env(normalized_agent, effective_config)
+
+    # 3. Keep AGENT_DEFAULTS in memory synchronized
+    try:
+        from backend.persistence import AGENT_DEFAULTS
+        if normalized_agent in AGENT_DEFAULTS:
+            AGENT_DEFAULTS[normalized_agent].update({
+                "model": effective_config.get("model", ""),
+                "temperature": effective_config.get("temperature"),
+                "top_p": effective_config.get("top_p"),
+                "max_tokens": effective_config.get("max_tokens"),
+                "enable_thinking": effective_config.get("enable_thinking"),
+            })
+    except Exception:
+        pass
+
     return {
         "agent_name": agent_name,
         "stored_agent_name": normalized_agent,
         "config": _format_effective_config(normalized_agent, effective_config),
+        "env_updated": env_updated,
         **meta,
     }
 
@@ -248,3 +345,4 @@ def apply_settings_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "updated_agent": result,
         "warnings": result.get("warnings", []),
     }
+

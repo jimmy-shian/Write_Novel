@@ -17,3 +17,14 @@ def api_save_settings(payload: Mapping[str, Any] = Body(...)):
         return apply_settings_payload(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/settings/fetch-models")
+def api_fetch_models(payload: Mapping[str, Any] = Body(...)):
+    from backend.services.settings.service import fetch_available_models
+    base_url = payload.get("base_url", "")
+    api_key = payload.get("api_key", "")
+    try:
+        return fetch_available_models(base_url, api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

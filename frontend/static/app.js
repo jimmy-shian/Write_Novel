@@ -7,7 +7,7 @@ import { buildFrontendStateReference } from './generation/generationStateMapper.
 import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown } from './core/utils.js';
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage } from './ui/renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './ui/novelLifecycle.js';
-import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings } from './ui/settings.js';
+import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings, fetchModelsForCurrentUrl } from './ui/settings.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator, hideAllAgentProcessingIndicators, switchToDirectorTab, switchToStreamTab } from './pipeline/agentProcessing.js';
 import { showPipelineProgress, updatePipelineStage, updateDirectorMessage, showGeneratingIndicator, executePipelineStage } from './pipeline/pipeline.js';
 // Expose state globally to eliminate Uncaught ReferenceError for onclick handlers in index.html and renderers.js
@@ -4717,68 +4717,37 @@ function setupEventListeners() {
     });
     
     // Save Settings
-    el.btnSaveAgentSettings.addEventListener('click', saveCurrentAgentSettings);
+    if (el.btnSaveAgentSettings) {
+        el.btnSaveAgentSettings.addEventListener('click', saveCurrentAgentSettings);
+    }
     
-    // Quick apply Nvidia Presets
-    if (el.settingPresetModel) {
-        el.settingPresetModel.addEventListener('change', () => {
-            const presetVal = el.settingPresetModel.value;
-            if (!presetVal) return;
-            
-            const presets = {
-                "nvidia/nemotron-3-super-120b-a12b": {
-                    model: "nvidia/nemotron-3-super-120b-a12b",
-                    temperature: 1.0,
-                    top_p: 0.95,
-                    max_tokens: 16384,
-                    enable_thinking: true
-                },
-                "openai/gpt-oss-120b": {
-                    model: "openai/gpt-oss-120b",
-                    temperature: 1.0,
-                    top_p: 1.0,
-                    max_tokens: 4096,
-                    enable_thinking: false
-                },
-                "minimaxai/minimax-m2.7": {
-                    model: "minimaxai/minimax-m2.7",
-                    temperature: 1.0,
-                    top_p: 0.95,
-                    max_tokens: 8192,
-                    enable_thinking: false
-                },
-                "mistralai/mistral-small-4-119b-2603": {
-                    model: "mistralai/mistral-small-4-119b-2603",
-                    temperature: 0.10,
-                    top_p: 1.00,
-                    max_tokens: 16384,
-                    enable_thinking: false
-                },
-                "stepfun-ai/step-3.5-flash": {
-                    model: "stepfun-ai/step-3.5-flash",
-                    temperature: 1.0,
-                    top_p: 0.9,
-                    max_tokens: 16384,
-                    enable_thinking: false
-                }
-            };
-            
-            const preset = presets[presetVal];
-            if (preset) {
-                el.settingModel.value = preset.model;
-                el.settingMaxTokens.value = preset.max_tokens;
-                el.settingTemperature.value = preset.temperature;
-                el.settingTopP.value = preset.top_p;
-                el.settingEnableThinking.checked = preset.enable_thinking;
-                
-                if (!el.settingBaseUrl.value || el.settingBaseUrl.value.trim() === '' || el.settingBaseUrl.value.includes('qwen') || el.settingBaseUrl.value.includes('nvidia')) {
-                    el.settingBaseUrl.value = 'https://integrate.api.nvidia.com/v1';
-                }
-                
-                showToast(`已套用 ${preset.model} 預設值，點擊儲存以套用！`);
+    // Fetch Models from Base URL
+    if (el.btnFetchModels) {
+        el.btnFetchModels.addEventListener('click', () => {
+            fetchModelsForCurrentUrl(true);
+        });
+    }
+
+    // Sync Model Select dropdown with Model text input
+    if (el.settingModelSelect) {
+        el.settingModelSelect.addEventListener('change', () => {
+            const selected = el.settingModelSelect.value;
+            if (selected) {
+                el.settingModel.value = selected;
             }
         });
     }
+
+    if (el.settingModel) {
+        el.settingModel.addEventListener('input', () => {
+            const val = el.settingModel.value.trim();
+            if (el.settingModelSelect) {
+                const hasOption = Array.from(el.settingModelSelect.options).some(o => o.value === val);
+                el.settingModelSelect.value = hasOption ? val : '';
+            }
+        });
+    }
+
     
     // 4. Save Text Editors Handlers
     el.btnWorldviewSave.addEventListener('click', saveWorldviewDirect);

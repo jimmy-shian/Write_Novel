@@ -1975,6 +1975,145 @@ textarea:focus {
     color: #ffffff;
 }
 
+.settings-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.settings-panel-header h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-hint-badge {
+    font-size: 0.78rem;
+    background: var(--bg-tertiary, #f1f5f9);
+    color: var(--text-secondary, #64748b);
+    padding: 3px 10px;
+    border-radius: 9999px;
+    font-weight: 500;
+}
+
+.input-with-action {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.input-with-action input {
+    flex: 1;
+}
+
+.input-with-action .btn {
+    white-space: nowrap;
+    padding: 9px 14px;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.settings-status-hint {
+    font-size: 0.82rem;
+    margin-top: 5px;
+    min-height: 18px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.settings-status-hint.loading {
+    color: #3b82f6;
+}
+
+.settings-status-hint.success {
+    color: #10b981;
+}
+
+.settings-status-hint.error {
+    color: #ef4444;
+}
+
+.model-selection-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-field-tip {
+    font-size: 0.78rem;
+    color: var(--text-muted, #94a3b8);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+
+.settings-params-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 16px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color, #e2e8f0);
+}
+
+.settings-checkbox-group {
+    grid-column: span 2;
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--primary, #3b82f6);
+}
+
+@media (max-width: 768px) {
+    .settings-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+
+    .settings-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        padding-bottom: 8px;
+    }
+
+    .settings-tab-btn {
+        white-space: nowrap;
+        padding: 8px 12px;
+        font-size: 0.85rem;
+    }
+
+    .settings-params-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-checkbox-group {
+        grid-column: span 1;
+    }
+}
+
+
 /* ==========================================
    DROPDOWNS
    ========================================== */
