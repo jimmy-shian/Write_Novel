@@ -5014,11 +5014,11 @@ function setupEventListeners() {
             
             const format = await window.showCustomDialog({
                 title: "📦 匯出小說",
-                message: "請選擇您要匯出的格式：\nTXT: 純文字格式，適合閱讀正文。\nMarkdown: 包含世界觀、角色設定的格式化文件。",
+                message: "請選擇您要匯出的格式：\n• HTML: 離線便攜閱讀器（支援記憶閱讀進度、字體調節、主題切換、章節目錄跳轉）。\n• TXT: 純文字格式，適合簡易備份。",
                 type: 'options',
                 options: [
-                    { value: 'txt', text: '匯出為 TXT 檔' },
-                    { value: 'markdown', text: '匯出為 Markdown 檔' }
+                    { value: 'html', text: '📖 匯出為 HTML 離線便攜閱讀器（推薦）' },
+                    { value: 'txt', text: '📄 匯出為 TXT 純文字檔' }
                 ]
             });
             
