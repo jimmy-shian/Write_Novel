@@ -357,6 +357,12 @@ def delete_volume(novel_id, volume_index):
     cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
     cursor.execute("UPDATE chapters SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
     
+    # 5.1 同步刪除並平移敘事記憶庫與 Arc 摘要，防止章節記憶索引脫鉤錯位
+    cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
+    cursor.execute("UPDATE chapter_memory SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
+    cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
+    cursor.execute("UPDATE arc_summaries SET arc_start = arc_start - ?, arc_end = arc_end - ? WHERE novel_id = ? AND arc_start > ?", (ch_count, ch_count, novel_id, end_ch))
+    
     # 6. 自大綱（plot_chapters 表）中剔除該卷的章節，並將後續大綱章節的 chapter_index 同步向前平移
     plot_rows = cursor.execute("SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchall()
     if plot_rows:

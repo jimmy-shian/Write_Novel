@@ -17,6 +17,14 @@ try:
 except Exception:
     CHARACTER_BASIC_FIELDS = []
 
+try:
+    from backend.services.incremental_patch.engine import ALLOWED_CHARACTER_FIELDS
+except Exception:
+    ALLOWED_CHARACTER_FIELDS = {
+        "name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw",
+        "motivation", "arc", "speech_style", "appearance", "background", "relationships"
+    }
+
 def get_latest_characters(novel_id):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -261,15 +269,19 @@ def update_character_field(novel_id, char_index, field_name, new_value):
         return None
     
     parsed = char_data["parsed_data"]
-    if "characters" not in parsed:
+    if isinstance(parsed, list):
+        char_list = parsed
+    elif isinstance(parsed, dict) and "characters" in parsed:
+        char_list = parsed["characters"]
+    else:
         return None
     
     try:
-        norm_idx = normalize_char_index(char_index, len(parsed["characters"]), source='update_character_field')
+        norm_idx = normalize_char_index(char_index, len(char_list), source='update_character_field')
     except IndexError:
         return None
     
-    parsed["characters"][norm_idx][field_name] = new_value
+    char_list[norm_idx][field_name] = new_value
     
     return save_characters(novel_id, parsed)
 

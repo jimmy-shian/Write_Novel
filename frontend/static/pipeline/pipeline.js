@@ -498,6 +498,7 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
         showToast(`🚀 正在啟動 ${stage} Agent...`);
         showAgentProcessingIndicator(stage, agentName);
         let failed = false;
+        let recoveryScheduled = false;
         // 保存寫作章節索引用於閉包
         const writingChapterIndex = state.currentlyWritingChapterIndex;
         // Initialize buffer
@@ -613,6 +614,7 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 hideAgentProcessingIndicator(stage);
                 
                 if (shouldAskDirector) {
+                    recoveryScheduled = true;
                     // 啟用總監自癒容錯機制，將錯誤反饋給總監
                     showToast("⚠️ 偵測到管線執行錯誤，正在請求總監進行決策自癒修正...");
                     setTimeout(async () => {
@@ -643,8 +645,9 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                             state.isPipelineRunning = false;
                             showPipelineProgress(false);
                             showToast(`總監自癒重試失敗: ${e.message || e}`);
+                        } finally {
+                            resolve();
                         }
-                        resolve();
                     }, 3000);
                 } else {
                     resolve();
@@ -656,31 +659,38 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                     state.directorSubAgentStatus[stage] = 'error';
                     renderSubAgentStatus(state.directorSubAgentStatus);
                     stopPipelineHeartbeat();
-                    resolve();
+                    if (!recoveryScheduled) {
+                        resolve();
+                    }
                     return;
                 }
-                state.directorSubAgentStatus[stage] = 'done';
-                renderSubAgentStatus(state.directorSubAgentStatus);
-                stopPipelineHeartbeat();
-                updatePipelineStage(stage, 'done');
-                hideAgentProcessingIndicator(stage);
-                await window.loadNovelDetails(state.currentNovelId);
-                // 角色生成完成後，清除 need_characters 信號（已補充完畢）
-                if (stage === 'characters') {
-                    state.skeletonNeedsCharacters = null;
-                }
-                if (state.isPipelineRunning && !state.receiveFinishCommand) {
-                    showToast(`${stage} 完成，正在請求 AI 總監評估...`);
-                    const nextDecision = await window.runDirectorDecision(stage);
-                    if (nextDecision && nextDecision.action === 'FINISH') {
-                        state.receiveFinishCommand = true;
-                        await window.executeDirectorAction(nextDecision, userPrompt);
-                        abortPipeline();
-                    } else {
-                        await window.executeDirectorAction(nextDecision, userPrompt);
+                try {
+                    state.directorSubAgentStatus[stage] = 'done';
+                    renderSubAgentStatus(state.directorSubAgentStatus);
+                    stopPipelineHeartbeat();
+                    updatePipelineStage(stage, 'done');
+                    hideAgentProcessingIndicator(stage);
+                    await window.loadNovelDetails(state.currentNovelId);
+                    // 角色生成完成後，清除 need_characters 信號（已補充完畢）
+                    if (stage === 'characters') {
+                        state.skeletonNeedsCharacters = null;
                     }
+                    if (state.isPipelineRunning && !state.receiveFinishCommand) {
+                        showToast(`${stage} 完成，正在請求 AI 總監評估...`);
+                        const nextDecision = await window.runDirectorDecision(stage);
+                        if (nextDecision && nextDecision.action === 'FINISH') {
+                            state.receiveFinishCommand = true;
+                            await window.executeDirectorAction(nextDecision, userPrompt);
+                            abortPipeline();
+                        } else {
+                            await window.executeDirectorAction(nextDecision, userPrompt);
+                        }
+                    }
+                } catch (completionErr) {
+                    console.error(`[Pipeline] Completion error in stage ${stage}:`, completionErr);
+                } finally {
+                    resolve();
                 }
-                resolve();
             },
             10,
             (error, retry, maxRetries) => {

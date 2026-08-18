@@ -150,9 +150,20 @@ def iter_post_processed_generation_stream(
     event_log: List[Dict[str, Any]] = []
     failed = False
     failure_message: Optional[str] = None
+    import time
+    last_heartbeat = time.time()
 
     try:
         for chunk in stream:
+            now = time.time()
+            if now - last_heartbeat > 15:
+                try:
+                    if task and getattr(task, "novel_id", None):
+                        db.update_pipeline_heartbeat(task.novel_id)
+                except Exception:
+                    pass
+                last_heartbeat = now
+
             event = parse_sse_event(chunk)
             if event:
                 event_type = event.get("type")
