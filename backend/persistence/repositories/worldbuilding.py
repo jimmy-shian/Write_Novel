@@ -21,7 +21,6 @@ def get_worldview_patches(novel_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     row = cursor.execute("SELECT worldview_patches FROM novels WHERE id = ?", (novel_id,)).fetchone()
-    conn.close()
     if row and row["worldview_patches"]:
         try:
             return json.loads(row["worldview_patches"])
@@ -31,23 +30,22 @@ def get_worldview_patches(novel_id):
 
 def add_worldview_patch(novel_id, category, details, source_chapter_index):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    row = cursor.execute("SELECT worldview_patches FROM novels WHERE id = ?", (novel_id,)).fetchone()
-    patches = []
-    if row and row["worldview_patches"]:
-        try:
-            patches = json.loads(row["worldview_patches"])
-        except:
-            patches = []
-    patches.append({
-        "category": _to_traditional(category),
-        "details": _to_traditional(details),
-        "source_chapter": source_chapter_index,
-        "created_at": datetime.now().isoformat()
-    })
-    cursor.execute("UPDATE novels SET worldview_patches = ? WHERE id = ?", (json.dumps(patches, ensure_ascii=False), novel_id))
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        row = cursor.execute("SELECT worldview_patches FROM novels WHERE id = ?", (novel_id,)).fetchone()
+        patches = []
+        if row and row["worldview_patches"]:
+            try:
+                patches = json.loads(row["worldview_patches"])
+            except:
+                patches = []
+        patches.append({
+            "category": _to_traditional(category),
+            "details": _to_traditional(details),
+            "source_chapter": source_chapter_index,
+            "created_at": datetime.now().isoformat()
+        })
+        cursor.execute("UPDATE novels SET worldview_patches = ? WHERE id = ?", (json.dumps(patches, ensure_ascii=False), novel_id))
 
 def mark_downstream_dirty(novel_id, source_chapter_index):
     """
@@ -55,21 +53,19 @@ def mark_downstream_dirty(novel_id, source_chapter_index):
     to terminate immediate LLM cascades.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # 1. Mark chapters with index > source_chapter_index as dirty
-    cursor.execute("UPDATE chapters SET is_dirty = 1 WHERE novel_id = ? AND chapter_index > ?", (novel_id, source_chapter_index))
-    
-    # 2. Mark latest plot_chapters (outlines) record as dirty
-    cursor.execute("UPDATE plot_chapters SET is_dirty = 1 WHERE novel_id = ?", (novel_id,))
-    
-    # 3. Mark downstream volumes as dirty
-    vols = get_volumes(novel_id)
-    source_volume = get_chapter_volume_index(vols, source_chapter_index)
-    cursor.execute("UPDATE volumes SET is_dirty = 1 WHERE novel_id = ? AND volume_index > ?", (novel_id, source_volume))
-    
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        
+        # 1. Mark chapters with index > source_chapter_index as dirty
+        cursor.execute("UPDATE chapters SET is_dirty = 1 WHERE novel_id = ? AND chapter_index > ?", (novel_id, source_chapter_index))
+        
+        # 2. Mark latest plot_chapters (outlines) record as dirty
+        cursor.execute("UPDATE plot_chapters SET is_dirty = 1 WHERE novel_id = ?", (novel_id,))
+        
+        # 3. Mark downstream volumes as dirty
+        vols = get_volumes(novel_id)
+        source_volume = get_chapter_volume_index(vols, source_chapter_index)
+        cursor.execute("UPDATE volumes SET is_dirty = 1 WHERE novel_id = ? AND volume_index > ?", (novel_id, source_volume))
 
 def apply_worldview_patch(novel_id, category, details):
     """
@@ -95,7 +91,6 @@ def get_latest_worldbuilding(novel_id):
         "SELECT * FROM worldbuilding WHERE novel_id = ? ORDER BY version DESC LIMIT 1",
         (novel_id,)
     ).fetchone()
-    conn.close()
     return dict(row) if row else None
 
 def get_worldbuilding_history(novel_id):
@@ -105,7 +100,6 @@ def get_worldbuilding_history(novel_id):
         "SELECT version, created_at FROM worldbuilding WHERE novel_id = ? ORDER BY version DESC",
         (novel_id,)
     ).fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 def get_worldbuilding_by_version(novel_id, version):
@@ -115,7 +109,6 @@ def get_worldbuilding_by_version(novel_id, version):
         "SELECT * FROM worldbuilding WHERE novel_id = ? AND version = ?",
         (novel_id, version)
     ).fetchone()
-    conn.close()
     return dict(row) if row else None
 
 def save_worldbuilding(novel_id, content, validate=True):
@@ -126,19 +119,18 @@ def save_worldbuilding(novel_id, content, validate=True):
         if warnings:
             print(f'[WARN] Worldview validation warnings for novel {novel_id}: {";".join(warnings)}')
     conn = get_db_connection()
-    cursor = conn.cursor()
-    row = cursor.execute(
-        "SELECT MAX(version) as max_v FROM worldbuilding WHERE novel_id = ?",
-        (novel_id,)
-    ).fetchone()
-    next_version = (row["max_v"] or 0) + 1
-    
-    cursor.execute(
-        "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
-        (novel_id, _to_traditional(content), next_version)
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT MAX(version) as max_v FROM worldbuilding WHERE novel_id = ?",
+            (novel_id,)
+        ).fetchone()
+        next_version = (row["max_v"] or 0) + 1
+        
+        cursor.execute(
+            "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
+            (novel_id, _to_traditional(content), next_version)
+        )
     return next_version
 
 # --- CHARACTERS (VERSIONED) ---

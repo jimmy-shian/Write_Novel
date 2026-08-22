@@ -329,6 +329,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
         required_character_set=required_character_set,
+        novel_id=novel_id,
     )
     
     db.save_chat_message(

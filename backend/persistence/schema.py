@@ -382,8 +382,9 @@ def db_init():
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
     )
     """)
+    # 移除與 UNIQUE(novel_id, chapter_index) 完全重複的冗餘索引，減少 WAL 寫入放大
     try:
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapter_memory_lookup ON chapter_memory (novel_id, chapter_index)")
+        cursor.execute("DROP INDEX IF EXISTS idx_chapter_memory_lookup")
     except sqlite3.OperationalError:
         pass
 
@@ -400,8 +401,9 @@ def db_init():
         FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
     )
     """)
+    # 移除與 UNIQUE(novel_id, arc_start, arc_end) 完全重複的冗餘索引，減少 WAL 寫入放大
     try:
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_arc_summaries_lookup ON arc_summaries (novel_id, arc_start, arc_end)")
+        cursor.execute("DROP INDEX IF EXISTS idx_arc_summaries_lookup")
     except sqlite3.OperationalError:
         pass
 
@@ -469,7 +471,5 @@ def db_init():
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create prompt_overrides table: {e}")
-        
-    conn.close()
 
 # --- PROMPT OVERRIDES ---

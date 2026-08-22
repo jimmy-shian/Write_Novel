@@ -22,55 +22,54 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
     target_vol_idx: 若指定（patch 模式），則只 upsert 該卷，其餘卷保留不被刪除。
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    if target_vol_idx is not None:
-        cursor.execute(
-            "DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?",
-            (novel_id, target_vol_idx)
-        )
-    else:
-        cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
-        if clear_downstream:
-            # Backup chapters before wiping (P0-1)
-            cursor.execute("DELETE FROM chapters_backup WHERE novel_id = ?", (novel_id,))
-            cursor.execute("""
-                INSERT INTO chapters_backup (novel_id, chapter_index, content, synopsis, thinking, version, created_at, backed_up_at)
-                SELECT novel_id, chapter_index, content, synopsis, thinking, version, created_at, CURRENT_TIMESTAMP
-                FROM chapters WHERE novel_id = ?
-            """, (novel_id,))
-            cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
-            cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ?", (novel_id,))
-            cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
-            cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
-            cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
-    for idx, vol in enumerate(volumes_list):
-        volume_index = vol.get("volume_index", idx + 1)
-        title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
-        summary = _to_traditional(vol.get("summary", ""))
-        factions = vol.get("factions", "")
-        if isinstance(factions, list) or isinstance(factions, dict):
-            factions = json.dumps(_convert_obj_to_traditional(factions), ensure_ascii=False)
+    with conn:
+        cursor = conn.cursor()
+        if target_vol_idx is not None:
+            cursor.execute(
+                "DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?",
+                (novel_id, target_vol_idx)
+            )
         else:
-            factions = _to_traditional(factions)
-        is_dirty = vol.get("is_dirty", 0)
-        chapter_count = vol.get("chapter_count", 50)
-        
-        # 新增的精密對接欄位
-        time_timeline = _to_traditional(vol.get("time_timeline", ""))
-        sequence_context = _to_traditional(vol.get("sequence_context", ""))
-        applicable_rules = vol.get("applicable_rules", "")
-        if isinstance(applicable_rules, list) or isinstance(applicable_rules, dict):
-            applicable_rules = json.dumps(_convert_obj_to_traditional(applicable_rules), ensure_ascii=False)
-        else:
-            applicable_rules = _to_traditional(applicable_rules)
+            cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
+            if clear_downstream:
+                # Backup chapters before wiping (P0-1)
+                cursor.execute("DELETE FROM chapters_backup WHERE novel_id = ?", (novel_id,))
+                cursor.execute("""
+                    INSERT INTO chapters_backup (novel_id, chapter_index, content, synopsis, thinking, version, created_at, backed_up_at)
+                    SELECT novel_id, chapter_index, content, synopsis, thinking, version, created_at, CURRENT_TIMESTAMP
+                    FROM chapters WHERE novel_id = ?
+                """, (novel_id,))
+                cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
+        for idx, vol in enumerate(volumes_list):
+            volume_index = vol.get("volume_index", idx + 1)
+            title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
+            summary = _to_traditional(vol.get("summary", ""))
+            factions = vol.get("factions", "")
+            if isinstance(factions, list) or isinstance(factions, dict):
+                factions = json.dumps(_convert_obj_to_traditional(factions), ensure_ascii=False)
+            else:
+                factions = _to_traditional(factions)
+            is_dirty = vol.get("is_dirty", 0)
+            chapter_count = vol.get("chapter_count", 50)
             
-        cursor.execute(
-            "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules)
-        )
-    conn.commit()
-    conn.close()
+            # 新增的精密對接欄位
+            time_timeline = _to_traditional(vol.get("time_timeline", ""))
+            sequence_context = _to_traditional(vol.get("sequence_context", ""))
+            applicable_rules = vol.get("applicable_rules", "")
+            if isinstance(applicable_rules, list) or isinstance(applicable_rules, dict):
+                applicable_rules = json.dumps(_convert_obj_to_traditional(applicable_rules), ensure_ascii=False)
+            else:
+                applicable_rules = _to_traditional(applicable_rules)
+                
+            cursor.execute(
+                "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules)
+            )
     
     try:
         precompute_global_foreshadowing(novel_id)
@@ -81,7 +80,6 @@ def get_volumes(novel_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
-    conn.close()
     res = []
     for r in rows:
         d = dict(r)
@@ -127,10 +125,9 @@ def get_total_chapter_count(volumes):
 
 def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE volumes SET is_dirty = ? WHERE novel_id = ? AND volume_index = ?", (is_dirty, novel_id, volume_index))
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE volumes SET is_dirty = ? WHERE novel_id = ? AND volume_index = ?", (is_dirty, novel_id, volume_index))
 
 def update_volume_outline(novel_id, volume_index, node_chapters):
     """
@@ -243,154 +240,148 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     filtered_ch.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
     
     # 💡 6. 【核心修復】：改用純 SQL 寫入大綱主表新版本，絕不呼叫會觸發反向分卷更新的 save_plot_chapters 函式！
-    row_max = cursor.execute("SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?", (novel_id,)).fetchone()
-    next_v = (row_max["max_v"] or 0) + 1
-    cursor.execute(
-        "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-        (novel_id, json.dumps({"chapters": filtered_ch}, ensure_ascii=False), next_v)
-    )
-    
-    conn.commit()
-    conn.close()
+    with conn:
+        row_max = cursor.execute("SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?", (novel_id,)).fetchone()
+        next_v = (row_max["max_v"] or 0) + 1
+        cursor.execute(
+            "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+            (novel_id, json.dumps({"chapters": filtered_ch}, ensure_ascii=False), next_v)
+        )
 
 
 def update_volume(novel_id, volume_index, title, summary, factions):
     conn = get_db_connection()
-    cursor = conn.cursor()
     if isinstance(factions, list) or isinstance(factions, dict):
         factions = json.dumps(_convert_obj_to_traditional(factions), ensure_ascii=False)
     else:
         factions = _to_traditional(factions)
         
-    # Check if volume already exists
-    row = cursor.execute(
-        "SELECT id FROM volumes WHERE novel_id = ? AND volume_index = ?",
-        (novel_id, volume_index)
-    ).fetchone()
-    
-    if row:
-        cursor.execute(
-            "UPDATE volumes SET title = ?, summary = ?, factions = ? WHERE novel_id = ? AND volume_index = ?",
-            (_to_traditional(title), _to_traditional(summary), factions, novel_id, volume_index)
-        )
-    else:
-        cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline, chapter_count) VALUES (?, ?, ?, ?, ?, 0, '[]', 50)",
-            (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
-        )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        # Check if volume already exists
+        row = cursor.execute(
+            "SELECT id FROM volumes WHERE novel_id = ? AND volume_index = ?",
+            (novel_id, volume_index)
+        ).fetchone()
+        
+        if row:
+            cursor.execute(
+                "UPDATE volumes SET title = ?, summary = ?, factions = ? WHERE novel_id = ? AND volume_index = ?",
+                (_to_traditional(title), _to_traditional(summary), factions, novel_id, volume_index)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline, chapter_count) VALUES (?, ?, ?, ?, ?, 0, '[]', 50)",
+                (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
+            )
 
 def delete_volume(novel_id, volume_index):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # 1. 取得所有篇卷，以便在刪除前計算章節範圍與章節數
-    rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
-    vols = [dict(r) for r in rows]
-    
-    if not vols:
-        conn.close()
-        return
+    with conn:
+        cursor = conn.cursor()
         
-    start_ch, end_ch = get_volume_chapter_range(vols, volume_index)
-    ch_count = end_ch - start_ch + 1
-    
-    # 2. 從 volumes 表中刪除該卷
-    cursor.execute("DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?", (novel_id, volume_index))
-    
-    # 3. 對剩餘的所有卷進行 volume_index 重排，確保 1-indexed 連續無縫，並同步平移及更新每個餘下卷內 chapters_outline 中的 chapter_index
-    remaining_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
-    for idx, r in enumerate(remaining_rows):
-        new_vol_idx = idx + 1
-        old_vol_idx = r["volume_index"]
+        # 1. 取得所有篇卷，以便在刪除前計算章節範圍與章節數
+        rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+        vols = [dict(r) for r in rows]
         
-        # 解析並處理該卷對應的 chapters_outline
-        ch_outline_str = r["chapters_outline"]
-        updated_outline_str = ch_outline_str
-        if ch_outline_str:
+        if not vols:
+            return
+            
+        start_ch, end_ch = get_volume_chapter_range(vols, volume_index)
+        ch_count = end_ch - start_ch + 1
+        
+        # 2. 從 volumes 表中刪除該卷
+        cursor.execute("DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?", (novel_id, volume_index))
+        
+        # 3. 對剩餘的所有卷進行 volume_index 重排，確保 1-indexed 連續無縫，並同步平移及更新每個餘下卷內 chapters_outline 中的 chapter_index
+        remaining_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
+        for idx, r in enumerate(remaining_rows):
+            new_vol_idx = idx + 1
+            old_vol_idx = r["volume_index"]
+            
+            # 解析並處理該卷對應的 chapters_outline
+            ch_outline_str = r["chapters_outline"]
+            updated_outline_str = ch_outline_str
+            if ch_outline_str:
+                try:
+                    ch_list = json.loads(ch_outline_str)
+                    if isinstance(ch_list, list):
+                        updated_chaps = []
+                        for c in ch_list:
+                            c_idx = int(c.get("chapter_index", 0))
+                            if start_ch <= c_idx <= end_ch:
+                                continue # 剔除已被刪除卷範圍內的章節
+                            elif c_idx > end_ch:
+                                c["chapter_index"] = c_idx - ch_count # 平移後續章節 index
+                            updated_chaps.append(c)
+                        updated_outline_str = json.dumps(updated_chaps, ensure_ascii=False)
+                except Exception as e:
+                    print(f"[ERROR] Failed to update chapters_outline for vol {old_vol_idx}: {e}")
+                    
+            cursor.execute(
+                "UPDATE volumes SET volume_index = ?, chapters_outline = ? WHERE id = ?",
+                (new_vol_idx, updated_outline_str, r["id"])
+            )
+                
+        # 4. 同步更新 worldbuilding 表中最先進世界觀 JSON 數據，防止幽靈卷殘留
+        wb_row = cursor.execute("SELECT * FROM worldbuilding WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchone()
+        if wb_row:
+            wb_data = dict(wb_row)
             try:
-                ch_list = json.loads(ch_outline_str)
-                if isinstance(ch_list, list):
+                current_json = json.loads(wb_data["content"])
+                if isinstance(current_json, dict) and "volumes" in current_json:
+                    v_list = current_json["volumes"]
+                    if isinstance(v_list, list):
+                        # 篩選掉被刪除的那一卷
+                        updated_v_list = [v for v in v_list if int(v.get("volume_index", 0)) != volume_index]
+                        # 重新編排 volume_index
+                        for idx, v in enumerate(updated_v_list):
+                            v["volume_index"] = idx + 1
+                        current_json["volumes"] = updated_v_list
+                        
+                        next_wb_version = int(wb_data.get("version", 0)) + 1
+                        cursor.execute(
+                            "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
+                            (novel_id, json.dumps(_convert_obj_to_traditional(current_json), ensure_ascii=False, indent=2), next_wb_version)
+                        )
+            except Exception as e:
+                print(f"[ERROR] Failed to synchronize worldview JSON: {e}")
+
+        # 5. 刪除對應的已寫正文章節，並將其後所有章節的 chapter_index 向前平移以填補空洞
+        cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
+        cursor.execute("UPDATE chapters SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
+        
+        # 5.1 同步刪除並平移敘事記憶庫與 Arc 摘要，防止章節記憶索引脫鉤錯位
+        cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
+        cursor.execute("UPDATE chapter_memory SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
+        cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
+        cursor.execute("UPDATE arc_summaries SET arc_start = arc_start - ?, arc_end = arc_end - ? WHERE novel_id = ? AND arc_start > ?", (ch_count, ch_count, novel_id, end_ch))
+        
+        # 6. 自大綱（plot_chapters 表）中剔除該卷的章節，並將後續大綱章節的 chapter_index 同步向前平移
+        plot_rows = cursor.execute("SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchall()
+        if plot_rows:
+            latest = dict(plot_rows[0])
+            try:
+                parsed = json.loads(latest["outline_json"])
+                if isinstance(parsed, dict) and "chapters" in parsed:
+                    chaps = parsed["chapters"]
                     updated_chaps = []
-                    for c in ch_list:
+                    for c in chaps:
                         c_idx = int(c.get("chapter_index", 0))
                         if start_ch <= c_idx <= end_ch:
-                            continue # 剔除已被刪除卷範圍內的章節
+                            continue # 剔除被刪卷的章節
                         elif c_idx > end_ch:
-                            c["chapter_index"] = c_idx - ch_count # 平移後續章節 index
+                            c["chapter_index"] = c_idx - ch_count # 平移後續章節
                         updated_chaps.append(c)
-                    updated_outline_str = json.dumps(updated_chaps, ensure_ascii=False)
-            except Exception as e:
-                print(f"[ERROR] Failed to update chapters_outline for vol {old_vol_idx}: {e}")
-                
-        cursor.execute(
-            "UPDATE volumes SET volume_index = ?, chapters_outline = ? WHERE id = ?",
-            (new_vol_idx, updated_outline_str, r["id"])
-        )
-            
-    # 4. 同步更新 worldbuilding 表中最先進世界觀 JSON 數據，防止幽靈卷殘留
-    wb_row = cursor.execute("SELECT * FROM worldbuilding WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchone()
-    if wb_row:
-        wb_data = dict(wb_row)
-        try:
-            current_json = json.loads(wb_data["content"])
-            if isinstance(current_json, dict) and "volumes" in current_json:
-                v_list = current_json["volumes"]
-                if isinstance(v_list, list):
-                    # 篩選掉被刪除的那一卷
-                    updated_v_list = [v for v in v_list if int(v.get("volume_index", 0)) != volume_index]
-                    # 重新編排 volume_index
-                    for idx, v in enumerate(updated_v_list):
-                        v["volume_index"] = idx + 1
-                    current_json["volumes"] = updated_v_list
+                    parsed["chapters"] = updated_chaps
                     
-                    next_wb_version = int(wb_data.get("version", 0)) + 1
+                    next_version = int(latest.get("version", 0)) + 1
                     cursor.execute(
-                        "INSERT INTO worldbuilding (novel_id, content, version) VALUES (?, ?, ?)",
-                        (novel_id, json.dumps(_convert_obj_to_traditional(current_json), ensure_ascii=False, indent=2), next_wb_version)
+                        "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+                        (novel_id, json.dumps(_convert_obj_to_traditional(parsed), ensure_ascii=False), next_version)
                     )
-        except Exception as e:
-            print(f"[ERROR] Failed to synchronize worldview JSON: {e}")
-
-    # 5. 刪除對應的已寫正文章節，並將其後所有章節的 chapter_index 向前平移以填補空洞
-    cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
-    cursor.execute("UPDATE chapters SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
-    
-    # 5.1 同步刪除並平移敘事記憶庫與 Arc 摘要，防止章節記憶索引脫鉤錯位
-    cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
-    cursor.execute("UPDATE chapter_memory SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
-    cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
-    cursor.execute("UPDATE arc_summaries SET arc_start = arc_start - ?, arc_end = arc_end - ? WHERE novel_id = ? AND arc_start > ?", (ch_count, ch_count, novel_id, end_ch))
-    
-    # 6. 自大綱（plot_chapters 表）中剔除該卷的章節，並將後續大綱章節的 chapter_index 同步向前平移
-    plot_rows = cursor.execute("SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1", (novel_id,)).fetchall()
-    if plot_rows:
-        latest = dict(plot_rows[0])
-        try:
-            parsed = json.loads(latest["outline_json"])
-            if isinstance(parsed, dict) and "chapters" in parsed:
-                chaps = parsed["chapters"]
-                updated_chaps = []
-                for c in chaps:
-                    c_idx = int(c.get("chapter_index", 0))
-                    if start_ch <= c_idx <= end_ch:
-                        continue # 剔除被刪卷的章節
-                    elif c_idx > end_ch:
-                        c["chapter_index"] = c_idx - ch_count # 平移後續章節
-                    updated_chaps.append(c)
-                parsed["chapters"] = updated_chaps
-                
-                next_version = int(latest.get("version", 0)) + 1
-                cursor.execute(
-                    "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-                    (novel_id, json.dumps(_convert_obj_to_traditional(parsed), ensure_ascii=False), next_version)
-                )
-        except Exception as e:
-            print(f"[ERROR] Failed to update plot chapters: {e}")
-            
-    conn.commit()
-    conn.close()
+            except Exception as e:
+                print(f"[ERROR] Failed to update plot chapters: {e}")
     
     try:
         precompute_global_foreshadowing(novel_id)
@@ -466,29 +457,27 @@ def save_volume_skeletons(novel_id, volume_index, chapters_skeleton):
             cleaned_skeleton.append(ch)
             
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # 將章節骨架轉為 JSON 並保存
-    skeleton_json = json.dumps(_convert_obj_to_traditional(cleaned_skeleton), ensure_ascii=False, indent=2)
-    
-    # 更新 volumes 表中該卷的 chapters_outline
-    cursor.execute(
-        "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
-        (skeleton_json, novel_id, volume_index)
-    )
-    
-    # 如果該卷記錄不存在，則新增
-    if cursor.rowcount == 0:
-        volumes = get_volumes(novel_id)
-        start_ch, end_ch = get_volume_chapter_range(volumes, volume_index)
+    with conn:
+        cursor = conn.cursor()
+        
+        # 將章節骨架轉為 JSON 並保存
+        skeleton_json = json.dumps(_convert_obj_to_traditional(cleaned_skeleton), ensure_ascii=False, indent=2)
+        
+        # 更新 volumes 表中該卷的 chapters_outline
         cursor.execute(
-            "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?)",
-            (novel_id, volume_index, f"第 {volume_index} 卷", f"本卷包含第 {start_ch} 章至第 {end_ch} 章的簡易骨架大綱。", "全域陣列", skeleton_json)
+            "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
+            (skeleton_json, novel_id, volume_index)
         )
-    
-    conn.commit()
-    conn.close()
+        
+        # 如果該卷記錄不存在，則新增
+        if cursor.rowcount == 0:
+            volumes = get_volumes(novel_id)
+            start_ch, end_ch = get_volume_chapter_range(volumes, volume_index)
+            cursor.execute(
+                "INSERT INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapters_outline) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?)",
+                (novel_id, volume_index, f"第 {volume_index} 卷", f"本卷包含第 {start_ch} 章至第 {end_ch} 章的簡易骨架大綱。", "全域陣列", skeleton_json)
+            )
     print(f"[DB] Volume {volume_index} skeleton saved successfully")
 
 

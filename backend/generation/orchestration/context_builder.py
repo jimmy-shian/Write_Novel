@@ -55,7 +55,7 @@ def _compact_character_card(char: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(char, dict):
         return {}
     selected = {}
-    for key in ("name", "role", "entry_phase", "personality", "want", "need", "arc", "relationships", "relationship_matrix"):
+    for key in ("name", "role", "entry_phase", "faction", "affiliation", "personality", "want", "need", "speech_profile", "initial_knowledge_scope", "arc", "relationships", "relationship_matrix"):
         if key in char and char[key] not in (None, "", [], {}):
             selected[key] = char[key]
     return selected

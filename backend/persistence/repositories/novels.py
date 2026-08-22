@@ -25,30 +25,31 @@ def create_novel(novel_id, title, genre, style):
         (novel_id, _to_traditional(title), genre, style, "")
     )
     conn.commit()
-    conn.close()
 
 def update_novel_pipeline_prompt(novel_id, pipeline_prompt):
+    formatted = _to_traditional(pipeline_prompt)
     conn = get_db_connection()
     cursor = conn.cursor()
+    # 寫入去重檢查：如果內容相同則跳過寫入
+    row = cursor.execute("SELECT pipeline_prompt FROM novels WHERE id = ?", (novel_id,)).fetchone()
+    if row and row["pipeline_prompt"] == formatted:
+        return
     cursor.execute(
         "UPDATE novels SET pipeline_prompt = ? WHERE id = ?",
-        (_to_traditional(pipeline_prompt), novel_id)
+        (formatted, novel_id)
     )
     conn.commit()
-    conn.close()
 
 def get_novel(novel_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     row = cursor.execute("SELECT * FROM novels WHERE id = ?", (novel_id,)).fetchone()
-    conn.close()
     return dict(row) if row else None
 
 def list_novels():
     conn = get_db_connection()
     cursor = conn.cursor()
     rows = cursor.execute("SELECT * FROM novels ORDER BY created_at DESC").fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 def delete_novel(novel_id):
@@ -56,7 +57,6 @@ def delete_novel(novel_id):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM novels WHERE id = ?", (novel_id,))
     conn.commit()
-    conn.close()
 
 # --- VOLUMES (篇卷) HELPERS ---
 

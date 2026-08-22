@@ -55,8 +55,11 @@ FORESHADOWING_OUTPUT_SCHEMA = {
         {
             "id": 1,
             "name": "伏筆名稱（文字，不含 FS/Seed 標號）",
+            "method": "action | dialogue | carrier_object | environment | omission | relationship_shift",
             "description": "伏筆內容與表層偽裝（文字）",
             "setup_hint": "適合埋設時機或敘事載體（文字）",
+            "subtlety": "high | medium | low",
+            "expected_payoff_window": "預期回收篇卷或章節範圍（文字）",
             "payoff_hint": "未來回收方式與反轉效果（文字）",
             "related_characters": ["角色名"],
             "thematic_link": "與主題或核心衝突的連結（文字）"
@@ -84,14 +87,14 @@ FORESHADOWING_APPROVAL_CRITERIA = {
             "description": "輸出必須包含 foreshadowing_seeds 與 key_turning_points；分批生成時只能輸出本批指定的其中一個頂層鍵"
         },
         "foreshadowing_seed_count": {
-            "description": "foreshadowing_seeds 必須至少 50 個；id 必須是從 1 開始連續的 JSON number / integer"
+            "description": "foreshadowing_seeds 數量依題材與篇幅合理規劃；id 必須是從 1 開始連續的 JSON number / integer"
         },
         "turning_point_count": {
-            "description": "key_turning_points 必須至少 50 個；id 必須是從 1 開始連續的 JSON number / integer"
+            "description": "key_turning_points 數量依題材與篇幅合理規劃；id 必須是從 1 開始連續的 JSON number / integer"
         },
         "foreshadowing_seed_fields": {
             "required_fields": ["id", "name", "description", "setup_hint", "payoff_hint", "related_characters", "thematic_link"],
-            "description": "每個伏筆種子必須有具體載體、表層偽裝、埋設提示、回收方向、關聯角色與主題連結"
+            "description": "每個伏筆種子可採用實物、行為、對話、環境或遺漏等多元載體，具備表層偽裝、埋設提示、回收方向、關聯角色與主題連結"
         },
         "turning_point_fields": {
             "required_fields": ["id", "turning_point_name", "description", "trigger_condition", "structural_impact", "emotional_stakes", "related_characters"],
@@ -201,15 +204,25 @@ CHARACTER_SCHEMA = {
     "want": "",
     "need": "",
     "fatal_flaw": "",
-    "want_need_conflict": "", # 新增： want 與 need 的內心衝突與靈魂拉扯
-    "secret": "", # 新增： 角色的不可告人秘密 (用來做為伏筆)
+    "want_need_conflict": "", # want 與 need 的內心衝突與靈魂拉扯
+    "secret": "", # 角色的不可告人秘密 (用來做為伏筆)
     "motivation": "",
     "arc": "",
-    "speech_style": "",
+    "speech_style": "", # 兼容舊版：說話風格概述
+    "speech_profile": {
+        "default_register": "冷靜正式 | 溫和儒雅 | 市井隨性 | 諷刺自嘲 | 孤僻寡言",
+        "sentence_length": "偏短簡練 | 中等流暢 | 繁複長句 | 破碎斷續",
+        "directness": "直截了當 | 迂迴含蓄 | 官僚推託 | 試探防禦",
+        "emotional_leak": "極少外露 | 受壓時語調冷酷 | 容易激動",
+        "power_behavior": "面對上位者迂迴防備，面對同儕隨和，面對弱者果斷",
+        "under_pressure": "句子明顯縮短、用詞轉為精確冷冽",
+        "taboo_topics": []
+    },
+    "initial_knowledge_scope": [], # 角色開篇時已知情報與秘密範圍
     "appearance": "",
     "background": "",
     "relationships": [],
-    "relationship_matrix": [] # 新增： 精細的角色關係網說明
+    "relationship_matrix": [] # 精細的角色關係網說明
 }
 
 CHARACTER_RELATIONSHIP_SCHEMA = {
@@ -223,7 +236,7 @@ CHARACTERS_ROOT_SCHEMA = {
 }
 
 # --- 寫作 agent 角色設定傳遞過濾清單 ---
-# 用於 writer agent 章節寫作時，extract_character_basic() 只保留這些欄位
+# 用於 writer agent 章節寫作時，extract_character_basic() 保留這些欄位
 # 也供 diagnostics.py 等模組統一引用，避免各處硬編碼
 CHARACTER_BASIC_FIELDS = [
     "name",
@@ -238,6 +251,8 @@ CHARACTER_BASIC_FIELDS = [
     "want_need_conflict",
     "secret",
     "speech_style",
+    "speech_profile",
+    "initial_knowledge_scope",
     "appearance",
     "motivation",
     "arc",
@@ -252,7 +267,7 @@ CHARACTER_APPROVAL_CRITERIA = {
     "display_name": "角色設計師",
     "criteria": {
         "required_fields": {
-            "per_character": ["name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw", "want_need_conflict", "secret", "motivation", "arc", "speech_style", "background", "relationships", "relationship_matrix"],
+            "per_character": ["name", "role", "entry_phase", "personality", "want", "need", "fatal_flaw", "want_need_conflict", "secret", "motivation", "arc", "background", "relationships", "relationship_matrix"],
             "description": "每個角色必填欄位必須完整，不得為空或佔位符"
         },
         "name_validity": {
@@ -273,9 +288,8 @@ CHARACTER_APPROVAL_CRITERIA = {
             "min_length": 30,
             "description": "成長弧線(Arc)需清晰描述角色的變化軌跡"
         },
-        "speech_style": {
-            "min_length": 15,
-            "description": "說話風格需具體描述口頭禪、語氣特徵"
+        "speech_profile": {
+            "description": "建議定義 speech_profile（語域、句長、受壓行為與禁忌話題），禁止機械式字尾口頭禪"
         },
         "relationships": {
             "description": "每位角色需有多段明確的關係設定，含type與evolution"
@@ -363,7 +377,17 @@ CHAPTER_SKELETON_SCHEMA = {
     "chapter_summary": "",
     "time_setting": "",
     "scene_setting": "",
-    "events": [
+    "scene_goal": "", # 本章核心戲劇目標
+    "scene_conflict": "", # 本章核心衝突阻礙
+    "scene_beats": [ # 結構化推進拍點（建議 3-5 個）
+        {
+            "beat_index": 1,
+            "beat_type": "setup | escalation | turn | outcome",
+            "description": "具體行動與推進行動",
+            "involved_characters": []
+        }
+    ],
+    "events": [ # 相容舊版欄位
         {
             "scene_index": 1,
             "location": "",
@@ -373,6 +397,8 @@ CHAPTER_SKELETON_SCHEMA = {
     ],
     "characters_active": [],
     "emotional_tone": "",
+    "scene_turn": "", # 本章認知或情勢轉折
+    "scene_outcome": "", # 本章結束狀態與代價
     "cliffhanger": ""
 }
 
@@ -382,6 +408,16 @@ CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     "chapter_summary": "",
     "time_setting": "",
     "scene_setting": "",
+    "scene_goal": "",
+    "scene_conflict": "",
+    "scene_beats": [
+        {
+            "beat_index": 1,
+            "beat_type": "setup | escalation | turn | outcome",
+            "description": "具體行動與推進行動",
+            "involved_characters": []
+        }
+    ],
     "events": [
         {
             "scene_index": 1,
@@ -392,6 +428,8 @@ CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     ],
     "characters_active": [],
     "emotional_tone": "",
+    "scene_turn": "",
+    "scene_outcome": "",
     "cliffhanger": "",
     "volume_index": 1,
     "volume_title": "",
@@ -400,6 +438,45 @@ CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
         "foreshadowing_payoffs": [],
         "turning_points": []
     }
+}
+
+# 場景寫作契約 Schema（由 WriterContextBuilder 動態組裝給 Writer）
+SCENE_CONTRACT_SCHEMA = {
+    "chapter_index": 1,
+    "pov_character": "林澤",
+    "narrative_mode": "third_person_limited", # third_person_limited | first_person | third_person_omniscient
+    "narrative_distance": "close", # close | medium | far
+    "thought_mode": "free_indirect", # free_indirect | sensory_only | direct_internal
+    "scene_goal": "",
+    "conflict": "",
+    "turn": "",
+    "outcome": "",
+    "knowledge_scope": ["當前 POV 角色能感知、記憶或推論的情報範圍"]
+}
+
+# 編輯評審診斷報告 Schema (Reviewer Output)
+EDITOR_REVIEW_REPORT_SCHEMA = {
+    "chapter_index": 1,
+    "pov_violations": [
+        # {"snippet": "違規原文片段", "issue": "說明為何越界或非授權視角切換", "suggestion": "修正建議"}
+    ],
+    "knowledge_leaks": [
+        # {"snippet": "違規原文片段", "issue": "角色說出或知道尚未得知的秘密", "suggestion": "修正建議"}
+    ],
+    "info_dump_sections": [
+        # {"snippet": "設定集傾倒片段", "issue": "抽離故事的設定說明", "suggestion": "改為融入動作或環境"}
+    ],
+    "dialogue_issues": [
+        # {"speaker": "角色名", "snippet": "生硬對話片段", "issue": "機械口癖/無潛台詞/不符語音人設", "suggestion": "修正建議"}
+    ],
+    "repetition_flags": [
+        # {"snippet": "AI模板詞/重複句式", "issue": "過度使用顫抖/凝固/命運重量等套路詞"}
+    ],
+    "scene_goal_completed": True,
+    "foreshadow_tasks_completed": [],
+    "style_consistency_score": 8.5,
+    "revision_required": False,
+    "target_revision_instructions": ""
 }
 
 VOLUME_SKELETON_LIST_SCHEMA = []
@@ -413,16 +490,14 @@ SKELETON_APPROVAL_CRITERIA = {
             "description": "必須確保【全書所有卷】的章節骨架都已生成完畢。請仔細檢查底層剛性校驗報告，若報告指出還有其他卷（如卷4, 5等）尚未完成骨架，則嚴禁放行進入 writer 階段，必須維持在 volume_skeleton 階段繼續生成缺失的骨架。"
         },
         "chapter_structure": {
-            "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "events", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
-            "description": "每章需具備輕量骨架結構，欄位需可供 writer 承接；events 只需核心事件，不要求詳細場景大綱"
+            "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
+            "description": "每章需具備輕量骨架結構，可包含 scene_goal, scene_conflict 與 scene_beats（或 events），供 writer 承接"
         },
         "time_setting": {
             "description": "每章需有清晰的時間設定與前章的時間跨度"
         },
-        "events": {
-            "min_scenes": 0,
-            "max_scenes": 1,
-            "description": "每章 events 建議只含 1 個核心事件，短句描述行動與結果；詳細場景由 writer 展開"
+        "scene_beats": {
+            "description": "每章建議規劃 3-5 個輕量推進拍點（或 1-2 個核心事件），清晰描述行動與結果，不寫長段散文"
         },
         "foreshadowing_sync": {
             "description": "伏筆種植(foreshadowing_plants)與回收(foreshadowing_payoffs)需與骨架分配的allocated_tasks一致"
@@ -583,6 +658,8 @@ OUTPUT_SCHEMA_REGISTRY = {
     "characters": {"characters": [CHARACTER_SCHEMA]},
     "volumes": {"volumes": [VOLUME_SCHEMA]},
     "volume_skeleton": {"volume_index": 1, "chapters_skeleton": [CHAPTER_SKELETON_WITH_ALLOC_SCHEMA]},
+    "scene_contract": SCENE_CONTRACT_SCHEMA,
+    "editor_review": EDITOR_REVIEW_REPORT_SCHEMA,
     "writer": WRITER_OUTPUT_SCHEMA,
     "editor": EDITOR_OUTPUT_SCHEMA,
 }

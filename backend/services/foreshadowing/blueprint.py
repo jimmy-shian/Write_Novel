@@ -142,56 +142,55 @@ def repair_foreshadowing_allocations(novel_id, volume_index=None):
     from backend import persistence as db
 
     conn = db.get_db_connection()
-    cursor = conn.cursor()
-    if volume_index is None:
-        rows = cursor.execute(
-            "SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
-            (novel_id,),
-        ).fetchall()
-    else:
-        rows = cursor.execute(
-            "SELECT * FROM volumes WHERE novel_id = ? AND volume_index = ? ORDER BY volume_index ASC",
-            (novel_id, int(volume_index)),
-        ).fetchall()
+    with conn:
+        cursor = conn.cursor()
+        if volume_index is None:
+            rows = cursor.execute(
+                "SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
+                (novel_id,),
+            ).fetchall()
+        else:
+            rows = cursor.execute(
+                "SELECT * FROM volumes WHERE novel_id = ? AND volume_index = ? ORDER BY volume_index ASC",
+                (novel_id, int(volume_index)),
+            ).fetchall()
 
-    all_chapters = []
-    touched = 0
-    for row in rows:
-        volume = dict(row)
-        try:
-            chapters = json.loads(volume.get("chapters_outline") or "[]")
-        except Exception:
-            chapters = []
-        if not isinstance(chapters, list):
-            chapters = []
-        canonical_map = apply_canonical_allocated_tasks_to_chapters(novel_id, chapters)
-        canonical_list = list(canonical_map.values())
-        canonical_list.sort(key=lambda item: int(item.get("chapter_index", 0)))
-        cursor.execute(
-            "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-            (json.dumps(db._convert_obj_to_traditional(canonical_list), ensure_ascii=False), volume["id"]),
-        )
-        all_chapters.extend(canonical_list)
-        touched += 1
+        all_chapters = []
+        touched = 0
+        for row in rows:
+            volume = dict(row)
+            try:
+                chapters = json.loads(volume.get("chapters_outline") or "[]")
+            except Exception:
+                chapters = []
+            if not isinstance(chapters, list):
+                chapters = []
+            canonical_map = apply_canonical_allocated_tasks_to_chapters(novel_id, chapters)
+            canonical_list = list(canonical_map.values())
+            canonical_list.sort(key=lambda item: int(item.get("chapter_index", 0)))
+            cursor.execute(
+                "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
+                (json.dumps(db._convert_obj_to_traditional(canonical_list), ensure_ascii=False), volume["id"]),
+            )
+            all_chapters.extend(canonical_list)
+            touched += 1
 
-    if volume_index is None and all_chapters:
-        all_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
-        row_max = cursor.execute(
-            "SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
-            (novel_id,),
-        ).fetchone()
-        next_version = (row_max["max_v"] or 0) + 1
-        cursor.execute(
-            "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
-            (
-                novel_id,
-                json.dumps({"chapters": db._convert_obj_to_traditional(all_chapters)}, ensure_ascii=False),
-                next_version,
-            ),
-        )
+        if volume_index is None and all_chapters:
+            all_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
+            row_max = cursor.execute(
+                "SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
+                (novel_id,),
+            ).fetchone()
+            next_version = (row_max["max_v"] or 0) + 1
+            cursor.execute(
+                "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+                (
+                    novel_id,
+                    json.dumps({"chapters": db._convert_obj_to_traditional(all_chapters)}, ensure_ascii=False),
+                    next_version,
+                ),
+            )
 
-    conn.commit()
-    conn.close()
     return touched
 
 
@@ -274,13 +273,12 @@ def precompute_global_foreshadowing(novel_id):
     }
 
     conn = db.get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO foreshadowing_blueprints (novel_id, blueprint_json) VALUES (?, ?)",
-        (novel_id, json.dumps(blueprint, ensure_ascii=False)),
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO foreshadowing_blueprints (novel_id, blueprint_json) VALUES (?, ?)",
+            (novel_id, json.dumps(blueprint, ensure_ascii=False)),
+        )
 
     print(f"[DB] Global foreshadowing blueprint precomputed successfully for novel {novel_id} (T={total_chapters})")
     return blueprint
@@ -298,7 +296,6 @@ def get_global_foreshadowing_blueprint(novel_id):
     conn = db.get_db_connection()
     cursor = conn.cursor()
     row = cursor.execute("SELECT blueprint_json FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,)).fetchone()
-    conn.close()
 
     if row:
         try:

@@ -38,10 +38,9 @@ def _sync_foreshadowing_after_worldbuilding_patch(novel_id, target_section, pars
         print(f"[WARN] Failed to sync foreshadowing allocations after incremental patch: {exc}")
 
     conn = db.get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE chapters SET is_dirty = 1 WHERE novel_id = ?", (novel_id,))
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE chapters SET is_dirty = 1 WHERE novel_id = ?", (novel_id,))
 
     try:
         from backend.services import narrative_memory

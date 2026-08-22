@@ -303,7 +303,6 @@ def _chapter_versions(novel_id, chapter_index, limit=2):
         "SELECT * FROM chapters WHERE novel_id = ? AND chapter_index = ? ORDER BY version DESC LIMIT ?",
         (novel_id, chapter_index, limit),
     ).fetchall()
-    conn.close()
     return [dict(row) for row in rows]
 
 

@@ -32,7 +32,6 @@ def get_latest_characters(novel_id):
         "SELECT * FROM characters WHERE novel_id = ? ORDER BY version DESC LIMIT 1",
         (novel_id,)
     ).fetchone()
-    conn.close()
     if row:
         data = dict(row)
         try:
@@ -234,19 +233,18 @@ def save_characters(novel_id, json_data):
             pass
         
     conn = get_db_connection()
-    cursor = conn.cursor()
-    row = cursor.execute(
-        "SELECT MAX(version) as max_v FROM characters WHERE novel_id = ?",
-        (novel_id,)
-    ).fetchone()
-    next_version = (row["max_v"] or 0) + 1
-    
-    cursor.execute(
-        "INSERT INTO characters (novel_id, json_data, version) VALUES (?, ?, ?)",
-        (novel_id, json_str, next_version)
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT MAX(version) as max_v FROM characters WHERE novel_id = ?",
+            (novel_id,)
+        ).fetchone()
+        next_version = (row["max_v"] or 0) + 1
+        
+        cursor.execute(
+            "INSERT INTO characters (novel_id, json_data, version) VALUES (?, ?, ?)",
+            (novel_id, json_str, next_version)
+        )
     return next_version
 
 # --- PLOT CHAPTERS (VERSIONED) ---

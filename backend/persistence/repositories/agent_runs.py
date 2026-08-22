@@ -17,7 +17,26 @@ try:
 except Exception:
     CHARACTER_BASIC_FIELDS = []
 
+# --- RAM CACHES FOR STATIC/SEMI-STATIC DATA ---
+_AGENT_CONFIGS_CACHE: Optional[Dict[str, dict]] = None
+_AGENT_CONFIGS_DATA_VERSION: Optional[int] = None
+_PROMPT_OVERRIDE_CACHE: Dict[tuple, Optional[str]] = {}
+
+def get_db_data_version(conn=None) -> int:
+    """取得 SQLite 資料庫的 data_version，用於跨連線快取失效檢查"""
+    c = conn or get_db_connection()
+    try:
+        row = c.execute("PRAGMA data_version;").fetchone()
+        return row[0] if row else 0
+    except Exception:
+        return 0
+
 def save_prompt_override(template_name: str, key: str, value: str):
+    cache_key = (template_name, key)
+    # 寫入去重：若記憶體快取中值完全相同，直接跳過 DB Write
+    if _PROMPT_OVERRIDE_CACHE.get(cache_key) == value:
+        return
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -30,9 +49,13 @@ def save_prompt_override(template_name: str, key: str, value: str):
         (template_name, key, value)
     )
     conn.commit()
-    conn.close()
+    _PROMPT_OVERRIDE_CACHE[cache_key] = value
 
 def get_prompt_override(template_name: str, key: str) -> Optional[str]:
+    cache_key = (template_name, key)
+    if cache_key in _PROMPT_OVERRIDE_CACHE:
+        return _PROMPT_OVERRIDE_CACHE[cache_key]
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -40,8 +63,9 @@ def get_prompt_override(template_name: str, key: str) -> Optional[str]:
         (template_name, key)
     )
     row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
+    val = row[0] if row else None
+    _PROMPT_OVERRIDE_CACHE[cache_key] = val
+    return val
 
 # --- LAST AGENT RUN TRACKING ---
 def save_last_agent_run(novel_id, agent_name, input_data, output_data):
@@ -60,7 +84,6 @@ def save_last_agent_run(novel_id, agent_name, input_data, output_data):
         (novel_id, agent_name, input_data, output_data)
     )
     conn.commit()
-    conn.close()
 
 def get_last_agent_run(novel_id):
     conn = get_db_connection()
@@ -69,19 +92,48 @@ def get_last_agent_run(novel_id):
         "SELECT * FROM last_agent_run WHERE novel_id = ?",
         (novel_id,)
     ).fetchone()
-    conn.close()
     return dict(row) if row else None
 
-# --- NOVELS CRUD ---
+# --- AGENT CONFIGS (WITH RAM CACHE & DEDUPLICATION) ---
+
+def invalidate_agent_configs_cache():
+    """使 Agent Config 記憶體快取失效"""
+    global _AGENT_CONFIGS_CACHE, _AGENT_CONFIGS_DATA_VERSION
+    _AGENT_CONFIGS_CACHE = None
+    _AGENT_CONFIGS_DATA_VERSION = None
 
 def get_agent_configs():
+    global _AGENT_CONFIGS_CACHE, _AGENT_CONFIGS_DATA_VERSION
     conn = get_db_connection()
+    current_ver = get_db_data_version(conn)
+    if _AGENT_CONFIGS_CACHE is not None and _AGENT_CONFIGS_DATA_VERSION == current_ver:
+        return _AGENT_CONFIGS_CACHE
+
     cursor = conn.cursor()
     rows = cursor.execute("SELECT * FROM agent_configs").fetchall()
-    conn.close()
-    return {r["agent_name"]: dict(r) for r in rows}
+    configs = {r["agent_name"]: dict(r) for r in rows}
+    _AGENT_CONFIGS_CACHE = configs
+    _AGENT_CONFIGS_DATA_VERSION = current_ver
+    return configs
 
 def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking):
+    global _AGENT_CONFIGS_CACHE
+    # 寫入去重檢查：比對目前快取，若所有欄位完全無變更則直接跳過寫入
+    current_configs = get_agent_configs()
+    existing = current_configs.get(agent_name)
+    if existing:
+        if (
+            existing.get("api_key") == api_key and
+            existing.get("base_url") == base_url and
+            existing.get("model") == model and
+            float(existing.get("temperature", 0)) == float(temperature) and
+            float(existing.get("top_p", 0)) == float(top_p) and
+            int(existing.get("max_tokens", 0)) == int(max_tokens) and
+            int(existing.get("enable_thinking", 0)) == int(enable_thinking)
+        ):
+            # 無任何變更，跳過 DB Write 零 I/O
+            return
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -89,7 +141,7 @@ def save_agent_config(agent_name, api_key, base_url, model, temperature, top_p, 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, int(enable_thinking)))
     conn.commit()
-    conn.close()
+    invalidate_agent_configs_cache()
 
 # --- INCREMENTAL UPDATE FUNCTIONS ---
 

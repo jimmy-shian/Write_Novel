@@ -110,13 +110,66 @@ AGENT_DEFAULTS = {
     }
 }
 
-def get_db_connection():
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+import threading
+
+def _configure_sqlite_connection(conn: sqlite3.Connection):
+    """套用 SQLite 引擎保護 SSD 與記憶體集中讀寫 PRAGMA 配置"""
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
-    conn.row_factory = sqlite3.Row
-    return conn
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA cache_size = -16384;")  # 16 MiB per connection
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA wal_autocheckpoint = 1000;")
+    
+    # MMAP 作為可選讀取優化（預設關閉 0）
+    mmap_size = int(os.getenv("SQLITE_MMAP_SIZE", "0"))
+    if mmap_size > 0:
+        conn.execute(f"PRAGMA mmap_size = {mmap_size};")
+
+
+class ConnectionManager:
+    """Thread-Local Persistent Connection 管理器，避免頻繁開關檔案控制代碼與鎖震盪"""
+    _local = threading.local()
+
+    @classmethod
+    def get_connection(cls) -> sqlite3.Connection:
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            
+        conn = getattr(cls._local, "conn", None)
+        if conn is not None:
+            try:
+                # 快速連線存活檢查
+                conn.execute("SELECT 1;")
+                return conn
+            except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                cls._local.conn = None
+
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        _configure_sqlite_connection(conn)
+        cls._local.conn = conn
+        return conn
+
+    @classmethod
+    def close_thread_connection(cls):
+        """關閉目前執行緒的持久連線"""
+        conn = getattr(cls._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            cls._local.conn = None
+
+
+def get_db_connection() -> sqlite3.Connection:
+    """取得目前執行緒的 SQLite Persistent Connection"""
+    return ConnectionManager.get_connection()
 

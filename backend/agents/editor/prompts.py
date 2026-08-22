@@ -1,69 +1,98 @@
 # -*- coding: utf-8 -*-
 """
-Prompt Builder (隔離的提示詞構建與拼接層)
-負責將系統提示詞與執行期資料做字串插值、拼接，確保 agents.py 只有純粹的核心邏輯與資料庫存取。
+Prompt Builder for Editor & Reviewer
+負責組裝 Editor 兩階段管線提示詞：
+1. Reviewer（品質評審）：輸出結構化品質診斷報告 JSON（POV 違規、知識洩漏、設定傾倒、對話瑕疵、AI 模板詞）。
+2. Targeted Rewriter（定向精修）：依據診斷報告進行外科手術式局部修補。
 """
 
 import json
-from backend.schemas import agent_json
-from backend import persistence as db
-from backend.schemas.agent_json import CHARACTER_BASIC_FIELDS
-from backend.prompts.prompt_main import (
-    STORY_ARCHITECT_PROMPT,
-    STORY_ARCHITECT_GUIDELINES,
-    VOLUMES_PLANNER_PROMPT,
-    VOLUMES_PLANNER_GUIDELINES,
-    VOLUME_SKELETON_PROMPT,
-    VOLUME_SKELETON_GUIDELINES,
-    CHARACTER_DESIGNER_PROMPT,
-    CHARACTER_DESIGNER_GUIDELINES,
-    FORESHADOWING_ORCHESTRATOR_PROMPT,
-    FORESHADOWING_ORCHESTRATOR_GUIDELINES,
-    CHAPTER_WRITER_PROMPT,
-    CHAPTER_WRITER_GUIDELINES,
-    VOLUME_SKELETON_PROMPT_PLUS,
-    CHARACTER_DESIGNER_PROMPT_PLUS
+from typing import Any, Dict, List, Optional
+
+from backend.prompts.common.context import (
+    CONTEXT_REQUEST_RULE,
+    build_agent_context_contract,
 )
 from backend.prompts.prompt_detail_modifier import (
     EDITOR_PROMPT,
-    INCREMENTAL_CHARACTER_PROMPT,
-    INCREMENTAL_CHARACTER_APPEND_PROMPT
-)
-from backend.prompts.prompt_instructions import (
-    CO_PILOT_ORCHESTRATOR_PROMPT,
-    DIRECTOR_COMMON_FOOTER
-)
-from backend.prompts.output_contracts import (
-    DIRECTOR_DECISION_KEY_CONTRACT,
-    DIRECTOR_HARD_VALIDATION_POLICY,
-    DIRECTOR_MANDATORY_INSPECTION_POLICY,
-    DIRECTOR_TOOL_CALL_CONTRACT,
-    STRICT_JSON_KEY_CONTRACT,
-    format_json_schema_prompt,
+    REVIEWER_PROMPT,
+    TARGETED_REWRITER_PROMPT,
 )
 
-# --- 世界觀摘要輔助函數 ---
-# 用於提取世界觀的關鍵摘要，避免過長的上下文導致 API 失敗
-MAX_WORLDVIEW_SUMMARY_LENGTH = 36000
-MAX_MACRO_OUTLINE_LENGTH = 12000
-MAX_DIRECTOR_WORLDVIEW_LENGTH = 42000
-MAX_DIRECTOR_CHARACTERS_LENGTH = 36000
-MAX_DIRECTOR_PLOT_LENGTH = 52000
-MAX_DIRECTOR_PROSE_LENGTH = 32000
-MAX_DIRECTOR_REPORT_LENGTH = 30000
-MAX_GOLD_RULES_CONTEXT_LENGTH = 16000
 
-# --- 角色基本設定輔助函數 ---
-# 定義角色只需要傳入的基本欄位，過濾掉冗長的背景故事等欄位
-# 核心欄位：name 和 personality 是必留的，其他可以過濾
-# CHARACTER_BASIC_FIELDS 定義在 agent_json.py 中，供各模組統一引用
+def build_reviewer_agent_messages(
+    chapter_index: int,
+    original_prose: str,
+    scene_contract_or_outline: Optional[Dict[str, Any]] = None,
+    editor_context: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """組裝 Reviewer 品質評審提示詞"""
+    system_prompt = REVIEWER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
+    system_prompt += build_agent_context_contract(
+        "Reviewer / 小說品質評審",
+        "- 待評審章節的原始正文。\n- 當前章節 Scene Contract、大綱與角色知情邊界。\n- 伏筆任務與連續性記憶。",
+        "嚴格診斷正文中的 POV 越界、知情洩漏、設定傾倒、對白生硬與 AI 套路詞，輸出標準診斷 JSON 報告。",
+        "必須且只能輸出合法 JSON 物件，嚴禁包含額外對話或散文。"
+    )
 
-MAX_CHARACTERS_SUMMARY_LENGTH = 26000
+    contract_text = ""
+    if scene_contract_or_outline:
+        contract_text = f"【本章場景契約與大綱約束】\n{json.dumps(scene_contract_or_outline, ensure_ascii=False, indent=2)}\n\n"
 
-from backend.prompts.common.context import *
+    user_content = f"""{contract_text}【背景與連續性上下文】
+{editor_context or "（無額外上下文）"}
+
+【待評審的第 {chapter_index} 章正文】
+{original_prose}
+
+請按照審查面向進行深度評審，並直接回傳合法的診斷 JSON 報告：
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
+
+def build_targeted_rewriter_messages(
+    chapter_index: int,
+    original_prose: str,
+    diagnostic_report: Dict[str, Any],
+    edit_instructions: Optional[str] = None,
+    editor_context: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """組裝 Targeted Rewriter 定向精修提示詞"""
+    system_prompt = TARGETED_REWRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
+    system_prompt += build_agent_context_contract(
+        "Targeted Rewriter / 定向正文精修",
+        "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 連續性約束與編輯指令。",
+        "只針對被標記之段落進行局部重寫修正，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
+        "直接輸出精修後正文，不要輸出評語、不要輸出 JSON。"
+    )
+
+    report_text = json.dumps(diagnostic_report, ensure_ascii=False, indent=2)
+
+    user_content = f"""【Reviewer 品質診斷報告與待修復標記】
+{report_text}
+
+【額外精修指示】
+{edit_instructions or "依據診斷報告修正視角越界、設定傾倒或生硬對白，保留未標記之優秀段落。"}
+
+【不可破壞的連續性約束】
+{editor_context or "（無額外約束）"}
+
+【第 {chapter_index} 章原始正文】
+{original_prose}
+
+請直接輸出修訂後的完整小說正文：
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
+    ]
+
 
 def build_editor_agent_messages(chapter_index, edit_instructions, original_prose, editor_context=None):
-    """編輯姬提示詞拼接"""
+    """舊版單步編輯提示詞拼接（相容過渡介面）"""
     system_prompt = EDITOR_PROMPT + "\n" + CONTEXT_REQUEST_RULE
     system_prompt += build_agent_context_contract(
         "Editor / 正文編輯",

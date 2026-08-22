@@ -16,20 +16,19 @@ def _decode_summary(row):
 def save_chapter_memory(novel_id, chapter_index, summary_json, source_version=None):
     payload = _convert_obj_to_traditional(summary_json)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO chapter_memory (novel_id, chapter_index, summary_json, source_version)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(novel_id, chapter_index) DO UPDATE SET
-            summary_json = excluded.summary_json,
-            source_version = excluded.source_version,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (novel_id, int(chapter_index), json.dumps(payload, ensure_ascii=False), source_version),
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chapter_memory (novel_id, chapter_index, summary_json, source_version)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(novel_id, chapter_index) DO UPDATE SET
+                summary_json = excluded.summary_json,
+                source_version = excluded.source_version,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (novel_id, int(chapter_index), json.dumps(payload, ensure_ascii=False), source_version),
+        )
     return True
 
 
@@ -40,7 +39,6 @@ def get_chapter_memory(novel_id, chapter_index):
         "SELECT * FROM chapter_memory WHERE novel_id = ? AND chapter_index = ?",
         (novel_id, int(chapter_index)),
     ).fetchone()
-    conn.close()
     return _decode_summary(row) if row else None
 
 
@@ -68,22 +66,20 @@ def get_chapter_memories(novel_id, start_chapter=None, end_chapter=None, limit=N
         """,
         params,
     ).fetchall()
-    conn.close()
     return [_decode_summary(row) for row in rows]
 
 
 def delete_chapter_memories_in_range(novel_id, start_chapter, end_chapter):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        DELETE FROM chapter_memory
-        WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?
-        """,
-        (novel_id, int(start_chapter), int(end_chapter)),
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM chapter_memory
+            WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?
+            """,
+            (novel_id, int(start_chapter), int(end_chapter)),
+        )
 
 
 def shift_chapter_memories(novel_id, start_chapter, delta):
@@ -91,44 +87,42 @@ def shift_chapter_memories(novel_id, start_chapter, delta):
     if delta == 0:
         return
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE chapter_memory
-        SET chapter_index = -chapter_index
-        WHERE novel_id = ? AND chapter_index >= ?
-        """,
-        (novel_id, int(start_chapter)),
-    )
-    cursor.execute(
-        """
-        UPDATE chapter_memory
-        SET chapter_index = (-chapter_index) + ?
-        WHERE novel_id = ? AND chapter_index < 0
-        """,
-        (delta, novel_id),
-    )
-    cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE chapter_memory
+            SET chapter_index = -chapter_index
+            WHERE novel_id = ? AND chapter_index >= ?
+            """,
+            (novel_id, int(start_chapter)),
+        )
+        cursor.execute(
+            """
+            UPDATE chapter_memory
+            SET chapter_index = (-chapter_index) + ?
+            WHERE novel_id = ? AND chapter_index < 0
+            """,
+            (delta, novel_id),
+        )
+        cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
 
 
 def save_arc_summary(novel_id, arc_start, arc_end, summary_json):
     payload = _convert_obj_to_traditional(summary_json)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO arc_summaries (novel_id, arc_start, arc_end, summary_json)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(novel_id, arc_start, arc_end) DO UPDATE SET
-            summary_json = excluded.summary_json,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (novel_id, int(arc_start), int(arc_end), json.dumps(payload, ensure_ascii=False)),
-    )
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO arc_summaries (novel_id, arc_start, arc_end, summary_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(novel_id, arc_start, arc_end) DO UPDATE SET
+                summary_json = excluded.summary_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (novel_id, int(arc_start), int(arc_end), json.dumps(payload, ensure_ascii=False)),
+        )
     return True
 
 
@@ -162,7 +156,6 @@ def get_arc_summary(novel_id, chapter_index=None, arc_start=None, arc_end=None):
             """,
             (novel_id,),
         ).fetchone()
-    conn.close()
     return _decode_summary(row) if row else None
 
 
@@ -182,13 +175,11 @@ def get_arc_summaries(novel_id, end_chapter=None):
         """,
         params,
     ).fetchall()
-    conn.close()
     return [_decode_summary(row) for row in rows]
 
 
 def clear_arc_summaries(novel_id):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
-    conn.commit()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
