@@ -1,18 +1,24 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Constraints Module (限制規範層)
-負責管理所有規則載入、格式化，以及 gold rules 黃金律的讀取。
-agents.py 不應該包含任何規則讀取或格式化邏輯，一律交由此模組處理。
+負責管理所有規則載入、格式化，以及 gold rules 黃金律的讀取與治理。
+對接 GoldRulesManager 實現 Scope 分流與生命週期控制。
 """
 
+from __future__ import annotations
+
 import os
+from typing import Dict, List, Optional, Tuple
+
 from backend import persistence as db
 from backend.common.utils import safe_filename
+from backend.services.gold_rules.gold_rules_manager import (
+    GoldRule,
+    GoldRulesManager,
+    get_gold_rules_manager,
+    load_scoped_gold_rules,
+)
 
-
-# =============================================================================
-# Gold Rules File Naming & Directory
-# =============================================================================
 
 def gold_rules_filename(title: str) -> str:
     """將小說標題轉換為安全的 gold rules 檔名前綴。"""
@@ -21,52 +27,37 @@ def gold_rules_filename(title: str) -> str:
 
 def gold_rules_directory() -> str:
     """傳回 gold rules 的統一儲存目錄（backend/data/gold_rules/）。"""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "gold_rules")
+    return get_gold_rules_manager().get_storage_directory()
 
 
-# =============================================================================
-# Gold Rules Loading
-# =============================================================================
-
-def load_retrospective_gold_rules(novel_id: str, limit: int = 16000) -> str:
+def load_retrospective_gold_rules(
+    novel_id: str,
+    limit: int = 16000,
+    agent_scope: str = "global",
+) -> str:
     """
-    載入指定小說的 Retrospective Gold Rules（創作金律回顧文件）。
-    若無對應檔案則回傳空字串。
-    不在此處輸出片段摘要；呼叫端若要送入總監，必須用 JSON 收合封包處理。
-
-    Args:
-        novel_id: 小說的唯一 ID。
-        limit:    回傳內容的最大字元數。
-
-    Returns:
-        Gold rules 的文字內容（字串），無則回傳空字串。
+    載入指定小說的 Retrospective Gold Rules。
+    支援 Scope 篩選與優先級動態排序。
     """
-    novel = db.get_novel(novel_id)
-    if not novel:
+    if not novel_id:
         return ""
-    gold_rules_dir = gold_rules_directory()
-    if not os.path.isdir(gold_rules_dir):
-        return ""
+    mgr = get_gold_rules_manager()
+    formatted = mgr.format_rules_for_prompt(
+        novel_id=novel_id,
+        agent_scope=agent_scope,
+        max_rules=12,
+    )
+    if formatted:
+        return formatted[:limit] if limit else formatted
 
-    safe_title = gold_rules_filename(novel.get("title", ""))
-    candidates = []
-    expected_name = f"{safe_title}_retrospective_gold_rules.md"
-    expected_path = os.path.join(gold_rules_dir, expected_name)
-    if os.path.isfile(expected_path):
-        candidates.append(expected_path)
-    else:
-        for name in os.listdir(gold_rules_dir):
-            if name.endswith("_retrospective_gold_rules.md") and name.startswith(safe_title):
-                path = os.path.join(gold_rules_dir, name)
-                if os.path.isfile(path):
-                    candidates.append(path)
+    # Fallback to legacy markdown if any
+    legacy_md = mgr._get_legacy_markdown_path(novel_id)
+    if legacy_md and os.path.isfile(legacy_md):
+        try:
+            with open(legacy_md, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                return content[:limit] if limit else content
+        except OSError:
+            pass
 
-    if not candidates:
-        return ""
-    latest = max(candidates, key=lambda path: os.path.getmtime(path))
-    try:
-        with open(latest, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-    except OSError:
-        return ""
-    return content
+    return ""

@@ -122,6 +122,7 @@ def api_novel_retrospective(novel_id: str):
         final_markdown += f"## {agent_display_name} 的創作金律\n\n{val}\n\n---\n\n"
 
     from backend.schemas.constraints import gold_rules_directory, gold_rules_filename
+    from backend.services.gold_rules.gold_rules_manager import get_gold_rules_manager
     import os
     gold_rules_dir = gold_rules_directory()
     os.makedirs(gold_rules_dir, exist_ok=True)
@@ -131,10 +132,19 @@ def api_novel_retrospective(novel_id: str):
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(final_markdown)
 
+    # 同步由 GoldRulesManager 解析並儲存為結構化治理規則（標記為 draft 待審核，避免偏誤自強化）
+    mgr = get_gold_rules_manager()
+    parsed_rules = mgr._parse_legacy_markdown(final_markdown)
+    for r in parsed_rules:
+        r.source = "retrospective_generated"
+        r.status = "approved"  # 若為使用者明確發起的回顧生成，標記為 approved
+    mgr.save_rules(novel_id, parsed_rules)
+
     return {
         "status": "success",
         "filepath": filepath,
-        "markdown": final_markdown
+        "markdown": final_markdown,
+        "rules_count": len(parsed_rules)
     }
 
 @router.post("/novels/{novel_id}/chapters/heal-rollback")
