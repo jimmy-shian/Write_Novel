@@ -32,14 +32,17 @@ def _page_items(items: List[Any], start_index: int, end_index: int) -> Dict[str,
 def expand_collapsed_json(
     stage_name: str,
     field_name: str,
-    start_index: int,
-    end_index: int,
-    novel_id: str
+    start_index: Any = 1,
+    end_index: Any = None,
+    novel_id: str = "",
+    **extra: Any,
 ) -> Dict[str, Any]:
     """
     [Tool 4] 允許總監分批展開查看被收合的 JSON 陣列內容 (如 1~10, 11~20)
     避免一次載入全部 50 個項目導致上下文溢出，使總監能精準評估。
     """
+    start, end = _coerce_range(start_index, end_index, default_size=50)
+
     if stage_name in ("foreshadowing", "worldview"):
         wb = db.get_latest_worldbuilding(novel_id)
         if not wb:
@@ -58,20 +61,20 @@ def expand_collapsed_json(
 
         total_count = len(items)
         # Convert 1-based indexing to 0-based slice
-        start_offset = max(0, start_index - 1)
-        end_offset = max(start_offset, end_index)
+        start_offset = max(0, start - 1)
+        end_offset = max(start_offset, end)
         sub_items = items[start_offset:end_offset]
 
         return {
             "success": True,
             "stage_name": stage_name,
             "field_name": field_name,
-            "start_index": start_index,
-            "end_index": end_index,
+            "start_index": start,
+            "end_index": end,
             "total_count": total_count,
             "returned_count": len(sub_items),
             "items": sub_items,
-            "step_description": f"已展開查看 {field_name} 的第 {start_index} 到 {end_index} 個項目 (總計 {total_count} 個)。"
+            "step_description": f"已展開查看 {field_name} 的第 {start} 到 {end} 個項目 (總計 {total_count} 個)。"
         }
     else:
         return {"success": False, "error": f"不支援的階段: {stage_name}"}

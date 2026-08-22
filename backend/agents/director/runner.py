@@ -591,10 +591,41 @@ def run_director_decision(
             tool_followup_context = None
             tool_signature = _director_tool_signature(tool_name, params)
             if _tool_signature_seen(extra_context, tool_signature):
-                yield "data: " + json.dumps({
-                    "type": "status",
-                    "message": f"總監再次呼叫同一工具：{tool_signature}。後端不補正決策，依總監輸出繼續執行。"
-                }, ensure_ascii=False) + "\n\n"
+                # 檢查當前階段是否已在資料庫中完整生成並通過校驗
+                detected_stage = diagnostics.detect_current_stage(novel_id)
+                STAGES_ORDER = ["worldview", "characters", "foreshadowing", "volumes", "volume_skeleton", "writer", "editor"]
+                curr_idx = STAGES_ORDER.index(current_stage) if current_stage in STAGES_ORDER else -1
+                det_idx = STAGES_ORDER.index(detected_stage) if detected_stage in STAGES_ORDER else -1
+                
+                if det_idx > curr_idx and curr_idx >= 0:
+                    # 資料庫已推進至下一階段，自動收斂決策，防止無限重複工具調用
+                    converged_decision = {
+                        "action": "CONTINUE",
+                        "target": detected_stage,
+                        "hint": f"{current_stage} 階段已由工具檢閱並經 Python 校驗合格，推進至 {detected_stage} 階段。",
+                        "reason": f"系統自動收斂：工具 {tool_signature} 已完成檢閱，且資料庫中 {current_stage} 結構完整合格，自動推進至 {detected_stage} 階段，避免重複展開循環。",
+                        "agent_prompt": f"請依據已完成的設定，繼續進行 {detected_stage} 階段的創作任務。"
+                    }
+                    decision_formatted = _format_director_decision_content(converged_decision)
+                    _save_director_decision_message(novel_id, current_stage, decision_formatted, "")
+                    yield "data: " + json.dumps({
+                        "type": "status",
+                        "message": f"總監已完成工具檢閱，系統自動收斂推進至 {detected_stage} 階段。"
+                    }, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps({"type": "content", "delta": decision_formatted}, ensure_ascii=False) + "\n\n"
+                    _record_director_review_status(
+                        novel_id,
+                        current_stage,
+                        converged_decision,
+                        volume_index=volume_index,
+                        chapter_index=chapter_index,
+                    )
+                    return
+                else:
+                    yield "data: " + json.dumps({
+                        "type": "status",
+                        "message": f"總監再次呼叫同一工具：{tool_signature}。後端依總監輸出繼續執行。"
+                    }, ensure_ascii=False) + "\n\n"
             
             if tool_name == "invoke_sub_agent":
                 agent_name = params.get("agent_name")

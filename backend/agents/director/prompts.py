@@ -185,8 +185,6 @@ def build_director_decision_messages(
  
 【完整世界觀設定（包含核心、多幕起伏結構與角色漸進規劃）】
 {worldview_text}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     elif current_stage == "characters":
@@ -212,8 +210,6 @@ def build_director_decision_messages(
 【完整角色列表（完整設定）】
 {characters_text}
 {character_extra_context}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     elif current_stage == "volumes":
@@ -235,8 +231,6 @@ def build_director_decision_messages(
  
 【完整篇卷列表（完整設定）】
 {plot_text}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     elif current_stage == "volume_skeleton":
@@ -264,8 +258,6 @@ def build_director_decision_messages(
  
 【完整卷骨架列表（完整設定）】
 {plot_text}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
 
@@ -298,8 +290,6 @@ def build_director_decision_messages(
 
 【本章正文（完整內容）】
 {written_chapters_text}
-
-{FINAL_USER_INSTRUCTION}
 """
     
     elif current_stage == "editor":
@@ -333,8 +323,6 @@ def build_director_decision_messages(
  
 【潤色後正文（完整內容）】
 {written_chapters_text}{extra_guideline}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     elif current_stage == "foreshadowing":
@@ -348,21 +336,16 @@ def build_director_decision_messages(
 2. 請核對「世界觀背景」以及「剛性校驗報告」。
 3. 確認伏筆種子（foreshadowing_seeds）是否包含必要欄位，且數量是否達到 50 個。
 4. 確認關鍵轉折點（key_turning_points）是否包含必要欄位，且數量是否達到 50 個。
-5. **重要審查指引（分步展開審查）**：
-   - 審查應分步進行（例如先確認伏筆種子，再確認轉折點）。
-   - 你可以使用 `expand_collapsed_json` 工具來分頁展開查看資料庫中的完整伏筆列表。
-   - 例如，你可以呼叫 `expand_collapsed_json` 展開 1~10，在下一輪呼叫展開 11~20，依此類推。
-   - **檢查-1, 2, 3 的步驟狀態**：若需要說明目前檢查到哪一步，只能寫在 JSON 的 `reason` value 中，例如「Step 1: 伏筆種子 1-10 審查」。
-   - 如果某部分不合格，你可以使用 `supplement_content` 工具進行部分修改與補強。
-   - 只有當伏筆種子與轉折點皆確認合格且數量足夠後，才能下達 `CONTINUE` 進入 `characters` 階段。
+5. **重要審查指引**：
+   - 若「系統底層結構/進度檢查報告」顯示伏筆種子與關鍵轉折點皆已達標（各 >= 50 筆）且無欄位錯誤，且展示內容品質良好，請直接下達 `CONTINUE` + `target: "volumes"` 進入篇卷規劃階段。
+   - 只有在內容存在明顯品質問題時，才使用 `supplement_content` 進行部分修正，或使用 `expand_collapsed_json` 進行抽查。
+   - 嚴禁在資料庫與校驗報告已確認 50 筆完整合格的情況下反覆調用展開工具；確認合格後應立即 `CONTINUE` 進入 `volumes`。
 
 """
         user_content = f"""{default_user_prompt_section}
  
 【完整世界觀背景】
 {worldview_text}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     else:
@@ -384,8 +367,6 @@ def build_director_decision_messages(
 - 角色設定：{characters_text if characters_text else "（空）"}
 - 大綱設定：{plot_text if plot_text else "（空）"}
 - 正文：{written_chapters_text if written_chapters_text else "（空）"}
- 
-{FINAL_USER_INSTRUCTION}
 """
     
     system_prompt += director_input_policy
@@ -494,6 +475,8 @@ def build_director_decision_messages(
     else:
         if "【使用者建書初期原始需求" not in user_content:
             user_content += f"\n\n{bg_prompt_block}"
+
+    user_content += f"\n\n{FINAL_USER_INSTRUCTION}\n"
     
     return [
         {"role": "system", "content": system_prompt},

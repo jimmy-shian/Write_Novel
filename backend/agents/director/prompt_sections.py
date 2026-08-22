@@ -113,17 +113,16 @@ STAGE_REVIEW_RULES = {
     "worldview": """
 ## Stage Review: worldview
 Check core worldview, multi-act structure, and progressive character plan.
-If the data is empty or incomplete, route to `worldview`.
+If the Python validation report confirms worldview is complete, route to `characters` with `CONTINUE`.
 Put any critique inside `reason`; do not write a separate report.
 """,
     "foreshadowing": """
 ## Stage Review: foreshadowing
 Check both `foreshadowing_seeds` and `key_turning_points`.
-First use `evaluate_output` for hard checks when needed.
-Use `expand_collapsed_json` only through the full Tool envelope.
+If the Python validation report confirms both batches are complete (>=50 items each) and structurally valid, route to `volumes` with `CONTINUE`.
+Do not repeatedly call `expand_collapsed_json` if items are already validated by the system.
 If one batch is missing, route to `foreshadowing` with the required batch marker.
 If characters are missing, route to `characters` before continuing foreshadowing.
-If both batches are structurally complete and sufficiently reviewed, route to `volumes`.
 """,
     "characters": """
 ## Stage Review: characters

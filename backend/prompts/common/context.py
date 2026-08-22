@@ -223,11 +223,12 @@ def collapse_json_output_for_director(raw_output, stage_name, preview_count=5):
         return {
             "...收合標記...": (
                 f"⚠️ 此 {field_name} 共 {total} 筆項目；此處僅展示前 {preview_count} 筆供快速審閱，"
-                f"已收合第 {next_start}~{total} 筆。這表示資料已存在，不代表只有 {preview_count} 筆。"
+                f"已收合第 {next_start}~{total} 筆。這表示資料已完整儲存於資料庫，不代表只有 {preview_count} 筆。"
             ),
             "_director_note": (
-                f"若需逐項審查第 {next_start}~{total} 筆，"
-                f"可參考 available_expansion_tool 使用 {tool_info['tool_name']}。"
+                f"提示：此收合僅為節省提示詞 Token，資料庫已完整持久化且 Python 校驗報告已核對數量與欄位。"
+                "若 Python 校驗報告合格且前項品質無誤，請直接下達流程決策（例如 CONTINUE）；"
+                f"僅在確需逐項細審第 {next_start}~{total} 筆時，才使用 {tool_info['tool_name']} 工具。"
                 "這不是總監回覆格式；總監輸出仍必須是完整決策 envelope。"
             ),
             "available_expansion_tool": {

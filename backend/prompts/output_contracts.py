@@ -157,32 +157,14 @@ DIRECTOR_HARD_VALIDATION_POLICY = """## Python 硬性校驗的用途與邊界
 - allocated_tasks 是否有明顯格式錯誤。
 - 正文是否過短、空白或含占位標記。
 
-硬性校驗只能證明「結構與數量」；它不能替你判斷內容品質。以下必須由總監實際展開內容後閱讀判斷：
-- 世界觀是否有張力、規則是否有創作價值。
-- 多幕結構是否真的有起伏與遞進。
-- 角色登場策略是否能支撐群像與長篇節奏。
-- 伏筆種子是否具體可埋、回收方向是否自然。
-- 關鍵轉折是否真能改變局勢/關係/角色弧線。
-- 角色聖經是否有心理深度、關係網是否可寫。
-- 卷骨架每章是否銜接順、角色/勢力是否一致、任務落點是否自然。
-- 正文與編輯稿是否符合角色聲音、文風、節奏與伏筆執行。
-
-因此：硬性校驗通過後，若本階段含長列表、角色列表、卷骨架或正文，仍必須用展開工具實際查看內容；未展開前不得宣稱「內容審核通過」。"""
+硬性校驗回答「結構與數量」。若 Python 校驗報告確認數量與結構皆合格，且展示的預設視圖品質優良，總監即可直接放行進入下一流程（例如下達 CONTINUE）；僅在發現具體品質疑慮時才需調用展開工具細查。"""
 
 
-DIRECTOR_MANDATORY_INSPECTION_POLICY = """## 必須展開檢閱的資料
-當輸入出現摘要、保護性收合、`director_payload_view: "collapsed_json"`、`__collapsed_text__`、`...摘要...`、或本階段資料本質上是長列表/長文本時，放行前必須先用工具展開。
-
-必查區塊：
-- `worldview`: `multi_act_structure`、`progressive_character_plan`、`factions`、`macro_outline`；若已存在，也要查 `foreshadowing_seeds`、`key_turning_points`。
-- `foreshadowing`: `foreshadowing_seeds` 與 `key_turning_points`，分頁查完足以支持內容品質判斷的範圍；不能只看數量。
-- `characters`: `characters`，分頁檢查角色卡、角色關係、勢力歸屬與登場功能。
-- `volumes`: `volumes`，分頁檢查卷功能、時間線、勢力與規則。
-- `volume_skeleton`: `chapters_outline`，針對當前審查卷分頁檢查完整章節骨架；不能只看第 1-15 筆就放行整卷，除非其餘筆已在工具結果或完整輸入中可見。
-- `writer` / `editor`: `chapter`，檢查本章完整正文。
-
-推薦分頁大小 10-15 筆。若一次展開 1-50 且工具回傳成功，該欄位視為已完整展開，不得再重複展開同一範圍。
-工具結果會回傳 `total_count` 與 `returned_count`；若 `returned_count < total_count`，而你尚未看過剩餘內容，就不能把整個區塊判為內容通過。"""
+DIRECTOR_MANDATORY_INSPECTION_POLICY = """## 長列表收合與展開檢閱指引
+1. 當輸入出現摘要標記或 `...收合標記...` 時，代表資料庫中已完整存檔，僅在提示詞中為節省 Token 進行了展示收合。
+2. 若 Python 校驗報告確認該區塊數量與必填欄位完整，且展示的項目質量符合標準，總監可直接下達流程決策（如 `CONTINUE`），不需要強制調用工具展開每一筆已收合的項目。
+3. 若總監確實需要深度審閱某個具體範圍的內容細節，可以使用 `TOOL_CALL`（如 `expand_collapsed_json` 或 `inspect_content_block`）調閱該範圍。
+4. **禁止重複展開**：工具返回展開結果後，該資料即視為已檢閱完畢。總監必須在下一輪給出流程決策（`CONTINUE` / `AUTO_REGENERATE` / `GO_BACK_*` 等），絕對禁止連續調用相同參數的展開工具，不得陷入展開循環。"""
 
 
 def format_json_schema_prompt(schema, *, label="this schema"):
