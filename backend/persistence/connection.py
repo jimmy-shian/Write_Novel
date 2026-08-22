@@ -44,65 +44,67 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
 DB_PATH = os.getenv("DB_PATH", os.path.join(PROJECT_ROOT, "data", "novel_factory.db"))
 
 # --- Agent Default Configurations from .env ---
+DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+
 AGENT_DEFAULTS = {
     "global": {
-        "model": os.getenv("MODEL_GLOBAL", "patcher-main"),
+        "model": os.getenv("MODEL_GLOBAL", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "architect": {
-        "model": os.getenv("MODEL_ARCHITECT", "patcher-main"),
+        "model": os.getenv("MODEL_ARCHITECT", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 32768,
         "enable_thinking": 0
     },
     "character": {
-        "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", "patcher-main"),
+        "model": os.getenv("MODEL_CHARACTER") or os.getenv("MODEL_STORY", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 32768,
         "enable_thinking": 0
     },
     "volumes": {
-        "model": os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT", "patcher-main"),
+        "model": os.getenv("MODEL_VOLUMES") or os.getenv("MODEL_ARCHITECT", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "volume_skeleton": {
-        "model": os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT", "patcher-main"),
+        "model": os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "plot": {
-        "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", "patcher-main"),
+        "model": os.getenv("MODEL_PLOT") or os.getenv("MODEL_CRITIC", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "writer": {
-        "model": os.getenv("MODEL_WRITER", "patcher-main"),
+        "model": os.getenv("MODEL_WRITER", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "editor": {
-        "model": os.getenv("MODEL_EDITOR", "patcher-main"),
+        "model": os.getenv("MODEL_EDITOR", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,
         "enable_thinking": 0
     },
     "copilot": {
-        "model": os.getenv("MODEL_COPILOT", "patcher-main"),
+        "model": os.getenv("MODEL_COPILOT", DEFAULT_MODEL),
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": 16384,

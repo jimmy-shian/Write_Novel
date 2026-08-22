@@ -36,7 +36,7 @@ def get_agent_api_key(agent_name):
 def get_agent_model(agent_name):
     """Get default model from environment variables.
     If specific agent model is not set, falls back to MODEL_GLOBAL."""
-    global_default = os.getenv("MODEL_GLOBAL", "patcher-main")
+    global_default = os.getenv("MODEL_GLOBAL", "nvidia/nemotron-3-super-120b-a12b")
     model_map = {
         "global": global_default,
         "architect": os.getenv("MODEL_ARCHITECT") or global_default,

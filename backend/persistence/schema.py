@@ -65,7 +65,7 @@ def sync_agent_configs_from_env(cursor):
             elif agent == "volume_skeleton":
                 model = os.getenv("MODEL_VOLUME_SKELETON") or os.getenv("MODEL_PLOT")
             if not model:
-                model = os.getenv("MODEL_GLOBAL") or "patcher-main"
+                model = os.getenv("MODEL_GLOBAL") or "nvidia/nemotron-3-super-120b-a12b"
 
         # Float / Int parameters with robust fallbacks
         def get_float_env(key, fallback):

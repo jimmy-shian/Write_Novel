@@ -20,7 +20,7 @@
 3. 使用虛擬環境 Python 啟動 Uvicorn 伺服器：
    ```powershell
    C:\Users\user\venv\Scripts\python.exe -m pip install -r requirements.txt
-   C:\Users\user\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
+   C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
    ```
 4. 啟動成功後，造訪本地服務網址：
    👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**

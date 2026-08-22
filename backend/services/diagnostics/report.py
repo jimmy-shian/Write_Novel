@@ -634,13 +634,25 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                     missing_chars.append(name)
                     
         report_lines.append("【2.1. 本卷活躍角色建存校驗】")
-        report_lines.append(f"  - 當前活躍篇卷：第 {act_vol_idx} 卷")
+        vol_label = f"第 {act_vol_idx} 卷" if (act_vol_idx is not None and vols and active_v) else "（尚未規劃篇卷）"
+        report_lines.append(f"  - 當前活躍篇卷：{vol_label}")
         report_lines.append(f"  - 本卷命名角色清單 (required_character_set)：{', '.join(required_character_set) if required_character_set else '（無）'}")
-        if missing_chars:
+        
+        if not vols or not active_v:
+            if not char_exists:
+                report_lines.append("  - 狀態：⚪ 尚未進入篇卷階段 (世界觀與角色聖經尚未建立)")
+            else:
+                report_lines.append("  - 狀態：⚪ 尚未規劃篇卷骨架 (暫無本卷活躍角色約束)")
+        elif not required_character_set:
+            if not char_exists:
+                report_lines.append("  - 狀態：⚠️ 角色聖經為空，且本卷骨架未標註命名角色")
+            else:
+                report_lines.append("  - 狀態：⚪ 本卷骨架大綱中未標註特定命名角色需求")
+        elif missing_chars:
             report_lines.append(f"  - 狀態：❌ 偵測到未建卡命名角色，必須進行角色擴展 (INCREMENTAL_APPEND_CHARACTER)")
             report_lines.append(f"  - 待追加角色：{', '.join(missing_chars)}")
         else:
-            report_lines.append("  - 狀態：✅ 本卷所有命名角色皆已建卡")
+            report_lines.append(f"  - 狀態：✅ 本卷所有命名角色皆已建卡 (共 {len(required_character_set)} 位)")
     except Exception as e:
         report_lines.append(f"【2.1. 本卷活躍角色建存校驗】⚠️ 檢查過程發生錯誤：{e}")
     report_lines.append("")
