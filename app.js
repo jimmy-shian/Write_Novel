@@ -4730,6 +4730,47 @@ function setupEventListeners() {
             localStorage.setItem('novelsListCollapsed', isNowCollapsed);
         });
     }
+
+    // 4c. Mobile Drawer Controls
+    const mobileMenuBtn = document.getElementById('btn-mobile-sidebar-toggle');
+    const mobileCopilotBtn = document.getElementById('btn-mobile-copilot-toggle');
+    const mobileBackdrop = document.getElementById('mobile-drawer-backdrop');
+    const sidebarLeft = document.getElementById('sidebar-left');
+    const sidebarRight = document.getElementById('sidebar-right');
+
+    const closeMobileDrawers = () => {
+        sidebarLeft?.classList.remove('mobile-open');
+        sidebarRight?.classList.remove('mobile-open');
+        mobileBackdrop?.classList.add('hidden');
+    };
+
+    mobileMenuBtn?.addEventListener('click', () => {
+        sidebarRight?.classList.remove('mobile-open');
+        const isOpen = sidebarLeft?.classList.toggle('mobile-open');
+        if (isOpen) {
+            mobileBackdrop?.classList.remove('hidden');
+        } else {
+            mobileBackdrop?.classList.add('hidden');
+        }
+    });
+
+    mobileCopilotBtn?.addEventListener('click', () => {
+        sidebarLeft?.classList.remove('mobile-open');
+        const isOpen = sidebarRight?.classList.toggle('mobile-open');
+        if (isOpen) {
+            mobileBackdrop?.classList.remove('hidden');
+        } else {
+            mobileBackdrop?.classList.add('hidden');
+        }
+    });
+
+    mobileBackdrop?.addEventListener('click', closeMobileDrawers);
+
+    document.getElementById('novels-list')?.addEventListener('click', (e) => {
+        if (window.innerWidth <= 900) {
+            closeMobileDrawers();
+        }
+    });
     
     // 5. Add Manual placeholders - WORK DIRECTLY WITH STATE, NOT TEXTAREA
     el.btnCharacterAdd.addEventListener('click', () => {

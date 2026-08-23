@@ -290,6 +290,51 @@ function createDashboardDOM() {
             color: #64748b;
             margin-right: 6px;
         }
+        @media (max-width: 768px) {
+            #autonomous-dashboard-widget {
+                bottom: 10px !important;
+                right: 10px !important;
+                left: 10px !important;
+                width: auto !important;
+                max-width: calc(100vw - 20px) !important;
+            }
+            .auto-widget-card {
+                width: 100% !important;
+                max-width: 100% !important;
+                padding: 12px 14px !important;
+                border-radius: 12px !important;
+            }
+            .auto-widget-header {
+                margin-bottom: 8px !important;
+            }
+            .auto-widget-title {
+                font-size: 0.92rem !important;
+            }
+            .auto-widget-stop-btn,
+            .auto-widget-close-btn-styled {
+                font-size: 0.78rem !important;
+                padding: 4px 8px !important;
+            }
+            .auto-widget-progress-container {
+                height: 6px !important;
+                margin-bottom: 8px !important;
+            }
+            .auto-widget-info {
+                margin-bottom: 8px !important;
+            }
+            .auto-widget-status-text {
+                font-size: 0.82rem !important;
+            }
+            .auto-widget-pct-badge {
+                font-size: 0.82rem !important;
+                padding: 1px 6px !important;
+            }
+            .auto-widget-logs {
+                max-height: 70px !important;
+                font-size: 0.76rem !important;
+                padding: 6px 8px !important;
+            }
+        }
     `;
     document.head.appendChild(style);
 }
