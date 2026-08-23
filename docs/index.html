@@ -63,12 +63,31 @@
             </div>
         </aside>
         
+        <!-- Mobile Drawer Backdrop -->
+        <div id="mobile-drawer-backdrop" class="mobile-drawer-backdrop hidden"></div>
+
         <!-- ================= MAIN WORKSPACE ================= -->
         <main id="workspace">
+            <!-- Mobile App Top Bar -->
+            <div id="mobile-top-bar" class="mobile-only-header">
+                <button id="btn-mobile-sidebar-toggle" class="btn btn-ghost btn-sm" title="開啟小說列表" style="padding: 6px 10px; display: flex; align-items: center; gap: 6px;">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                    <span>小說</span>
+                </button>
+                <div class="mobile-app-title">AI Novel Factory</div>
+                <button id="btn-mobile-copilot-toggle" class="btn btn-ghost btn-sm" title="開啟小說總監" style="padding: 6px 10px; display: flex; align-items: center; gap: 6px;">
+                    <span>💬 總監</span>
+                </button>
+            </div>
+
             <!-- Active Novel Header -->
             <header id="workspace-header">
-                <div class="workspace-header-top" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
-                    <div class="novel-title-badge" style="margin-bottom: 0;">
+                <div class="workspace-header-top">
+                    <div class="novel-title-badge">
                         <span id="current-novel-genre">小說類型</span>
                         <h1 id="current-novel-title">請選擇或建立一部小說</h1>
                     </div>
