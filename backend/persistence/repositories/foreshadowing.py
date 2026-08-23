@@ -74,6 +74,25 @@ def get_global_foreshadowing_blueprint(novel_id):
     return _get_blueprint(novel_id)
 
 
+def get_foreshadowing_seeds(novel_id: str) -> List[Any]:
+    """獲取指定小說的伏筆種子清單"""
+    try:
+        from backend.persistence.repositories.worldbuilding import get_latest_worldbuilding, parse_worldview_to_json
+        wb = get_latest_worldbuilding(novel_id)
+        if not wb or not wb.get("content"):
+            return []
+        content = wb["content"]
+        if content.strip().startswith("{"):
+            parsed = parse_worldview_to_json(content)
+            return parsed.get("foreshadowing_seeds", [])
+        if "【伏筆種子】" in content or "伏筆" in content:
+            return [content]
+        return []
+    except Exception as e:
+        print(f"[WARN] Failed to get foreshadowing seeds: {e}")
+        return []
+
+
 
 # Cross-repository imports used by legacy domain functions during runtime.
 from backend.persistence.schema import db_init, sync_agent_configs_from_env

@@ -16,21 +16,29 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
 
 
-# --- Agent API Key Mapping from .env ---
+# --- Agent API Key Mapping from .env & Space Secrets ---
 def get_agent_api_key(agent_name):
-    """Get API key from environment variables."""
+    """Get API key from environment variables (including Hugging Face Space Secrets)."""
+    global_fallback = (
+        os.getenv("NVIDIA_API_KEY_GLOBAL")
+        or os.getenv("GLOBAL_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("DEEPSEEK_API_KEY")
+        or os.getenv("API_KEY")
+        or ""
+    )
     key_map = {
-        "global": os.getenv("NVIDIA_API_KEY_GLOBAL"),
-        "architect": os.getenv("NVIDIA_API_KEY_ARCHITECT"),
-        "character": os.getenv("NVIDIA_API_KEY_CHARACTER"),
-        "volumes": os.getenv("NVIDIA_API_KEY_VOLUMES") or os.getenv("NVIDIA_API_KEY_ARCHITECT"),
-        "volume_skeleton": os.getenv("NVIDIA_API_KEY_VOLUME_SKELETON") or os.getenv("NVIDIA_API_KEY_PLOT"),
-        "plot": os.getenv("NVIDIA_API_KEY_PLOT"),
-        "writer": os.getenv("NVIDIA_API_KEY_WRITER"),
-        "editor": os.getenv("NVIDIA_API_KEY_EDITOR"),
-        "copilot": os.getenv("NVIDIA_API_KEY_COPILOT")
+        "global": global_fallback,
+        "architect": os.getenv("NVIDIA_API_KEY_ARCHITECT") or global_fallback,
+        "character": os.getenv("NVIDIA_API_KEY_CHARACTER") or global_fallback,
+        "volumes": os.getenv("NVIDIA_API_KEY_VOLUMES") or os.getenv("NVIDIA_API_KEY_ARCHITECT") or global_fallback,
+        "volume_skeleton": os.getenv("NVIDIA_API_KEY_VOLUME_SKELETON") or os.getenv("NVIDIA_API_KEY_PLOT") or global_fallback,
+        "plot": os.getenv("NVIDIA_API_KEY_PLOT") or global_fallback,
+        "writer": os.getenv("NVIDIA_API_KEY_WRITER") or global_fallback,
+        "editor": os.getenv("NVIDIA_API_KEY_EDITOR") or global_fallback,
+        "copilot": os.getenv("NVIDIA_API_KEY_COPILOT") or global_fallback
     }
-    return key_map.get(agent_name, key_map.get("global"))
+    return key_map.get(agent_name, global_fallback) or global_fallback
 
 # --- Agent Model Mapping from .env ---
 def get_agent_model(agent_name):
@@ -120,6 +128,10 @@ def get_config_for_agent(agent_name):
             if k in agent_cfg and agent_cfg[k] not in [None, ""]:
                 config[k] = agent_cfg[k]
                 
+    # Final fallback: If api_key is empty or whitespace, guarantee env / Space Secrets fallback
+    if not config.get("api_key") or not str(config["api_key"]).strip():
+        config["api_key"] = get_agent_api_key(agent_name) or get_agent_api_key("global") or ""
+
     return config
 
 

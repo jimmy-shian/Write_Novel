@@ -289,6 +289,9 @@ def get_all_chapters_latest(novel_id):
     """, (novel_id,)).fetchall()
     return [dict(r) for r in rows]
 
+get_chapters = get_all_chapters_latest
+get_all_chapters = get_all_chapters_latest
+
 def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None):
     conn = get_db_connection()
     with conn:

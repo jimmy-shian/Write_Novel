@@ -1,6 +1,18 @@
+---
+title: WriteNovel
+emoji: 🌌
+colorFrom: indigo
+colorTo: purple
+sdk: gradio
+sdk_version: 5.12.0
+app_file: app.py
+pinned: false
+---
+
 # AI Novel Factory (AI 小說工廠)
 
 > 智能長篇小說創作系統 — 採用多 AI 代理協作（Multi-Agent Collaboration）與總監驅動管線（Director-Driven Pipeline）架構。
+
 
 ---
 

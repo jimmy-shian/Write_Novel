@@ -37,6 +37,12 @@ from backend.api.settings.routes import router as settings_router
 from backend.api.export.routes import router as export_router
 from backend.api.volumes.routes import router as volumes_router
 from backend.api.diagnostics.routes import router as diagnostics_router
+from backend.api.sync.routes import router as sync_router
+from backend.api.autonomous.routes import router as autonomous_router
+from backend.services.hf_sync import restore_database, async_backup
+
+# Restore database from Hugging Face Dataset if running in cloud / configured
+restore_database(force=False)
 
 # Initialize database (must happen before routes)
 from backend import persistence as db
@@ -59,6 +65,8 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
 app.include_router(volumes_router, prefix="/api")
 app.include_router(diagnostics_router, prefix="/api")
+app.include_router(sync_router, prefix="/api")
+app.include_router(autonomous_router, prefix="/api")
 
 # --- GENERATION TASK ENDPOINT (kept inline for now as core feature) ---
 @app.post("/api/generation-task")
@@ -77,11 +85,19 @@ def api_generation_task(payload: dict = Body(...)):
 
     try:
         if task.options.stream:
+            def stream_with_sync():
+                try:
+                    for chunk in stream_generation_task(task):
+                        yield chunk
+                finally:
+                    async_backup(reason=f"Stage {task.stage} stream finished")
+
             return StreamingResponse(
-                stream_generation_task(task),
+                stream_with_sync(),
                 media_type="text/event-stream",
             )
         response = execute_generation_task(task)
+        async_backup(reason=f"Stage {task.stage} execution finished")
         return response.dict() if hasattr(response, "dict") else response
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
