@@ -36,7 +36,7 @@ export async function loadNovels() {
         localStorage.setItem('currentNovelId', novelId);
         state.currentNovelData = data;
         
-        if (isProjectSwitch || isDefaultIndex) {
+        if (isProjectSwitch || (isDefaultIndex && !state.isPipelineRunning && !state.currentlyWritingChapterIndex)) {
             const chapters = data.chapters || [];
             const writtenIndexes = new Set(
                 chapters
@@ -72,6 +72,7 @@ export async function loadNovels() {
                     const matchedVol = window.getChapterVolumeIndexJS(earliestMissing);
                     if (matchedVol) {
                         state.activeVolumeIndex = matchedVol;
+                        state.activeVolumeIdx = matchedVol;
                     }
                 } else {
                     let startCh = 1;
@@ -82,6 +83,7 @@ export async function loadNovels() {
                         const endCh = startCh + count - 1;
                         if (earliestMissing >= startCh && earliestMissing <= endCh) {
                             state.activeVolumeIndex = parseInt(v.volume_index);
+                            state.activeVolumeIdx = parseInt(v.volume_index);
                             break;
                         }
                         startCh = endCh + 1;

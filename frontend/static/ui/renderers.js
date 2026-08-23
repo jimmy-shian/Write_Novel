@@ -778,6 +778,7 @@ export function renderPlotTab() {
     window.scrollToVolume = function(volIdx) {
         // Step 3: 記錄當前活躍的卷數
         state.activeVolumeIdx = volIdx;
+        state.activeVolumeIndex = volIdx;
         
         const volCard = document.getElementById(`volume-card-${volIdx}`);
         if (volCard) {
@@ -815,6 +816,7 @@ export function renderPlotTab() {
     // 點擊 volume-card 任意位置時，設定為當前活躍卷並刷新時間軸
     window.activateVolumeNav = function(volIdx) {
         state.activeVolumeIdx = volIdx;
+        state.activeVolumeIndex = volIdx;
         
         // 更新 roadmap 節點高亮
         document.querySelectorAll('.roadmap-node').forEach((node) => {
@@ -853,6 +855,7 @@ export function renderPlotTab() {
                     
                     // 💡 同步更新當前活躍卷，並重繪右側快捷導航條
                     state.activeVolumeIdx = volIdx;
+                    state.activeVolumeIndex = volIdx;
                     if (typeof window.renderQuickTimelineNav === 'function') {
                         window.renderQuickTimelineNav();
                     }
@@ -1251,7 +1254,7 @@ export function renderPlotTab() {
                     
                     // 收集當前活躍卷的章節（而非全書章節）
                     const allDisplayChapters = [];
-                    const activeVolNum = state.activeVolumeIdx || 1;
+                    const activeVolNum = state.activeVolumeIndex || state.activeVolumeIdx || 1;
                     const currentVol = volumes.find(v => parseInt(v.volume_index) === activeVolNum) || volumes[0];
                     if (currentVol) {
                         const outl = Array.isArray(currentVol.chapters_outline) ? currentVol.chapters_outline : JSON.parse(currentVol.chapters_outline || '[]');
