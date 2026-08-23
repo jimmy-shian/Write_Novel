@@ -197,12 +197,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     merged_chapters = list(merged_map.values())
     merged_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)))
     
-    # 💡 4. 將融合後完整的章節池同步回寫至 volumes 表
+    # 💡 4. 將融合後完整的章節池同步回寫至 volumes 表與 plot_chapters 主表（原子交易）
     chapters_json = json.dumps(_convert_obj_to_traditional(merged_chapters), ensure_ascii=False)
-    cursor.execute(
-        "UPDATE volumes SET chapters_outline = ?, is_dirty = 0 WHERE novel_id = ? AND volume_index = ?",
-        (chapters_json, novel_id, volume_index)
-    )
     
     # 💡 5. 同步將融合後的完整列表縫合回 master plot_chapters 大綱主表
     # 直接在同一個連線中安全讀取主表最末版本，避免併發鎖定
@@ -239,14 +235,20 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     # 全局升序排序
     filtered_ch.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
     
-    # 💡 6. 【核心修復】：改用純 SQL 寫入大綱主表新版本，絕不呼叫會觸發反向分卷更新的 save_plot_chapters 函式！
+    # 💡 6. 【核心修復】：原子事務提交 volumes 更新與 plot_chapters 主表新版本
     with conn:
+        cursor.execute(
+            "UPDATE volumes SET chapters_outline = ?, is_dirty = 0 WHERE novel_id = ? AND volume_index = ?",
+            (chapters_json, novel_id, volume_index)
+        )
         row_max = cursor.execute("SELECT MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?", (novel_id,)).fetchone()
         next_v = (row_max["max_v"] or 0) + 1
         cursor.execute(
             "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
             (novel_id, json.dumps({"chapters": filtered_ch}, ensure_ascii=False), next_v)
         )
+        conn.commit()
+
 
 
 def update_volume(novel_id, volume_index, title, summary, factions):

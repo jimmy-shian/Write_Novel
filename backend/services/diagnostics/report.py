@@ -401,16 +401,28 @@ def detect_current_stage(novel_id):
     if not vols:
         return "volumes"
         
-    # 如果有任何一卷尚未規劃簡易骨架大綱，則為 volume_skeleton 階段
+    # 如果有任何一卷尚未規劃完整骨架大綱，則為 volume_skeleton 階段
     has_all_skeletons = True
     for v in vols:
         skeleton_list = v.get("chapters_outline")
-        if not skeleton_list:
+        if isinstance(skeleton_list, str):
+            try:
+                skeleton_list = json.loads(skeleton_list)
+            except Exception:
+                skeleton_list = None
+        if not isinstance(skeleton_list, list) or len(skeleton_list) == 0:
+            has_all_skeletons = False
+            break
+        planned_count = db._get_clean_chapter_count(v)
+        if len(skeleton_list) < planned_count:
             has_all_skeletons = False
             break
         # 檢查是否超過50%為 "待設定標題" 佔位符
         empty_titles = 0
         for c in skeleton_list:
+            if not isinstance(c, dict):
+                empty_titles += 1
+                continue
             title = c.get("chapter_title") or c.get("title") or ""
             if not title or title.strip() == "" or title == "待設定標題":
                 empty_titles += 1

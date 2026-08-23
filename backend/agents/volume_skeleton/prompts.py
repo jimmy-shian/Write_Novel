@@ -147,12 +147,7 @@ def build_volume_skeleton_completion_messages(
 ):
     """
     卷骨架「分段補全」提示詞拼接（completion 模式）。
-    把已生成的前段章節成果（prior_segment_json 字串）放在 messages 中作為
-    「已完成段落」，要求 LLM 只接續輸出剩餘章節 (start_ch ~ end_ch) 的骨架，
-    銜接前段已有標題、情節、allocated_tasks，避免前後斷層。
-
-    messages 結構刻意在最後放置一條 role=assistant 的「前段成果節錄」前綴，
-    讓模型以續寫方式產出後半，達成真正的 completion 補全。
+    要求 LLM 接續前段章節脈絡，產出指定補全範圍 (start_ch ~ end_ch) 的獨立完整 JSON。
     """
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
     system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUME_SKELETON_GUIDELINES}\n"
@@ -168,52 +163,55 @@ def build_volume_skeleton_completion_messages(
 
 【當前特定篇卷任務 — 分段補全 (Completion)】
 - 當前篇卷序號：第 {volume_index} 卷
-- 篇卷標題：{current_vol['title']}
-- 篇卷概要：{current_vol['summary']}
-- 已完成前段：第 {start_ch - 1} 章及之前（請勿重寫此前段章節）
-- 本次需補全章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {batch_count} 章）
-請務必只輸出此補全範圍內的章節骨架；不得輸出範圍外章節，不得重寫前段已存在章節。
+- 篇卷標題：{current_vol.get('title', f'第 {volume_index} 卷')}
+- 篇卷概要：{current_vol.get('summary', '')}
+- 已完成前段章節：第 {start_ch - 1} 章及之前（請勿重寫此前段章節）
+- 本次需補全章節範圍：第 {start_ch} 章至第 {end_ch} 章（共 {batch_count} 章，序號必須為 {start_ch} 到 {end_ch} 連續編號）
 
 {surrounding_context}
 {precalc_clues}
 
-【前段已生成之章節骨架（務必延續其標題命名風格、情節脈絡、伏筆分配）】
+【前段已生成之章節骨架參考】
 {prior_segment_json}
 
-以下為本次需補全章節的 allocated_tasks 硬性填寫規則：
-- 你不得自行挑選、推測、複製或新增任何伏筆 Seed / turning point 到未指定章節。
-- 只有上方清單明確列出的章節，才可在 allocated_tasks 對應陣列填入該任務。
-- 未列出任務的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
-- 補全章節須與前段情節自然銜接：延續前段 cliffhanger 的解決、角色行為因果、時間線連貫。
+【補全輸出要求】
+1. 請輸出包含本次補全範圍（第 {start_ch} 至第 {end_ch} 章）的完整 JSON 物件，格式如下：
+```json
+{{
+  "volume_index": {volume_index},
+  "chapters_skeleton": [
+    {{
+      "chapter_index": {start_ch},
+      "chapter_title": "章節標題",
+      "chapter_summary": "本章概要",
+      "time_setting": "時間設定",
+      "scene_setting": "主要場景",
+      "scene_goal": "核心目標",
+      "scene_conflict": "阻礙與衝突",
+      "scene_beats": [{{"beat_index": 1, "beat_type": "setup", "description": "行動與結果", "involved_characters": []}}],
+      "characters_active": [],
+      "emotional_tone": "",
+      "scene_turn": "",
+      "scene_outcome": "",
+      "cliffhanger": "",
+      "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
+    }}
+  ]
+}}
+```
+2. 輸出章數必須等於 {batch_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。
+3. 嚴格延續前段章節的標題風格與劇情因果。
 
 【使用者額外提示詞 (Prompt)】
 {user_prompt or "請接續前段內容，為本卷剩餘章節補全骨架大綱。"}
-
-請以 completion（續寫）方式，只輸出第 {start_ch} 章至第 {end_ch} 章的 chapters_skeleton JSON 陣列。輸出章數必須等於 {batch_count}，chapter_index 必須連續且不可缺漏。
 """
-    # 為促成真正的 completion，把前段成果作為 assistant 前綴（role=assistant），
-    # 讓模型以「自己先前已開始產出此 JSON」的續寫方式補完剩餘章節。
-    # 注意：以下字串刻意不以 f-string 撰寫，避免 JSON 花括號被當成 f-string 表達式。
-    assistant_intro = (
-        "以下是第 " + str(volume_index) + " 卷前段已生成的章節骨架（請勿重複輸出，僅作為脈絡）：\n"
-        "```json\n" + prior_segment_json + "\n```\n\n"
-        "我現在接續輸出第 " + str(start_ch) + " 章至第 " + str(end_ch) + " 章的 chapters_skeleton：\n"
-        "```json\n"
-        '{"volume_index": ' + str(volume_index) + ', "chapters_skeleton": ['
-    )
-    assistant_follow = (
-        "請接著上面已開始的 JSON 直接輸出 chapters_skeleton 陣列中的章節元素"
-        "（第 " + str(start_ch) + " ~ " + str(end_ch) + " 章），"
-        "然後以 ]}} 結束。只輸出尚未補完的章節，不要重複前段章節。"
-    )
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
-        {"role": "assistant", "content": assistant_intro},
-        {"role": "user", "content": assistant_follow},
     ]
     return messages
+
 
 def build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint):
     """卷骨架增量修正提示詞拼接"""

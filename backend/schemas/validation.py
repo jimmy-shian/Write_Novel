@@ -292,11 +292,20 @@ def chapter_index_or_none(chapter) -> int | None:
     """從章節物件中安全提取 chapter_index 整數，若無法解析則回傳 None。"""
     if not isinstance(chapter, dict):
         return None
-    raw = chapter.get("chapter_index") or chapter.get("chapter") or chapter.get("index")
-    try:
-        return int(raw)
-    except Exception:
-        return None
+    for key in ("chapter_index", "chapter", "chapter_number", "chapter_no", "index", "id", "chapterIndex", "ch_idx", "no"):
+        val = chapter.get(key)
+        if val is not None:
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                # 支援如「第 1 章」、「Chapter 1」等字串提取數字
+                m = re.search(r"\d+", str(val))
+                if m:
+                    try:
+                        return int(m.group(0))
+                    except (ValueError, TypeError):
+                        pass
+    return None
 
 
 def volume_existing_chapter_indexes(volume: dict, start_ch: int, end_ch: int) -> set:
@@ -384,16 +393,30 @@ def extract_chapters_in_range(parsed_skeleton, expected_indexes: list) -> list:
     從 LLM 回傳的骨架解析結果中提取符合預期章節 index 的章節物件列表，
     去除重複，並確保 chapter_index 欄位被正確賦值。
     """
+    chapters = []
     if isinstance(parsed_skeleton, dict):
-        chapters = parsed_skeleton.get("chapters_skeleton", []) or parsed_skeleton.get("chapters", [])
+        for key in (
+            "chapters_skeleton", "chapters", "chapters_outline",
+            "chapters_list", "chapter_list", "skeleton", "outline",
+            "volume_skeleton", "data", "items", "chapter_skeletons"
+        ):
+            candidate = parsed_skeleton.get(key)
+            if isinstance(candidate, list) and candidate:
+                chapters = candidate
+                break
+        if not chapters:
+            dict_values = [v for v in parsed_skeleton.values() if isinstance(v, dict)]
+            if dict_values:
+                chapters = dict_values
     elif isinstance(parsed_skeleton, list):
         chapters = parsed_skeleton
-    else:
-        chapters = []
+
     expected = set(expected_indexes)
     cleaned = []
     seen = set()
     for ch in chapters if isinstance(chapters, list) else []:
+        if not isinstance(ch, dict):
+            continue
         idx = chapter_index_or_none(ch)
         if idx in expected and idx not in seen:
             ch["chapter_index"] = idx

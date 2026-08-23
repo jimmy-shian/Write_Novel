@@ -260,24 +260,18 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
         row for row in task_rows
         if row["foreshadowing_plants"] or row["foreshadowing_payoffs"] or row["turning_points"]
     ]
-    precalc_clues = "【Python 預先計算好的本卷逐章伏筆/轉折硬性操作表】\n" + json.dumps({
+    precalc_clues = "【Python 預先計算好的本卷硬性伏筆/轉折任務指派表】\n（注意：下方僅列出有具體任務的章節；其餘未列出的章節 allocated_tasks 請填空陣列）\n" + json.dumps({
         "source_of_truth": "Python deterministic foreshadowing_blueprint",
         "volume_index": volume_index,
         "chapter_range": [start_ch, end_ch],
-        "rule": "每章 allocated_tasks 必須逐字依此表填寫；空陣列代表該章沒有硬性伏筆/轉折任務，不得自行新增。",
-        "all_chapter_allocated_tasks": task_rows,
-        "non_empty_task_summary": non_empty_rows,
+        "rule": "有列出的章節請將任務填入 allocated_tasks；其餘未列出的章節 allocated_tasks 請填空陣列：{\"foreshadowing_plants\": [], \"foreshadowing_payoffs\": [], \"turning_points\": []}。",
+        "chapters_with_tasks": non_empty_rows,
     }, ensure_ascii=False, indent=2)
 
-    prompt = (
-        f"{user_prompt or '請生成本卷完整章節骨架。'}\n\n"
-        f"【本次後端整卷生成任務】一次輸出第 {start_ch} 至第 {end_ch} 章的完整卷骨架，"
-        f"必須包含這些 chapter_index：{full_indexes}。不得切段、不得只輸出缺失片段。"
-    )
-    messages = build_volume_skeleton_planner_messages(
-        worldview_text, volume_index, current_vol, start_ch, end_ch, len(full_indexes),
-        surrounding_context, precalc_clues, prompt
-    )
+    batches = split_consecutive_batches(missing_indexes, batch_size=VOLUME_SKELETON_BATCH_SIZE)
+    total_batches = len(batches)
+    last_messages = None
+    full_text_list = []
 
     db.save_chat_message(
         novel_id,
@@ -286,60 +280,84 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
         message_type="pipeline",
     )
 
-    full_text = ""
-    saved_count = 0
-    for attempt in range(1, VOLUME_SKELETON_BATCH_RETRIES + 1):
-        yield "data: " + json.dumps({"type": "content", "delta": f"\n[整卷骨架] 第 {volume_index} 卷：一次生成第 {start_ch}-{end_ch} 章（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
-        llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
-        accumulated = []
-        saw_error = False
-        for chunk in llm_stream:
-            if chunk.startswith("data:"):
-                try:
-                    data = json.loads(chunk[5:].strip())
-                    if data.get("type") == "done":
-                        continue
-                    if data.get("type") == "content":
-                        accumulated.append(data.get("delta", ""))
-                    elif data.get("type") == "error":
-                        saw_error = True
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    pass
-            yield chunk
+    for batch_num, batch_indexes in enumerate(batches, 1):
+        batch_start, batch_end = min(batch_indexes), max(batch_indexes)
+        batch_count = len(batch_indexes)
 
-        full_text = "".join(accumulated)
-        if full_text.strip() and _handle_director_context_request(novel_id, "篇卷骨架規劃師", full_text):
-            yield "data: " + json.dumps({"type": "error", "message": "篇卷骨架規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-        if not full_text.strip() or saw_error:
-            if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
-                yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷完整骨架生成失敗，未取得有效內容。"}, ensure_ascii=False) + "\n\n"
+        batch_prompt = (
+            f"{user_prompt or '請生成本卷完整章節骨架。'}\n\n"
+            f"【本次後端骨架生成任務】只輸出第 {batch_start} 至第 {batch_end} 章的骨架，"
+            f"必須包含這些 chapter_index：{batch_indexes}。不得切段、不得只輸出缺失片段。"
+        )
+        messages = build_volume_skeleton_planner_messages(
+            worldview_text, volume_index, current_vol, batch_start, batch_end, batch_count,
+            surrounding_context, precalc_clues, batch_prompt
+        )
+        last_messages = messages
+
+        for attempt in range(1, VOLUME_SKELETON_BATCH_RETRIES + 1):
+            yield "data: " + json.dumps({"type": "content", "delta": f"\n[整卷骨架] 第 {volume_index} 卷 (批次 {batch_num}/{total_batches})：生成第 {batch_start}-{batch_end} 章（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
+            llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
+            accumulated = []
+            saw_error = False
+            for chunk in llm_stream:
+                if chunk.startswith("data:"):
+                    try:
+                        data = json.loads(chunk[5:].strip())
+                        if data.get("type") == "done":
+                            continue
+                        if data.get("type") == "content":
+                            accumulated.append(data.get("delta", ""))
+                        elif data.get("type") == "error":
+                            saw_error = True
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+                yield chunk
+
+            batch_full_text = "".join(accumulated)
+            full_text_list.append(batch_full_text)
+
+            if batch_full_text.strip() and _handle_director_context_request(novel_id, "篇卷骨架規劃師", batch_full_text):
+                yield "data: " + json.dumps({"type": "error", "message": "篇卷骨架規劃師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
-            continue
 
-        parsed_skeleton = extract_json_block(full_text)
-        chapters_skeleton = _extract_chapters_in_range(parsed_skeleton, full_indexes)
-        parsed_indexes = {chapter_index_or_none(ch) for ch in chapters_skeleton}
-        missing_after_parse = sorted(set(full_indexes) - parsed_indexes)
-        if missing_after_parse:
-            if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
-                yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷完整骨架仍缺失章節：{missing_after_parse}。"}, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-                return
-            continue
+            if not batch_full_text.strip() or saw_error:
+                if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
+                    yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 生成失敗，未取得有效內容。"}, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                    return
+                continue
 
-        canonical_map = db.apply_canonical_allocated_tasks_to_chapters(novel_id, chapters_skeleton)
-        chapters_skeleton = list(canonical_map.values())
-        chapters_skeleton.sort(key=lambda ch: int(ch.get("chapter_index", 0)))
-        db.update_volume_outline(novel_id, volume_index, chapters_skeleton)
-        saved_count = len(chapters_skeleton)
-        break
+            parsed_skeleton = extract_json_block(batch_full_text)
+            chapters_skeleton = _extract_chapters_in_range(parsed_skeleton, batch_indexes)
 
-    db.save_last_agent_run(novel_id, "volume_skeleton", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-    db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷完整骨架生成完成，一次保存/更新 {saved_count} 章。", message_type="pipeline")
-    yield "data: " + json.dumps({"type": "content", "delta": f"\n第 {volume_index} 卷完整骨架生成完成，一次保存/更新 {saved_count} 章。"}, ensure_ascii=False) + "\n\n"
+            # 即時保存已成功解析的合法章節（防止偶發缺失 1 章時丟失全部成果）
+            if chapters_skeleton:
+                canonical_map = db.apply_canonical_allocated_tasks_to_chapters(novel_id, chapters_skeleton)
+                partial_chapters = list(canonical_map.values())
+                partial_chapters.sort(key=lambda ch: int(ch.get("chapter_index", 0)))
+                db.update_volume_outline(novel_id, volume_index, partial_chapters)
+
+            parsed_indexes = {chapter_index_or_none(ch) for ch in chapters_skeleton}
+            missing_after_parse = sorted(set(batch_indexes) - parsed_indexes)
+            if missing_after_parse:
+                if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
+                    yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 仍缺失章節：{missing_after_parse}。"}, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                    return
+                continue
+
+            break
+
+    all_vols_after = db.get_volumes(novel_id)
+    final_missing = _volume_missing_chapter_indexes(all_vols_after, volume_index)
+    total_saved = len(full_indexes) - len(final_missing)
+
+    final_full_text = "\n\n".join(full_text_list)
+    db.save_last_agent_run(novel_id, "volume_skeleton", json.dumps(last_messages or [], ensure_ascii=False, indent=2), final_full_text)
+    db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷完整骨架生成完成，共保存/更新 {total_saved} 章。", message_type="pipeline")
+    yield "data: " + json.dumps({"type": "content", "delta": f"\n第 {volume_index} 卷完整骨架生成完成，共保存/更新 {total_saved} 章。"}, ensure_ascii=False) + "\n\n"
     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 
