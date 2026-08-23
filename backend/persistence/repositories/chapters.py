@@ -229,35 +229,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                         (novel_id, vol_idx, f"第 {vol_idx} 卷", f"本卷包含第 {v_start} 章至第 {v_end} 章的大綱規劃。", "全域陣列", new_chaps_str)
                     )
             
-            # 💡 額外處理：對於「有骨架但 incoming 中完全沒有任何章節的卷」，
-            #    也要清除其骨架中已被刪除的章節（例如刪除骨架章節後 plot.chapters 為空時）
-            all_vol_indices = set(v.get("volume_index", 0) for v in vols)
-            for vol_idx in all_vol_indices:
-                if vol_idx not in vol_groups:
-                    vol_row = cursor.execute(
-                        "SELECT id, chapters_outline FROM volumes WHERE novel_id = ? AND volume_index = ?",
-                        (novel_id, vol_idx)
-                    ).fetchone()
-                    if vol_row and vol_row["chapters_outline"]:
-                        try:
-                            existing_skeleton = json.loads(vol_row["chapters_outline"])
-                            if isinstance(existing_skeleton, list):
-                                filtered = []
-                                for sk_ch in existing_skeleton:
-                                    raw_idx = sk_ch.get("chapter_index") or sk_ch.get("chapter") or sk_ch.get("index")
-                                    try:
-                                        sk_idx = int(raw_idx)
-                                        if sk_idx in all_incoming_chapter_indices:
-                                            filtered.append(sk_ch)
-                                    except:
-                                        pass
-                                if len(filtered) != len(existing_skeleton):
-                                    cursor.execute(
-                                        "UPDATE volumes SET chapters_outline = ? WHERE id = ?",
-                                        (json.dumps(filtered, ensure_ascii=False), vol_row["id"])
-                                    )
-                        except:
-                            pass
+            # 注意：未在 incoming 中出現的篇卷保持原樣，不作反向抹除，以防分卷/局部更新時誤刪其他卷的骨架。
+
                     
     return 1
 

@@ -26,48 +26,48 @@ def acquire_pipeline_lock(novel_id, locked_by="pipeline"):
     If lock exists but heartbeat is older than 5 minutes (stale), breaks the stale lock and acquires new one.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, (novel_id, locked_by))
-        conn.commit()
-        _LAST_HEARTBEAT_DB_TIME[novel_id] = time.time()
-        return True
-    except sqlite3.IntegrityError:
-        # Lock exists - check if stale (heartbeat older than 5 minutes)
-        cursor.execute("""
-            SELECT locked_by, heartbeat_at FROM pipeline_locks WHERE novel_id = ?
-        """, (novel_id,))
-        row = cursor.fetchone()
-        if row:
-            # Check if heartbeat is stale (older than 5 minutes)
+    with conn:
+        cursor = conn.cursor()
+        try:
             cursor.execute("""
-                SELECT (julianday('now') - julianday(heartbeat_at)) * 24 * 60 as minutes_diff
-                FROM pipeline_locks WHERE novel_id = ?
+                INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (novel_id, locked_by))
+            _LAST_HEARTBEAT_DB_TIME[novel_id] = time.time()
+            return True
+        except sqlite3.IntegrityError:
+            # Lock exists - check if stale (heartbeat older than 5 minutes)
+            cursor.execute("""
+                SELECT locked_by, heartbeat_at FROM pipeline_locks WHERE novel_id = ?
             """, (novel_id,))
-            diff_row = cursor.fetchone()
-            if diff_row and diff_row["minutes_diff"] > 5:
-                # Stale lock - break it and acquire new one
-                cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+            row = cursor.fetchone()
+            if row:
+                # Check if heartbeat is stale (older than 5 minutes)
                 cursor.execute("""
-                    INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, (novel_id, locked_by))
-                conn.commit()
-                _LAST_HEARTBEAT_DB_TIME[novel_id] = time.time()
-                print(f"[LOCK] Broke stale lock for novel {novel_id} (held by {row['locked_by']})")
-                return True
-        return False
+                    SELECT (julianday('now') - julianday(heartbeat_at)) * 24 * 60 as minutes_diff
+                    FROM pipeline_locks WHERE novel_id = ?
+                """, (novel_id,))
+                diff_row = cursor.fetchone()
+                if diff_row and diff_row["minutes_diff"] > 5:
+                    # Stale lock - break it and acquire new one
+                    cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+                    cursor.execute("""
+                        INSERT INTO pipeline_locks (novel_id, locked_by, locked_at, heartbeat_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """, (novel_id, locked_by))
+                    _LAST_HEARTBEAT_DB_TIME[novel_id] = time.time()
+                    print(f"[LOCK] Broke stale lock for novel {novel_id} (held by {row['locked_by']})")
+                    return True
+            return False
 
 def release_pipeline_lock(novel_id):
     """Release the pipeline lock for a novel."""
     _LAST_HEARTBEAT_DB_TIME.pop(novel_id, None)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+        conn.commit()
 
 def update_pipeline_heartbeat(novel_id):
     """Update the heartbeat timestamp for an active pipeline lock (throttled to at most once per 15 seconds to protect SSD)."""
@@ -78,10 +78,13 @@ def update_pipeline_heartbeat(novel_id):
         return
         
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE pipeline_locks SET heartbeat_at = CURRENT_TIMESTAMP WHERE novel_id = ?", (novel_id,))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pipeline_locks SET heartbeat_at = CURRENT_TIMESTAMP WHERE novel_id = ?", (novel_id,))
+        conn.commit()
     _LAST_HEARTBEAT_DB_TIME[novel_id] = now
+
+
 
 def get_pipeline_lock_status(novel_id):
     """Get the current pipeline lock status for a novel. Returns dict if locked, None if not locked."""

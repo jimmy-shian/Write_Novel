@@ -519,54 +519,12 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 print(f"[LLM] Line processing error (non-fatal): {e}")
                 continue
         
-        # --- Validations (before yielding done) ---
-        full_text = "".join(accumulated_content)
-        
-        # If JSON is expected, validate it
-        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
-            parsed_json = extract_json_block(full_text)
-            if not parsed_json or len(parsed_json) == 0:
-                raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
-                
         # If we reached here, the call succeeded!
         yield "data: " + json.dumps({"type": "done"}) + "\n\n"
         return
         
     except Exception as e:
         print(f"[AGENT ERROR] Agent '{agent_name}' failed: {e}")
-        
-        # For JSON-structural agents, redirect to director (copilot) with error context
-        if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
-            error_msg = str(e)
-            failed_output = "".join(accumulated_content)
-            director_content = f"【系統通知】代理人「{agent_name}」在執行創作任務時發生錯誤。錯誤訊息：\n{error_msg}"
-            if failed_output.strip():
-                failed_payload = {
-                    "director_payload_view": "collapsed_json",
-                    "payload_kind": "agent_failed_output",
-                    "agent_name": agent_name,
-                    "char_count": len(failed_output),
-                    "data": failed_output if len(failed_output) <= 2000 else {
-                        "__collapsed_text__": True,
-                        "message": "代理人失敗輸出已收合為 metadata；請總監依錯誤、完整對話紀錄與後續工具結果決定是否重發指令。",
-                    },
-                }
-                director_content += f"\n\n【該代理人的失敗輸出 JSON 收合封包】\n{json.dumps(failed_payload, ensure_ascii=False, indent=2)}"
-            director_content += f"\n\n以下是該代理人的完整對話紀錄。請你（創意總監）根據這些資訊判斷下一步該如何處理。"
-            
-            director_msgs = [{"role": "system", "content": director_content}]
-            director_msgs.extend(normalized_msgs)
-            
-            yield "data: " + json.dumps({"type": "reset"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "retrying", "message": f"⚠️ 代理人「{agent_name}」輸出格式異常，正在轉呈創意總監代理判斷與處理..."}, ensure_ascii=False) + "\n\n"
-            
-            yield from call_llm_stream("copilot", director_msgs)
-            return
-        
-        # For other agents, yield error + done
-        if has_yielded_anything:
-            yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-        else:
-            yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
