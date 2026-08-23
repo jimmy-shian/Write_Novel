@@ -351,12 +351,13 @@ export async function startAutonomousPipeline(novelId, prompt = '', maxChapters 
     });
 }
 
-export async function getAutonomousPipelineStatus() {
-    return await requestAPI('/api/pipeline/auto-status', 'GET');
+export async function getAutonomousPipelineStatus(novelId = null) {
+    const query = novelId ? `?novel_id=${encodeURIComponent(novelId)}` : '';
+    return await requestAPI(`/api/pipeline/auto-status${query}`, 'GET');
 }
 
-export async function stopAutonomousPipeline() {
-    return await requestAPI('/api/pipeline/auto-stop', 'POST');
+export async function stopAutonomousPipeline(novelId = null) {
+    return await requestAPI('/api/pipeline/auto-stop', 'POST', { novel_id: novelId });
 }
 
 // Expose globally for modules/scripts that rely on window.streamAPI
@@ -365,3 +366,4 @@ window.requestAPI = requestAPI;
 window.startAutonomousPipeline = startAutonomousPipeline;
 window.getAutonomousPipelineStatus = getAutonomousPipelineStatus;
 window.stopAutonomousPipeline = stopAutonomousPipeline;
+

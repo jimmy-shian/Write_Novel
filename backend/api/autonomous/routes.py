@@ -16,6 +16,10 @@ class AutoRunRequest(BaseModel):
     max_chapters: Optional[int] = 5
 
 
+class AutoStopRequest(BaseModel):
+    novel_id: Optional[str] = None
+
+
 @router.post("/pipeline/auto-run")
 def api_start_auto_pipeline(req: AutoRunRequest):
     res = autonomous_manager.start_pipeline(
@@ -29,10 +33,11 @@ def api_start_auto_pipeline(req: AutoRunRequest):
 
 
 @router.get("/pipeline/auto-status")
-def api_get_auto_pipeline_status():
-    return autonomous_manager.get_status()
+def api_get_auto_pipeline_status(novel_id: Optional[str] = None):
+    return autonomous_manager.get_status(novel_id=novel_id)
 
 
 @router.post("/pipeline/auto-stop")
-def api_stop_auto_pipeline():
-    return autonomous_manager.stop_pipeline()
+def api_stop_auto_pipeline(req: Optional[AutoStopRequest] = None):
+    novel_id = req.novel_id if req else None
+    return autonomous_manager.stop_pipeline(novel_id=novel_id)

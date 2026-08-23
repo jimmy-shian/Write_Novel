@@ -111,7 +111,7 @@ function createDashboardDOM() {
             }
             if (confirm('確定要中止雲端無人值守生成嗎？已完成的章節將被安全保留。')) {
                 try {
-                    const res = await stopAutonomousPipeline();
+                    const res = await stopAutonomousPipeline(state.currentNovelId || null);
                     showToast(res.message || '已發送中止請求');
                     pollPipelineStatus();
                 } catch (e) {
@@ -305,7 +305,7 @@ function startStatusPolling() {
 
 async function pollPipelineStatus() {
     try {
-        const data = await getAutonomousPipelineStatus();
+        const data = await getAutonomousPipelineStatus(state.currentNovelId || null);
         updateWidgetUI(data);
     } catch (e) {
         // 後端離線或尚未設定
@@ -344,7 +344,8 @@ function updateWidgetUI(data) {
         card.style.display = 'block';
 
         if (data.is_running) {
-            title.textContent = `🚀 《${data.novel_title || '小說'}》雲端自主創作中...`;
+            const multiBadge = (data.active_tasks_count && data.active_tasks_count > 1) ? ` (${data.active_tasks_count}本並行)` : '';
+            title.textContent = `🚀 《${data.novel_title || '小說'}》自主創作中${multiBadge}...`;
             if (dot) {
                 dot.style.background = '#10b981';
                 dot.style.boxShadow = '0 0 10px #10b981';
