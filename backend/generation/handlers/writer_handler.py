@@ -20,6 +20,10 @@ def run_writer_task(task: GenerationTaskRequest, context=None):
             chapter_index = None
     if chapter_index is None:
         raise ValueError("writer 階段必須由總監明確指定 chapter_index，且無法自動修復當前章節。")
+    try:
+        chapter_index = int(chapter_index)
+    except (ValueError, TypeError):
+        pass
     return run_chapter_writer(
         task.novel_id,
         chapter_index=chapter_index,

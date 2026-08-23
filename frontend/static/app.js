@@ -4,7 +4,7 @@ import { showToast } from './core/toast.js';
 import { requestAPI, streamAPI } from './api/api.js';
 import { buildGenerationTaskPayload } from './generation/generationTaskSchema.js';
 import { buildFrontendStateReference } from './generation/generationStateMapper.js';
-import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown } from './core/utils.js';
+import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown, splitThinkingAndProse } from './core/utils.js';
 import { renderActiveTab, renderWorldviewTab, renderWorldviewSections, renderWorldviewSection, renderCharactersTab, renderPlotTab, renderWriterTab, selectWriterChapter, renderActiveChapter, renderChatMessages, appendChatMessage } from './ui/renderers.js';
 import { loadNovels, loadNovelDetails, clearWorkspace, renderNovelsList } from './ui/novelLifecycle.js';
 import { loadSettings, loadAgentConfigFields, saveCurrentAgentSettings, fetchModelsForCurrentUrl } from './ui/settings.js';
@@ -471,23 +471,7 @@ async function executeChapterProseEditFlow(targetChapterIndex, editInstructions)
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    let proseVal = val;
-                    let thinkingVal = "";
-                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                    let splitIndex = -1;
-                    for (const sw of specialWords) {
-                        const idx = val.indexOf(sw);
-                        if (idx !== -1) {
-                            splitIndex = idx;
-                            thinkingVal = val.substring(0, idx).trim();
-                            proseVal = val.substring(idx + sw.length).trim();
-                            break;
-                        }
-                    }
-                    if (splitIndex === -1) {
-                        thinkingVal = val;
-                        proseVal = "";
-                    }
+                    const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(val);
                     if (el.editorProse) {
                         el.editorProse.value = proseVal;
                     }
@@ -836,7 +820,8 @@ async function executeDirectorAction(decision, userPrompt) {
         }
         
         case 'AUTO_REGENERATE': {
-            const target = decision.target || decision.regenerateStage || '';
+            const rawTarget = (decision.target || decision.regenerateStage || '').toString().trim().toLowerCase();
+            const target = rawTarget;
             showToast(`⚡ 總監指示重新生成：${hint || target}`);
             const enhancedPrompt = hint ? `【⚠️ 總監修改指示/修正要求】：\n${hint}` : userPrompt;
 
@@ -853,10 +838,10 @@ async function executeDirectorAction(decision, userPrompt) {
             } else if (target.includes('character') || target.includes('角色')) {
                 updatePipelineStage('characters', 'running');
                 await executePipelineStage('characters', enhancedPrompt, decision);
-            } else if (target.includes('volume') || target.includes('卷')) {
-                updatePipelineStage('volumes', 'running');
-                await executePipelineStage('volumes', enhancedPrompt, decision);
-            } else if (target.includes('skeleton') || target.includes('骨架')) {
+            } else if (target.includes('foreshadow') || target.includes('伏筆')) {
+                updatePipelineStage('foreshadowing', 'running');
+                await executePipelineStage('foreshadowing', enhancedPrompt, decision);
+            } else if (target.includes('skeleton') || target.includes('骨架') || target === 'volume_skeleton') {
                 updatePipelineStage('volume_skeleton', 'running');
                 if (decision.volume_index !== undefined && decision.volume_index !== null) {
                     state.activeVolumeIndex = parseInt(decision.volume_index);
@@ -877,6 +862,9 @@ async function executeDirectorAction(decision, userPrompt) {
                     appendChatMessage('system', `⚠️ **[系統補正]** 總監未指定卷索引，系統自動定位到第一個缺失骨架的卷：第 ${fallbackVolIdx} 卷。`);
                 }
                 await executePipelineStage('volume_skeleton', enhancedPrompt, decision);
+            } else if (target === 'volumes' || target === 'volume' || (target.includes('卷') && !target.includes('骨架'))) {
+                updatePipelineStage('volumes', 'running');
+                await executePipelineStage('volumes', enhancedPrompt, decision);
             } else if (target.includes('writer') || target.includes('寫作') || target.includes('正文')) {
                 updatePipelineStage('writer', 'running');
                 if (decision.chapter_index !== undefined && decision.chapter_index !== null) {
@@ -892,9 +880,6 @@ async function executeDirectorAction(decision, userPrompt) {
             } else {
                 showToast('⚡ 總監指示重新生成，但未明確指定階段已停止流程...');
                 break;
-                // 預設重跑世界觀
-                // updatePipelineStage('worldview', 'running');
-                // await executePipelineStage('worldview', enhancedPrompt);
             }
             break;
         }
@@ -2939,15 +2924,9 @@ async function saveProseDirect(chapterIndex = null) {
         content = state.writingBuffer || content;
     }
     
-    // 💡 剛性修復：若 content 內含有 [START_OF_PROSE] 或 [正文開始]，進行拆分，只保存乾淨的正文
-    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-    for (const sw of specialWords) {
-        const idx = content.indexOf(sw);
-        if (idx !== -1) {
-            content = content.substring(idx + sw.length).trim();
-            break;
-        }
-    }
+    // 💡 剛性修復：若 content 內含有特殊標籤，進行拆分，只保存乾淨的正文
+    const parsedProseResult = splitThinkingAndProse(content);
+    content = parsedProseResult.prose || content;
     
     try {
         await requestAPI(`/api/novels/${state.currentNovelId}/chapters/${targetIdx}`, 'POST', { content });
@@ -3337,23 +3316,7 @@ streamAPI(
                     set value(val) {
                         state.writingBuffer = val;
                         if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                            let proseVal = val;
-                            let thinkingVal = "";
-                            const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                            let splitIndex = -1;
-                            for (const sw of specialWords) {
-                                const idx = val.indexOf(sw);
-                                if (idx !== -1) {
-                                    splitIndex = idx;
-                                    thinkingVal = val.substring(0, idx).trim();
-                                    proseVal = val.substring(idx + sw.length).trim();
-                                    break;
-                                }
-                            }
-                            if (splitIndex === -1) {
-                                thinkingVal = val;
-                                proseVal = "";
-                            }
+                            const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(val);
                             
                             if (el.editorProse) {
                                 el.editorProse.value = proseVal;
@@ -4572,23 +4535,7 @@ async function handleDrawerPromptSubmit() {
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    let proseVal = val;
-                    let thinkingVal = "";
-                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                    let splitIndex = -1;
-                    for (const sw of specialWords) {
-                        const idx = val.indexOf(sw);
-                        if (idx !== -1) {
-                            splitIndex = idx;
-                            thinkingVal = val.substring(0, idx).trim();
-                            proseVal = val.substring(idx + sw.length).trim();
-                            break;
-                        }
-                    }
-                    if (splitIndex === -1) {
-                        thinkingVal = val;
-                        proseVal = "";
-                    }
+                    const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(val);
                     
                     if (el.editorProse) {
                         el.editorProse.value = proseVal;
@@ -4635,7 +4582,7 @@ async function handleDrawerPromptSubmit() {
                 
                 // 呼叫總監評估
                 showToast(`第 ${targetChapterIndex} 章優化完成，正在請求 AI 總監評估...`);
-                await runDirectorDecision('writer');
+                await runDirectorDecision('editor');
             },
             { tabName: 'writer', agentName: 'Editor Agent' }
         );
@@ -5058,23 +5005,7 @@ function setupEventListeners() {
             set value(val) {
                 state.writingBuffer = val;
                 if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                    let proseVal = val;
-                    let thinkingVal = "";
-                    const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                    let splitIndex = -1;
-                    for (const sw of specialWords) {
-                        const idx = val.indexOf(sw);
-                        if (idx !== -1) {
-                            splitIndex = idx;
-                            thinkingVal = val.substring(0, idx).trim();
-                            proseVal = val.substring(idx + sw.length).trim();
-                            break;
-                        }
-                    }
-                    if (splitIndex === -1) {
-                        thinkingVal = val;
-                        proseVal = "";
-                    }
+                    const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(val);
                     
                     if (el.editorProse) {
                         el.editorProse.value = proseVal;
@@ -5117,6 +5048,7 @@ function setupEventListeners() {
                 state.writingBuffer = "";
                 
                 await loadNovelDetails(state.currentNovelId);
+                state.activeChapterIndex = targetChapterIndex;
                 
                 // 呼叫總監評估
                 showToast(`第 ${targetChapterIndex} 章已完成，正在請求 AI 總監評估...`);
@@ -5777,23 +5709,7 @@ function startStage4_Writer(regenerate = false) {
         set value(val) {
             state.writingBuffer = val;
             if (state.activeChapterIndex === state.currentlyWritingChapterIndex) {
-                let proseVal = val;
-                let thinkingVal = "";
-                const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                let splitIndex = -1;
-                for (const sw of specialWords) {
-                    const idx = val.indexOf(sw);
-                    if (idx !== -1) {
-                        splitIndex = idx;
-                        thinkingVal = val.substring(0, idx).trim();
-                        proseVal = val.substring(idx + sw.length).trim();
-                        break;
-                    }
-                }
-                if (splitIndex === -1) {
-                    thinkingVal = val;
-                    proseVal = "";
-                }
+                const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(val);
                 
                 if (el.editorProse) {
                     el.editorProse.value = proseVal;

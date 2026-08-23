@@ -680,3 +680,39 @@ export function throttledRenderMarkdown(element, markdownText) {
         });
     }
 }
+
+/**
+ * 健壯解析正文與思考內容，杜絕正文空白與特殊標籤遺漏
+ * @param {string} rawText - 原始流式或完整文字
+ * @returns {{ thinking: string, prose: string }}
+ */
+export function splitThinkingAndProse(rawText) {
+    if (!rawText) return { thinking: "", prose: "" };
+    const text = String(rawText);
+    const specialWords = ["[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"];
+    for (const sw of specialWords) {
+        const idx = text.indexOf(sw);
+        if (idx !== -1) {
+            let thinking = text.substring(0, idx).trim();
+            thinking = thinking.replace(/<\/?think>/g, '').trim();
+            const prose = text.substring(idx + sw.length).trim();
+            return { thinking, prose };
+        }
+    }
+    
+    // 檢查 <think> 標籤
+    if (text.includes("<think>")) {
+        const thinkEnd = text.indexOf("</think>");
+        if (thinkEnd !== -1) {
+            const thinking = text.substring(0, thinkEnd + 8).replace(/<\/?think>/g, '').trim();
+            const prose = text.substring(thinkEnd + 8).trim();
+            return { thinking, prose };
+        } else {
+            const thinking = text.replace(/<think>/g, '').trim();
+            return { thinking, prose: "" };
+        }
+    }
+    
+    // 若無特殊標籤且無 think 標籤，全數作為正文展示
+    return { thinking: "", prose: text };
+}

@@ -1,6 +1,7 @@
 import { state } from '../core/state.js';
 import { el } from '../core/dom.js';
 import { showToast } from '../core/toast.js';
+import { splitThinkingAndProse } from '../core/utils.js';
 import { showAgentProcessingIndicator, hideAgentProcessingIndicator } from '../pipeline/agentProcessing.js';
 import { renderSubAgentStatus } from '../pipeline/status_panel.js';
 import { buildGenerationTaskPayload } from '../generation/generationTaskSchema.js';
@@ -537,23 +538,7 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                     if (stage === 'writer') {
                         state.writingBuffer = (state.writingBuffer || "") + delta;
                         
-                        let proseVal = state.writingBuffer;
-                        let thinkingVal = "";
-                        const specialWords = ["[START_OF_PROSE]", "[正文開始]"];
-                        let splitIndex = -1;
-                        for (const sw of specialWords) {
-                            const idx = state.writingBuffer.indexOf(sw);
-                            if (idx !== -1) {
-                                splitIndex = idx;
-                                thinkingVal = state.writingBuffer.substring(0, idx).trim();
-                                proseVal = state.writingBuffer.substring(idx + sw.length).trim();
-                                break;
-                            }
-                        }
-                        if (splitIndex === -1) {
-                            thinkingVal = state.writingBuffer;
-                            proseVal = "";
-                        }
+                        const { thinking: thinkingVal, prose: proseVal } = splitThinkingAndProse(state.writingBuffer);
                         
                         if (state.activeChapterIndex === writingChapterIndex) {
                             targetTextarea.value = proseVal;
@@ -654,6 +639,7 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                 }
             },
             async () => {
+                const finishedWritingChapter = writingChapterIndex;
                 state.currentlyWritingChapterIndex = null;
                 if (failed) {
                     state.directorSubAgentStatus[stage] = 'error';
@@ -671,6 +657,9 @@ async function _executePipelineStageWithBody(stage, userPrompt, decision = null)
                     updatePipelineStage(stage, 'done');
                     hideAgentProcessingIndicator(stage);
                     await window.loadNovelDetails(state.currentNovelId);
+                    if (stage === 'writer' && finishedWritingChapter) {
+                        state.activeChapterIndex = finishedWritingChapter;
+                    }
                     // 角色生成完成後，清除 need_characters 信號（已補充完畢）
                     if (stage === 'characters') {
                         state.skeletonNeedsCharacters = null;

@@ -351,13 +351,20 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             return
         prose_val = full_text
         thinking_val = ""
-        special_words = ["[START_OF_PROSE]", "[正文開始]"]
+        special_words = ["[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"]
         for sw in special_words:
             idx = full_text.find(sw)
             if idx != -1:
                 thinking_val = full_text[:idx].strip()
                 prose_val = full_text[idx + len(sw):].strip()
                 break
+        if thinking_val and ("<think>" in thinking_val or "</think>" in thinking_val):
+            thinking_val = re.sub(r"</?think>", "", thinking_val).strip()
+        elif "<think>" in prose_val and "</think>" in prose_val:
+            m = re.search(r"<think>(.*?)</think>", prose_val, flags=re.DOTALL)
+            if m:
+                thinking_val = m.group(1).strip()
+                prose_val = re.sub(r"<think>.*?</think>", "", prose_val, flags=re.DOTALL).strip()
                 
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,
