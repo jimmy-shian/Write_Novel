@@ -1,7 +1,7 @@
 import { state } from './core/state.js';
 import { el } from './core/dom.js';
 import { showToast } from './core/toast.js';
-import { requestAPI, streamAPI } from './api/api.js';
+import { requestAPI, streamAPI, downloadNovelExport } from './api/api.js';
 import { buildGenerationTaskPayload } from './generation/generationTaskSchema.js';
 import { buildFrontendStateReference } from './generation/generationStateMapper.js';
 import { parseWorldviewJSON, showCustomConfirm, stripBulletPrefix, formatDate, renderMarkdown, parseDirectorDecisionText, throttledRenderMarkdown, splitThinkingAndProse } from './core/utils.js';
@@ -4982,9 +4982,7 @@ function setupEventListeners() {
             });
             
             if (format) {
-                showToast(`正在準備匯出 ${format.toUpperCase()} 檔...`);
-                // Trigger download via window.location
-                window.location.href = `/api/novels/${state.currentNovelId}/export?format=${format}`;
+                await downloadNovelExport(state.currentNovelId, format);
             }
         });
     }
@@ -5311,23 +5309,14 @@ function setupEventListeners() {
         
         // Handle dropdown item click
         el.exportDropdownMenu.querySelectorAll('.dropdown-item').forEach(item => {
-            item.addEventListener('click', (e) => {
+            item.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 el.exportDropdownMenu.classList.remove('show');
                 
-                if (!state.currentNovelId) return;
+                if (!state.currentNovelId) return showToast("請先選擇或建立一部小說");
                 
-                const format = item.dataset.format;
-                
-                // Trigger direct file download
-                const a = document.createElement('a');
-                a.href = `/api/novels/${state.currentNovelId}/export?format=${format}`;
-                a.download = '';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                
-                showToast(`正在匯出為 ${format.toUpperCase()} 格式...`);
+                const format = item.dataset.format || 'html';
+                await downloadNovelExport(state.currentNovelId, format);
             });
         });
     }

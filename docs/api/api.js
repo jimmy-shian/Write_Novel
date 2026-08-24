@@ -360,10 +360,64 @@ export async function stopAutonomousPipeline(novelId = null) {
     return await requestAPI('/api/pipeline/auto-stop', 'POST', { novel_id: novelId });
 }
 
+// Export Novel Helper with full Cloud Hybrid & Bearer Token support
+export async function downloadNovelExport(novelId, format = 'html') {
+    if (!novelId) {
+        showToast('請先選擇或建立一部小說');
+        return;
+    }
+    showToast(`正在準備匯出 ${format.toUpperCase()} 檔...`);
+    try {
+        const fullUrl = resolveAPIUrl(`/api/novels/${novelId}/export?format=${format}`);
+        const headers = {};
+        const token = getHFToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        const resp = await fetch(fullUrl, { method: 'GET', headers });
+        if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error(errText || `匯出失敗 (HTTP ${resp.status})`);
+        }
+
+        const blob = await resp.blob();
+        let filename = `小說_${format.toUpperCase()}.${format === 'html' ? 'html' : 'txt'}`;
+
+        const disposition = resp.headers.get('Content-Disposition');
+        if (disposition && disposition.includes('filename')) {
+            const utf8Match = disposition.match(/filename\*=utf-8''([^;]+)/i);
+            if (utf8Match && utf8Match[1]) {
+                try {
+                    filename = decodeURIComponent(utf8Match[1]);
+                } catch (e) {}
+            } else {
+                const regularMatch = disposition.match(/filename=["']?([^"';]+)["']?/i);
+                if (regularMatch && regularMatch[1]) {
+                    filename = regularMatch[1];
+                }
+            }
+        }
+
+        const objectUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => window.URL.revokeObjectURL(objectUrl), 15000);
+        showToast(`✅ 已成功匯出 ${filename}`);
+    } catch (err) {
+        console.error('Export error:', err);
+        showToast(`❌ 匯出失敗: ${err.message}`);
+    }
+}
+
 // Expose globally for modules/scripts that rely on window.streamAPI
 window.streamAPI = streamAPI;
 window.requestAPI = requestAPI;
 window.startAutonomousPipeline = startAutonomousPipeline;
 window.getAutonomousPipelineStatus = getAutonomousPipelineStatus;
 window.stopAutonomousPipeline = stopAutonomousPipeline;
+window.downloadNovelExport = downloadNovelExport;
 
