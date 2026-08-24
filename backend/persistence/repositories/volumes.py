@@ -123,6 +123,10 @@ def get_total_chapter_count(volumes):
     from backend.services.foreshadowing.chapter_math import get_total_chapter_count as _get_total_chapter_count
     return _get_total_chapter_count(volumes)
 
+def volume_missing_chapter_indexes(volumes: list, volume_index: int) -> list:
+    from backend.schemas.validation import volume_missing_chapter_indexes as _volume_missing_chapter_indexes
+    return _volume_missing_chapter_indexes(volumes, volume_index)
+
 def update_volume_dirty(novel_id, volume_index, is_dirty):
     conn = get_db_connection()
     with conn:

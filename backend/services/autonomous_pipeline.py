@@ -329,7 +329,7 @@ class AutonomousPipelineManager:
                 async_backup(reason=f"Auto flow [{task.novel_title}]: volumes finished")
                 vols = db.get_volumes(novel_id)
 
-            # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆具備細綱)
+            # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆 100% 具備細綱)
             if task.stop_requested: return
             vols = db.get_volumes(novel_id)
             if vols:
@@ -337,12 +337,12 @@ class AutonomousPipelineManager:
                     if task.stop_requested: return
                     vol_idx = int(vol.get("volume_index") or v_idx)
                     vol_title = vol.get("title", f"第 {vol_idx} 卷")
-                    ch_outline = vol.get("chapters_outline")
-                    if not ch_outline:
+                    missing_chapters = db.volume_missing_chapter_indexes(vols, vol_idx)
+                    if missing_chapters:
                         task.current_stage = f"volume_skeleton_vol{vol_idx}"
                         task.progress_percent = 40 + int((v_idx / len(vols)) * 10)
-                        task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架..."
-                        task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱...")
+                        task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架 (缺失 {len(missing_chapters)} 章)..."
+                        task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱 (目標缺失章節: {missing_chapters})...")
                         self._execute_stage_with_retry(
                             task=task,
                             stage="volume_skeleton",
@@ -352,6 +352,7 @@ class AutonomousPipelineManager:
                             user_prompt=f"生成第 {vol_idx} 卷詳細細綱",
                         )
                         task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】章節細綱骨架規劃完成！")
+                        vols = db.get_volumes(novel_id)
                 
                 db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
                 async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
@@ -388,9 +389,9 @@ class AutonomousPipelineManager:
                 # 確保該章所屬的卷具備骨架
                 curr_vol_idx = db.get_chapter_volume_index(vols, ch_idx) if vols else None
                 if curr_vol_idx:
-                    curr_vol = next((v for v in vols if int(v.get("volume_index", 0)) == int(curr_vol_idx)), None)
-                    if curr_vol and not curr_vol.get("chapters_outline"):
-                        task.log(f"第 {ch_idx} 章所屬第 {curr_vol_idx} 卷無骨架，正在補充生成第 {curr_vol_idx} 卷骨架...")
+                    missing_in_curr = db.volume_missing_chapter_indexes(vols, curr_vol_idx)
+                    if ch_idx in missing_in_curr:
+                        task.log(f"第 {ch_idx} 章所屬第 {curr_vol_idx} 卷缺失該章細綱，正在補充生成第 {curr_vol_idx} 卷骨架...")
                         self._execute_stage_with_retry(
                             task=task,
                             stage="volume_skeleton",

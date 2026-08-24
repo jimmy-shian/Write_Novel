@@ -391,7 +391,7 @@ def split_consecutive_batches(indexes: list, batch_size: int = VOLUME_SKELETON_B
 def extract_chapters_in_range(parsed_skeleton, expected_indexes: list) -> list:
     """
     從 LLM 回傳的骨架解析結果中提取符合預期章節 index 的章節物件列表，
-    去除重複，並確保 chapter_index 欄位被正確賦值。
+    支援絕對索引與相對批次索引（1..len）自動映射，並補齊缺漏 index。
     """
     chapters = []
     if isinstance(parsed_skeleton, dict):
@@ -411,17 +411,43 @@ def extract_chapters_in_range(parsed_skeleton, expected_indexes: list) -> list:
     elif isinstance(parsed_skeleton, list):
         chapters = parsed_skeleton
 
-    expected = set(expected_indexes)
+    if not isinstance(chapters, list):
+        return []
+
+    sorted_expected = sorted(expected_indexes)
+    expected_set = set(sorted_expected)
     cleaned = []
     seen = set()
-    for ch in chapters if isinstance(chapters, list) else []:
+
+    # 第一遍：直接匹配絕對索引
+    for ch in chapters:
         if not isinstance(ch, dict):
             continue
         idx = chapter_index_or_none(ch)
-        if idx in expected and idx not in seen:
-            ch["chapter_index"] = idx
-            cleaned.append(ch)
+        if idx is not None and idx in expected_set and idx not in seen:
+            ch_copy = dict(ch)
+            ch_copy["chapter_index"] = idx
+            cleaned.append(ch_copy)
             seen.add(idx)
+
+    # 第二遍：若絕對匹配不完整且章節數量相符，嘗試相對批次索引映射 (1..len)
+    if len(cleaned) < len(sorted_expected):
+        missing_expected = [x for x in sorted_expected if x not in seen]
+        unmatched_chapters = [
+            ch for ch in chapters
+            if isinstance(ch, dict) and chapter_index_or_none(ch) not in seen
+        ]
+
+        # 依序配對剩餘章節至 missing_expected
+        for i, ch in enumerate(unmatched_chapters):
+            if i < len(missing_expected):
+                target_idx = missing_expected[i]
+                ch_copy = dict(ch)
+                ch_copy["chapter_index"] = target_idx
+                cleaned.append(ch_copy)
+                seen.add(target_idx)
+
+    cleaned.sort(key=lambda x: int(x.get("chapter_index", 0)))
     return cleaned
 
 
