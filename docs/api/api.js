@@ -2,6 +2,8 @@
 // API WRAPPERS & STREAMING CORE
 // ==========================================
 
+import { showToast } from '../core/toast.js';
+
 const GENERATION_TASK_LEGACY_KEYS = [
     'taskType',
     'userPrompt',
