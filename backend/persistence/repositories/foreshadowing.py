@@ -93,6 +93,28 @@ def get_foreshadowing_seeds(novel_id: str) -> List[Any]:
         return []
 
 
+def get_key_turning_points(novel_id: str) -> List[Any]:
+    """獲取指定小說的關鍵轉折點清單"""
+    try:
+        from backend.persistence.repositories.worldbuilding import get_latest_worldbuilding, parse_worldview_to_json
+        wb = get_latest_worldbuilding(novel_id)
+        if not wb or not wb.get("content"):
+            return []
+        content = wb["content"]
+        if content.strip().startswith("{"):
+            parsed = parse_worldview_to_json(content)
+            return (
+                parsed.get("key_turning_points")
+                or parsed.get("turning_points")
+                or parsed.get("major_turnings")
+                or []
+            )
+        return []
+    except Exception as e:
+        print(f"[WARN] Failed to get key turning points: {e}")
+        return []
+
+
 
 # Cross-repository imports used by legacy domain functions during runtime.
 from backend.persistence.schema import db_init, sync_agent_configs_from_env

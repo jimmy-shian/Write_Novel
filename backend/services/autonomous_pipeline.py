@@ -272,23 +272,42 @@ class AutonomousPipelineManager:
                 db.save_chat_message(novel_id, "assistant", "👥 **【總監通報】** 核心主角群與配角人設檔案已設計完成！", message_type="chat")
                 async_backup(reason=f"Auto flow [{task.novel_title}]: characters finished")
 
-            # 3. 檢查並編織全局伏筆
+            # 3. 檢查並編織全局伏筆與關鍵轉折
             if task.stop_requested: return
             seeds = db.get_foreshadowing_seeds(novel_id)
-            if not seeds:
-                task.current_stage = "foreshadowing"
-                task.progress_percent = 25
+            if not seeds or len(seeds) < 10:
+                task.current_stage = "foreshadowing_seeds"
+                task.progress_percent = 22
                 task.status_message = "正在編織全局懸念與長線伏筆網絡..."
                 task.log("開始編織全書伏筆網絡...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="foreshadowing",
                     task_type="generate",
-                    instruction="請為全書埋設貫穿全局的重大懸念與分卷伏筆",
+                    instruction="[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆",
                     user_prompt="設計核心主線伏筆",
                 )
                 task.log("✅ 伏筆網絡已編織完成！")
                 db.save_chat_message(novel_id, "assistant", "🕸️ **【總監通報】** 全局懸念與長線伏筆網絡已編織完成！", message_type="chat")
+                async_backup(reason=f"Auto flow [{task.novel_title}]: seeds finished")
+
+            if task.stop_requested: return
+            turns = db.get_key_turning_points(novel_id) if hasattr(db, "get_key_turning_points") else []
+            if not turns or len(turns) < 10:
+                task.current_stage = "foreshadowing_turns"
+                task.progress_percent = 28
+                task.status_message = "正在規劃全書核心關鍵轉折點與高潮逆轉事件..."
+                task.log("開始規劃全書核心關鍵轉折點...")
+                self._execute_stage_with_retry(
+                    task=task,
+                    stage="foreshadowing",
+                    task_type="generate",
+                    instruction="[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件",
+                    user_prompt="設計核心關鍵轉折點",
+                )
+                task.log("✅ 關鍵轉折點已規劃完成！")
+                db.save_chat_message(novel_id, "assistant", "🎭 **【總監通報】** 全書核心關鍵轉折點已規劃就緒！", message_type="chat")
+                async_backup(reason=f"Auto flow [{task.novel_title}]: key turning points finished")
 
             # 4. 檢查並規劃分卷結構
             if task.stop_requested: return
@@ -308,30 +327,40 @@ class AutonomousPipelineManager:
                 task.log("✅ 分卷架構規劃完成！")
                 db.save_chat_message(novel_id, "assistant", "📚 **【總監通報】** 全書分卷結構與高潮節奏已規劃就緒！", message_type="chat")
                 async_backup(reason=f"Auto flow [{task.novel_title}]: volumes finished")
+                vols = db.get_volumes(novel_id)
 
-            # 5. 檢查並規劃篇卷骨架 (各章節細綱)
+            # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆具備細綱)
             if task.stop_requested: return
-            plot_data = db.get_stitched_plot(novel_id)
-            planned_chapters = plot_data.get("chapters", []) if plot_data else []
-            if not planned_chapters:
-                task.current_stage = "volume_skeleton"
-                task.progress_percent = 45
-                task.status_message = "正在生成第一卷的逐章詳細情節骨架..."
-                task.log("開始生成篇卷章節骨架細綱...")
-                self._execute_stage_with_retry(
-                    task=task,
-                    stage="volume_skeleton",
-                    task_type="generate",
-                    instruction="請詳細規劃各章的情節要點、視角人物、場景與伏筆回收點",
-                    user_prompt="生成逐章詳細細綱",
-                )
-                task.log("✅ 章節細綱骨架規劃完成！")
-                db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 各章節詳細情節骨架與細綱已生成完畢！", message_type="chat")
-                plot_data = db.get_stitched_plot(novel_id)
-                planned_chapters = plot_data.get("chapters", []) if plot_data else []
+            vols = db.get_volumes(novel_id)
+            if vols:
+                for v_idx, vol in enumerate(vols, start=1):
+                    if task.stop_requested: return
+                    vol_idx = int(vol.get("volume_index") or v_idx)
+                    vol_title = vol.get("title", f"第 {vol_idx} 卷")
+                    ch_outline = vol.get("chapters_outline")
+                    if not ch_outline:
+                        task.current_stage = f"volume_skeleton_vol{vol_idx}"
+                        task.progress_percent = 40 + int((v_idx / len(vols)) * 10)
+                        task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架..."
+                        task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱...")
+                        self._execute_stage_with_retry(
+                            task=task,
+                            stage="volume_skeleton",
+                            task_type="generate",
+                            target={"volume_index": vol_idx},
+                            instruction=f"請詳細規劃第 {vol_idx} 卷（{vol_title}）各章的情節要點、視角人物、場景與伏筆回收點",
+                            user_prompt=f"生成第 {vol_idx} 卷詳細細綱",
+                        )
+                        task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】章節細綱骨架規劃完成！")
+                
+                db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
+                async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
 
             # 6. 逐章撰寫與精修 (智慧接續未完成之章節)
-            total_target = len(planned_chapters) if planned_chapters else max_chapters
+            vols = db.get_volumes(novel_id)
+            plot_data = db.get_stitched_plot(novel_id)
+            planned_chapters = plot_data.get("chapters", []) if plot_data else []
+            total_target = len(planned_chapters) if planned_chapters else (db.get_total_chapter_count(vols) if vols else max_chapters)
             if total_target <= 0:
                 total_target = max_chapters or 10
 
@@ -355,6 +384,22 @@ class AutonomousPipelineManager:
                 if ch_idx in written_indices:
                     task.log(f"第 {ch_idx} 章已存在完整內容，跳過並接續下一章。")
                     continue
+
+                # 確保該章所屬的卷具備骨架
+                curr_vol_idx = db.get_chapter_volume_index(vols, ch_idx) if vols else None
+                if curr_vol_idx:
+                    curr_vol = next((v for v in vols if int(v.get("volume_index", 0)) == int(curr_vol_idx)), None)
+                    if curr_vol and not curr_vol.get("chapters_outline"):
+                        task.log(f"第 {ch_idx} 章所屬第 {curr_vol_idx} 卷無骨架，正在補充生成第 {curr_vol_idx} 卷骨架...")
+                        self._execute_stage_with_retry(
+                            task=task,
+                            stage="volume_skeleton",
+                            task_type="generate",
+                            target={"volume_index": int(curr_vol_idx)},
+                            instruction=f"請詳細規劃第 {curr_vol_idx} 卷各章的情節要點、視角人物、場景與伏筆回收點",
+                            user_prompt=f"生成第 {curr_vol_idx} 卷詳細細綱",
+                        )
+                        vols = db.get_volumes(novel_id)
 
                 # (1) 正文寫作 (含 5 次自動重試)
                 task.current_stage = f"writer_ch{ch_idx}"

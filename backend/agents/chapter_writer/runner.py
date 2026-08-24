@@ -254,6 +254,15 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     
     current_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index), None)
     if not current_outline:
+        # Fallback to global stitched plot / plot_chapters table
+        stitched = db.get_stitched_plot(novel_id)
+        if stitched and isinstance(stitched.get("chapters"), list):
+            for ch in stitched["chapters"]:
+                if isinstance(ch, dict) and int(ch.get("chapter_index", 0)) == chapter_index:
+                    current_outline = ch
+                    break
+
+    if not current_outline:
         current_outline = {
             "chapter_index": chapter_index,
             "title": f"第 {chapter_index} 章",
