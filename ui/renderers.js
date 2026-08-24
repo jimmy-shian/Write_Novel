@@ -460,7 +460,7 @@ export function renderWorldviewSections() {
     `;
     
     // 關鍵轉折點 (data-section 映射為 turning-points 配合 app.js)
-    const tpList = js.key_turning_points || [];
+    const tpList = js.key_turning_points || js.turning_points || js.major_turnings || [];
     strategyHtml += `
         <div class="worldview-section-card" data-section="turning-points">
             <div class="worldview-section-header">
