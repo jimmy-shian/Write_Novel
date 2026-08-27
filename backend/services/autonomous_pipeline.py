@@ -251,7 +251,6 @@ class AutonomousPipelineManager:
                 )
                 task.log("✅ 世界觀設定已完成並持久化！")
                 db.save_chat_message(novel_id, "assistant", "🌍 **【總監通報】** 世界觀設定與力量體系已規劃完成並存入數據庫！", message_type="chat")
-                async_backup(reason=f"Auto flow [{task.novel_title}]: worldview finished")
 
             # 2. 檢查並生成主要角色設定
             if task.stop_requested: return
@@ -270,7 +269,6 @@ class AutonomousPipelineManager:
                 )
                 task.log("✅ 角色設定已完成並持久化！")
                 db.save_chat_message(novel_id, "assistant", "👥 **【總監通報】** 核心主角群與配角人設檔案已設計完成！", message_type="chat")
-                async_backup(reason=f"Auto flow [{task.novel_title}]: characters finished")
 
             # 3. 檢查並編織全局伏筆與關鍵轉折
             if task.stop_requested: return
@@ -289,7 +287,6 @@ class AutonomousPipelineManager:
                 )
                 task.log("✅ 伏筆網絡已編織完成！")
                 db.save_chat_message(novel_id, "assistant", "🕸️ **【總監通報】** 全局懸念與長線伏筆網絡已編織完成！", message_type="chat")
-                async_backup(reason=f"Auto flow [{task.novel_title}]: seeds finished")
 
             if task.stop_requested: return
             turns = db.get_key_turning_points(novel_id) if hasattr(db, "get_key_turning_points") else []
@@ -307,7 +304,6 @@ class AutonomousPipelineManager:
                 )
                 task.log("✅ 關鍵轉折點已規劃完成！")
                 db.save_chat_message(novel_id, "assistant", "🎭 **【總監通報】** 全書核心關鍵轉折點已規劃就緒！", message_type="chat")
-                async_backup(reason=f"Auto flow [{task.novel_title}]: key turning points finished")
 
             # 4. 檢查並規劃分卷結構
             if task.stop_requested: return
@@ -440,10 +436,8 @@ class AutonomousPipelineManager:
                     f"✍️ **【總監通報】** 第 {ch_idx} 章正文已由 Writer 撰寫並經 Editor 潤色精修完成，已成功入庫！\n- 進度：第 {ch_idx}/{total_target} 章 ({task.progress_percent}%)",
                     message_type="chat"
                 )
-
-                # (3) 每完成一章即時同步至私有 Dataset
-                async_backup(reason=f"Auto flow [{task.novel_title}]: Chapter {ch_idx} completed")
-                time.sleep(1)
+                # (3) 本地 DB 已寫入，不進行每章雲端 commit 備份以避免空間爆滿
+                time.sleep(0.5)
 
             if not task.stop_requested:
                 task.progress_percent = 100

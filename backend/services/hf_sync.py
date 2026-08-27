@@ -30,8 +30,7 @@ _last_backup_time: Optional[float] = None
 _last_backup_status: str = "never"
 _last_restore_time: Optional[float] = None
 _last_restore_status: str = "never"
-_last_error_message: str = ""
-_MIN_BACKUP_INTERVAL = 15.0  # 兩次自動備份之間最小間隔秒數 (防抖動)
+_MIN_BACKUP_INTERVAL = float(os.getenv("HF_BACKUP_MIN_INTERVAL", "1800.0"))  # 兩次自動備份之間最小間隔秒數 (預設 30 分鐘，防 commit 爆炸)
 
 
 def is_hf_sync_available() -> bool:
