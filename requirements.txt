@@ -4,3 +4,5 @@ pydantic
 requests
 python-dotenv
 opencc-python-reimplemented
+huggingface_hub>=0.28.0
+hf_xet>=1.6.0
