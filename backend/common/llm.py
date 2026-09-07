@@ -87,51 +87,37 @@ def get_default_config():
 def get_config_for_agent(agent_name):
     """
     Fetches the configuration for a specific agent.
-    Priority: Database settings > AGENT_DEFAULTS > .env globals
+    Priority: Database agent config > Database global config > Baseline fallback.
+    (.env is deprecated; SQLite agent_configs is the sole source of truth)
     """
     configs = get_agent_configs()
     
-    agent_cfg = configs.get(agent_name)
-    global_cfg = configs.get("global")
+    agent_cfg = configs.get(agent_name) or {}
+    global_cfg = configs.get("global") or {}
     
-    # Get agent-specific defaults from AGENT_DEFAULTS (reads from .env for models)
-    agent_defaults = AGENT_DEFAULTS.get(agent_name, AGENT_DEFAULTS["global"])
-    
-    # Base fallback from agent-specific AGENT_DEFAULTS and .env
+    # 1. Baseline baseline defaults (only used if DB has no record)
     config = {
-        "api_key": get_agent_api_key(agent_name) or "",
-        "base_url": get_agent_base_url(agent_name),
-        "model": get_agent_model(agent_name),
-        "temperature": agent_defaults["temperature"],
-        "top_p": agent_defaults["top_p"],
-        "max_tokens": agent_defaults["max_tokens"],
-        "enable_thinking": agent_defaults["enable_thinking"]
+        "api_key": "",
+        "base_url": "http://127.0.0.1:8765/v1",
+        "model": "gemini-web/pro",
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_tokens": 16384,
+        "enable_thinking": 1,
     }
     
-    # Override with global database values if present and not empty
+    # 2. Inherit from global database config if present
     if global_cfg:
-        for k in config:
+        for k in ("api_key", "base_url", "model", "temperature", "top_p", "max_tokens", "enable_thinking"):
             if k in global_cfg and global_cfg[k] not in [None, ""]:
-                # Only override model if agent doesn't have a specialized default model in .env
-                if k == "model" and agent_name != "global":
-                    if get_agent_model(agent_name) != get_agent_model("global"):
-                        continue
-                # Do not override if the agent has a specialized default that differs from global
-                if agent_name != "global" and k in agent_defaults and k in AGENT_DEFAULTS["global"]:
-                    if agent_defaults[k] != AGENT_DEFAULTS["global"][k]:
-                        continue
                 config[k] = global_cfg[k]
                 
-    # Override with specific agent database values if present and not empty
-    if agent_cfg and agent_name != "global":
-        for k in config:
+    # 3. Override with specific agent database values if present and not empty
+    if agent_name != "global" and agent_cfg:
+        for k in ("api_key", "base_url", "model", "temperature", "top_p", "max_tokens", "enable_thinking"):
             if k in agent_cfg and agent_cfg[k] not in [None, ""]:
                 config[k] = agent_cfg[k]
                 
-    # Final fallback: If api_key is empty or whitespace, guarantee env / Space Secrets fallback
-    if not config.get("api_key") or not str(config["api_key"]).strip():
-        config["api_key"] = get_agent_api_key(agent_name) or get_agent_api_key("global") or ""
-
     return config
 
 

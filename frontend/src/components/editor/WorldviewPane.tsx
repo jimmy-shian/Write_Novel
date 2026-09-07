@@ -4,7 +4,7 @@ import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { showToast } from '../common/Toast';
-import { TaskPicker } from './TaskPicker';
+import { TaskPicker, resolveTaskItem } from './TaskPicker';
 import {
   IconCopy,
   IconBookOpen,
@@ -19,6 +19,7 @@ import {
 } from '../common/Icons';
 import { copyToClipboard } from '../../utils/clipboard';
 import { saveWorldbuilding, saveCharacters, savePlot, saveVolumes, savePipelinePrompt } from '../../api/novels';
+import { ExpansionSyncState } from '../../hooks/useExpansionSync';
 
 export type WorldviewTab = 'worldview' | 'characters' | 'plot';
 
@@ -47,6 +48,7 @@ interface WorldviewPaneProps {
   targetElement?: TargetElement | null;
   actionTrigger?: WorldviewActionPayload | null;
   fontSize?: number;
+  expansionSync?: ExpansionSyncState;
   onFontSizeChange?: (size: number) => void;
   onTabChange?: (tab: WorldviewTab) => void;
   onRefresh?: () => void;
@@ -147,6 +149,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
   targetElement,
   actionTrigger,
   fontSize = 16,
+  expansionSync,
   onFontSizeChange,
   onTabChange,
   onRefresh,
@@ -173,11 +176,52 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
   const [charViewMode, setCharViewMode] = useState<'card' | 'raw'>('card');
   const [plotViewMode, setPlotViewMode] = useState<'card' | 'raw'>('card');
 
-  // Incremental Lazy Loading Slices (for large 100~1000 chapter novels)
-  const [visibleCharCount, setVisibleCharCount] = useState<number>(8);
-  const [visibleVolumeCount, setVisibleVolumeCount] = useState<number>(4);
-  const [visibleSeedCount, setVisibleSeedCount] = useState<number>(8);
-  const [visibleTpCount, setVisibleTpCount] = useState<number>(8);
+  // Incremental Lazy Loading Slices (delegated to expansionSync if provided)
+  const [localVisibleCharCount, setLocalVisibleCharCount] = useState<number>(8);
+  const [localVisibleVolumeCount, setLocalVisibleVolumeCount] = useState<number>(4);
+  const [localVisibleSeedCount, setLocalVisibleSeedCount] = useState<number>(8);
+  const [localVisibleTpCount, setLocalVisibleTpCount] = useState<number>(8);
+
+  const visibleCharCount = expansionSync ? expansionSync.visibleCharCount : localVisibleCharCount;
+  const visibleVolumeCount = expansionSync ? expansionSync.visibleVolumeCount : localVisibleVolumeCount;
+  const visibleSeedCount = expansionSync ? expansionSync.visibleSeedCount : localVisibleSeedCount;
+  const visibleTpCount = expansionSync ? expansionSync.visibleTpCount : localVisibleTpCount;
+
+  const setVisibleCharCount = useCallback((val: number | ((prev: number) => number)) => {
+    if (expansionSync) {
+      const next = typeof val === 'function' ? val(expansionSync.visibleCharCount) : val;
+      expansionSync.syncCharCount(next);
+    } else {
+      setLocalVisibleCharCount(val);
+    }
+  }, [expansionSync]);
+
+  const setVisibleVolumeCount = useCallback((val: number | ((prev: number) => number)) => {
+    if (expansionSync) {
+      const next = typeof val === 'function' ? val(expansionSync.visibleVolumeCount) : val;
+      expansionSync.syncVolumeCount(next);
+    } else {
+      setLocalVisibleVolumeCount(val);
+    }
+  }, [expansionSync]);
+
+  const setVisibleSeedCount = useCallback((val: number | ((prev: number) => number)) => {
+    if (expansionSync) {
+      const next = typeof val === 'function' ? val(expansionSync.visibleSeedCount) : val;
+      expansionSync.syncSeedCount(next);
+    } else {
+      setLocalVisibleSeedCount(val);
+    }
+  }, [expansionSync]);
+
+  const setVisibleTpCount = useCallback((val: number | ((prev: number) => number)) => {
+    if (expansionSync) {
+      const next = typeof val === 'function' ? val(expansionSync.visibleTpCount) : val;
+      expansionSync.syncTpCount(next);
+    } else {
+      setLocalVisibleTpCount(val);
+    }
+  }, [expansionSync]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -3067,7 +3111,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                               {/* Detailed Chapter Outlines with Foreshadowing & Turning Points allocation */}
                               <div className="vol-chapters-outline-section">
                                 <div
-                                  className="vol-ch-header cursor-pointer"
+                                  className={`vol-ch-header cursor-pointer ${expandedVolChapters.includes(volNum) ? 'open' : ''}`}
                                   onClick={() => toggleExpandVolumeChapters(volNum)}
                                   role="button"
                                   tabIndex={0}
@@ -3086,19 +3130,18 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                       <span>新增章綱</span>
                                     </Button>
                                     <span
-                                      className="vol-ch-header-toggle"
+                                      className={`tree-arrow ${expandedVolChapters.includes(volNum) ? 'open' : ''}`}
                                       onClick={() => toggleExpandVolumeChapters(volNum)}
                                       style={{ marginLeft: '6px' }}
                                     >
-                                      {expandedVolChapters.includes(volNum)
-                                        ? '▴ 收合'
-                                        : '▾ 展開'}
+                                      ▾
                                     </span>
                                   </div>
                                 </div>
 
-                                {expandedVolChapters.includes(volNum) && (
-                                  <div className="vol-ch-outline-list">
+                                <div className={`tree-accordion-collapsible ${expandedVolChapters.includes(volNum) ? 'open' : ''}`}>
+                                  <div className="tree-accordion-inner">
+                                    <div className="vol-ch-outline-list">
                                     {(!vol.chapters_outline || vol.chapters_outline.length === 0) ? (
                                       <div className="p-3 text-center text-xs text-muted">
                                         本卷尚未規劃章節細目大綱。點擊上方【新增章綱】開始編排。
@@ -3330,14 +3373,20 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <div className="vol-task-group tp-task">
                                                       <span className="vol-task-label">轉折點:</span>
                                                       <div className="vol-task-badges">
-                                                        {tps.map((tp: any, i: number) => (
-                                                          <span
-                                                            key={i}
-                                                            className="vol-task-badge tp-badge"
-                                                          >
-                                                            ⚡ {typeof tp === 'string' ? tp : tp.name || tp.id}
-                                                          </span>
-                                                        ))}
+                                                        {tps.map((tp: any, i: number) => {
+                                                          const res = resolveTaskItem(tp, 'turning_points', parsedWorldview?.key_turning_points || []);
+                                                          const label = res.code ? `[${res.code}] ${res.name}` : res.name;
+                                                          const tip = `${res.code ? `[${res.code}] ` : ''}${res.name}${res.desc ? `\n說明: ${res.desc}` : ''}`;
+                                                          return (
+                                                            <span
+                                                              key={i}
+                                                              className="vol-task-badge tp-badge"
+                                                              title={tip}
+                                                            >
+                                                              ⚡ {label}
+                                                            </span>
+                                                          );
+                                                        })}
                                                       </div>
                                                     </div>
                                                   )}
@@ -3345,14 +3394,20 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <div className="vol-task-group plant-task">
                                                       <span className="vol-task-label">伏筆佈局:</span>
                                                       <div className="vol-task-badges">
-                                                        {plants.map((p: any, i: number) => (
-                                                          <span
-                                                            key={i}
-                                                            className="vol-task-badge plant-badge"
-                                                          >
-                                                            🌱 {typeof p === 'string' ? p : p.name || p.id}
-                                                          </span>
-                                                        ))}
+                                                        {plants.map((p: any, i: number) => {
+                                                          const res = resolveTaskItem(p, 'foreshadowing_plants', parsedWorldview?.foreshadowing_seeds || []);
+                                                          const label = res.code ? `[${res.code}] ${res.name}` : res.name;
+                                                          const tip = `${res.code ? `[${res.code}] ` : ''}${res.name}${res.desc ? `\n說明: ${res.desc}` : ''}`;
+                                                          return (
+                                                            <span
+                                                              key={i}
+                                                              className="vol-task-badge plant-badge"
+                                                              title={tip}
+                                                            >
+                                                              🌱 {label}
+                                                            </span>
+                                                          );
+                                                        })}
                                                       </div>
                                                     </div>
                                                   )}
@@ -3360,14 +3415,20 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <div className="vol-task-group payoff-task">
                                                       <span className="vol-task-label">伏筆回收:</span>
                                                       <div className="vol-task-badges">
-                                                        {payoffs.map((p: any, i: number) => (
-                                                          <span
-                                                            key={i}
-                                                            className="vol-task-badge payoff-badge"
-                                                          >
-                                                            🎯 {typeof p === 'string' ? p : p.name || p.id}
-                                                          </span>
-                                                        ))}
+                                                        {payoffs.map((p: any, i: number) => {
+                                                          const res = resolveTaskItem(p, 'foreshadowing_payoffs', parsedWorldview?.foreshadowing_seeds || []);
+                                                          const label = res.code ? `[${res.code}] ${res.name}` : res.name;
+                                                          const tip = `${res.code ? `[${res.code}] ` : ''}${res.name}${res.desc ? `\n說明: ${res.desc}` : ''}`;
+                                                          return (
+                                                            <span
+                                                              key={i}
+                                                              className="vol-task-badge payoff-badge"
+                                                              title={tip}
+                                                            >
+                                                              🎯 {label}
+                                                            </span>
+                                                          );
+                                                        })}
                                                       </div>
                                                     </div>
                                                   )}
@@ -3392,8 +3453,9 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                         );
                                       })
                                     )}
+                                    </div>
                                   </div>
-                                )}
+                                </div>
                               </div>
                             </>
                           )}

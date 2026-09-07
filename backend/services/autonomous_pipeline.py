@@ -64,6 +64,7 @@ class NovelPipelineTask:
             "status_message": self.status_message,
             "logs": list(self.logs),
             "error": self.error,
+            "stop_requested": self.stop_requested,
             "start_time": self.start_time,
             "last_heartbeat": self.last_heartbeat,
         }
@@ -385,6 +386,63 @@ class AutonomousPipelineManager:
             db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
             async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
 
+            # 5.5 角色一致性與名冊完整性防呆校驗 (防止正文角色性格盲猜或反派立場翻轉)
+            try:
+                char_data = db.get_latest_characters(novel_id)
+                existing_names = set()
+                if char_data and char_data.get("parsed_data"):
+                    parsed = char_data["parsed_data"]
+                    ch_list = parsed.get("characters", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+                    for c in ch_list:
+                        if isinstance(c, dict) and c.get("name"):
+                            existing_names.add(str(c["name"]).strip())
+
+                # 收集全書已規劃章節大綱中活躍的角色
+                missing_char_cards = []
+                GENERIC_IGNORE = {
+                    "主角", "群眾", "眾人", "路人", "守衛", "衛兵", "NPC", "某人", "乘客", "掌櫃", "店小二",
+                    "殺手", "刺客", "弟子", "長老", "侍衛", "管家", "僕人", "士兵", "隨從", "黑衣人", "無名氏"
+                }
+                for vol in vols:
+                    ch_outline = vol.get("chapters_outline") or []
+                    if isinstance(ch_outline, str):
+                        try:
+                            ch_outline = json.loads(ch_outline)
+                        except Exception:
+                            ch_outline = []
+                    for ch in ch_outline:
+                        if not isinstance(ch, dict):
+                            continue
+                        act = ch.get("characters_active") or []
+                        if isinstance(act, str):
+                            act = [a.strip() for a in act.replace("，", ",").replace("、", ",").split(",") if a.strip()]
+                        for name in act:
+                            name_clean = str(name).strip()
+                            if not name_clean or len(name_clean) > 15 or name_clean in GENERIC_IGNORE:
+                                continue
+                            if name_clean not in existing_names:
+                                ch_i = ch.get("chapter_index", 1)
+                                missing_char_cards.append({
+                                    "name": name_clean,
+                                    "role": "大綱出場角色",
+                                    "personality": "行事符合大綱情節脈絡，具備明確立場與動機",
+                                    "motivation": f"於第 {ch_i} 章登場推動主線",
+                                    "first_appearance_chapter": ch_i,
+                                })
+                                existing_names.add(name_clean)
+
+                if missing_char_cards:
+                    added = db.append_or_merge_characters(novel_id, missing_char_cards)
+                    task.log(f"💡 [角色一致性守護] 偵測到大綱活躍角色尚未立卡，已自動合流補齊 {len(added)} 位：{', '.join(added)}")
+                    db.save_chat_message(
+                        novel_id,
+                        "assistant",
+                        f"🛡️ **【角色庫合流防呆通報】** 正文寫作啟動前，已自動補齊大綱中出場的 {len(added)} 位角色卡：{', '.join(added)}，杜絕正文盲猜與立場偏離！",
+                        message_type="chat"
+                    )
+            except Exception as e:
+                task.log(f"⚠️ 角色庫完整性檢查發生異常（非致命）：{e}", level="warn")
+
             # 6. 逐章撰寫與精修 (智慧接續未完成之章節)
             vols = db.get_volumes(novel_id)
             if not vols:
@@ -580,18 +638,12 @@ def _has_volume_skeleton(novel_id: str, volume_index: int) -> bool:
     vols = db.get_volumes(novel_id)
     if not vols:
         return False
-    for v in vols:
-        v_idx = int(v.get("volume_index") or 0)
-        if v_idx == volume_index:
-            chapters = v.get("chapters_outline") or []
-            if isinstance(chapters, str):
-                try:
-                    chapters = json.loads(chapters)
-                except Exception:
-                    chapters = []
-            if isinstance(chapters, list) and len(chapters) > 0:
-                return True
-    return False
+    target_vol = next((v for v in vols if int(v.get("volume_index") or 0) == int(volume_index)), None)
+    if not target_vol:
+        return False
+    missing = db.volume_missing_chapter_indexes(vols, volume_index)
+    return len(missing) == 0
+
 
 
 def _is_chapter_written(novel_id: str, chapter_index: int) -> bool:

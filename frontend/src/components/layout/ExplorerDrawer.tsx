@@ -5,6 +5,7 @@ import { CustomSelect } from '../common/CustomSelect';
 import { CreateNovelModal } from '../novel/CreateNovelModal';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { ResetNovelModal } from '../novel/ResetNovelModal';
+import { ExpansionSyncState } from '../../hooks/useExpansionSync';
 import {
   IconFileText,
   IconGitBranch,
@@ -24,6 +25,8 @@ interface ExplorerDrawerProps {
   charactersRaw?: string;
   worldbuilding?: string;
   volumes?: any[];
+  plot?: any;
+  expansionSync?: ExpansionSyncState;
   onSelectWorldviewTab?: (tab: 'worldview' | 'characters' | 'plot') => void;
   onSelectCharacter?: (charName: string) => void;
   onSelectVolume?: (volumeIndex: number) => void;
@@ -55,6 +58,8 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
   charactersRaw,
   worldbuilding,
   volumes = [],
+  plot,
+  expansionSync,
   onSelectWorldviewTab,
   onSelectCharacter,
   onSelectVolume,
@@ -75,16 +80,48 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
   const [isResetting, setIsResetting] = useState(false);
   const [treeOrChaptersOverride, setTreeOrChaptersOverride] = useState<'tree' | 'chapters' | null>(null);
 
-  // Sub-tree toggle expansions
-  const [expandWorldview, setExpandWorldview] = useState(true);
-  const [expandTps, setExpandTps] = useState(false);
-  const [showAllTps, setShowAllTps] = useState(false);
-  const [expandSeeds, setExpandSeeds] = useState(false);
-  const [showAllSeeds, setShowAllSeeds] = useState(false);
-  const [expandChars, setExpandChars] = useState(true);
-  const [showAllChars, setShowAllChars] = useState(false);
-  const [expandVols, setExpandVols] = useState(true);
-  const [expandedVolumeIndices, setExpandedVolumeIndices] = useState<number[]>([]);
+  // Sub-tree toggle expansions (delegated to expansionSync if provided, else fallback to local state)
+  const [localExpandWorldview, setLocalExpandWorldview] = useState(true);
+  const [localExpandTps, setLocalExpandTps] = useState(true);
+  const [localShowAllTps, setLocalShowAllTps] = useState(false);
+  const [localExpandSeeds, setLocalExpandSeeds] = useState(false);
+  const [localShowAllSeeds, setLocalShowAllSeeds] = useState(false);
+  const [localExpandChars, setLocalExpandChars] = useState(true);
+  const [localShowAllChars, setLocalShowAllChars] = useState(false);
+  const [localExpandVols, setLocalExpandVols] = useState(true);
+  const [localExpandedVolumeIndices, setLocalExpandedVolumeIndices] = useState<number[]>([]);
+
+  const expandWorldview = expansionSync ? expansionSync.expandWorldview : localExpandWorldview;
+  const setExpandWorldview = expansionSync ? expansionSync.setExpandWorldview : setLocalExpandWorldview;
+
+  const expandTps = expansionSync ? expansionSync.expandTps : localExpandTps;
+  const setExpandTps = expansionSync ? expansionSync.setExpandTps : setLocalExpandTps;
+
+  const showAllTps = expansionSync ? expansionSync.showAllTps : localShowAllTps;
+  const setShowAllTps = expansionSync ? expansionSync.setShowAllTps : setLocalShowAllTps;
+
+  const expandSeeds = expansionSync ? expansionSync.expandSeeds : localExpandSeeds;
+  const setExpandSeeds = expansionSync ? expansionSync.setExpandSeeds : setLocalExpandSeeds;
+
+  const showAllSeeds = expansionSync ? expansionSync.showAllSeeds : localShowAllSeeds;
+  const setShowAllSeeds = expansionSync ? expansionSync.setShowAllSeeds : setLocalShowAllSeeds;
+
+  const expandChars = expansionSync ? expansionSync.expandChars : localExpandChars;
+  const setExpandChars = expansionSync ? expansionSync.setExpandChars : setLocalExpandChars;
+
+  const showAllChars = expansionSync ? expansionSync.showAllChars : localShowAllChars;
+  const setShowAllChars = expansionSync ? expansionSync.setShowAllChars : setLocalShowAllChars;
+
+  const expandVols = expansionSync ? expansionSync.expandVols : localExpandVols;
+  const setExpandVols = expansionSync ? expansionSync.setExpandVols : setLocalExpandVols;
+
+  const expandedVolumeIndices = expansionSync ? expansionSync.expandedVolumeIndices : localExpandedVolumeIndices;
+  const setExpandedVolumeIndices = expansionSync ? expansionSync.setExpandedVolumeIndices : setLocalExpandedVolumeIndices;
+
+  const tpLimit = showAllTps ? undefined : Math.max(15, expansionSync?.visibleTpCount || 15);
+  const seedLimit = showAllSeeds ? undefined : Math.max(15, expansionSync?.visibleSeedCount || 15);
+  const charLimit = showAllChars ? undefined : Math.max(12, expansionSync?.visibleCharCount || 12);
+
 
   // Floating Context Menu
   const [contextMenu, setContextMenu] = useState<{
@@ -181,12 +218,108 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
     }
   };
 
-  const toggleVolumeChaptersExpand = (vIdx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedVolumeIndices((prev) =>
-      prev.includes(vIdx) ? prev.filter((i) => i !== vIdx) : [...prev, vIdx]
-    );
+  const toggleVolumeChaptersExpand = (vIdx: number, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (expansionSync) {
+      expansionSync.toggleVolumeChaptersExpand(vIdx);
+    } else {
+      setLocalExpandedVolumeIndices((prev) =>
+        prev.includes(vIdx) ? prev.filter((i) => i !== vIdx) : [...prev, vIdx]
+      );
+    }
   };
+
+  // Memoize full chapter list merged from volumes (chapters_outline), plot outlines, and written chapters
+  const displayChapters = useMemo(() => {
+    const chapterMap = new Map<number, {
+      chapter_index: number;
+      title?: string;
+      isGenerated: boolean;
+      word_count: number;
+      content?: string;
+      summary?: string;
+      volume_index?: number;
+      volume_title?: string;
+    }>();
+
+    // 1. Ingest planned outline chapters from volumes
+    if (Array.isArray(volumes)) {
+      volumes.forEach((vol: any, vIdx: number) => {
+        const volumeIndex = vol.volume_index ?? vIdx + 1;
+        const volumeTitle = vol.title || `第 ${volumeIndex} 卷`;
+        const outlines = Array.isArray(vol.chapters_outline)
+          ? vol.chapters_outline
+          : Array.isArray(vol.chapters)
+          ? vol.chapters
+          : [];
+        outlines.forEach((ch: any, cIdx: number) => {
+          const chNum = Number(ch.chapter_index ?? cIdx + 1);
+          if (isNaN(chNum) || chNum <= 0) return;
+          const rawTitle = ch.chapter_title || ch.title || '';
+          const cleanTitle = rawTitle.replace(/^第\s*\d+\s*章([：:\s]*)/, '').trim() || rawTitle;
+          chapterMap.set(chNum, {
+            chapter_index: chNum,
+            title: cleanTitle || undefined,
+            isGenerated: false,
+            word_count: 0,
+            summary: ch.chapter_summary || ch.summary || '',
+            volume_index: volumeIndex,
+            volume_title: volumeTitle,
+          });
+        });
+      });
+    }
+
+    // 2. Ingest from plot if available
+    if (plot && Array.isArray(plot.chapters)) {
+      plot.chapters.forEach((ch: any, cIdx: number) => {
+        const chNum = Number(ch.chapter_index ?? cIdx + 1);
+        if (isNaN(chNum) || chNum <= 0) return;
+        if (!chapterMap.has(chNum)) {
+          const rawTitle = ch.chapter_title || ch.title || '';
+          const cleanTitle = rawTitle.replace(/^第\s*\d+\s*章([：:\s]*)/, '').trim() || rawTitle;
+          chapterMap.set(chNum, {
+            chapter_index: chNum,
+            title: cleanTitle || undefined,
+            isGenerated: false,
+            word_count: 0,
+            summary: ch.chapter_summary || ch.summary || '',
+            volume_index: ch.volume_index,
+            volume_title: ch.volume_title,
+          });
+        }
+      });
+    }
+
+    // 3. Overlay written chapters from chapters table
+    if (Array.isArray(chapters)) {
+      chapters.forEach((ch) => {
+        const chNum = Number(ch.chapter_index);
+        if (isNaN(chNum) || chNum <= 0) return;
+        const hasContent = Boolean(ch.content && ch.content.trim().length > 0);
+        const words = hasContent ? ch.content.length : 0;
+        const existing = chapterMap.get(chNum);
+        if (existing) {
+          existing.isGenerated = hasContent;
+          existing.word_count = words;
+          existing.content = ch.content;
+          if (ch.title && !existing.title) {
+            existing.title = ch.title;
+          }
+        } else {
+          chapterMap.set(chNum, {
+            chapter_index: chNum,
+            title: ch.title,
+            isGenerated: hasContent,
+            word_count: words,
+            content: ch.content,
+          });
+        }
+      });
+    }
+
+    return Array.from(chapterMap.values()).sort((a, b) => a.chapter_index - b.chapter_index);
+  }, [volumes, plot, chapters]);
 
   return (
     <>
@@ -289,7 +422,7 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
               {/* 1. Worldbuilding Node with Sub-branches */}
               <div>
                 <div
-                  className={`tree-item ${worldviewTab === 'worldview' ? 'active' : ''}`}
+                  className={`tree-item ${worldviewTab === 'worldview' ? 'active' : ''} ${expandWorldview ? 'open' : ''}`}
                   onClick={() => {
                     onSelectWorldviewTab?.('worldview');
                     setExpandWorldview((prev) => !prev);
@@ -320,241 +453,282 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                     </span>
                     <span>世界觀構建</span>
                   </div>
-                  <span className="tree-item-meta">
-                    {expandWorldview ? '▾' : '▸'}
+                  <span className={`tree-arrow ${expandWorldview ? 'open' : ''}`}>
+                    ▾
                   </span>
                 </div>
 
-                {expandWorldview && (
-                  <div className="tree-sub-list">
-                    {/* Pipeline Prompt */}
-                    <div
-                      className="tree-sub-item cursor-pointer"
-                      onClick={() => {
-                        onSelectWorldviewTab?.('worldview');
-                        onWorldviewAction?.({ type: 'section', id: 'wb-card-prompt' });
-                        if (isOpenMobile) onCloseMobile();
-                      }}
-                    >
-                      <span className="truncate">故事簡述 / 大綱靈感</span>
-                    </div>
-
-                    {/* Theme & Conflict */}
-                    <div
-                      className="tree-sub-item cursor-pointer"
-                      onClick={() => {
-                        onSelectWorldviewTab?.('worldview');
-                        onWorldviewAction?.({ type: 'section', id: 'wb-card-theme' });
-                        if (isOpenMobile) onCloseMobile();
-                      }}
-                    >
-                      <span>核心主題與主要衝突</span>
-                    </div>
-
-                    {/* Rules & Power System */}
-                    <div
-                      className="tree-sub-item cursor-pointer"
-                      onClick={() => {
-                        onSelectWorldviewTab?.('worldview');
-                        onWorldviewAction?.({ type: 'section', id: 'wb-card-rules' });
-                        if (isOpenMobile) onCloseMobile();
-                      }}
-                    >
-                      <span>世界觀法則與修煉體系</span>
-                    </div>
-
-                    {/* Macro Outline */}
-                    <div
-                      className="tree-sub-item cursor-pointer"
-                      onClick={() => {
-                        onSelectWorldviewTab?.('worldview');
-                        onWorldviewAction?.({ type: 'section', id: 'wb-card-macro' });
-                        if (isOpenMobile) onCloseMobile();
-                      }}
-                    >
-                      <span>全書宏觀主線大綱</span>
-                    </div>
-
-                    {/* Key Turning Points Branch */}
-                    <div className="tree-sub-group">
-                      {/* Turning Points Sub-branch */}
+                <div className={`tree-accordion-collapsible ${expandWorldview ? 'open' : ''}`}>
+                  <div className="tree-accordion-inner">
+                    <div className="tree-sub-list">
+                      {/* Pipeline Prompt */}
                       <div
-                        className="tree-sub-header"
-                        onClick={() => setExpandTps((prev) => !prev)}
-                        onContextMenu={(e) =>
-                          openContextMenu(e, [
-                            {
-                              label: '+ 新增轉折點',
-                              onClick: () => onWorldviewAction?.({ type: 'tp', action: 'add' }),
-                            },
-                            {
-                              label: '清除空白轉折點',
-                              danger: true,
-                              onClick: () => onWorldviewAction?.({ type: 'tp', action: 'clean' }),
-                            },
-                          ])
-                        }
+                        className="tree-sub-item cursor-pointer"
+                        onClick={() => {
+                          onSelectWorldviewTab?.('worldview');
+                          onWorldviewAction?.({ type: 'section', id: 'wb-card-prompt' });
+                          if (isOpenMobile) onCloseMobile();
+                        }}
                       >
-                        <div className="tree-sub-header-left">
-                          <span>{expandTps ? '▾' : '▸'} 重大轉折點 ({turningPointsList.length})</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="tree-action-btn"
-                          title="新增轉折點 (+)"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onWorldviewAction?.({ type: 'tp', action: 'add' });
-                            if (isOpenMobile) onCloseMobile();
-                          }}
-                        >
-                          +
-                        </button>
+                        <span className="truncate">故事簡述 / 大綱靈感</span>
                       </div>
-                      {expandTps && turningPointsList.length > 0 && (
-                        <div className="tree-sub-nested-list" style={{ paddingLeft: '14px' }}>
-                          {(showAllTps ? turningPointsList : turningPointsList.slice(0, 15)).map((tp: any, tpIdx: number) => {
-                            const name = tp.turning_point_name || tp.name || `轉折點 #${tpIdx + 1}`;
-                            return (
-                              <div
-                                key={tpIdx}
-                                className="tree-sub-item cursor-pointer"
-                                onClick={() => {
-                                  onSelectWorldviewTab?.('worldview');
-                                  onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'scroll' });
-                                  if (isOpenMobile) onCloseMobile();
-                                }}
-                                onContextMenu={(e) =>
-                                  openContextMenu(e, [
-                                    {
-                                      label: '定位轉折卡片',
-                                      onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'scroll' }),
-                                    },
-                                    {
-                                      label: '編輯此轉折點',
-                                      onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'edit' }),
-                                    },
-                                    {
-                                      label: '刪除此轉折點',
-                                      danger: true,
-                                      onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'delete' }),
-                                    },
-                                  ])
-                                }
-                              >
-                                <span className="truncate">
-                                  ⚡ <span className="text-muted mr-1 font-mono">#{tpIdx + 1}</span>{name}
-                                </span>
-                              </div>
-                            );
-                          })}
-                          {turningPointsList.length > 15 && (
-                            <div
-                              className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setShowAllTps((prev) => !prev);
-                              }}
-                            >
-                              {showAllTps
-                                ? '▴ 收合轉折點清單'
-                                : `▾ 展開全部轉折點 (${turningPointsList.length} 處)`}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
 
-                    {/* Foreshadowing Seeds Branch */}
-                    <div className="tree-sub-group">
+                      {/* Theme & Conflict */}
                       <div
-                        className="tree-sub-header"
-                        onClick={() => setExpandSeeds((prev) => !prev)}
-                        onContextMenu={(e) =>
-                          openContextMenu(e, [
-                            {
-                              label: '+ 新增伏筆種子',
-                              onClick: () => onWorldviewAction?.({ type: 'seed', action: 'add' }),
-                            },
-                            {
-                              label: '清除空白伏筆種子',
-                              danger: true,
-                              onClick: () => onWorldviewAction?.({ type: 'seed', action: 'clean' }),
-                            },
-                          ])
-                        }
+                        className="tree-sub-item cursor-pointer"
+                        onClick={() => {
+                          onSelectWorldviewTab?.('worldview');
+                          onWorldviewAction?.({ type: 'section', id: 'wb-card-theme' });
+                          if (isOpenMobile) onCloseMobile();
+                        }}
                       >
-                        <div className="tree-sub-header-left">
-                          <span>{expandSeeds ? '▾' : '▸'} 伏筆種子庫 ({seedsList.length})</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="tree-action-btn"
-                          title="新增伏筆種子 (+)"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onWorldviewAction?.({ type: 'seed', action: 'add' });
-                            if (isOpenMobile) onCloseMobile();
-                          }}
-                        >
-                          +
-                        </button>
+                        <span>核心主題與主要衝突</span>
                       </div>
-                      {expandSeeds && seedsList.length > 0 && (
-                        <div className="tree-sub-nested-list" style={{ paddingLeft: '14px' }}>
-                          {(showAllSeeds ? seedsList : seedsList.slice(0, 15)).map((seed: any, sIdx: number) => {
-                            const name = seed.name || `伏筆 #${sIdx + 1}`;
-                            return (
-                              <div
-                                key={sIdx}
-                                className="tree-sub-item cursor-pointer"
-                                onClick={() => {
-                                  onSelectWorldviewTab?.('worldview');
-                                  onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'scroll' });
-                                  if (isOpenMobile) onCloseMobile();
-                                }}
-                                onContextMenu={(e) =>
-                                  openContextMenu(e, [
-                                    {
-                                      label: '定位伏筆卡片',
-                                      onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'scroll' }),
-                                    },
-                                    {
-                                      label: '編輯此伏筆',
-                                      onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'edit' }),
-                                    },
-                                    {
-                                      label: '刪除此伏筆',
-                                      danger: true,
-                                      onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'delete' }),
-                                    },
-                                  ])
-                                }
-                              >
-                                <span className="truncate">
-                                  🌱 <span className="text-muted mr-1 font-mono">#{sIdx + 1}</span>{name}
-                                </span>
-                              </div>
-                            );
-                          })}
-                          {seedsList.length > 15 && (
-                            <div
-                              className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setShowAllSeeds((prev) => !prev);
-                              }}
-                            >
-                              {showAllSeeds
-                                ? '▴ 收合伏筆種子清單'
-                                : `▾ 展開全部伏筆 (${seedsList.length} 個)`}
-                            </div>
-                          )}
+
+                      {/* Rules & Power System */}
+                      <div
+                        className="tree-sub-item cursor-pointer"
+                        onClick={() => {
+                          onSelectWorldviewTab?.('worldview');
+                          onWorldviewAction?.({ type: 'section', id: 'wb-card-rules' });
+                          if (isOpenMobile) onCloseMobile();
+                        }}
+                      >
+                        <span>世界觀法則與修煉體系</span>
+                      </div>
+
+                      {/* Macro Outline */}
+                      <div
+                        className="tree-sub-item cursor-pointer"
+                        onClick={() => {
+                          onSelectWorldviewTab?.('worldview');
+                          onWorldviewAction?.({ type: 'section', id: 'wb-card-macro' });
+                          if (isOpenMobile) onCloseMobile();
+                        }}
+                      >
+                        <span>全書宏觀主線大綱</span>
+                      </div>
+
+                      {/* Key Turning Points Branch */}
+                      <div className="tree-sub-group">
+                        <div
+                          className={`tree-sub-header ${expandTps ? 'open' : ''}`}
+                          onClick={() => setExpandTps((prev) => !prev)}
+                          onContextMenu={(e) =>
+                            openContextMenu(e, [
+                              {
+                                label: '+ 新增轉折點',
+                                onClick: () => onWorldviewAction?.({ type: 'tp', action: 'add' }),
+                              },
+                              {
+                                label: '清除空白轉折點',
+                                danger: true,
+                                onClick: () => onWorldviewAction?.({ type: 'tp', action: 'clean' }),
+                              },
+                            ])
+                          }
+                        >
+                          <div className="tree-sub-header-left">
+                            <span className={`tree-arrow ${expandTps ? 'open' : ''}`}>▾</span>
+                            <span>重大轉折點 ({turningPointsList.length})</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="tree-action-btn"
+                            title="新增轉折點 (+)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onWorldviewAction?.({ type: 'tp', action: 'add' });
+                              if (isOpenMobile) onCloseMobile();
+                            }}
+                          >
+                            +
+                          </button>
                         </div>
-                      )}
+                        <div className={`tree-accordion-collapsible ${expandTps && turningPointsList.length > 0 ? 'open' : ''}`}>
+                          <div className="tree-accordion-inner">
+                            <div className="tree-sub-nested-list" style={{ paddingLeft: '14px' }}>
+                              {(showAllTps ? turningPointsList : turningPointsList.slice(0, tpLimit)).map((tp: any, tpIdx: number) => {
+                                const name = tp.turning_point_name || tp.name || `轉折點 #${tpIdx + 1}`;
+                                return (
+                                  <div
+                                    key={tpIdx}
+                                    className="tree-sub-item cursor-pointer"
+                                    onClick={() => {
+                                      onSelectWorldviewTab?.('worldview');
+                                      onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'scroll' });
+                                      if (isOpenMobile) onCloseMobile();
+                                    }}
+                                    onContextMenu={(e) =>
+                                      openContextMenu(e, [
+                                        {
+                                          label: '定位轉折卡片',
+                                          onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'scroll' }),
+                                        },
+                                        {
+                                          label: '編輯此轉折點',
+                                          onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'edit' }),
+                                        },
+                                        {
+                                          label: '刪除此轉折點',
+                                          danger: true,
+                                          onClick: () => onWorldviewAction?.({ type: 'tp', id: tpIdx, action: 'delete' }),
+                                        },
+                                      ])
+                                    }
+                                  >
+                                    <span className="truncate">
+                                      ⚡ <span className="text-muted mr-1 font-mono">#{tpIdx + 1}</span>{name}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {turningPointsList.length > (tpLimit || 15) && !showAllTps && (
+                                <div
+                                  className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (expansionSync) {
+                                      expansionSync.toggleShowAllTps(turningPointsList.length);
+                                    } else {
+                                      setShowAllTps(true);
+                                    }
+                                  }}
+                                >
+                                  ▾ 展開全部轉折點 ({turningPointsList.length} 處)
+                                </div>
+                              )}
+                              {showAllTps && turningPointsList.length > 15 && (
+                                <div
+                                  className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (expansionSync) {
+                                      expansionSync.toggleShowAllTps();
+                                    } else {
+                                      setShowAllTps(false);
+                                    }
+                                  }}
+                                >
+                                  ▴ 收合轉折點清單
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Foreshadowing Seeds Branch */}
+                      <div className="tree-sub-group">
+                        <div
+                          className={`tree-sub-header ${expandSeeds ? 'open' : ''}`}
+                          onClick={() => setExpandSeeds((prev) => !prev)}
+                          onContextMenu={(e) =>
+                            openContextMenu(e, [
+                              {
+                                label: '+ 新增伏筆種子',
+                                onClick: () => onWorldviewAction?.({ type: 'seed', action: 'add' }),
+                              },
+                              {
+                                label: '清除空白伏筆種子',
+                                danger: true,
+                                onClick: () => onWorldviewAction?.({ type: 'seed', action: 'clean' }),
+                              },
+                            ])
+                          }
+                        >
+                          <div className="tree-sub-header-left">
+                            <span className={`tree-arrow ${expandSeeds ? 'open' : ''}`}>▾</span>
+                            <span>伏筆種子庫 ({seedsList.length})</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="tree-action-btn"
+                            title="新增伏筆種子 (+)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onWorldviewAction?.({ type: 'seed', action: 'add' });
+                              if (isOpenMobile) onCloseMobile();
+                            }}
+                          >
+                            +
+                          </button>
+                        </div>
+                        <div className={`tree-accordion-collapsible ${expandSeeds && seedsList.length > 0 ? 'open' : ''}`}>
+                          <div className="tree-accordion-inner">
+                            <div className="tree-sub-nested-list" style={{ paddingLeft: '14px' }}>
+                              {(showAllSeeds ? seedsList : seedsList.slice(0, seedLimit)).map((seed: any, sIdx: number) => {
+                                const name = seed.name || `伏筆 #${sIdx + 1}`;
+                                return (
+                                  <div
+                                    key={sIdx}
+                                    className="tree-sub-item cursor-pointer"
+                                    onClick={() => {
+                                      onSelectWorldviewTab?.('worldview');
+                                      onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'scroll' });
+                                      if (isOpenMobile) onCloseMobile();
+                                    }}
+                                    onContextMenu={(e) =>
+                                      openContextMenu(e, [
+                                        {
+                                          label: '定位伏筆卡片',
+                                          onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'scroll' }),
+                                        },
+                                        {
+                                          label: '編輯此伏筆',
+                                          onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'edit' }),
+                                        },
+                                        {
+                                          label: '刪除此伏筆',
+                                          danger: true,
+                                          onClick: () => onWorldviewAction?.({ type: 'seed', id: sIdx, action: 'delete' }),
+                                        },
+                                      ])
+                                    }
+                                  >
+                                    <span className="truncate">
+                                      🌱 <span className="text-muted mr-1 font-mono">#{sIdx + 1}</span>{name}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {seedsList.length > (seedLimit || 15) && !showAllSeeds && (
+                                <div
+                                  className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (expansionSync) {
+                                      expansionSync.toggleShowAllSeeds(seedsList.length);
+                                    } else {
+                                      setShowAllSeeds(true);
+                                    }
+                                  }}
+                                >
+                                  ▾ 展開全部伏筆 ({seedsList.length} 個)
+                                </div>
+                              )}
+                              {showAllSeeds && seedsList.length > 15 && (
+                                <div
+                                  className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (expansionSync) {
+                                      expansionSync.toggleShowAllSeeds();
+                                    } else {
+                                      setShowAllSeeds(false);
+                                    }
+                                  }}
+                                >
+                                  ▴ 收合伏筆種子清單
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* 2. Character Bible Node with + button and Collapsible Children */}
@@ -589,8 +763,9 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="tree-item-meta">
-                      {parsedCharList.length > 0 ? `${parsedCharList.length} 人` : ''} {expandChars ? '▾' : '▸'}
+                      {parsedCharList.length > 0 ? `${parsedCharList.length} 人` : ''}
                     </span>
+                    <span className={`tree-arrow ${expandChars ? 'open' : ''}`}>▾</span>
                     <button
                       type="button"
                       className="tree-action-btn"
@@ -606,54 +781,73 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                   </div>
                 </div>
 
-                {expandChars && parsedCharList.length > 0 && (
-                  <div className="tree-sub-list">
-                    {(showAllChars ? parsedCharList : parsedCharList.slice(0, 12)).map((char: any, idx: number) => (
-                      <div
-                        key={char.name || idx}
-                        className="tree-sub-item cursor-pointer"
-                        onClick={() => {
-                          onSelectWorldviewTab?.('characters');
-                          onSelectCharacter?.(char.name);
-                          if (isOpenMobile) onCloseMobile();
-                        }}
-                        onContextMenu={(e) =>
-                          openContextMenu(e, [
-                            {
-                              label: `定位《${char.name}》`,
-                              onClick: () => onSelectCharacter?.(char.name),
-                            },
-                            {
-                              label: '編輯角色',
-                              onClick: () => onWorldviewAction?.({ type: 'character', id: char.name, action: 'edit' }),
-                            },
-                            {
-                              label: '刪除角色',
-                              danger: true,
-                              onClick: () => onWorldviewAction?.({ type: 'character', id: char.name, action: 'delete' }),
-                            },
-                          ])
-                        }
-                      >
-                        <span className="truncate">{char.name}</span>
-                        {char.role && <span className="text-xs text-muted">[{char.role}]</span>}
-                      </div>
-                    ))}
-                    {parsedCharList.length > 12 && (
-                      <div
-                        className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowAllChars((prev) => !prev);
-                        }}
-                      >
-                        {showAllChars
-                          ? '▴ 收合角色清單'
-                          : `▾ 展開全部角色 (${parsedCharList.length} 位)`}
-                      </div>
-                    )}
+                <div className={`tree-accordion-collapsible ${expandChars && parsedCharList.length > 0 ? 'open' : ''}`}>
+                  <div className="tree-accordion-inner">
+                    <div className="tree-sub-list">
+                      {(showAllChars ? parsedCharList : parsedCharList.slice(0, charLimit)).map((char: any, idx: number) => (
+                        <div
+                          key={char.name || idx}
+                          className="tree-sub-item cursor-pointer"
+                          onClick={() => {
+                            onSelectWorldviewTab?.('characters');
+                            onSelectCharacter?.(char.name);
+                            if (isOpenMobile) onCloseMobile();
+                          }}
+                          onContextMenu={(e) =>
+                            openContextMenu(e, [
+                              {
+                                label: `定位《${char.name}》`,
+                                onClick: () => onSelectCharacter?.(char.name),
+                              },
+                              {
+                                label: '編輯角色',
+                                onClick: () => onWorldviewAction?.({ type: 'character', id: char.name, action: 'edit' }),
+                              },
+                              {
+                                label: '刪除角色',
+                                danger: true,
+                                onClick: () => onWorldviewAction?.({ type: 'character', id: char.name, action: 'delete' }),
+                              },
+                            ])
+                          }
+                        >
+                          <span className="truncate">{char.name}</span>
+                          {char.role && <span className="text-xs text-muted">[{char.role}]</span>}
+                        </div>
+                      ))}
+                      {parsedCharList.length > (charLimit || 12) && !showAllChars && (
+                        <div
+                          className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (expansionSync) {
+                              expansionSync.toggleShowAllChars(parsedCharList.length);
+                            } else {
+                              setShowAllChars(true);
+                            }
+                          }}
+                        >
+                          ▾ 展開全部角色 ({parsedCharList.length} 位)
+                        </div>
+                      )}
+                      {showAllChars && parsedCharList.length > 12 && (
+                        <div
+                          className="tree-sub-item tree-expand-toggle text-accent cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (expansionSync) {
+                              expansionSync.toggleShowAllChars();
+                            } else {
+                              setShowAllChars(false);
+                            }
+                          }}
+                        >
+                          ▴ 收合角色清單
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* 3. Volumes Skeleton Node with + button and Collapsible Chapter Outlines */}
@@ -688,8 +882,9 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="tree-item-meta">
-                      {volumes.length > 0 ? `${volumes.length} 卷` : ''} {expandVols ? '▾' : '▸'}
+                      {volumes.length > 0 ? `${volumes.length} 卷` : ''}
                     </span>
+                    <span className={`tree-arrow ${expandVols ? 'open' : ''}`}>▾</span>
                     <button
                       type="button"
                       className="tree-action-btn"
@@ -705,142 +900,161 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                   </div>
                 </div>
 
-                {expandVols && volumes.length > 0 && (
-                  <div className="tree-sub-list">
-                    {volumes.map((vol: any, idx: number) => {
-                      const vIdx = vol.volume_index ?? idx + 1;
-                      const hasChapters = Array.isArray(vol.chapters_outline) && vol.chapters_outline.length > 0;
-                      const isExpanded = expandedVolumeIndices.includes(vIdx);
+                <div className={`tree-accordion-collapsible ${expandVols && volumes.length > 0 ? 'open' : ''}`}>
+                  <div className="tree-accordion-inner">
+                    <div className="tree-sub-list">
+                      {volumes.map((vol: any, idx: number) => {
+                        const vIdx = vol.volume_index ?? idx + 1;
+                        const hasChapters = Array.isArray(vol.chapters_outline) && vol.chapters_outline.length > 0;
+                        const isExpanded = expandedVolumeIndices.includes(vIdx);
 
-                      return (
-                        <div key={vol.id || idx} className="tree-volume-branch">
-                          <div
-                            className="tree-sub-item cursor-pointer flex items-center justify-between"
-                            onClick={() => {
-                              onSelectWorldviewTab?.('plot');
-                              onSelectVolume?.(vIdx);
-                              if (isOpenMobile) onCloseMobile();
-                            }}
-                            onContextMenu={(e) =>
-                              openContextMenu(e, [
-                                {
-                                  label: `+ 為第 ${vIdx} 卷新增章綱`,
-                                  onClick: () => onWorldviewAction?.({ type: 'chapter_outline', action: 'add', volIndex: vIdx }),
-                                },
-                                {
-                                  label: `定位第 ${vIdx} 卷卡片`,
-                                  onClick: () => onSelectVolume?.(vIdx),
-                                },
-                                {
-                                  label: '編輯分卷',
-                                  onClick: () => onWorldviewAction?.({ type: 'volume', id: vIdx, action: 'edit' }),
-                                },
-                                {
-                                  label: '刪除此卷',
-                                  danger: true,
-                                  onClick: () => onWorldviewAction?.({ type: 'volume', id: vIdx, action: 'delete' }),
-                                },
-                              ])
-                            }
-                          >
-                            <span className="truncate">
-                              {hasChapters && (
-                                <span
-                                  className="text-xs text-muted mr-1"
-                                  onClick={(e) => toggleVolumeChaptersExpand(vIdx, e)}
-                                >
-                                  {isExpanded ? '▾' : '▸'}
-                                </span>
-                              )}
-                              第 {vIdx} 卷: {vol.title || '篇卷'}
-                            </span>
-                            <button
-                              type="button"
-                              className="tree-action-btn"
-                              title={`為第 ${vIdx} 卷新增章綱 (+)`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onWorldviewAction?.({ type: 'chapter_outline', action: 'add', volIndex: vIdx });
+                        return (
+                          <div key={vol.id || idx} className="tree-volume-branch">
+                            <div
+                              className="tree-sub-item cursor-pointer flex items-center justify-between"
+                              onClick={() => {
+                                onSelectWorldviewTab?.('plot');
+                                onSelectVolume?.(vIdx);
+                                if (hasChapters) {
+                                  toggleVolumeChaptersExpand(vIdx);
+                                }
                                 if (isOpenMobile) onCloseMobile();
                               }}
+                              onContextMenu={(e) =>
+                                openContextMenu(e, [
+                                  {
+                                    label: `+ 為第 ${vIdx} 卷新增章綱`,
+                                    onClick: () => onWorldviewAction?.({ type: 'chapter_outline', action: 'add', volIndex: vIdx }),
+                                  },
+                                  {
+                                    label: `定位第 ${vIdx} 卷卡片`,
+                                    onClick: () => onSelectVolume?.(vIdx),
+                                  },
+                                  {
+                                    label: '編輯分卷',
+                                    onClick: () => onWorldviewAction?.({ type: 'volume', id: vIdx, action: 'edit' }),
+                                  },
+                                  {
+                                    label: '刪除此卷',
+                                    danger: true,
+                                    onClick: () => onWorldviewAction?.({ type: 'volume', id: vIdx, action: 'delete' }),
+                                  },
+                                ])
+                              }
                             >
-                              +
-                            </button>
-                          </div>
-
-                          {/* Nested Chapter Outline list under volume */}
-                          {hasChapters && isExpanded && (
-                            <div className="tree-sub-nested-list" style={{ paddingLeft: '16px' }}>
-                              {vol.chapters_outline.map((ch: any, cIdx: number) => {
-                                const chNum = ch.chapter_index ?? cIdx + 1;
-                                const rawTitle = ch.chapter_title || `第 ${chNum} 章`;
-                                const cleanTitle = rawTitle.replace(/^第\s*\d+\s*章([：:\s]*)/, '').trim() || rawTitle;
-                                return (
-                                  <div
-                                    key={chNum}
-                                    className="tree-sub-item cursor-pointer text-xs"
-                                    onClick={() => {
-                                      onSelectWorldviewTab?.('plot');
-                                      onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'scroll' });
-                                      if (isOpenMobile) onCloseMobile();
-                                    }}
-                                    onContextMenu={(e) =>
-                                      openContextMenu(e, [
-                                        {
-                                          label: `定位第 ${chNum} 章細綱`,
-                                          onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'scroll' }),
-                                        },
-                                        {
-                                          label: '編輯章綱',
-                                          onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'edit' }),
-                                        },
-                                        {
-                                          label: '刪除此章綱',
-                                          danger: true,
-                                          onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'delete' }),
-                                        },
-                                      ])
-                                    }
-                                  >
-                                    <span className="truncate">第 {chNum} 章: {cleanTitle}</span>
-                                  </div>
-                                );
-                              })}
+                              <div className="flex items-center gap-1.5 truncate">
+                                {hasChapters && (
+                                  <span className={`tree-arrow-side ${isExpanded ? 'open' : ''}`}>
+                                    ▸
+                                  </span>
+                                )}
+                                <span className="truncate">第 {vIdx} 卷: {vol.title || '篇卷'}</span>
+                              </div>
+                              <button
+                                type="button"
+                                className="tree-action-btn"
+                                title={`為第 ${vIdx} 卷新增章綱 (+)`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onWorldviewAction?.({ type: 'chapter_outline', action: 'add', volIndex: vIdx });
+                                  if (isOpenMobile) onCloseMobile();
+                                }}
+                              >
+                                +
+                              </button>
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
+
+                            {/* Nested Chapter Outline list under volume */}
+                            {hasChapters && (
+                              <div className={`tree-accordion-collapsible ${isExpanded ? 'open' : ''}`}>
+                                <div className="tree-accordion-inner">
+                                  <div className="tree-sub-nested-list" style={{ paddingLeft: '16px' }}>
+                                    {vol.chapters_outline.map((ch: any, cIdx: number) => {
+                                      const chNum = ch.chapter_index ?? cIdx + 1;
+                                      const rawTitle = ch.chapter_title || `第 ${chNum} 章`;
+                                      const cleanTitle = rawTitle.replace(/^第\s*\d+\s*章([：:\s]*)/, '').trim() || rawTitle;
+                                      return (
+                                        <div
+                                          key={chNum}
+                                          className="tree-sub-item cursor-pointer text-xs"
+                                          onClick={() => {
+                                            onSelectWorldviewTab?.('plot');
+                                            onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'scroll' });
+                                            if (isOpenMobile) onCloseMobile();
+                                          }}
+                                          onContextMenu={(e) =>
+                                            openContextMenu(e, [
+                                              {
+                                                label: `定位第 ${chNum} 章細綱`,
+                                                onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'scroll' }),
+                                              },
+                                              {
+                                                label: '編輯章綱',
+                                                onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'edit' }),
+                                              },
+                                              {
+                                                label: '刪除此章綱',
+                                                danger: true,
+                                                onClick: () => onWorldviewAction?.({ type: 'chapter_outline', id: chNum, volIndex: vIdx, chIndex: chNum, action: 'delete' }),
+                                              },
+                                            ])
+                                          }
+                                        >
+                                          <span className="truncate">第 {chNum} 章: {cleanTitle}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
             </div>
           ) : (
             <div className="chapter-tree-list">
-              {chapters.length === 0 ? (
-                <div className="empty-tree-hint">目前無章節，點擊上方按鈕建立</div>
+              {displayChapters.length === 0 ? (
+                <div className="empty-tree-hint">目前無章節與大綱，點擊上方按鈕建立</div>
               ) : (
-                chapters.map((ch) => {
+                displayChapters.map((ch) => {
                   const isActive = ch.chapter_index === activeChapterIndex;
-                  const words = ch.content ? ch.content.length : 0;
+                  const hasCustomTitle = Boolean(ch.title && ch.title !== `第 ${ch.chapter_index} 章`);
                   return (
                     <div
                       key={ch.chapter_index}
-                      className={`tree-item ${isActive ? 'active' : ''}`}
+                      className={`tree-item ${ch.isGenerated ? '' : 'tree-item-unwritten'} ${isActive ? 'active' : ''}`}
                       onClick={() => {
                         onSelectChapter(ch.chapter_index);
                         if (isOpenMobile) onCloseMobile();
                       }}
                       role="button"
                       tabIndex={0}
+                      title={
+                        ch.summary
+                          ? `第 ${ch.chapter_index} 章細綱: ${ch.summary}`
+                          : hasCustomTitle
+                          ? `第 ${ch.chapter_index} 章: ${ch.title} ${ch.isGenerated ? `(${ch.word_count} 字)` : '(待生成)'}`
+                          : `第 ${ch.chapter_index} 章 ${ch.isGenerated ? `(${ch.word_count} 字)` : '(待生成)'}`
+                      }
                     >
-                      <div className="tree-item-title">
-                        <span className="tree-item-badge">
+                      <div className="tree-item-title truncate">
+                        <span className={`tree-item-badge ${ch.isGenerated ? '' : 'tree-item-badge-dashed'}`}>
                           <IconFileText size={13} />
                         </span>
-                        <span>第 {ch.chapter_index} 章</span>
+                        <span className="truncate">
+                          第 {ch.chapter_index} 章{hasCustomTitle ? `: ${ch.title}` : ''}
+                        </span>
                       </div>
-                      <span className="tree-item-meta">{words} 字</span>
+                      {ch.isGenerated ? (
+                        <span className="tree-item-meta">{ch.word_count} 字</span>
+                      ) : (
+                        <span className="tree-item-meta unwritten-badge">待生成</span>
+                      )}
                     </div>
                   );
                 })

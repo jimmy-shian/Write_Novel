@@ -12,10 +12,8 @@ interface WorkspaceHeaderProps {
   activeChapterIndex: number;
   isDirty: boolean;
   isSaving: boolean;
-  isAutoRunning: boolean;
   activeView: ActiveView;
   onSave: () => void;
-  onToggleAuto: () => void;
   onToggleExplorerMobile: () => void;
   onToggleCopilotMobile: () => void;
   onSelectView: (view: ActiveView) => void;
@@ -33,10 +31,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   activeChapterIndex,
   isDirty,
   isSaving,
-  isAutoRunning,
   activeView,
   onSave,
-  onToggleAuto,
   onToggleExplorerMobile,
   onToggleCopilotMobile,
   onSelectView,
@@ -109,19 +105,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           />
         </div>
 
-        {/* Autonomous Pipeline Run/Stop Toggle */}
-        <Button
-          size="sm"
-          className="topbar-auto-btn"
-          variant={isAutoRunning ? 'danger' : 'secondary'}
-          onClick={onToggleAuto}
-          data-tooltip={isAutoRunning ? '自主寫作執行中 (點擊停止)' : '啟動 AI 自主寫作'}
-          data-tooltip-pos="bottom"
-        >
-          <StatusDot status={isAutoRunning ? 'danger' : 'neutral'} />
-          <span className="auto-btn-label-desktop">{isAutoRunning ? '執行中 (停止)' : '自主寫作'}</span>
-          <span className="auto-btn-label-mobile">{isAutoRunning ? '執行中' : '自主'}</span>
-        </Button>
 
         {/* Save button */}
         <Button

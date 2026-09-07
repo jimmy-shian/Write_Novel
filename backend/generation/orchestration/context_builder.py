@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from backend import persistence as db
 from backend.services.diagnostics import detect_current_stage
 from backend.prompts.common.context import (
+    WORLDVIEW_FIELDS_BY_STAGE,
     compact_json_data,
     extract_character_basic,
     extract_character_names_list,
@@ -105,10 +106,17 @@ def _build_worldview_bundle(task: GenerationTaskRequest, worldview_text: str) ->
             "data": extract_worldview_summary(worldview_text),
         }
     compact_worldview = {}
-    if isinstance(parsed_worldview, dict):
-        for key in ("theme", "main_conflict", "worldview", "macro_outline"):
+    stage = getattr(task, "stage", None) or "copilot"
+    allowed_fields = WORLDVIEW_FIELDS_BY_STAGE.get(stage)
+    if allowed_fields is None and stage != "worldview":
+        allowed_fields = ["theme", "main_conflict", "worldview", "macro_outline"]
+
+    if isinstance(parsed_worldview, dict) and allowed_fields is not None:
+        for key in allowed_fields:
             if key in parsed_worldview and parsed_worldview[key] not in (None, "", [], {}):
                 compact_worldview[key] = parsed_worldview[key]
+    elif isinstance(parsed_worldview, dict):
+        compact_worldview = parsed_worldview
     else:
         compact_worldview = parsed_worldview
     return {
@@ -121,6 +129,9 @@ def _build_character_bundle(task: GenerationTaskRequest, characters_data: Any) -
     mode = task.context_mode
     if not characters_data:
         return {"mode": mode, "data": "尚無角色設定"}
+
+    if getattr(task, "stage", None) == "editor":
+        return {"mode": "minimal", "data": "編輯階段以本章場景契約與正文為準，不注入全書角色設定卡"}
 
     if mode == "full":
         if isinstance(characters_data, dict) and "parsed_data" in characters_data:
@@ -149,6 +160,15 @@ def _build_plot_bundle(task: GenerationTaskRequest, volumes: List[Dict[str, Any]
     mode = task.context_mode
     chapter_index = task.target.chapter_index
     volume_index = task.target.volume_index
+
+    if getattr(task, "stage", None) == "editor":
+        return {
+            "mode": "minimal",
+            "data": {
+                "window": _get_current_outline_window(plot_data, chapter_index),
+            }
+        }
+
     if mode == "full":
         return {
             "mode": mode,

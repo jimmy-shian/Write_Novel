@@ -101,6 +101,18 @@ export async function getPipelinePrompt(novelId: string): Promise<{ pipeline_pro
   return request(`/api/novels/${novelId}/pipeline-prompt`);
 }
 
+export async function getChatMemory(
+  novelId: string,
+  limit: number = 100,
+  messageType?: string
+): Promise<{ chat_memory: any[]; count: number }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (messageType) {
+    params.set('message_type', messageType);
+  }
+  return request(`/api/novels/${novelId}/chat-memory?${params.toString()}`);
+}
+
 export async function clearChatMemory(novelId: string): Promise<{ status: string }> {
   return request(`/api/novels/${novelId}/clear-chat`, {
     method: 'POST',

@@ -31,30 +31,35 @@ from backend.services.settings.service import apply_settings_payload
 
 def test_reentrant_lock_save_settings():
     """Verify save_agent_config does not deadlock and works in bulk settings payloads."""
-    payload = {
-        "configs": {
-            "global": {
-                "api_key": "test_key",
-                "base_url": "https://api.openai.com/v1",
-                "model": "test-model-1",
-                "temperature": 0.7,
-                "enable_thinking": 1,
-            },
-            "writer": {
-                "api_key": "test_key",
-                "base_url": "https://api.openai.com/v1",
-                "model": "test-model-2",
-                "temperature": 0.8,
-                "enable_thinking": 0,
+    initial_configs = get_agent_configs()
+    try:
+        payload = {
+            "configs": {
+                "global": {
+                    "api_key": "test_key",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "test-model-1",
+                    "temperature": 0.7,
+                    "enable_thinking": 1,
+                },
+                "writer": {
+                    "api_key": "test_key",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "test-model-2",
+                    "temperature": 0.8,
+                    "enable_thinking": 0,
+                }
             }
         }
-    }
-    res = apply_settings_payload(payload)
-    assert res["status"] == "success"
-    
-    configs = get_agent_configs()
-    assert configs["global"]["model"] == "test-model-1"
-    assert configs["writer"]["model"] == "test-model-2"
+        res = apply_settings_payload(payload)
+        assert res["status"] == "success"
+        
+        configs = get_agent_configs()
+        assert configs["global"]["model"] == "test-model-1"
+        assert configs["writer"]["model"] == "test-model-2"
+    finally:
+        if initial_configs:
+            apply_settings_payload({"configs": initial_configs})
 
 
 def test_connection_manager_close_all():

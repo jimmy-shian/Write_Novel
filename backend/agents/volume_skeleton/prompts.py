@@ -127,15 +127,55 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
   "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
 }}
 
-【勢力與角色一致性規則】
-- 勢力/組織的定義、立場、利益、制度背景以【世界觀背景】中的 factions / 世界觀設定為準；本卷 factions 只是本卷活躍勢力子集，不得重新發明或改寫勢力設定。
+【勢力與角色一致性及增量規則 (必填)】
+- 勢力/組織的定義、立場、利益、制度背景以【世界觀背景】中的 factions / 世界觀設定為準；本卷 factions 只是本卷活躍勢力子集，不得重新發明或改寫現有設定。
 - 若章節需要使用既有命名角色，characters_active 必須使用既有角色名冊中的名稱。
-- 若劇情確實需要新增命名角色，可以在骨架中提出，但總監審核時必須先補角色卡再進入正文；不得把缺角色卡的命名角色當作已完備角色使用。
+- 💡【嚴禁正文角色性格腦補】：若本批章節劇情確實需要引入新命名角色（例如新反派、商會盟友、特殊勢力頭目），絕不能只在 characters_active 留下一句人名讓正文作家盲猜（避免反派變正派或立場翻轉）！
+- 凡本批章節新登場的命名角色，必須在回傳的頂層 JSON 中包含 "new_characters" 列表，明確指定：
+  - name: 角色全名
+  - role: 劇中定位（正派盟友 / 主要反派 / 導師 / 灰色中立 / 競爭者 / 地方頭目）
+  - faction: 所屬勢力或門派
+  - personality: 核心性格特徵與說話習慣（短句，務必鮮明立體）
+  - motivation: 核心動機與利益訴求
+  - first_appearance_chapter: 首次登場章節號
+- 若本批章節解鎖了新地域、專屬法則（如禁忌法規、商會特權法、概念反噬規律）或新勢力，請一併在頂層 "new_world_rules" 與 "new_factions" 中回傳；若無新增則給予空陣列 []。
+
+【完整輸出 JSON 根結構範例】
+{{
+  "volume_index": {vol_idx},
+  "chapters_skeleton": [
+    ... // 共 {vol_chapter_count} 章節輕量骨架
+  ],
+  "new_characters": [
+    {{
+      "name": "新角色全名",
+      "role": "正派盟友 | 主要反派 | 導師 | 灰色中立 | 地方頭目",
+      "faction": "所屬勢力或門派名稱",
+      "personality": "性格特質與言語風格短句",
+      "motivation": "核心訴求或衝突動機",
+      "first_appearance_chapter": {start_ch}
+    }}
+  ],
+  "new_world_rules": [
+    {{
+      "name": "本卷新增規則或特殊制度名稱",
+      "scope": "本卷專屬 | 全域通用",
+      "description": "具體規則邏輯、代價與約束"
+    }}
+  ],
+  "new_factions": [
+    {{
+      "name": "新增勢力名稱",
+      "alignment": "敵對 | 友好 | 中立利益導向",
+      "summary": "勢力背景與在當前卷的影響力"
+    }}
+  ]
+}}
 
 【使用者額外提示詞 (Prompt)】
-{user_prompt or "請為本卷生成完整、連貫、短句化的輕量章節骨架。"}
+{user_prompt or "請為本卷生成完整、連貫、短句化的輕量章節骨架，並同步申明新角色與新法則。"}
 
-請生成符合 JSON 結構的 chapters_skeleton 清單。輸出章數必須等於 {vol_chapter_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。不要因追求細節導致輸出中斷。
+請生成符合上述 JSON 結構的物件。chapters_skeleton 輸出章數必須等於 {vol_chapter_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。不要因追求細節導致輸出中斷。
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -191,21 +231,34 @@ def build_volume_skeleton_completion_messages(
       "scene_goal": "核心目標",
       "scene_conflict": "阻礙與衝突",
       "scene_beats": [{{"beat_index": 1, "beat_type": "setup", "description": "行動與結果", "involved_characters": []}}],
-      "characters_active": [],
+      "characters_active": ["活躍角色名稱"],
       "emotional_tone": "",
       "scene_turn": "",
       "scene_outcome": "",
       "cliffhanger": "",
       "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
     }}
-  ]
+  ],
+  "new_characters": [
+    {{
+      "name": "本段新登場角色全名",
+      "role": "正派盟友 | 主要反派 | 導師 | 灰色中立 | 地方頭目",
+      "faction": "所屬門派勢力",
+      "personality": "性格特質與言語風格短句",
+      "motivation": "利益訴求或矛盾",
+      "first_appearance_chapter": {start_ch}
+    }}
+  ],
+  "new_world_rules": [],
+  "new_factions": []
 }}
 ```
 2. 輸出章數必須等於 {batch_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。
 3. 嚴格延續前段章節的標題風格與劇情因果。
+4. 凡本段登場之新命名人物，務必於 new_characters 中明確其陣營、性格與動機，嚴禁在正文中產生角色性格幻覺。
 
 【使用者額外提示詞 (Prompt)】
-{user_prompt or "請接續前段內容，為本卷剩餘章節補全骨架大綱。"}
+{user_prompt or "請接續前段內容，為本卷剩餘章節補全骨架大綱，並申明新角色。"}
 """
 
     messages = [

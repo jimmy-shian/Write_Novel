@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Shared Type Definitions for AI Novel Factory.
  */
 
@@ -35,10 +35,14 @@ export interface Chapter {
 }
 
 export interface Volume {
+  id?: number;
+  novel_id?: string;
   volume_index: number;
   title: string;
   summary: string;
   chapters?: Chapter[];
+  chapters_outline?: any[];
+  chapter_count?: number;
 }
 
 export interface TemporalEntity {
@@ -122,3 +126,16 @@ export interface AgentConfig {
   max_tokens: number;
   enable_thinking: number;
 }
+
+export type CopilotTab = 'stages' | 'records';
+
+export interface ChatRecord {
+  id?: number;
+  novel_id?: string;
+  role: 'assistant' | 'user' | 'director' | 'system' | string;
+  content: string;
+  thinking?: string | null;
+  message_type: 'chat' | 'director' | 'pipeline' | string;
+  timestamp: string;
+}
+

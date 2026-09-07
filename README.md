@@ -142,7 +142,7 @@ FastAPI 會自動服務 `frontend/dist/` 所構建出的現代化 OpenDesign 工
 
 
 ### G. 一鍵本地打包與 GitHub Actions 遠端自動編譯
-- **本地一鍵封裝控制 (uild_app.py)**：支援互動式選單或 CLI 參數 (--target apk|exe|all|web)，自動配置 Android SDK 與 JDK 環境變數，使用固定金鑰庫 (mykey.keystore) 簽名 Release APK，並支援 PyInstaller 獨立綠色版桌面程式 (.EXE) 打包。
+- **本地一鍵封裝控制 (build_app.py)**：支援互動式選單或 CLI 參數 (--target apk|exe|all|web)，自動配置 Android SDK 與 JDK 環境變數，使用固定金鑰庫 (mykey.keystore) 簽名 Release APK，並支援 PyInstaller 獨立綠色版桌面程式 (.EXE) 打包。
 - **CI/CD 自動編譯工作流 (.github/workflows/build_and_release.yml)**：master 分支推送自動觸發全套自動化測試、網頁資源構建、Android APK 簽名封裝與 Windows EXE 打包，產物自動上傳至 GitHub Actions Artifacts。
 
 ## 4. 系統技術架構

@@ -187,15 +187,14 @@ def _coerce_str(value: Any) -> Optional[str]:
 
 
 def _format_effective_config(agent_name: str, config: Mapping[str, Any]) -> Dict[str, Any]:
-    defaults = get_default_config()
     return {
         "api_key": config.get("api_key", ""),
-        "base_url": config.get("base_url", defaults["base_url"]),
+        "base_url": config.get("base_url", ""),
         "model": config.get("model", ""),
-        "temperature": config.get("temperature", defaults["temperature"]),
-        "top_p": config.get("top_p", defaults["top_p"]),
-        "max_tokens": config.get("max_tokens", defaults["max_tokens"]),
-        "enable_thinking": int(config.get("enable_thinking", defaults["enable_thinking"])),
+        "temperature": config.get("temperature", 0.7),
+        "top_p": config.get("top_p", 0.95),
+        "max_tokens": config.get("max_tokens", 16384),
+        "enable_thinking": int(config.get("enable_thinking", 1)),
         "display_name": DISPLAY_NAMES.get(agent_name, agent_name),
         "plot_review_batch_size": _get_plot_review_batch_size(),
     }
@@ -282,8 +281,8 @@ def save_settings_patch(agent_name: str, patch: Mapping[str, Any]) -> Dict[str, 
         effective_config.get("enable_thinking", get_default_config()["enable_thinking"]),
     )
 
-    # 2. Update .env file and hot reload os.environ
-    env_updated = sync_agent_settings_to_env(normalized_agent, effective_config)
+    # 2. (.env is deprecated, database SQLite is the sole source of truth)
+    env_updated = False
 
     # 3. Keep AGENT_DEFAULTS in memory synchronized
     try:

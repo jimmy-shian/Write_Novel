@@ -10,6 +10,7 @@ import {
   saveWorldbuilding,
   saveCharacters,
   saveVolumes,
+  getChatMemory,
   NovelDetailResponse,
 } from '../api/novels';
 
@@ -87,6 +88,16 @@ export function useNovel() {
       setIsLoading(false);
     }
   }, [activeNovelId, activeChapterIndex]);
+
+  const refreshChatMemory = useCallback(async () => {
+    if (!activeNovelId) return;
+    try {
+      const res = await getChatMemory(activeNovelId);
+      setNovelDetail((prev) => (prev ? { ...prev, chat_memory: res.chat_memory } : prev));
+    } catch (err: any) {
+      console.warn('無法重新整理對話與指令紀錄:', err);
+    }
+  }, [activeNovelId]);
 
   useEffect(() => {
     if (activeNovelId) {
@@ -175,10 +186,20 @@ export function useNovel() {
   // Create new chapter
   const createChapter = useCallback(() => {
     if (!novelDetail) return;
-    const maxIdx = novelDetail.chapters.reduce(
+    let maxIdx = (novelDetail.chapters || []).reduce(
       (max, c) => (c.chapter_index > max ? c.chapter_index : max),
       0
     );
+    if (Array.isArray(novelDetail.volumes)) {
+      for (const v of novelDetail.volumes) {
+        if (Array.isArray(v.chapters_outline)) {
+          for (const co of v.chapters_outline) {
+            const num = Number(co.chapter_index);
+            if (!isNaN(num) && num > maxIdx) maxIdx = num;
+          }
+        }
+      }
+    }
     const newIdx = maxIdx + 1;
     selectChapter(newIdx);
     setEditorContent('');
@@ -482,6 +503,7 @@ export function useNovel() {
     handleDeleteNovel,
     handleResetNovelContent,
     refreshActiveNovel,
+    refreshChatMemory,
     refreshNovels,
     saveWorldbuildingData,
     saveCharactersData,

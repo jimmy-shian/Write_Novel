@@ -295,6 +295,84 @@ def update_volume(novel_id, volume_index, title, summary, factions):
                 (novel_id, volume_index, _to_traditional(title), _to_traditional(summary), factions)
             )
 
+
+def append_or_merge_volume_settings(novel_id, volume_index, new_rules=None, new_factions=None):
+    """
+    增量合併本卷的專屬法則 (applicable_rules) 與勢力 (factions)。
+    保留既有設定，去重後寫回 volumes 資料表。
+    """
+    if not new_rules and not new_factions:
+        return {"rules": [], "factions": []}
+
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT applicable_rules, factions FROM volumes WHERE novel_id = ? AND volume_index = ?",
+            (novel_id, volume_index)
+        ).fetchone()
+        if not row:
+            return {"rules": [], "factions": []}
+
+        # 1. 處理 applicable_rules
+        existing_rules = []
+        if row["applicable_rules"]:
+            try:
+                parsed_r = json.loads(row["applicable_rules"])
+                existing_rules = parsed_r if isinstance(parsed_r, list) else [parsed_r]
+            except Exception:
+                existing_rules = [{"name": row["applicable_rules"], "description": ""}]
+
+        added_rules = []
+        if new_rules:
+            existing_rule_names = {
+                r.get("name", "").strip() if isinstance(r, dict) else str(r).strip()
+                for r in existing_rules
+            }
+            for nr in new_rules:
+                name = nr.get("name", "").strip() if isinstance(nr, dict) else str(nr).strip()
+                if not name:
+                    continue
+                if name not in existing_rule_names:
+                    existing_rules.append(nr)
+                    existing_rule_names.add(name)
+                    added_rules.append(nr)
+
+        # 2. 處理 factions
+        existing_factions = []
+        if row["factions"]:
+            try:
+                parsed_f = json.loads(row["factions"])
+                existing_factions = parsed_f if isinstance(parsed_f, list) else [parsed_f]
+            except Exception:
+                existing_factions = [{"name": row["factions"], "summary": ""}]
+
+        added_factions = []
+        if new_factions:
+            existing_faction_names = {
+                f.get("name", "").strip() if isinstance(f, dict) else str(f).strip()
+                for f in existing_factions
+            }
+            for nf in new_factions:
+                name = nf.get("name", "").strip() if isinstance(nf, dict) else str(nf).strip()
+                if not name:
+                    continue
+                if name not in existing_faction_names:
+                    existing_factions.append(nf)
+                    existing_faction_names.add(name)
+                    added_factions.append(nf)
+
+        # 3. 回寫資料庫
+        rules_json = json.dumps(_convert_obj_to_traditional(existing_rules), ensure_ascii=False)
+        factions_json = json.dumps(_convert_obj_to_traditional(existing_factions), ensure_ascii=False)
+        cursor.execute(
+            "UPDATE volumes SET applicable_rules = ?, factions = ? WHERE novel_id = ? AND volume_index = ?",
+            (rules_json, factions_json, novel_id, volume_index)
+        )
+
+        return {"rules": added_rules, "factions": added_factions}
+
+
 def delete_volume(novel_id, volume_index):
     conn = get_db_connection()
     with conn:

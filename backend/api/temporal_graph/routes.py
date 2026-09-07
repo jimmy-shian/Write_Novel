@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from fastapi import APIRouter, HTTPException, Query, Body
 from typing import Optional, Dict, Any, List
 from backend import persistence as db
@@ -101,7 +101,7 @@ def extract_temporal_facts_endpoint(novel_id: str, payload: Dict[str, Any] = Bod
     text = payload.get("content")
     if not text:
         # Load from chapters table
-        chapter_row = db.get_chapter(novel_id, chapter_index)
+        chapter_row = db.get_latest_chapter(novel_id, chapter_index)
         if chapter_row:
             text = chapter_row.get("content", "")
     if not text or not text.strip():

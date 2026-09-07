@@ -89,7 +89,8 @@ class WriterContextBuilder:
             if not isinstance(ch, dict):
                 continue
             name = ch.get("name", "")
-            # 若無明確指定活躍清單，或該角色在活躍名單內，或該角色為 POV
+            # Writer context is strictly scoped: only plan-declared active characters.
+            # If the plan has no active list, keep the legacy fallback for compatibility.
             if not active_set or name in active_set or name == pov_character:
                 is_pov = (name == pov_character)
 
@@ -123,10 +124,54 @@ class WriterContextBuilder:
                     "private_motivation": private_goal,
                     "speech_profile_summary": speech_desc,
                     "knowledge_scope": knowledge if knowledge else ["已知自身經歷與當前場景目擊之情報"],
+                    "state_source": "character_bible_initial" if knowledge else "fallback",
+                    "current_state_missing": True,
                 }
                 states.append(state_item)
 
         return states
+
+    @staticmethod
+    def _outline_brief(outline: Any) -> str:
+        """Return only the adjacent-chapter fields that are useful for handoff."""
+        if not isinstance(outline, dict):
+            return ""
+        idx = outline.get("chapter_index") or outline.get("chapter") or outline.get("chapter_number")
+        title = outline.get("title") or outline.get("chapter_title") or ""
+        goal = outline.get("scene_goal") or outline.get("purpose") or outline.get("chapter_summary") or outline.get("summary") or ""
+        return f"第 {idx} 章｜{title}｜目的：{goal}" if idx else f"{title}｜目的：{goal}"
+
+    def _format_adjacent_context(self, surrounding_plot: str) -> str:
+        """Normalize runner handoff without exposing raw adjacent outline JSON."""
+        if not surrounding_plot:
+            return ""
+        lines = []
+        for line in str(surrounding_plot).splitlines():
+            clean = line.strip()
+            if not clean or clean.startswith("{") or clean.startswith("}"):
+                continue
+            if clean.startswith("【") or "第 " in clean and ("章" in clean):
+                # Keep headings/brief lines; raw JSON keys are deliberately discarded.
+                if any(key in clean for key in ("前一章", "後一章")):
+                    lines.append(clean)
+                elif not any(key in clean for key in ('"chapter_index"', '"events"', '"characters_active"')):
+                    lines.append(clean)
+        return "\n".join(lines)
+
+    def _format_volume_context(self, vol_outline_context: str) -> str:
+        """Keep volume direction, not full faction/outline payloads."""
+        if not vol_outline_context:
+            return ""
+        keep = []
+        for line in str(vol_outline_context).splitlines():
+            clean = line.strip()
+            if not clean or clean.startswith("{") or clean.startswith("}"):
+                continue
+            if any(marker in clean for marker in ("當前卷", "前一卷", "後一卷")):
+                keep.append(clean)
+            elif clean.startswith(("標題：", "大綱：")):
+                keep.append(clean)
+        return "\n".join(keep)
 
     def build_scene_beats(self, current_outline: Dict[str, Any]) -> List[str]:
         """提煉結構化拍點，相容舊版 events 與新版 scene_beats。"""
@@ -206,7 +251,7 @@ class WriterContextBuilder:
         # 6. 組裝純淨文字區塊
         lines = []
 
-        core_context = format_novel_core_context(novel_id)
+        core_context = format_novel_core_context(novel_id, for_stage="writer")
         if core_context:
             lines.append(core_context)
             lines.append("")
@@ -240,6 +285,17 @@ class WriterContextBuilder:
             lines.append(f"  - 知情邊界 (Knowledge Scope)：{', '.join(cs['knowledge_scope'])}")
         lines.append("")
 
+        # (D) 相鄰章/卷方向：只保留 handoff 摘要，禁止 raw outline 漂入 Writer。
+        adjacent = self._format_adjacent_context(surrounding_plot)
+        volume_direction = self._format_volume_context(vol_outline_context)
+        if adjacent or volume_direction:
+            lines.append("### 🧭【相鄰章節與卷方向（僅供銜接，不得提前改寫未到章節事件）】")
+            if adjacent:
+                lines.append(adjacent)
+            if volume_direction:
+                lines.append(volume_direction)
+            lines.append("")
+
         # (D) 連續性與時序記憶任務 (Graphiti Temporal Graph)
         active_char_names = [cs["name"] for cs in char_states]
         temporal_graph_context = TemporalGraphService.build_narrative_context(
@@ -264,17 +320,22 @@ class WriterContextBuilder:
         # (D2) 術語庫名詞邊界約束 (Glossary)
         terms = db.get_terms(novel_id)
         if terms:
-            lines.append("### 📖【術語庫與名詞約束 (Story Terms - 嚴格維持全書一致性)】")
-            for t in terms[:20]:
-                cat = f"[{t['category']}] " if t.get("category") else ""
-                lines.append(f"- **{cat}{t['term']}**：{t['definition']}")
-            lines.append("")
+            context_haystack = json.dumps(current_outline, ensure_ascii=False) + " " + " ".join(active_char_names) + " " + contract.get("scene_goal", "")
+            matched_terms = [t for t in terms if t.get("term") and t["term"] in context_haystack]
+            selected_terms = matched_terms[:15] if matched_terms else terms[:10]
+            if selected_terms:
+                lines.append("### 📖【術語庫與名詞約束 (Story Terms - 嚴格維持全書一致性)】")
+                for t in selected_terms:
+                    cat = f"[{t['category']}] " if t.get("category") else ""
+                    lines.append(f"- **{cat}{t['term']}**：{t['definition']}")
+                lines.append("")
 
-        # (E) 世界觀背景（精簡版）
+        # (E) 世界觀背景（精簡版）。只接受已由上游 stage-scope 篩選的資料。
         if worldview_text:
             lines.append("### 🌍【相關世界觀法則與環境脈絡】")
-            # 限制長度，避免世界觀傾倒
-            clean_wv = worldview_text[:4000] if len(worldview_text) > 4000 else worldview_text
+            # Never silently compact canonical writer requirements. This legacy boundary is
+            # retained only as a transport guard for pre-TaskSpec callers.
+            clean_wv = worldview_text[:2000] if len(worldview_text) > 2000 else worldview_text
             lines.append(clean_wv)
             lines.append("")
 

@@ -5,6 +5,7 @@ Prompt Builder (隔離的提示詞構建與拼接層)
 """
 
 import json
+from typing import Any, Dict, List, Optional, Set
 from backend.schemas import agent_json
 from backend import persistence as db
 from backend.schemas.agent_json import CHARACTER_BASIC_FIELDS
@@ -62,8 +63,11 @@ MAX_GOLD_RULES_CONTEXT_LENGTH = 16000
 MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 
-def build_agent_context_contract(agent_name, visible_context, generation_boundary, output_boundary):
+def build_agent_context_contract(agent_name, visible_context, generation_boundary, output_boundary, allow_context_request=True):
     """Shared prompt block that tells each agent what it can actually see and where to stop."""
+    request_instruction = ""
+    if allow_context_request:
+        request_instruction = "\n若缺少會直接影響正確生成的必要資料，請依「資料不足時的回問總監規則」輸出 context request JSON；不要用猜測補完核心設定、角色關係、卷章大綱或正文事實。"
     return f"""
 
 ## 本輪可見上下文與生成邊界（{agent_name}）
@@ -77,8 +81,7 @@ def build_agent_context_contract(agent_name, visible_context, generation_boundar
 
 【輸出限制】
 {output_boundary}
-
-若缺少會直接影響正確生成的必要資料，請依「資料不足時的回問總監規則」輸出 context request JSON；不要用猜測補完核心設定、角色關係、卷章大綱或正文事實。
+{request_instruction}
 """
 
 
@@ -134,15 +137,34 @@ def compact_context_text(value, limit, label="context"):
     }
     return json.dumps(collapse_info, ensure_ascii=False, indent=2)
 
-def compact_json_data(data, max_list_items=10):
+NEVER_COMPACT_KEYS = {
+    "chapter_plan",
+    "scene_beats",
+    "allocated_tasks",
+    "foreshadowing_plants",
+    "foreshadowing_payoffs",
+    "turning_points",
+    "characters_active",
+    "progressive_character_plan",
+    "precalc_clues",
+    "hard_constraints",
+}
+
+def compact_json_data(data, max_list_items=10, parent_key=None):
     """
     Recursively process dictionary or list to compact large lists.
     Keeps the first N and last M items of a list (default total N+M = max_list_items),
     and replaces the middle items with a summary indicator to preserve JSON validity.
+    Canonical data keys listed in NEVER_COMPACT_KEYS are exempt from list compaction.
     """
     if isinstance(data, dict):
-        return {k: compact_json_data(v, max_list_items) for k, v in data.items()}
+        return {
+            k: (v if k in NEVER_COMPACT_KEYS else compact_json_data(v, max_list_items, parent_key=k))
+            for k, v in data.items()
+        }
     elif isinstance(data, list):
+        if parent_key in NEVER_COMPACT_KEYS:
+            return [compact_json_data(item, max_list_items, parent_key=parent_key) for item in data]
         total_len = len(data)
         if total_len > max_list_items:
             if max_list_items <= 0:
@@ -151,8 +173,8 @@ def compact_json_data(data, max_list_items=10):
             else:
                 head_len = max_list_items // 2
                 tail_len = max_list_items - head_len
-            head = [compact_json_data(item, max_list_items) for item in data[:head_len]]
-            tail = [compact_json_data(item, max_list_items) for item in data[-tail_len:]] if tail_len else []
+            head = [compact_json_data(item, max_list_items, parent_key=parent_key) for item in data[:head_len]]
+            tail = [compact_json_data(item, max_list_items, parent_key=parent_key) for item in data[-tail_len:]] if tail_len else []
             omitted = total_len - max_list_items
             
             # Use a consistent structural summary marker so callers can detect compaction reliably.
@@ -166,7 +188,7 @@ def compact_json_data(data, max_list_items=10):
             
             return head + [summary_item] + tail
         else:
-            return [compact_json_data(item, max_list_items) for item in data]
+            return [compact_json_data(item, max_list_items, parent_key=parent_key) for item in data]
     else:
         return data
 
@@ -355,8 +377,8 @@ WORLDVIEW_FIELDS_BY_STAGE = {
     "foreshadowing": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
     "volumes": ["theme", "main_conflict", "macro_outline", "multi_act_structure", "worldview", "setting", "power_system", "factions"],
     "volume_skeleton": ["theme", "main_conflict", "macro_outline", "multi_act_structure", "worldview", "setting", "power_system", "factions", "locations"],
-    "writer": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
-    "editor": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "progressive_character_plan"],
+    "writer": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations"],
+    "editor": ["theme", "worldview"],
     "director": ["title", "theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "timeline", "macro_outline", "progressive_character_plan"],
     "copilot": ["theme", "main_conflict", "worldview", "setting", "power_system", "rules", "factions", "locations", "macro_outline", "multi_act_structure", "progressive_character_plan"],
 }
@@ -551,10 +573,11 @@ def select_worldview_context(worldview_text, current_stage="copilot", query_text
     return compact_context_text(_json_text(compacted_selected), limit, "任務相關世界觀上下文")
 
 
-def format_novel_core_context(novel_id: str) -> str:
+def format_novel_core_context(novel_id: str, for_stage: Optional[str] = None) -> str:
     """
     格式化小說核心基石設定（標題、題材類型、寫作風格、大綱靈感 Pipeline Prompt）。
     此區塊為不可動搖的全域最高綱領，硬性注入至所有 Agent 上下文最前端。
+    當 for_stage 為 "writer" 或 "editor" 時，屏蔽包含全書結局與未到劇透的 pipeline_prompt 原文。
     """
     if not novel_id:
         return ""
@@ -577,7 +600,7 @@ def format_novel_core_context(novel_id: str) -> str:
         lines.append(f"- **題材類型**：{genre}")
     if style:
         lines.append(f"- **風格基調**：{style}")
-    if pipeline_prompt:
+    if pipeline_prompt and (for_stage or "").lower() not in ("writer", "editor"):
         lines.append(f"- **故事簡述 / 大綱靈感 (Pipeline Prompt)**：\n  {pipeline_prompt}")
 
     return "\n".join(lines)

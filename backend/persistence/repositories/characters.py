@@ -247,6 +247,81 @@ def save_characters(novel_id, json_data):
         )
     return next_version
 
+
+def append_or_merge_characters(novel_id: str, new_characters_list: List[Dict[str, Any]]) -> List[str]:
+    """
+    Appends or merges incremental characters into the novel's character bible.
+    Preserves all existing characters and updates/enriches profiles without wiping.
+    Returns the list of added/updated character names.
+    """
+    if not new_characters_list or not isinstance(new_characters_list, list):
+        return []
+
+    char_data = get_latest_characters(novel_id)
+    existing_list = []
+    if char_data and char_data.get("parsed_data"):
+        parsed = char_data["parsed_data"]
+        if isinstance(parsed, dict) and "characters" in parsed:
+            existing_list = list(parsed["characters"])
+        elif isinstance(parsed, list):
+            existing_list = list(parsed)
+
+    existing_names = set()
+    for c in existing_list:
+        if isinstance(c, dict):
+            c_name = c.get("name", "").strip()
+            if c_name:
+                existing_names.add(c_name)
+
+    added_names = []
+    formatted_new_chars = []
+    for item in new_characters_list:
+        if not isinstance(item, dict):
+            continue
+        raw_name = item.get("name", "").strip()
+        if not raw_name:
+            continue
+
+        role = item.get("role") or "配角"
+        faction = item.get("faction") or ""
+        first_ch = item.get("first_appearance_chapter") or item.get("entry_phase") or ""
+        personality = item.get("personality") or []
+        if isinstance(personality, str):
+            personality = [p.strip() for p in personality.replace("，", ",").replace("、", ",").split(",") if p.strip()]
+
+        motivation = item.get("motivation") or item.get("want") or ""
+        background = item.get("background") or ""
+        if faction and not background:
+            background = f"所屬勢力/陣營：{faction}"
+
+        char_obj = {
+            "name": raw_name,
+            "role": role,
+            "entry_phase": f"第 {first_ch} 章" if isinstance(first_ch, int) or (str(first_ch).isdigit()) else str(first_ch),
+            "personality": personality,
+            "want": motivation,
+            "need": item.get("need") or "",
+            "fatal_flaw": item.get("fatal_flaw") or "",
+            "motivation": motivation,
+            "arc": item.get("arc") or (f"於第 {first_ch} 章登場參與情節" if first_ch else "參與本卷劇情推進"),
+            "speech_style": item.get("speech_style") or "",
+            "appearance": item.get("appearance") or "",
+            "background": background,
+            "relationships": item.get("relationships") or []
+        }
+        formatted_new_chars.append(char_obj)
+        added_names.append(raw_name)
+
+    if not formatted_new_chars:
+        return []
+
+    combined = existing_list + formatted_new_chars
+    cleaned = clean_and_deduplicate_characters(combined)
+    save_characters(novel_id, {"characters": cleaned})
+    truly_added = [n for n in added_names if n not in existing_names]
+    return truly_added if truly_added else added_names
+
+
 # --- PLOT CHAPTERS (VERSIONED) ---
 
 def normalize_char_index(raw_index, total_chars, source='unknown'):

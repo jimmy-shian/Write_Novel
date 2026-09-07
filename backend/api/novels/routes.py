@@ -68,7 +68,7 @@ def api_get_novel(novel_id: str):
     char = db.get_latest_characters(novel_id)
     plot_data = db.get_stitched_plot(novel_id)
     written_ch = db.get_all_chapters_latest(novel_id)
-    memory = db.get_chat_memory(novel_id, limit=30)
+    memory = db.get_chat_memory(novel_id, limit=100)
 
     return {
         "novel": novel,
@@ -185,6 +185,14 @@ def api_save_chapter(novel_id: str, chapter_index: int, payload: ChapterSave):
 def api_clear_chat(novel_id: str):
     db.clear_chat_memory(novel_id)
     return {"status": "success"}
+
+@router.get("/novels/{novel_id}/chat-memory")
+def api_get_chat_memory(novel_id: str, limit: int = 100, message_type: Optional[str] = None):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    memory = db.get_chat_memory(novel_id, limit=limit, message_type=message_type)
+    return {"chat_memory": memory, "count": len(memory)}
 
 @router.post("/novels/{novel_id}/pipeline-prompt")
 def api_save_pipeline_prompt(novel_id: str, payload: PipelinePromptSave):

@@ -129,41 +129,47 @@ def test_draft_proposals_lifecycle():
 
 def test_settings_save_both_payload_formats():
     from backend.services.settings.service import apply_settings_payload, build_settings_snapshot
+    from backend import persistence as db
 
-    # Test format 1: { "agents": { "global": { ... } } }
-    res1 = apply_settings_payload({
-        "agents": {
-            "global": {
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4o",
-                "temperature": 0.8,
+    initial_configs = db.get_agent_configs()
+    try:
+        # Test format 1: { "agents": { "global": { ... } } }
+        res1 = apply_settings_payload({
+            "agents": {
+                "global": {
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "gpt-4o",
+                    "temperature": 0.8,
+                }
             }
-        }
-    })
-    assert res1["status"] == "success"
+        })
+        assert res1["status"] == "success"
 
-    # Test format 2: { "configs": { "writer": { ... } } }
-    res2 = apply_settings_payload({
-        "configs": {
-            "writer": {
-                "base_url": "https://integrate.api.nvidia.com/v1",
-                "model": "deepseek-ai/deepseek-v4-flash-0731",
-                "temperature": 0.7,
+        # Test format 2: { "configs": { "writer": { ... } } }
+        res2 = apply_settings_payload({
+            "configs": {
+                "writer": {
+                    "base_url": "https://integrate.api.nvidia.com/v1",
+                    "model": "deepseek-ai/deepseek-v4-flash-0731",
+                    "temperature": 0.7,
+                }
             }
-        }
-    })
-    assert res2["status"] == "success"
+        })
+        assert res2["status"] == "success"
 
-    # Test format 3: direct agent update { "agent_name": "architect", "model": "claude-3-5-sonnet" }
-    res3 = apply_settings_payload({
-        "agent_name": "architect",
-        "model": "claude-3-5-sonnet",
-    })
-    assert res3["status"] == "success"
+        # Test format 3: direct agent update { "agent_name": "architect", "model": "claude-3-5-sonnet" }
+        res3 = apply_settings_payload({
+            "agent_name": "architect",
+            "model": "claude-3-5-sonnet",
+        })
+        assert res3["status"] == "success"
 
-    snapshot = build_settings_snapshot()
-    assert snapshot["writer"]["model"] == "deepseek-ai/deepseek-v4-flash-0731"
-    assert snapshot["architect"]["model"] == "claude-3-5-sonnet"
+        snapshot = build_settings_snapshot()
+        assert snapshot["writer"]["model"] == "deepseek-ai/deepseek-v4-flash-0731"
+        assert snapshot["architect"]["model"] == "claude-3-5-sonnet"
+    finally:
+        if initial_configs:
+            apply_settings_payload({"configs": initial_configs})
 
 
 def test_pipeline_prompt_and_autonomous_status_lifecycle():

@@ -61,12 +61,13 @@ def build_targeted_rewriter_messages(
     editor_context: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """組裝 Targeted Rewriter 定向精修提示詞"""
-    system_prompt = TARGETED_REWRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
+    system_prompt = TARGETED_REWRITER_PROMPT
     system_prompt += build_agent_context_contract(
         "Targeted Rewriter / 定向正文精修",
         "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 連續性約束與編輯指令。",
-        "只針對被標記之段落進行局部重寫修正，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
-        "直接輸出精修後正文，不要輸出評語、不要輸出 JSON。"
+        "針對被標記之段落進行局部重寫修正，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
+        "直接輸出精修後正文，不要輸出評語、引言、註解或 JSON。",
+        allow_context_request=False,
     )
 
     report_text = json.dumps(diagnostic_report, ensure_ascii=False, indent=2)
@@ -92,13 +93,14 @@ def build_targeted_rewriter_messages(
 
 
 def build_editor_agent_messages(chapter_index, edit_instructions, original_prose, editor_context=None):
-    """舊版單步編輯提示詞拼接（相容過渡介面）"""
-    system_prompt = EDITOR_PROMPT + "\n" + CONTEXT_REQUEST_RULE
+    """正文潤色編輯提示詞拼接"""
+    system_prompt = EDITOR_PROMPT
     system_prompt += build_agent_context_contract(
         "Editor / 正文編輯",
-        "- 指定章節的原始正文。\n- 精修指示或總監修改重點。\n- 本章大綱、敘事記憶、角色卡與伏筆/轉折任務。",
-        "只潤色、修補與提升指定章節正文；保留原章節核心事件、人物意圖、伏筆狀態與既有連續性。",
-        "直接輸出精修後完整正文；不要輸出評語、JSON、世界觀修改或角色設定修改。"
+        "- 指定章節的原始正文。\n- 精修指示或總監修改重點。\n- 本章場景目標、術語表與不可破壞的連續性約束。",
+        "只潤色、修補與提升指定章節正文文學美感；保留原章節核心事件、人物意圖與既有事實。",
+        "直接輸出精修後完整繁體中文正文；不要輸出評語、引言、註解、JSON、世界觀修改或角色設定修改。",
+        allow_context_request=False,
     )
     user_content = f"""【修改指示 / 精修重點】
 {edit_instructions or "精雕細琢遣詞造句，優化意象與文學美感，剔除冗詞贅字，增強情節張力與情緒渲染。"}

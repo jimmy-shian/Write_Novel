@@ -54,18 +54,11 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
         message_type="pipeline"
     )
 
-    # 階段一：Reviewer 診斷 (如果前端未強制單步)
-    # 組裝 Targeted Rewriter 提示詞（包含 Reviewer 報告與編輯指示）
-    mock_diagnostic = {
-        "chapter_index": chapter_index,
-        "focus": "消除設定集傾倒、修正 POV 漂移、增強對話語境與剔除 AI 套路詞",
-    }
-
-    messages = build_targeted_rewriter_messages(
+    # 組裝 Editor 提示詞（包含本章場景目標、前章銜接與編輯指示）
+    messages = build_editor_agent_messages(
         chapter_index=chapter_index,
-        original_prose=original_prose,
-        diagnostic_report=mock_diagnostic,
         edit_instructions=edit_instructions,
+        original_prose=original_prose,
         editor_context=editor_context,
     )
 
@@ -76,25 +69,36 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
 
     full_text = acc.content
     if full_text.strip():
-        if _handle_director_context_request(novel_id, "編輯姬", full_text):
+        # 清理可能輸出的正文標記前綴
+        cleaned_text = full_text.strip()
+        special_markers = ["[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"]
+        for marker in special_markers:
+            if marker in cleaned_text:
+                idx = cleaned_text.find(marker)
+                cleaned_text = cleaned_text[idx + len(marker):].strip()
+                break
+
+        if _handle_director_context_request(novel_id, "編輯姬", cleaned_text):
             yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
 
+        final_prose = cleaned_text if cleaned_text else full_text
+
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,
             chapter_index,
-            full_text,
+            final_prose,
             outline=outline,
         )
         synopsis = memory_summary.get("chapter_summary") or current_synopsis
-        saved_version = db.save_chapter(novel_id, chapter_index, full_text, synopsis=synopsis)
+        saved_version = db.save_chapter(novel_id, chapter_index, final_prose, synopsis=synopsis)
         narrative_memory.store_chapter_memory(
             novel_id,
             chapter_index,
-            full_text,
+            final_prose,
             source_version=saved_version,
             outline=outline,
         )
-        db.save_last_agent_run(novel_id, "editor", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功定向精修完畢！", message_type="pipeline")
+        db.save_last_agent_run(novel_id, "editor", json.dumps(messages, ensure_ascii=False, indent=2), final_prose)
+        db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功潤色精修完畢！", message_type="pipeline")

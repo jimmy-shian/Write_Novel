@@ -177,13 +177,8 @@ def _missing_named_active_characters(outline, characters_bible):
 # =============================================================================
 def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None, stream=False, force_json=False, context_bundle=None):
     """
-    Writing Stage:
-    Generate prose based on:
-    - worldview summary
-    - writing style (user setting)
-    - current chapter's detailed outline
-    - detailed outline of preceding & succeeding 1 volumes (or nearby chapters)
-    - clue retrieval details of the next 3 chapters (if any) + writing content where clue is retrieved
+    Writing Stage: generate prose from the current chapter contract and scoped continuity context.
+    The Writer must not receive future-chapter payoff instructions or unrestricted history.
     """
     wb = db.get_latest_worldbuilding(novel_id)
     # 只傳入世界觀摘要（依 stage 選欄位）
@@ -263,22 +258,12 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
                     break
 
     if not current_outline:
-        current_outline = {
-            "chapter_index": chapter_index,
-            "title": f"第 {chapter_index} 章",
-            "time_setting": "故事時間",
-            "events": [{"scene": "發生場景", "action": "核心情節", "consequence": "引發後果"}],
-            "purpose": "推進情節",
-            "characters_active": []
-        }
+        raise ValueError(f"第 {chapter_index} 章缺少 canonical chapter_plan（章綱），Chapter Writer 禁止在缺乏大綱情況下進行正文生成。")
 
-
-        
     pre_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
     nxt_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
     
-    # 角色上下文改由 chapter writer prompt module 依本章大綱、前後章、伏筆線索與額外指示挑選：
-    # 大綱中命名的角色送完整角色卡，其餘角色保留名稱與基本關係，避免先在 agent 層誤刪資料。
+    # 角色上下文改由 chapter writer prompt module 依本章大綱（characters_active）精確挑選
     surrounding_plot = ""
     if pre_ch_outline:
         surrounding_plot += f"\n【前一章 (第 {chapter_index - 1} 章) 大綱】\n{json.dumps(pre_ch_outline, ensure_ascii=False, indent=2)}\n"
@@ -305,16 +290,23 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
     if next_vol:
         vol_outline_context += f"\n【後一卷 (第 {curr_vol_idx + 1} 卷) 全卷概要】\n標題：{next_vol['title']}\n大綱：{next_vol['summary']}\n勢力：{next_vol.get('parsed_factions') or next_vol.get('factions') or ''}\n"
         
+    # Only the current chapter's deterministic allocation is authoritative.
+    # Future payoffs are deliberately invisible to Writer to prevent premature payoff/setup pollution.
     clue_payoff_details = ""
-    next_three_chaps = [ch for ch in normalized_outlines if chapter_index < ch["chapter_index"] <= chapter_index + 3]
-    payoff_clues = []
-    for ch in next_three_chaps:
-        payoffs = ch.get("allocated_tasks", {}).get("foreshadowing_payoffs", []) or ch.get("foreshadowing_payoff", [])
+    current_tasks = current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
+    if isinstance(current_tasks, dict):
+        plants = current_tasks.get("foreshadowing_plants") or []
+        payoffs = current_tasks.get("foreshadowing_payoffs") or []
+        turns = current_tasks.get("turning_points") or []
+        task_lines = []
+        if plants:
+            task_lines.append("本章伏筆埋設：" + json.dumps(plants, ensure_ascii=False))
         if payoffs:
-            payoff_clues.append(f"第 {ch.get('chapter_index')} 章預計收回的伏筆：{json.dumps(payoffs, ensure_ascii=False)}")
-            
-    if payoff_clues:
-        clue_payoff_details = "\n【後三章預計將要收回的伏筆內容與寫作線索】\n" + "\n".join(payoff_clues) + "\n*(寫作時請合理埋設對應的前置鋪墊，使後續收回顯得自然流暢)*\n"
+            task_lines.append("本章伏筆回收：" + json.dumps(payoffs, ensure_ascii=False))
+        if turns:
+            task_lines.append("本章轉折任務：" + json.dumps(turns, ensure_ascii=False))
+        if task_lines:
+            clue_payoff_details = "\n".join(task_lines)
 
     memory_packet = narrative_memory.build_writer_memory_context(novel_id, chapter_index)
     if context_bundle:
@@ -325,19 +317,17 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         }
     narrative_memory_context = narrative_memory.memory_context_text(memory_packet)
 
-    vol_chars = set()
-    for ch in vol_chapters:
-        for name in _active_character_names_from_outline(ch):
-            if not _is_generic_active_character_name(name):
-                vol_chars.add(name)
-    required_character_set = sorted(list(vol_chars))
-
     messages = build_chapter_writer_messages(
-        worldview_text, characters_bible, current_outline, surrounding_plot,
-        vol_outline_context, clue_payoff_details, custom_style, chapter_index,
+        worldview_text=worldview_text,
+        characters_bible=characters_bible,
+        current_outline=current_outline,
+        surrounding_plot=surrounding_plot,
+        vol_outline_context=vol_outline_context,
+        clue_payoff_details=clue_payoff_details,
+        custom_style=custom_style,
+        chapter_index=chapter_index,
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
-        required_character_set=required_character_set,
         novel_id=novel_id,
     )
     

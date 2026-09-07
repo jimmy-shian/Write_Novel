@@ -1,31 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { CreationStage } from '../../types';
+import { CreationStage, CopilotTab, STAGE_DEFINITIONS, CopilotDrawerProps } from './types';
+import { StageSelector } from './StageSelector';
+import { DirectorRecordsStream } from './DirectorRecordsStream';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import {
   IconCpu,
-  IconPlay,
-  IconSquare,
   IconSparkles,
   IconX,
-  IconRefresh,
   IconMessageSquare,
+  IconLayers,
+  IconSend,
 } from '../common/Icons';
-
-interface CopilotDrawerProps {
-  isOpenMobile: boolean;
-  isStreaming: boolean;
-  isAutoRunning: boolean;
-  thinkingText: string;
-  streamingContent: string;
-  currentStatus: string;
-  currentStage?: CreationStage;
-  onSelectStage?: (stage: CreationStage) => void;
-  onCloseMobile: () => void;
-  onTriggerStage: (stage: CreationStage, prompt: string) => void;
-  onToggleAuto: () => void;
-  onClearStreaming: () => void;
-}
+import { clearChatMemory } from '../../api/novels';
 
 export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   isOpenMobile,
@@ -35,14 +22,20 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   streamingContent,
   currentStatus,
   currentStage = 'writer',
+  chatMemory = [],
+  activeNovelId,
   onSelectStage,
   onCloseMobile,
   onTriggerStage,
   onToggleAuto,
   onClearStreaming,
+  onRefreshChatMemory,
 }) => {
+  const [activeTab, setActiveTab] = useState<CopilotTab>('stages');
   const [prompt, setPrompt] = useState('');
   const [activeStage, setActiveStage] = useState<CreationStage>(currentStage);
+  const [isStageCollapsed, setIsStageCollapsed] = useState(false);
+  const [isRefreshingMemory, setIsRefreshingMemory] = useState(false);
 
   useEffect(() => {
     if (currentStage) {
@@ -50,21 +43,43 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
     }
   }, [currentStage]);
 
-  const stages: { id: CreationStage; label: string; desc: string }[] = [
-    { id: 'writer', label: '正文撰寫', desc: '結合時序知識圖譜生成章節正文' },
-    { id: 'editor', label: '審閱修訂', desc: '產出審閱建議與修改提案' },
-    { id: 'worldview', label: '世界觀構建', desc: '設定歷史、修煉體系與法則' },
-    { id: 'characters', label: '角色聖經', desc: '角色性格、慾望與關係網' },
-    { id: 'volumes', label: '分卷骨架', desc: '大綱主線與伏筆鋪設' },
-    { id: 'evaluate', label: '深度評估', desc: '節奏、文筆與劇情衝突評分' },
-  ];
+  const handleStageSelect = (stage: CreationStage) => {
+    setActiveStage(stage);
+    onSelectStage?.(stage);
+  };
 
   const handleRunStage = () => {
     onTriggerStage(activeStage, prompt);
   };
 
+  const handleRefreshRecords = async () => {
+    if (onRefreshChatMemory) {
+      setIsRefreshingMemory(true);
+      try {
+        await onRefreshChatMemory();
+      } finally {
+        setIsRefreshingMemory(false);
+      }
+    }
+  };
+
+  const handleClearRecords = async () => {
+    if (!activeNovelId) return;
+    if (window.confirm('確定要清空此小說的所有總監評斷與對話紀錄嗎？此操作無法還原。')) {
+      try {
+        await clearChatMemory(activeNovelId);
+        onRefreshChatMemory?.();
+      } catch (err: any) {
+        alert(err.message || '清空失敗');
+      }
+    }
+  };
+
+  const currentStageDef = STAGE_DEFINITIONS.find((s) => s.id === activeStage) || STAGE_DEFINITIONS[0];
+
   return (
     <aside className={`copilot-panel ${isOpenMobile ? 'mobile-open' : ''}`}>
+      {/* 1. Header with Title & Badges */}
       <div className="copilot-header">
         <div className="copilot-title">
           <IconCpu size={16} className="text-accent" />
@@ -86,104 +101,107 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
         </div>
       </div>
 
-      <div className="copilot-messages">
-        {/* Quick Stage Action Selector */}
-        <div className="copilot-stage-selector">
-          <span className="copilot-section-label">選擇流水線階段</span>
-          <div className="stage-pill-grid">
-            {stages.map((st) => (
-              <button
-                key={st.id}
-                type="button"
-                className={`stage-pill-btn ${activeStage === st.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveStage(st.id);
-                  onSelectStage?.(st.id);
-                }}
-                title={st.desc}
-              >
-                {st.label}
-              </button>
-            ))}
-          </div>
+      {/* 2. Switcher: 選擇流水線階段 vs 總監評斷／指令紀錄 */}
+      <div className="copilot-tab-switch-bar">
+        <button
+          type="button"
+          className={`copilot-tab-btn ${activeTab === 'stages' ? 'active' : ''}`}
+          onClick={() => setActiveTab('stages')}
+        >
+          <IconLayers size={13} />
+          <span>選擇流水線階段</span>
+        </button>
+        <button
+          type="button"
+          className={`copilot-tab-btn ${activeTab === 'records' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('records');
+            onRefreshChatMemory?.();
+          }}
+        >
+          <IconMessageSquare size={13} />
+          <span>總監評斷紀錄</span>
+          {chatMemory.length > 0 && (
+            <span className="copilot-tab-count">{chatMemory.length}</span>
+          )}
+        </button>
+      </div>
 
-          {/* Active Stage Details & View Switch Indicator */}
-          <div className="stage-switch-indicator">
-            <div className="stage-indicator-left">
-              <span className="stage-indicator-badge">當前階段</span>
-              <span className="stage-indicator-title">
-                {stages.find((s) => s.id === activeStage)?.label}
-              </span>
-            </div>
-            <span className="stage-indicator-desc">
-              {stages.find((s) => s.id === activeStage)?.desc}
-            </span>
-          </div>
-        </div>
+      {/* 3. Tab Content Area */}
+      <div className="copilot-body-area">
+        {activeTab === 'stages' ? (
+          <div className="copilot-messages">
+            {/* Stage Selector Subcomponent */}
+            <StageSelector
+              activeStage={activeStage}
+              isCollapsed={isStageCollapsed}
+              isAutoRunning={isAutoRunning}
+              onSelectStage={handleStageSelect}
+              onToggleCollapse={() => setIsStageCollapsed(!isStageCollapsed)}
+              onToggleAuto={onToggleAuto}
+            />
 
-        {/* Autonomous Writing Quick Card */}
-        <div className="copilot-auto-card">
-          <div className="auto-card-info">
-            <span className="auto-card-title">全自動自主寫作</span>
-            <span className="auto-card-desc">依大綱、時序事實自驅撰寫並審閱章節</span>
-          </div>
-          <Button
-            size="xs"
-            variant={isAutoRunning ? 'danger' : 'secondary'}
-            onClick={onToggleAuto}
-            icon={isAutoRunning ? <IconSquare size={12} /> : <IconPlay size={12} />}
-          >
-            {isAutoRunning ? '執行中 (停止)' : '啟動'}
-          </Button>
-        </div>
+            {/* Live Status Indicator */}
+            {currentStatus && (
+              <div className="copilot-status-box">
+                <span className="copilot-status-text">{currentStatus}</span>
+              </div>
+            )}
 
-        {/* Live Status Indicator */}
-        {currentStatus && (
-          <div className="copilot-status-box">
-            <span className="copilot-status-text">{currentStatus}</span>
-          </div>
-        )}
+            {/* Live Thinking Process Display */}
+            {thinkingText && (
+              <div className="copilot-thinking-box">
+                <div className="thinking-box-header">
+                  <IconSparkles size={12} className="text-accent" />
+                  <span>AI 思考推理歷程 (Thinking)</span>
+                </div>
+                <div className="thinking-box-content">{thinkingText}</div>
+              </div>
+            )}
 
-        {/* Live Thinking Process Display */}
-        {thinkingText && (
-          <div className="copilot-thinking-box">
-            <div className="thinking-box-header">
-              <IconSparkles size={12} className="text-accent" />
-              <span>AI 思考推理歷程 (Thinking)</span>
-            </div>
-            <div className="thinking-box-content">{thinkingText}</div>
-          </div>
-        )}
+            {/* Live Output Preview */}
+            {streamingContent && (
+              <div className="copilot-output-box">
+                <div className="output-box-header">
+                  <IconMessageSquare size={12} className="text-muted" />
+                  <span>即時生成內容</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs text-muted"
+                    onClick={onClearStreaming}
+                  >
+                    清除
+                  </button>
+                </div>
+                <div className="output-box-content">{streamingContent}</div>
+              </div>
+            )}
 
-        {/* Live Output Preview */}
-        {streamingContent && (
-          <div className="copilot-output-box">
-            <div className="output-box-header">
-              <IconMessageSquare size={12} className="text-muted" />
-              <span>即時生成內容</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs text-muted"
-                onClick={onClearStreaming}
-              >
-                清除
-              </button>
-            </div>
-            <div className="output-box-content">{streamingContent}</div>
+            {!thinkingText && !streamingContent && !currentStatus && (
+              <div className="copilot-empty-placeholder">
+                <p>請選擇上方階段，或在下方輸入導演引導提示詞，點擊「執行階段生成」開始。</p>
+              </div>
+            )}
           </div>
-        )}
-
-        {!thinkingText && !streamingContent && !currentStatus && (
-          <div className="copilot-empty-placeholder">
-            <p>請選擇上方階段，或在下方輸入導演引導提示詞，點擊「執行階段生成」開始。</p>
-          </div>
+        ) : (
+          <DirectorRecordsStream
+            records={chatMemory}
+            isLoading={isRefreshingMemory}
+            onRefresh={handleRefreshRecords}
+            onClear={handleClearRecords}
+          />
         )}
       </div>
 
+      {/* 4. Bottom Input Area */}
       <div className="copilot-input-area">
         <textarea
           className="copilot-textarea"
-          placeholder={`對【${stages.find((s) => s.id === activeStage)?.label}】提供引導提示（選填）...`}
+          placeholder={
+            activeTab === 'stages'
+              ? `對【${currentStageDef.label}】提供引導提示（選填）...`
+              : '向總監或流水線發送引導指令與反饋...'
+          }
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           disabled={isStreaming}
@@ -194,9 +212,13 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
           onClick={handleRunStage}
           isLoading={isStreaming}
           disabled={isStreaming}
-          icon={<IconSparkles size={14} />}
+          icon={activeTab === 'stages' ? <IconSparkles size={14} /> : <IconSend size={14} />}
         >
-          {isStreaming ? '執行中...' : '執行階段生成'}
+          {isStreaming
+            ? '執行中...'
+            : activeTab === 'stages'
+            ? '執行階段生成'
+            : '發送指令'}
         </Button>
       </div>
     </aside>

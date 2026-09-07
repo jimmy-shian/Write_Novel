@@ -107,6 +107,141 @@ def _build_nearby_skeleton_context(volume, batch_indexes):
     return "\n【同卷鄰近既有骨架（只供銜接，不要重寫這些章）】\n" + json.dumps(nearby, ensure_ascii=False, indent=2) + "\n"
 
 
+def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skeleton, chapters_skeleton=None, start_chapter=1):
+    """
+    從 LLM 生成的篇卷骨架資料中提取角色增量 (new_characters)、世界法則 (new_world_rules) 與勢力 (new_factions)。
+    - 自動合流至角色庫 (characters)
+    - 自動寫入篇卷設定 (applicable_rules, factions) 與母體世界觀補丁 (worldview_patches)
+    - 內建 Fail-Safe：比對 chapters_skeleton 中登場的 characters_active，若有未立卡的新命名角色，自動生成基礎人設卡防呆
+    - 於 chat_memory 發送總監增量通報
+    """
+    if not parsed_skeleton:
+        return {"added_characters": [], "new_rules": [], "new_factions": [], "notice": ""}
+
+    raw_new_chars = []
+    if isinstance(parsed_skeleton, dict):
+        nc = parsed_skeleton.get("new_characters")
+        if isinstance(nc, list):
+            raw_new_chars = [item for item in nc if isinstance(item, dict)]
+
+    # 讀取現有角色名冊進行對比
+    char_data = db.get_latest_characters(novel_id)
+    existing_names = set()
+    if char_data and char_data.get("parsed_data"):
+        parsed = char_data["parsed_data"]
+        ch_list = parsed.get("characters", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        for c in ch_list:
+            if isinstance(c, dict) and c.get("name"):
+                existing_names.add(str(c["name"]).strip())
+
+    declared_names = {str(c.get("name", "")).strip() for c in raw_new_chars if c.get("name")}
+
+    # Fail-Safe: 從章節骨架的 characters_active 偵測漏填的角色
+    GENERIC_IGNORE = {
+        "主角", "群眾", "眾人", "路人", "守衛", "衛兵", "NPC", "某人", "乘客", "掌櫃", "店小二",
+        "殺手", "刺客", "弟子", "長老", "侍衛", "管家", "僕人", "士兵", "隨從", "黑衣人", "無名氏"
+    }
+    if chapters_skeleton:
+        for ch in chapters_skeleton:
+            if not isinstance(ch, dict):
+                continue
+            ch_idx = ch.get("chapter_index") or start_chapter
+            active_list = ch.get("characters_active") or []
+            if isinstance(active_list, str):
+                active_list = [a.strip() for a in active_list.replace("，", ",").replace("、", ",").split(",") if a.strip()]
+            for raw_a in active_list:
+                name = str(raw_a).strip()
+                if not name or len(name) > 15 or name in GENERIC_IGNORE:
+                    continue
+                if name not in existing_names and name not in declared_names:
+                    raw_new_chars.append({
+                        "name": name,
+                        "role": "本卷重要角色",
+                        "faction": f"第 {volume_index} 卷相關勢力",
+                        "personality": "行事符合劇情設定，具備鮮明目的與動機",
+                        "motivation": f"於第 {ch_idx} 章登場推動本卷劇情",
+                        "first_appearance_chapter": ch_idx
+                    })
+                    declared_names.add(name)
+
+    # 1. 持久化角色
+    added_characters = []
+    if raw_new_chars:
+        try:
+            added_characters = db.append_or_merge_characters(novel_id, raw_new_chars)
+        except Exception as e:
+            print(f"[VolumeSkeleton] append_or_merge_characters failed: {e}")
+
+    # 2. 提取新法則與勢力
+    new_rules = []
+    new_factions = []
+    if isinstance(parsed_skeleton, dict):
+        nr = parsed_skeleton.get("new_world_rules")
+        if isinstance(nr, list):
+            new_rules = [r for r in nr if r]
+        nf = parsed_skeleton.get("new_factions")
+        if isinstance(nf, list):
+            new_factions = [f for f in nf if f]
+
+    if new_rules or new_factions:
+        try:
+            db.append_or_merge_volume_settings(novel_id, volume_index, new_rules=new_rules, new_factions=new_factions)
+        except Exception as e:
+            print(f"[VolumeSkeleton] append_or_merge_volume_settings failed: {e}")
+
+        for r in new_rules:
+            try:
+                if isinstance(r, dict):
+                    r_name = r.get("name", "未命名法則")
+                    r_desc = r.get("description", "")
+                    r_scope = r.get("scope", "本卷專屬")
+                else:
+                    r_name = str(r)
+                    r_desc = str(r)
+                    r_scope = "本卷專屬"
+                db.add_worldview_patch(novel_id, f"世界法則 ({r_scope})", f"[{r_name}] {r_desc}", source_chapter_index=start_chapter)
+            except Exception as e:
+                print(f"[VolumeSkeleton] add_worldview_patch (rule) failed: {e}")
+
+        for f in new_factions:
+            try:
+                if isinstance(f, dict):
+                    f_name = f.get("name", "未命名勢力")
+                    f_summary = f.get("summary") or f.get("alignment") or ""
+                else:
+                    f_name = str(f)
+                    f_summary = str(f)
+                db.add_worldview_patch(novel_id, "勢力擴增", f"[{f_name}] {f_summary}", source_chapter_index=start_chapter)
+            except Exception as e:
+                print(f"[VolumeSkeleton] add_worldview_patch (faction) failed: {e}")
+
+    # 3. 總監審核通報
+    notice_text = ""
+    if added_characters or new_rules or new_factions:
+        lines = [f"📋 **【總監大綱增量設定審核通報 - 第 {volume_index} 卷】**"]
+        if added_characters:
+            lines.append(f"👤 **新增角色卡 ({len(added_characters)} 位)**：{', '.join(added_characters)}（已合流至全域角色庫，防止正文寫作性格偏離或立場翻轉）")
+        if new_rules:
+            r_names = [r.get("name", str(r)) if isinstance(r, dict) else str(r) for r in new_rules]
+            lines.append(f"📜 **新增世界/卷級法則 ({len(new_rules)} 條)**：{', '.join(r_names)}（已掛載為世界觀補丁）")
+        if new_factions:
+            f_names = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in new_factions]
+            lines.append(f"🚩 **新增活躍勢力 ({len(new_factions)} 個)**：{', '.join(f_names)}")
+        lines.append("⚡ 以上增量已完成原子持久化，後續 Writer Agent 將嚴格遵照上述設定進行正文編織。")
+        notice_text = "\n".join(lines)
+        try:
+            db.save_chat_message(novel_id, "assistant", notice_text, message_type="pipeline")
+        except Exception as e:
+            print(f"[VolumeSkeleton] save_chat_message failed: {e}")
+
+    return {
+        "added_characters": added_characters,
+        "new_rules": new_rules,
+        "new_factions": new_factions,
+        "notice": notice_text,
+    }
+
+
 
 def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False):
     """
@@ -297,22 +432,26 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
 
         for attempt in range(1, VOLUME_SKELETON_BATCH_RETRIES + 1):
             yield "data: " + json.dumps({"type": "content", "delta": f"\n[整卷骨架] 第 {volume_index} 卷 (批次 {batch_num}/{total_batches})：生成第 {batch_start}-{batch_end} 章（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
-            llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
             accumulated = []
             saw_error = False
-            for chunk in llm_stream:
-                if chunk.startswith("data:"):
-                    try:
-                        data = json.loads(chunk[5:].strip())
-                        if data.get("type") == "done":
-                            continue
-                        if data.get("type") == "content":
-                            accumulated.append(data.get("delta", ""))
-                        elif data.get("type") == "error":
-                            saw_error = True
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        pass
-                yield chunk
+            try:
+                llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
+                for chunk in llm_stream:
+                    if chunk.startswith("data:"):
+                        try:
+                            data = json.loads(chunk[5:].strip())
+                            if data.get("type") == "done":
+                                continue
+                            if data.get("type") == "content":
+                                accumulated.append(data.get("delta", ""))
+                            elif data.get("type") == "error":
+                                saw_error = True
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+                    yield chunk
+            except Exception as exc:
+                saw_error = True
+                print(f"[VolumeSkeleton] 第 {volume_index} 卷批次 {batch_start}-{batch_end} (第 {attempt} 次) 呼叫異常: {exc}")
 
             batch_full_text = "".join(accumulated)
             full_text_list.append(batch_full_text)
@@ -327,6 +466,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
                     yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 生成失敗，未取得有效內容。"}, ensure_ascii=False) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                     return
+                time.sleep(min(15, 2 * attempt))
                 continue
 
             parsed_skeleton = extract_json_block(batch_full_text)
@@ -346,7 +486,18 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
                     yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 仍缺失章節：{missing_after_parse}。"}, ensure_ascii=False) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                     return
+                time.sleep(min(10, attempt))
                 continue
+
+            increment_result = process_and_persist_skeleton_increments(
+                novel_id=novel_id,
+                volume_index=volume_index,
+                parsed_skeleton=parsed_skeleton,
+                chapters_skeleton=chapters_skeleton,
+                start_chapter=batch_start,
+            )
+            if increment_result.get("notice"):
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n{increment_result['notice']}\n"}, ensure_ascii=False) + "\n\n"
 
             break
 
@@ -645,6 +796,16 @@ def run_volume_skeleton_segment(task, context=None):
             gen = _persist_segment_and_emit(novel_id, volume_index, chapters_skeleton, total_batches_planned=1, batch_idx=1)
             for c in gen:
                 yield c
+            increment_result = process_and_persist_skeleton_increments(
+                novel_id=novel_id,
+                volume_index=volume_index,
+                parsed_skeleton=parsed_skeleton,
+                chapters_skeleton=chapters_skeleton,
+                start_chapter=batch_start,
+            )
+            if increment_result.get("notice"):
+                yield _emit_status(f"💡 增量更新：{', '.join(increment_result.get('added_characters') or [])}")
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n{increment_result['notice']}\n"}, ensure_ascii=False) + "\n\n"
             break
 
         # 解析失敗重試
@@ -754,6 +915,16 @@ def run_volume_skeleton_completion(task, context=None):
             gen = _persist_segment_and_emit(novel_id, volume_index, chapters_skeleton, total_batches_planned=1, batch_idx=1)
             for c in gen:
                 yield c
+            increment_result = process_and_persist_skeleton_increments(
+                novel_id=novel_id,
+                volume_index=volume_index,
+                parsed_skeleton=parsed_skeleton,
+                chapters_skeleton=chapters_skeleton,
+                start_chapter=batch_start,
+            )
+            if increment_result.get("notice"):
+                yield _emit_status(f"💡 增量更新：{', '.join(increment_result.get('added_characters') or [])}")
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n{increment_result['notice']}\n"}, ensure_ascii=False) + "\n\n"
             break
 
         all_vols_after = db.get_volumes(novel_id)

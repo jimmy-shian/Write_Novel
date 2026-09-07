@@ -248,39 +248,57 @@ def build_writer_memory_context(novel_id: str, chapter_index: int, window: int =
     previous = db.get_latest_chapter(novel_id, target - 1) if target > 1 else None
     previous_tail = tail_text(previous.get("content", ""), PREVIOUS_TAIL_LIMIT) if previous else ""
     arc = db.get_arc_summary(novel_id, chapter_index=target - 1) if target > 1 else None
-    historical = _memory_payload(db.get_chapter_memories(novel_id, 1, target - 1))
     return {
-        "memory_policy": "寫作必須以章節記憶、前章正文尾段、當前 arc summary 與未回收伏筆為連續性依據；若與本章大綱衝突，優先回報上下文衝突。",
+        "memory_policy": "寫作必須以章節記憶、前章正文尾段、當前 arc summary 為連續性依據；伏筆僅處理本章大綱明確指派之任務。",
         "recent_chapter_memories": recent,
         "current_arc_summary": arc.get("summary_json") if arc else None,
         "previous_chapter_tail": previous_tail,
-        "unresolved_foreshadowing": unresolved_foreshadowing_from_memories(historical),
     }
 
 
 def build_editor_context_packet(novel_id: str, chapter_index: int, original_prose: str) -> Dict[str, Any]:
+    """
+    Build lightweight, clean context for Editor according to CONTEXT_ARCHITECTURE_REVIEW.md Section 1.7:
+    - Minimum required: scene goals / chapter function, previous chapter tail (800-1200 words), relevant terms, editor policy.
+    - Strictly prohibited: truncated excerpts with ...(中略)..., 16KB historical memory dumps, full character bible dump.
+    """
     outline = get_chapter_outline(novel_id, chapter_index)
-    current_memory = db.get_chapter_memory(novel_id, chapter_index)
-    recent_memory = build_writer_memory_context(novel_id, chapter_index, window=RECENT_MEMORY_WINDOW)
-    char_data = db.get_latest_characters(novel_id)
-    characters_source = char_data.get("parsed_data") if char_data and char_data.get("parsed_data") else {}
-    query = json.dumps({
-        "outline": outline or {},
-        "memory": current_memory.get("summary_json") if current_memory else {},
-        "edit_target_excerpt": snippet_text(original_prose, 500, 500),
-    }, ensure_ascii=False)
-    active_names = (outline or {}).get("characters_active") if isinstance(outline, dict) else None
+    scene_goals = {}
+    if isinstance(outline, dict):
+        scene_goals = {
+            "chapter_index": chapter_index,
+            "chapter_title": outline.get("title") or outline.get("chapter_title") or f"第 {chapter_index} 章",
+            "chapter_goal": outline.get("scene_goal") or outline.get("purpose") or outline.get("chapter_summary") or "",
+            "scene_beats": outline.get("scene_beats") or outline.get("events") or [],
+            "characters_active": outline.get("characters_active") or [],
+        }
+
+    # Fetch previous chapter tail (800-1200 characters) for continuity checking
+    target = int(chapter_index)
+    previous_tail = ""
+    if target > 1:
+        prev = db.get_latest_chapter(novel_id, target - 1)
+        if prev and prev.get("content"):
+            _, prev_prose = split_generated_prose(prev["content"])
+            previous_tail = tail_text(prev_prose, limit=PREVIOUS_TAIL_LIMIT)
+
+    # Scoped story terms relevant to this chapter
+    terms_list = []
+    try:
+        all_terms = db.get_terms(novel_id)
+        if all_terms:
+            content_str = str(scene_goals) + " " + (original_prose[:1000] if original_prose else "")
+            matched = [t for t in all_terms if t.get("term") and t["term"] in content_str]
+            terms_list = matched[:15] if matched else all_terms[:5]
+    except Exception:
+        terms_list = []
+
     return {
-        "chapter_outline": outline or {},
-        "allocated_tasks": (outline or {}).get("allocated_tasks", {}) if isinstance(outline, dict) else {},
-        "current_chapter_memory": current_memory.get("summary_json") if current_memory else None,
-        "continuity_memory": recent_memory,
-        "active_character_cards": build_relevant_character_context(
-            characters_source,
-            query_text=query,
-            force_full_names=active_names,
-        ),
-        "editor_policy": "只允許改善文句、節奏、意象與局部銜接；不得改寫大綱事件、角色動機、伏筆鋪墊/回收狀態或既有連續性。",
+        "chapter_index": chapter_index,
+        "scene_goals": scene_goals,
+        "previous_chapter_tail": previous_tail,
+        "story_terms": [{"term": t.get("term"), "definition": t.get("definition")} for t in terms_list],
+        "editor_policy": "潤色方針：以修辭優化、節奏微調、對白生動與文學美感提升為主；嚴格保留本章既有情節走向、人物生死與客觀事實，不隨意刪除核心事件。",
     }
 
 

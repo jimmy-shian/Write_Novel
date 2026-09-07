@@ -440,6 +440,35 @@ CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     }
 }
 
+VOLUME_SKELETON_OUTPUT_SCHEMA = {
+    "volume_index": 1,
+    "chapters_skeleton": [CHAPTER_SKELETON_WITH_ALLOC_SCHEMA],
+    "new_characters": [
+        {
+            "name": "角色姓名",
+            "role": "正派盟友 / 主要反派 / 導師 / 灰色中立 / 地方頭目",
+            "faction": "所屬勢力或門派",
+            "personality": "核心性格特徵、言行語氣風格",
+            "motivation": "主要訴求、核心利益或潛在衝突",
+            "first_appearance_chapter": 1
+        }
+    ],
+    "new_world_rules": [
+        {
+            "name": "法則或制度名稱",
+            "scope": "本卷專屬 / 全域通用",
+            "description": "具體規則運作邏輯、代價或約束"
+        }
+    ],
+    "new_factions": [
+        {
+            "name": "勢力名稱",
+            "alignment": "敵對 / 友好 / 中立利益導向",
+            "summary": "勢力背景與在當前卷的影響力"
+        }
+    ]
+}
+
 # 場景寫作契約 Schema（由 WriterContextBuilder 動態組裝給 Writer）
 SCENE_CONTRACT_SCHEMA = {
     "chapter_index": 1,
@@ -657,7 +686,8 @@ OUTPUT_SCHEMA_REGISTRY = {
     "foreshadowing": FORESHADOWING_OUTPUT_SCHEMA,
     "characters": {"characters": [CHARACTER_SCHEMA]},
     "volumes": {"volumes": [VOLUME_SCHEMA]},
-    "volume_skeleton": {"volume_index": 1, "chapters_skeleton": [CHAPTER_SKELETON_WITH_ALLOC_SCHEMA]},
+    "volume_skeleton": VOLUME_SKELETON_OUTPUT_SCHEMA,
+    "skeleton": VOLUME_SKELETON_OUTPUT_SCHEMA,
     "scene_contract": SCENE_CONTRACT_SCHEMA,
     "editor_review": EDITOR_REVIEW_REPORT_SCHEMA,
     "writer": WRITER_OUTPUT_SCHEMA,

@@ -136,6 +136,7 @@ export interface AutoPipelineStatusResponse {
   status_message?: string;
   logs?: AutoPipelineLogEntry[];
   error?: string | null;
+  stop_requested?: boolean;
   start_time?: string;
   last_heartbeat?: string;
   active_tasks_count?: number;

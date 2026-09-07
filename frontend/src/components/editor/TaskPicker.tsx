@@ -3,6 +3,119 @@ import { IconCheck, IconPlus, IconX } from '../common/Icons';
 
 export type TaskPickerType = 'turning_points' | 'foreshadowing_plants' | 'foreshadowing_payoffs';
 
+export interface ResolvedTaskItem {
+  key: string;        // canonical storage string, e.g. 'TP001', 'FS018'
+  code: string;       // e.g. 'TP001', 'FS018', or ''
+  num: number | null; // e.g. 1, 18, or null
+  name: string;       // human readable name
+  desc?: string;      // description / hint
+  raw?: any;          // original object if matched
+}
+
+/**
+ * Standardize any task representation (integer ID, 'TP001', 'FS018', name string, or object)
+ * into a uniform ResolvedTaskItem with code, name, and tooltip description.
+ */
+export function resolveTaskItem(
+  raw: any,
+  taskType: TaskPickerType,
+  availableItems: any[] = []
+): ResolvedTaskItem {
+  if (raw === null || raw === undefined) {
+    return { key: '', code: '', num: null, name: '', raw };
+  }
+
+  const prefix = taskType === 'turning_points' ? 'TP' : 'FS';
+  let num: number | null = null;
+  let codeStr = '';
+  let rawStr = '';
+
+  if (typeof raw === 'number') {
+    num = raw;
+    rawStr = String(raw);
+  } else if (typeof raw === 'string') {
+    rawStr = raw.trim();
+    const m = rawStr.match(/^(?:TP|FS)?0*(\d+)$/i);
+    if (m && (rawStr.toUpperCase().startsWith('TP') || rawStr.toUpperCase().startsWith('FS') || /^\d+$/.test(rawStr))) {
+      num = parseInt(m[1], 10);
+    }
+  } else if (typeof raw === 'object') {
+    const rawId = raw.id ?? raw.code;
+    if (typeof rawId === 'number') {
+      num = rawId;
+    } else if (typeof rawId === 'string') {
+      const m = rawId.trim().match(/^(?:TP|FS)?0*(\d+)$/i);
+      if (m && (rawId.toUpperCase().startsWith('TP') || rawId.toUpperCase().startsWith('FS') || /^\d+$/.test(rawId))) {
+        num = parseInt(m[1], 10);
+      } else {
+        rawStr = rawId.trim();
+      }
+    }
+    if (!rawStr) {
+      rawStr = raw.turning_point_name || raw.name || '';
+    }
+  }
+
+  if (num !== null && !isNaN(num)) {
+    codeStr = `${prefix}${String(num).padStart(3, '0')}`;
+  } else if (/^(TP|FS)/i.test(rawStr)) {
+    codeStr = rawStr.toUpperCase();
+  }
+
+  // Match in availableItems
+  let match: any = null;
+  for (const item of availableItems) {
+    if (!item) continue;
+    const itemId = item.id;
+    if (num !== null && (itemId === num || String(itemId) === String(num))) {
+      match = item;
+      break;
+    }
+    if (codeStr && (item.code === codeStr || String(itemId).toUpperCase() === codeStr)) {
+      match = item;
+      break;
+    }
+    const itemName = (item.turning_point_name || item.name || '').trim();
+    if (rawStr && (itemName === rawStr || String(itemId) === rawStr)) {
+      match = item;
+      break;
+    }
+  }
+
+  let name = '';
+  let desc = '';
+  if (match) {
+    name = match.turning_point_name || match.name || '';
+    desc = match.description || match.trigger_condition || match.setup_hint || match.payoff_hint || '';
+    if (num === null && match.id !== undefined && match.id !== null) {
+      const n = parseInt(String(match.id).replace(/\D/g, ''), 10);
+      if (!isNaN(n)) {
+        num = n;
+        codeStr = `${prefix}${String(num).padStart(3, '0')}`;
+      }
+    }
+  } else if (rawStr && !/^(?:TP|FS)?\d+$/i.test(rawStr)) {
+    name = rawStr;
+  }
+
+  if (!name && codeStr) {
+    name = codeStr;
+  } else if (!name) {
+    name = rawStr || (num !== null ? `${prefix} #${num}` : '未命名');
+  }
+
+  const key = codeStr || rawStr || name;
+
+  return {
+    key,
+    code: codeStr,
+    num,
+    name,
+    desc,
+    raw: match || raw,
+  };
+}
+
 interface TaskPickerProps {
   type: TaskPickerType;
   label: string;
@@ -55,6 +168,36 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
       }
     >();
 
+    const registerItem = (
+      rawItem: any,
+      itemType: TaskPickerType,
+      category: 'usedChapters' | 'plantedChapters' | 'payoffChapters',
+      volNum: number,
+      chNum: number
+    ) => {
+      if (rawItem === null || rawItem === undefined || rawItem === '') return;
+      const res = resolveTaskItem(rawItem, itemType, availableItems);
+      const keys = new Set<string>();
+      if (res.code) keys.add(res.code);
+      if (res.num !== null) {
+        keys.add(String(res.num));
+        keys.add(`${itemType === 'turning_points' ? 'TP' : 'FS'}${res.num}`);
+      }
+      if (res.name) keys.add(res.name);
+      if (typeof rawItem === 'string' && rawItem.trim()) keys.add(rawItem.trim());
+      if (typeof rawItem === 'number') keys.add(String(rawItem));
+
+      keys.forEach((k) => {
+        if (!map.has(k)) {
+          map.set(k, { usedChapters: [], plantedChapters: [], payoffChapters: [] });
+        }
+        const bucket = map.get(k)!;
+        if (!bucket[category].some((c) => c.vol === volNum && c.ch === chNum)) {
+          bucket[category].push({ vol: volNum, ch: chNum });
+        }
+      });
+    };
+
     allVolumes.forEach((v: any, vIdx: number) => {
       const volNum = v.volume_index ?? vIdx + 1;
       const outlines = Array.isArray(v.chapters_outline) ? v.chapters_outline : [];
@@ -62,41 +205,31 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
         const chNum = ch.chapter_index ?? cIdx + 1;
         const tasks = ch.allocated_tasks || {};
 
-        // Turning points in this chapter
         const tps = Array.isArray(tasks.turning_points) ? tasks.turning_points : [];
-        tps.forEach((tp: any) => {
-          const key = typeof tp === 'string' ? tp : tp.id || tp.name;
-          if (!key) return;
-          if (!map.has(key)) map.set(key, { usedChapters: [], plantedChapters: [], payoffChapters: [] });
-          map.get(key)!.usedChapters.push({ vol: volNum, ch: chNum });
-        });
+        tps.forEach((tp: any) => registerItem(tp, 'turning_points', 'usedChapters', volNum, chNum));
 
-        // Foreshadowing plants
         const plants = Array.isArray(tasks.foreshadowing_plants) ? tasks.foreshadowing_plants : [];
-        plants.forEach((p: any) => {
-          const key = typeof p === 'string' ? p : p.id || p.name;
-          if (!key) return;
-          if (!map.has(key)) map.set(key, { usedChapters: [], plantedChapters: [], payoffChapters: [] });
-          map.get(key)!.plantedChapters.push({ vol: volNum, ch: chNum });
-        });
+        plants.forEach((p: any) => registerItem(p, 'foreshadowing_plants', 'plantedChapters', volNum, chNum));
 
-        // Foreshadowing payoffs
         const payoffs = Array.isArray(tasks.foreshadowing_payoffs) ? tasks.foreshadowing_payoffs : [];
-        payoffs.forEach((p: any) => {
-          const key = typeof p === 'string' ? p : p.id || p.name;
-          if (!key) return;
-          if (!map.has(key)) map.set(key, { usedChapters: [], plantedChapters: [], payoffChapters: [] });
-          map.get(key)!.payoffChapters.push({ vol: volNum, ch: chNum });
-        });
+        payoffs.forEach((p: any) => registerItem(p, 'foreshadowing_payoffs', 'payoffChapters', volNum, chNum));
       });
     });
 
     return map;
-  }, [allVolumes]);
+  }, [allVolumes, availableItems, type]);
 
   // Compute status for a specific item
-  const getItemStatus = (id: string, name: string) => {
-    const keysToCheck = [id, name].filter(Boolean);
+  const getItemStatus = (item: any) => {
+    const res = resolveTaskItem(item, type, availableItems);
+    const keysToCheck = [
+      res.code,
+      res.num !== null ? String(res.num) : '',
+      res.name,
+      typeof item === 'string' ? item : '',
+      item?.id ? String(item.id) : '',
+    ].filter(Boolean);
+
     let usedChapters: Array<{ vol: number; ch: number }> = [];
     let plantedChapters: Array<{ vol: number; ch: number }> = [];
     let payoffChapters: Array<{ vol: number; ch: number }> = [];
@@ -104,14 +237,20 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
     keysToCheck.forEach((k) => {
       const data = usageMap.get(k);
       if (data) {
-        usedChapters = [...usedChapters, ...data.usedChapters];
-        plantedChapters = [...plantedChapters, ...data.plantedChapters];
-        payoffChapters = [...payoffChapters, ...data.payoffChapters];
+        data.usedChapters.forEach((c) => {
+          if (!usedChapters.some((x) => x.vol === c.vol && x.ch === c.ch)) usedChapters.push(c);
+        });
+        data.plantedChapters.forEach((c) => {
+          if (!plantedChapters.some((x) => x.vol === c.vol && x.ch === c.ch)) plantedChapters.push(c);
+        });
+        data.payoffChapters.forEach((c) => {
+          if (!payoffChapters.some((x) => x.vol === c.vol && x.ch === c.ch)) payoffChapters.push(c);
+        });
       }
     });
 
     const isCurrentCh = (list: Array<{ vol: number; ch: number }>) =>
-      list.some((item) => item.vol === currentVolNum && item.ch === currentChNum);
+      list.some((it) => it.vol === currentVolNum && it.ch === currentChNum);
 
     if (type === 'turning_points') {
       if (isCurrentCh(usedChapters)) {
@@ -155,28 +294,56 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
     if (!search.trim()) return availableItems;
     const q = search.toLowerCase();
     return availableItems.filter((item) => {
-      const name = item.turning_point_name || item.name || '';
-      const id = item.id || '';
-      const desc = item.description || item.trigger_condition || '';
+      const res = resolveTaskItem(item, type, availableItems);
       return (
-        name.toLowerCase().includes(q) ||
-        id.toLowerCase().includes(q) ||
-        desc.toLowerCase().includes(q)
+        res.name.toLowerCase().includes(q) ||
+        res.code.toLowerCase().includes(q) ||
+        (res.desc && res.desc.toLowerCase().includes(q))
       );
     });
-  }, [availableItems, search]);
+  }, [availableItems, search, type]);
 
-  const handleToggle = (itemKey: string) => {
-    if (selected.includes(itemKey)) {
-      onChange(selected.filter((s) => s !== itemKey));
+  const isItemSelected = (target: any) => {
+    const targetRes = resolveTaskItem(target, type, availableItems);
+    return selected.some((s) => {
+      const sRes = resolveTaskItem(s, type, availableItems);
+      if (targetRes.code && sRes.code && targetRes.code === sRes.code) return true;
+      if (targetRes.num !== null && sRes.num !== null && targetRes.num === sRes.num) return true;
+      if (targetRes.name && sRes.name && targetRes.name === sRes.name) return true;
+      return s === targetRes.key || s === targetRes.code || s === targetRes.name;
+    });
+  };
+
+  const handleToggle = (item: any) => {
+    const targetRes = resolveTaskItem(item, type, availableItems);
+    if (isItemSelected(item)) {
+      onChange(
+        selected.filter((s) => {
+          const sRes = resolveTaskItem(s, type, availableItems);
+          if (targetRes.code && sRes.code && targetRes.code === sRes.code) return false;
+          if (targetRes.num !== null && sRes.num !== null && targetRes.num === sRes.num) return false;
+          if (targetRes.name && sRes.name && targetRes.name === sRes.name) return false;
+          return s !== targetRes.key && s !== targetRes.code && s !== targetRes.name;
+        })
+      );
     } else {
-      onChange([...selected, itemKey]);
+      const storeKey = targetRes.code || targetRes.name || targetRes.key;
+      onChange([...selected, storeKey]);
     }
   };
 
-  const handleRemove = (itemKey: string, e: React.MouseEvent) => {
+  const handleRemove = (itemVal: any, e: React.MouseEvent) => {
     e.stopPropagation();
-    onChange(selected.filter((s) => s !== itemKey));
+    const targetRes = resolveTaskItem(itemVal, type, availableItems);
+    onChange(
+      selected.filter((s) => {
+        const sRes = resolveTaskItem(s, type, availableItems);
+        if (targetRes.code && sRes.code && targetRes.code === sRes.code) return false;
+        if (targetRes.num !== null && sRes.num !== null && targetRes.num === sRes.num) return false;
+        if (targetRes.name && sRes.name && targetRes.name === sRes.name) return false;
+        return s !== targetRes.key && s !== targetRes.code && s !== targetRes.name;
+      })
+    );
   };
 
   const handleAddCustom = () => {
@@ -185,6 +352,8 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
     onChange([...selected, trimmed]);
     setSearch('');
   };
+
+  const isRightAligned = type === 'foreshadowing_payoffs';
 
   return (
     <div className="task-picker-wrapper" ref={dropdownRef}>
@@ -203,25 +372,22 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
               {placeholder || '點擊展開選單或手動選擇...'}
             </span>
           ) : (
-            selected.map((itemKey) => {
-              // Lookup name if possible
-              const match = availableItems.find(
-                (item) =>
-                  item.id === itemKey ||
-                  item.turning_point_name === itemKey ||
-                  item.name === itemKey
-              );
-              const displayName = match
-                ? match.turning_point_name || match.name || itemKey
-                : itemKey;
+            selected.map((itemVal, idx) => {
+              const res = resolveTaskItem(itemVal, type, availableItems);
+              const displayLabel = res.code ? `[${res.code}] ${res.name}` : res.name;
+              const tooltip = `${res.code ? `[${res.code}] ` : ''}${res.name}${res.desc ? `\n說明: ${res.desc}` : ''}`;
 
               return (
-                <span key={itemKey} className={`task-picker-chip chip-${type}`}>
-                  <span className="chip-text">{displayName}</span>
+                <span
+                  key={idx}
+                  className={`task-picker-chip chip-${type}`}
+                  title={tooltip}
+                >
+                  <span className="chip-text">{displayLabel}</span>
                   <button
                     type="button"
                     className="chip-remove-btn"
-                    onClick={(e) => handleRemove(itemKey, e)}
+                    onClick={(e) => handleRemove(itemVal, e)}
                     title="移除"
                   >
                     <IconX size={10} />
@@ -248,14 +414,14 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="task-picker-dropdown">
+        <div className={`task-picker-dropdown ${isRightAligned ? 'align-right' : ''}`}>
           <div className="task-picker-search-bar">
             <input
               type="text"
               className="task-picker-search-input"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜尋名稱或 ID..."
+              placeholder="搜尋名稱、標號或描述..."
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -291,24 +457,28 @@ export const TaskPicker: React.FC<TaskPickerProps> = ({
               </div>
             ) : (
               filteredItems.map((item, idx) => {
-                const id = item.id || '';
-                const name = item.turning_point_name || item.name || `項目 #${idx + 1}`;
-                const key = id || name;
-                const isSelected = selected.includes(key) || selected.includes(name) || (id ? selected.includes(id) : false);
-                const status = getItemStatus(id, name);
+                const res = resolveTaskItem(item, type, availableItems);
+                const isSelected = isItemSelected(item);
+                const status = getItemStatus(item);
+                const tooltipText = `${res.code ? `[${res.code}] ` : ''}${res.name}${
+                  res.desc ? `\n說明: ${res.desc}` : ''
+                }\n狀態: ${status.text}`;
 
                 return (
                   <div
-                    key={key}
+                    key={res.code || res.name || idx}
                     className={`task-picker-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => handleToggle(key)}
+                    onClick={() => handleToggle(item)}
+                    title={tooltipText}
                   >
                     <div className="task-picker-item-left">
                       <span className={`task-picker-checkbox ${isSelected ? 'checked' : ''}`}>
                         {isSelected && <IconCheck size={11} />}
                       </span>
-                      {id && <span className="task-picker-item-id">{id}</span>}
-                      <span className="task-picker-item-name">{name}</span>
+                      {res.code && <span className="task-picker-item-code">{res.code}</span>}
+                      <span className="task-picker-item-name" title={res.name}>
+                        {res.name}
+                      </span>
                     </div>
 
                     <div className="task-picker-item-right">

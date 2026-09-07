@@ -89,22 +89,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     getSettings()
       .then((data) => {
         const agents = data?.agents || data;
+        const globalAgent = agents?.global;
+        const architectAgent = agents?.architect || agents?.copilot;
         const writerAgent = agents?.writer;
-        const directorAgent = agents?.architect || agents?.copilot || agents?.global;
 
-        const baseKey = writerAgent?.api_key || directorAgent?.api_key || '';
-        const baseEndpoint = writerAgent?.base_url || directorAgent?.base_url || '';
-        const wModel = writerAgent?.model || '';
-        const dModel = directorAgent?.model || wModel;
+        // DB is the primary source of truth:
+        const baseEndpoint = globalAgent?.base_url || architectAgent?.base_url || writerAgent?.base_url || '';
+        const baseKey = globalAgent?.api_key || architectAgent?.api_key || writerAgent?.api_key || '';
+        const dModel = architectAgent?.model || globalAgent?.model || '';
+        const wModel = writerAgent?.model || dModel;
 
         setApiKey(baseKey);
         setBaseUrl(baseEndpoint);
-        setWriterModel(wModel);
         setDirectorModel(dModel);
+        setWriterModel(wModel);
         setSeparateModels(Boolean(wModel && dModel && wModel !== dModel));
 
-        setTemperature(writerAgent?.temperature ?? directorAgent?.temperature ?? 0.7);
-        setEnableThinking(writerAgent?.enable_thinking ?? directorAgent?.enable_thinking ?? 1);
+        const temp = architectAgent?.temperature ?? globalAgent?.temperature ?? writerAgent?.temperature ?? 0.7;
+        const thinking = architectAgent?.enable_thinking ?? globalAgent?.enable_thinking ?? writerAgent?.enable_thinking ?? 1;
+        setTemperature(temp);
+        setEnableThinking(thinking);
       })
       .catch((err) => {
         setStatusMessage(`載入設定失敗: ${err.message}`);

@@ -23,8 +23,10 @@ import {
 } from './api/generation';
 import { CreationStage, DraftProposal } from './types';
 import { ToastContainer, showToast } from './components/common/Toast';
+import { useExpansionSync } from './hooks/useExpansionSync';
 
 export const App: React.FC = () => {
+  const expansionSync = useExpansionSync();
   const {
     novels,
     activeNovelId,
@@ -42,6 +44,7 @@ export const App: React.FC = () => {
     handleDeleteNovel,
     handleResetNovelContent,
     refreshActiveNovel,
+    refreshChatMemory,
     deleteTurningPoint,
     deleteForeshadowingSeed,
     deleteCharacter,
@@ -302,14 +305,26 @@ export const App: React.FC = () => {
         if (stageCompleted) {
           refreshActiveNovel();
           refreshGraph();
+          refreshChatMemory();
         }
 
         if (!running) {
-          addLog(`[任務完成] 自主寫作任務已結束 (${status.status_message || '全數完成'})`);
-          showToast('自主寫作任務已完成！', 'success');
+          if (status.error || status.current_stage === 'error') {
+            addLog(`[任務中斷] 自主寫作異常中斷: ${status.error || status.status_message || '未知錯誤'}`);
+            showToast(`自主寫作異常中斷: ${status.error || status.status_message || '未知錯誤'}`, 'danger');
+          } else if (status.current_stage === 'completed' || status.progress_percent === 100) {
+            addLog(`[任務完成] 自主寫作任務已圓滿結束 (${status.status_message || '全數完成'})`);
+            showToast('自主寫作任務已全數完成！', 'success');
+          } else if (status.stop_requested) {
+            addLog(`[任務中止] 自主寫作已由使用者中止 (${status.status_message || '已停止'})`);
+            showToast('自主寫作已停止', 'info');
+          } else {
+            addLog(`[任務結束] 自主寫作流水線已結束 (${status.status_message || '等待啟動'})`);
+          }
           refreshActiveNovel();
           refreshGraph();
           refreshProposals();
+          refreshChatMemory();
         }
       } catch (err) {
         console.error('輪詢自主流水線狀態失敗:', err);
@@ -321,7 +336,7 @@ export const App: React.FC = () => {
         clearInterval(autoPollTimerRef.current);
       }
     };
-  }, [isAutoRunning, activeNovelId, addLog, refreshActiveNovel, refreshGraph, refreshProposals]);
+  }, [isAutoRunning, activeNovelId, addLog, refreshActiveNovel, refreshGraph, refreshProposals, refreshChatMemory]);
 
   // Handle stage execution
   const handleTriggerStage = async (stage: CreationStage, prompt: string) => {
@@ -387,6 +402,7 @@ export const App: React.FC = () => {
             await refreshActiveNovel();
             await refreshGraph();
             await refreshProposals();
+            await refreshChatMemory();
           },
         }
       );
@@ -516,6 +532,8 @@ export const App: React.FC = () => {
         charactersRaw={novelDetail?.characters_raw}
         worldbuilding={novelDetail?.worldbuilding || ''}
         volumes={novelDetail?.volumes || []}
+        plot={novelDetail?.plot}
+        expansionSync={expansionSync}
         onSelectWorldviewTab={(tab) => {
           setActiveView('worldview');
           setWorldviewTab(tab);
@@ -532,7 +550,10 @@ export const App: React.FC = () => {
         onSelectChapter={(idx) => {
           selectChapter(idx);
           setIsExplorerOpenMobile(false);
-          setActiveView('editor');
+          // Preserve 'graph' tab if user is currently inspecting temporal memory graph
+          if (activeView !== 'graph') {
+            setActiveView('editor');
+          }
         }}
         onCreateNovel={handleCreateNovel}
         onDeleteNovel={handleDeleteNovel}
@@ -550,10 +571,8 @@ export const App: React.FC = () => {
           activeChapterIndex={activeChapterIndex}
           isDirty={isDirty}
           isSaving={isSaving}
-          isAutoRunning={isAutoRunning}
           activeView={activeView}
           onSave={saveActiveChapter}
-          onToggleAuto={handleToggleAuto}
           onToggleExplorerMobile={() => setIsExplorerOpenMobile(!isExplorerOpenMobile)}
           onToggleCopilotMobile={() => setIsCopilotOpenMobile(!isCopilotOpenMobile)}
           onSelectView={setActiveView}
@@ -621,6 +640,7 @@ export const App: React.FC = () => {
               targetElement={worldviewTarget}
               actionTrigger={worldviewActionTrigger}
               fontSize={editorFontSize}
+              expansionSync={expansionSync}
               onFontSizeChange={handleFontSizeChange}
               onTabChange={setWorldviewTab}
               onRefresh={refreshActiveNovel}
@@ -657,11 +677,14 @@ export const App: React.FC = () => {
         streamingContent={streamingContent}
         currentStatus={currentStatus}
         currentStage={currentStage}
+        chatMemory={novelDetail?.chat_memory || []}
+        activeNovelId={activeNovelId}
         onSelectStage={handleSelectStage}
         onCloseMobile={() => setIsCopilotOpenMobile(false)}
         onTriggerStage={handleTriggerStage}
         onToggleAuto={handleToggleAuto}
         onClearStreaming={() => setStreamingContent('')}
+        onRefreshChatMemory={refreshChatMemory}
       />
 
       {/* 5. Collapsible Bottom Dock */}

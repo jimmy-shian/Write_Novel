@@ -328,6 +328,7 @@ def get_all_chapters_latest(novel_id):
 
 get_chapters = get_all_chapters_latest
 get_all_chapters = get_all_chapters_latest
+get_chapter = get_latest_chapter
 
 def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None):
     conn = get_db_connection()
@@ -346,108 +347,14 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None)
         )
     return next_version
 
-# --- CHAT MEMORY ---
-def get_chat_memory(novel_id, limit=20, message_type=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if message_type:
-        rows = cursor.execute(
-            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? AND message_type = ? ORDER BY id DESC LIMIT ?",
-            (novel_id, message_type, limit)
-        ).fetchall()
-    else:
-        rows = cursor.execute(
-            "SELECT role, content, thinking, message_type, timestamp FROM chat_memory WHERE novel_id = ? AND message_type IN ('chat', 'director') ORDER BY id DESC LIMIT ?",
-            (novel_id, limit)
-        ).fetchall()
-    return [dict(r) for r in reversed(rows)]
-
-def save_chat_message(novel_id, role, content, thinking=None, message_type='chat'):
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO chat_memory (novel_id, role, content, thinking, message_type) VALUES (?, ?, ?, ?, ?)",
-            (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
-        )
-        if message_type == 'pipeline':
-            # 滑動保留：僅保留每部小說最新的 300 則 pipeline 執行訊息，防止日誌無限成長
-            try:
-                cursor.execute(
-                    """
-                    DELETE FROM chat_memory
-                    WHERE novel_id = ?
-                      AND message_type = 'pipeline'
-                      AND id NOT IN (
-                          SELECT id FROM chat_memory
-                          WHERE novel_id = ? AND message_type = 'pipeline'
-                          ORDER BY id DESC LIMIT 300
-                      )
-                    """,
-                    (novel_id, novel_id)
-                )
-            except Exception:
-                pass
-
-
-def save_director_review_status(
-    novel_id,
-    stage_name,
-    status,
-    block_name=None,
-    volume_index=None,
-    chapter_index=None,
-    reason="",
-    decision_json=None,
-):
-    """Append a Director review status record without mutating content tables."""
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        if decision_json is not None and not isinstance(decision_json, str):
-            try:
-                decision_json = json.dumps(decision_json, ensure_ascii=False, indent=2)
-            except Exception:
-                decision_json = str(decision_json)
-        cursor.execute(
-            """
-            INSERT INTO director_reviews (
-                novel_id, stage_name, status, block_name, volume_index, chapter_index, reason, decision_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (novel_id, stage_name, status, block_name, volume_index, chapter_index, reason, decision_json),
-        )
-
-
-def get_latest_director_review_status(novel_id, stage_name=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if stage_name:
-        row = cursor.execute(
-            """
-            SELECT * FROM director_reviews
-            WHERE novel_id = ? AND stage_name = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (novel_id, stage_name),
-        ).fetchone()
-    else:
-        row = cursor.execute(
-            """
-            SELECT * FROM director_reviews
-            WHERE novel_id = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (novel_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def clear_chat_memory(novel_id):
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
+# --- CHAT MEMORY (Modularized into backend.persistence.repositories.chat_memory) ---
+from backend.persistence.repositories.chat_memory import (  # noqa: E402
+    get_chat_memory,
+    save_chat_message,
+    clear_chat_memory,
+    save_director_review_status,
+    get_latest_director_review_status,
+)
 
 
 def insert_plot_chapter(novel_id, insert_after_index, new_chapter, skip_volume_sync=False):
