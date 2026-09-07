@@ -121,7 +121,7 @@ def _configure_sqlite_connection(conn: sqlite3.Connection):
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
     conn.execute("PRAGMA busy_timeout = 5000;")
-    conn.execute("PRAGMA cache_size = -16384;")  # 16 MiB per connection
+    conn.execute("PRAGMA cache_size = -8192;")  # 8 MiB per connection
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA wal_autocheckpoint = 1000;")
     
@@ -134,6 +134,8 @@ def _configure_sqlite_connection(conn: sqlite3.Connection):
 class ConnectionManager:
     """Thread-Local Persistent Connection 管理器，避免頻繁開關檔案控制代碼與鎖震盪"""
     _local = threading.local()
+    _registry_lock = threading.RLock()
+    _active_connections: set = set()
 
     @classmethod
     def get_connection(cls) -> sqlite3.Connection:
@@ -152,10 +154,14 @@ class ConnectionManager:
                     conn.close()
                 except Exception:
                     pass
+                with cls._registry_lock:
+                    cls._active_connections.discard(conn)
                 cls._local.conn = None
 
         conn = sqlite3.connect(DB_PATH, timeout=30.0)
         _configure_sqlite_connection(conn)
+        with cls._registry_lock:
+            cls._active_connections.add(conn)
         cls._local.conn = conn
         return conn
 
@@ -168,7 +174,21 @@ class ConnectionManager:
                 conn.close()
             except Exception:
                 pass
+            with cls._registry_lock:
+                cls._active_connections.discard(conn)
             cls._local.conn = None
+
+    @classmethod
+    def close_all_connections(cls):
+        """關閉所有執行緒持有的持久連線，用於資料庫還原或熱替換"""
+        with cls._registry_lock:
+            for conn in list(cls._active_connections):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            cls._active_connections.clear()
+        cls._local.conn = None
 
 
 def get_db_connection() -> sqlite3.Connection:

@@ -540,3 +540,24 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
         yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
+
+def call_llm(agent_name: str, system_prompt: str, user_prompt: str, force_json: bool = False, **kwargs) -> str:
+    """Synchronously executes LLM call and returns accumulated content string."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    accumulated = []
+    for chunk in call_llm_stream(agent_name, messages, force_json=force_json, stream=False):
+        if chunk.startswith("data: "):
+            try:
+                data = json.loads(chunk[6:].strip())
+                if data.get("type") == "content":
+                    accumulated.append(data.get("delta", ""))
+                elif data.get("type") == "error":
+                    print(f"[LLM ERROR] {data.get('message')}")
+            except Exception:
+                pass
+    return "".join(accumulated)
+
+

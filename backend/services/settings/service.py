@@ -70,34 +70,29 @@ def fetch_available_models(base_url: str, api_key: Optional[str] = "") -> Dict[s
         headers["Authorization"] = f"Bearer {str(api_key).strip()}"
 
     try:
-        res = requests.get(models_url, headers=headers, timeout=12)
+        res = requests.get(models_url, headers=headers, timeout=20)
         if res.status_code != 200:
             raise ValueError(f"HTTP {res.status_code}: {res.text[:200]}")
 
         data = res.json()
         model_ids = []
 
-        # OpenAI standard format: {"data": [{"id": "model_id", ...}, ...]}
-        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-            for item in data["data"]:
-                if isinstance(item, dict) and "id" in item:
-                    model_ids.append(str(item["id"]))
-                elif isinstance(item, str):
-                    model_ids.append(item)
-        # Ollama / Other format: {"models": [{"name": "...", "model": "..."}, ...]}
-        elif isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
-            for item in data["models"]:
+        # OpenAI / NVIDIA NIM standard format: {"data": [{"id": "model_id", ...}, ...]}
+        raw_list = None
+        if isinstance(data, dict):
+            for candidate in ("data", "models", "result", "items"):
+                if candidate in data and isinstance(data[candidate], list):
+                    raw_list = data[candidate]
+                    break
+        elif isinstance(data, list):
+            raw_list = data
+
+        if raw_list is not None:
+            for item in raw_list:
                 if isinstance(item, dict):
-                    name = item.get("name") or item.get("model") or item.get("id")
+                    name = item.get("id") or item.get("name") or item.get("model")
                     if name:
                         model_ids.append(str(name))
-                elif isinstance(item, str):
-                    model_ids.append(item)
-        # Direct list format: [{"id": "..."}, ...] or ["model1", ...]
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and "id" in item:
-                    model_ids.append(str(item["id"]))
                 elif isinstance(item, str):
                     model_ids.append(item)
 
@@ -314,13 +309,19 @@ def save_settings_patch(agent_name: str, patch: Mapping[str, Any]) -> Dict[str, 
 
 
 def apply_settings_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
-    """Support both single-agent partial updates and bulk configs payloads."""
+    """Support both single-agent partial updates and bulk configs/agents payloads."""
+    bulk_dict = None
     if "configs" in payload and isinstance(payload["configs"], Mapping):
+        bulk_dict = payload["configs"]
+    elif "agents" in payload and isinstance(payload["agents"], Mapping):
+        bulk_dict = payload["agents"]
+
+    if bulk_dict is not None:
         results = []
         warnings = []
-        for agent_name, agent_patch in payload["configs"].items():
+        for agent_name, agent_patch in bulk_dict.items():
             if not isinstance(agent_patch, Mapping):
-                raise ValueError(f"Invalid settings patch for agent '{agent_name}'")
+                continue
             result = save_settings_patch(agent_name, agent_patch)
             results.append(result)
             warnings.extend(result.get("warnings", []))

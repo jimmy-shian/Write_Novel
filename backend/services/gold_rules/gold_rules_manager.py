@@ -241,8 +241,10 @@ class GoldRulesManager:
             return False
         try:
             data = [r.to_dict() for r in rules]
-            with open(filepath, "w", encoding="utf-8") as f:
+            tmp_filepath = f"{filepath}.tmp.{os.getpid()}"
+            with open(tmp_filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_filepath, filepath)
             self._rules_cache[novel_id] = rules
             self._cache_mtime[novel_id] = os.path.getmtime(filepath)
             return True

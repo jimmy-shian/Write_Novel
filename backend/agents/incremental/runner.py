@@ -191,7 +191,7 @@ def run_incremental_volume_skeleton(novel_id, volume_index, user_hint, stream=Fa
     existing_skeleton = json.dumps(current_vol.get("chapters_outline") or [], ensure_ascii=False, indent=2)
     
     from backend.agents.incremental.prompts import build_incremental_skeleton_messages
-    messages = build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint)
+    messages = build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint, novel_id=novel_id)
     
     db.save_chat_message(novel_id, "user", f"增量卷骨架修改。卷: {volume_index}, 要求: {user_hint}", message_type="pipeline")
     stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)

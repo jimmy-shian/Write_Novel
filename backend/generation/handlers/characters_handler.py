@@ -21,8 +21,11 @@ def _resolve_mode(task: GenerationTaskRequest) -> str:
     return "generate"
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_characters_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請設計立體豐富的主角、主要配角與反派角色設定")
 
     wb = db.get_latest_worldbuilding(task.novel_id)
     worldview_content = wb["content"] if wb else ""
@@ -38,6 +41,12 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
         worldview_diag = "世界觀為空"
 
     if worldview_diag:
+        if not task.options.stream:
+            def _error_stream():
+                yield "data: " + json.dumps({"type": "error", "message": f"角色生成前置檢查失敗：{worldview_diag}"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return _error_stream()
+
         def _redirect_to_worldview():
             decision = {
                 "action": "CONTINUE",

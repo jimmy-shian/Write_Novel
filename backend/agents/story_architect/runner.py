@@ -95,14 +95,21 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     
     If the user_prompt contains [TARGET: ...], we perform targeted incremental generation.
     """
-    novel = db.get_novel(novel_id)
+    novel = db.get_novel(novel_id) or {}
     genre = novel.get("genre", "Fantasy")
     style = novel.get("style", "Classic Modernism")
+    pipeline_prompt = (novel.get("pipeline_prompt") or "").strip()
+    if pipeline_prompt and user_prompt and str(user_prompt).strip() and str(user_prompt).strip() != pipeline_prompt:
+        effective_user_prompt = f"【故事原案大綱靈感】\n{pipeline_prompt}\n\n【本次生成要求】\n{str(user_prompt).strip()}"
+    else:
+        effective_user_prompt = str(user_prompt).strip() if (user_prompt and str(user_prompt).strip()) else pipeline_prompt
+    user_prompt = effective_user_prompt
     
     # 讀取已有的世界觀設定
     wb = db.get_latest_worldbuilding(novel_id)
     existing_wb = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
-    is_initial = not wb or not wb.get("content")
+    has_existing_content = any(isinstance(existing_wb.get(k), str) and len(existing_wb.get(k).strip()) >= 20 for k in ["theme", "worldview", "macro_outline"])
+    is_initial = not wb or not wb.get("content") or not has_existing_content
     
     target_part = None
     if user_prompt:
@@ -143,7 +150,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     last_messages = []
     if regen_core:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成核心世界觀設定（Theme, Conflict, Worldview, Outline）..."}, ensure_ascii=False) + "\n\n"
-        messages = build_worldview_core_messages(genre, style, user_prompt)
+        messages = build_worldview_core_messages(genre, style, user_prompt, novel_id=novel_id)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)
@@ -163,7 +170,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     acts_json_str = ""
     if regen_acts:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『多幕式劇情起伏結構』(Multi-Act Structure)..."}, ensure_ascii=False) + "\n\n"
-        messages = build_multi_act_structure_messages(core_json_str, user_prompt)
+        messages = build_multi_act_structure_messages(core_json_str, user_prompt, novel_id=novel_id)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)
@@ -180,7 +187,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     char_plan_json_str = ""
     if regen_char_plan:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『角色漸進登場規劃策略』(Progressive Character Plan)..."}, ensure_ascii=False) + "\n\n"
-        messages = build_progressive_character_plan_messages(core_json_str, acts_json_str, user_prompt)
+        messages = build_progressive_character_plan_messages(core_json_str, acts_json_str, user_prompt, novel_id=novel_id)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)
@@ -229,6 +236,13 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     if full_text.strip():
         if _handle_director_context_request(novel_id, "世界觀架構師", full_text):
             yield "data: " + json.dumps({"type": "error", "message": "世界觀架構師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        has_substantive = any(isinstance(final_worldview.get(k), str) and len(final_worldview.get(k).strip()) >= 20 for k in ["theme", "worldview", "macro_outline"])
+        if not has_substantive:
+            error_message = "世界觀架構生成失敗：未獲取到實質的世界觀內容，本次不予保存。"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
         db.save_worldbuilding(novel_id, full_text, validate=False)

@@ -291,7 +291,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
         )
         messages = build_volume_skeleton_planner_messages(
             worldview_text, volume_index, current_vol, batch_start, batch_end, batch_count,
-            surrounding_context, precalc_clues, batch_prompt
+            surrounding_context, precalc_clues, batch_prompt, novel_id=novel_id
         )
         last_messages = messages
 
@@ -603,7 +603,7 @@ def run_volume_skeleton_segment(task, context=None):
     )
     messages = build_volume_skeleton_planner_messages(
         worldview_text, volume_index, current_vol, batch_start, batch_end, batch_count,
-        surrounding_context, precalc_clues, batch_prompt
+        surrounding_context, precalc_clues, batch_prompt, novel_id=novel_id
     )
 
     observed_full_text = ""
@@ -712,7 +712,7 @@ def run_volume_skeleton_completion(task, context=None):
 
     messages = build_volume_skeleton_completion_messages(
         worldview_text, volume_index, current_vol, batch_start, batch_end, batch_count,
-        surrounding_context, precalc_clues, prompt, prior_segment_json
+        surrounding_context, precalc_clues, prompt, prior_segment_json, novel_id=novel_id
     )
 
     observed_full_text = ""

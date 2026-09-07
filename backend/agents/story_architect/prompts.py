@@ -133,7 +133,7 @@ def format_prompt_constraints(prompt_template, c):
             .replace("__MIN_WAVES__", str(c["min_waves"]))
             .replace("__MAX_WAVES__", str(c["max_waves"])))
 
-def build_story_architect_messages(genre, style, user_prompt):
+def build_story_architect_messages(genre, style, user_prompt, novel_id=None):
     """世界觀架構師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("worldview")
     c = parse_quantity_constraints(user_prompt)
@@ -141,25 +141,28 @@ def build_story_architect_messages(genre, style, user_prompt):
     system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect / 世界觀架構師",
-        "- 類型、風格基調、作者原始創作需求。\n- 若是重跑或局部調整，會在使用者內容中明確提供指定要求。",
+        "- 類型、風格基調、作者原始創作需求與作品核心基石。\n- 若是重跑或局部調整，會在使用者內容中明確提供指定要求。",
         "只建立世界觀、核心衝突、全書宏觀大綱、多幕結構與角色登場策略；不要生成角色 Bible、卷列表、章節骨架或正文。",
         "輸出必須是完整 worldview JSON；不得在 JSON 外加入解釋；不得把伏筆種子與關鍵轉折點當成本階段主要產物。"
     )
     system_prompt += "\n*[提示：`multi_act_structure` 與 `progressive_character_plan` 可以依據需要規劃任意數量的多幕/波段（例如：4幕、5波等），無須限制為範例中的數量。]*\n"
     
-    user_content = f"""【使用者創作需求與設定】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【使用者創作需求與設定】
 類型：{genre}
 風格基調：{style}
-詳細故事描述/要求：{user_prompt}
+詳細故事描述/要求：
+{user_prompt}
 
-請根據以上設定，為本作品生成符合結構的完整世界觀 JSON 設定。
+請根據以上作品核心基石與創作要求，為本作品生成符合結構的完整世界觀 JSON 設定。
+必須嚴格契合作品原案核心設定，嚴禁脫離原案瞎編其他無關能力或世界觀。
 """
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
 
-def build_worldview_core_messages(genre, style, user_prompt):
+def build_worldview_core_messages(genre, style, user_prompt, novel_id=None):
     """僅生成世界觀核心設定（theme, main_conflict, worldview, macro_outline）的提示詞"""
     from backend.prompts.prompt_main import STORY_ARCHITECT_PROMPT, WORLDVIEW_CORE_GUIDELINES
     schema_snippet = get_json_schema_prompt_snippet("worldview_core")
@@ -168,24 +171,27 @@ def build_worldview_core_messages(genre, style, user_prompt):
     system_prompt = f"{STORY_ARCHITECT_PROMPT}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Story Architect Core / 核心世界觀架構師",
-        "- 類型、風格基調、作者原始創作需求。\n- 本階段尚未有多幕結構、角色策略、角色 Bible、篇卷與正文。",
+        "- 類型、風格基調、作者原始創作需求與作品核心基石。\n- 本階段尚未有多幕結構、角色策略、角色 Bible、篇卷與正文。",
         "只生成 theme、main_conflict、worldview、macro_outline 四個核心欄位，為後續子階段提供基底。",
         "輸出只能是核心世界觀 JSON；不要生成 multi_act_structure、progressive_character_plan、characters、volumes 或 chapters。"
     )
     
-    user_content = f"""【使用者創作需求與設定】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【核心世界觀生成任務與設定】
 類型：{genre}
 風格基調：{style}
-詳細故事描述/要求：{user_prompt}
+詳細故事描述/要求：
+{user_prompt}
 
-請根據以上設定，僅生成核心世界觀（theme、main_conflict、worldview、macro_outline）的 JSON 設定。
+請根據以上作品核心基石與創作要求，僅生成核心世界觀（theme、main_conflict、worldview、macro_outline）的 JSON 設定。
+必須嚴格圍繞本作品核心構想展開，嚴禁忽視原案核心能力與故事設定。
 """
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
 
-def build_multi_act_structure_messages(worldview_core_json, user_prompt):
+def build_multi_act_structure_messages(worldview_core_json, user_prompt, novel_id=None):
     """基於核心世界觀，獨立生成多幕式起伏結構的提示詞"""
     from backend.prompts.prompt_main import MULTI_ACT_STRUCTURE_PROMPT, MULTI_ACT_STRUCTURE_GUIDELINES
     schema_snippet = get_json_schema_prompt_snippet("multi_act_structure")
@@ -195,12 +201,13 @@ def build_multi_act_structure_messages(worldview_core_json, user_prompt):
     system_prompt = f"{prompt_fmt}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Drama Structure Specialist / 多幕式結構師",
-        "- 已生成的核心世界觀 JSON。\n- 作者原始要求只作為風格與方向參考。",
+        "- 作品核心基石與已生成的核心世界觀 JSON。\n- 作者原始要求只作為風格與方向參考。",
         "只規劃 multi_act_structure，描述全書起伏、危機遞進與幕次功能。",
         "輸出只能包含 multi_act_structure；不要改寫核心世界觀，不要生成角色 Bible、伏筆清單、篇卷或章節。"
     )
     
-    user_content = f"""【已確定的核心世界觀設定】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【已確定的核心世界觀設定】
 {worldview_core_json}
 
 【使用者原始要求（參考）】
@@ -214,7 +221,7 @@ def build_multi_act_structure_messages(worldview_core_json, user_prompt):
         {"role": "user", "content": user_content}
     ]
 
-def build_progressive_character_plan_messages(worldview_core_json, multi_act_json, user_prompt):
+def build_progressive_character_plan_messages(worldview_core_json, multi_act_json, user_prompt, novel_id=None):
     """基於核心世界觀與多幕式結構，獨立生成角色漸進登場規劃策略的提示詞"""
     from backend.prompts.prompt_main import PROGRESSIVE_CHARACTER_PLAN_PROMPT, PROGRESSIVE_CHARACTER_PLAN_GUIDELINES
     schema_snippet = get_json_schema_prompt_snippet("progressive_character_plan")
@@ -242,12 +249,13 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
     system_prompt = f"{prompt_fmt}\n\n{schema_snippet}\n\n{guidelines_fmt}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Progression Planner / 角色登場策略規劃師",
-        "- 已生成的核心世界觀 JSON。\n- 已生成的 multi_act_structure。\n- 作者原始要求只作為風格與方向參考。",
+        "- 作品核心基石、已生成的核心世界觀 JSON 與 multi_act_structure。\n- 作者原始要求只作為風格與方向參考。",
         "只規劃 progressive_character_plan，說明各波次需要哪些角色功能與登場節奏。",
         "輸出只能包含 progressive_character_plan；不要生成完整角色卡，不要憑空定稿所有角色細節。"
     )
     
-    user_content = f"""【已確定的核心世界觀設定】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【已確定的核心世界觀設定】
 {worldview_core_json}
 
 【已確定的多幕式劇情結構】
@@ -266,4 +274,5 @@ def build_progressive_character_plan_messages(worldview_core_json, multi_act_jso
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content}
     ]
+
 

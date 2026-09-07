@@ -18,7 +18,9 @@ import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend import persistence as db
+from backend.prompts.common.context import format_novel_core_context
 from backend.services.gold_rules.gold_rules_manager import load_scoped_gold_rules
+from backend.services.graphiti.temporal_graph import TemporalGraphService
 
 
 class WriterContextBuilder:
@@ -204,6 +206,11 @@ class WriterContextBuilder:
         # 6. 組裝純淨文字區塊
         lines = []
 
+        core_context = format_novel_core_context(novel_id)
+        if core_context:
+            lines.append(core_context)
+            lines.append("")
+
         # (A) 場景契約
         lines.append(f"### 🎬【場景契約 (Scene Contract) - 第 {chapter_index} 章】")
         lines.append(f"- **POV 視角人物**：{contract['pov_character']}（攝影機固定於此角色，以其感知、經驗與推論為限）")
@@ -233,15 +240,35 @@ class WriterContextBuilder:
             lines.append(f"  - 知情邊界 (Knowledge Scope)：{', '.join(cs['knowledge_scope'])}")
         lines.append("")
 
-        # (D) 連續性與伏筆任務
-        lines.append("### 🔗【敘事連續性與記憶約束】")
-        lines.append(narrative_memory_context or "（第一章開篇或無前置章節記憶）")
+        # (D) 連續性與時序記憶任務 (Graphiti Temporal Graph)
+        active_char_names = [cs["name"] for cs in char_states]
+        temporal_graph_context = TemporalGraphService.build_narrative_context(
+            novel_id=novel_id,
+            at_chapter=chapter_index,
+            active_characters=active_char_names,
+            max_facts=12
+        )
+        lines.append("### 🔗【敘事連續性與時序記憶約束 (Graphiti Memory)】")
+        lines.append(temporal_graph_context)
+        if narrative_memory_context and narrative_memory_context.strip():
+            lines.append("")
+            lines.append("▶ 前置章節概要與承接：")
+            lines.append(narrative_memory_context.strip())
         if clue_payoff_details and clue_payoff_details.strip():
             lines.append("")
             lines.append("【本章伏筆與轉折任務】")
             lines.append(clue_payoff_details.strip())
             lines.append("*(請以自然情節、角色行動、對話或環境細節無痕融入，嚴禁抽離故事刻意說明)*")
         lines.append("")
+
+        # (D2) 術語庫名詞邊界約束 (Glossary)
+        terms = db.get_terms(novel_id)
+        if terms:
+            lines.append("### 📖【術語庫與名詞約束 (Story Terms - 嚴格維持全書一致性)】")
+            for t in terms[:20]:
+                cat = f"[{t['category']}] " if t.get("category") else ""
+                lines.append(f"- **{cat}{t['term']}**：{t['definition']}")
+            lines.append("")
 
         # (E) 世界觀背景（精簡版）
         if worldview_text:

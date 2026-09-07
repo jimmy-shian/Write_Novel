@@ -19,8 +19,12 @@ except Exception:
 
 def sync_agent_configs_from_env(cursor):
     """
-    Reads all agent configurations from .env file and inserts/updates them
-    directly into the agent_configs table.
+    Reads agent configurations from the .env file and seeds them into the
+    agent_configs table ONLY when a row for that agent does not exist yet.
+
+    User-saved settings stored in the database always take precedence and
+    must survive restarts. The .env values act as initial defaults for
+    first-time initialization only.
     """
     agents = ["global", "architect", "character", "volumes", "volume_skeleton", "plot", "writer", "editor", "copilot"]
     
@@ -109,7 +113,7 @@ def sync_agent_configs_from_env(cursor):
             enable_thinking = get_int_env(keys["enable_thinking"], get_int_env("ENABLE_THINKING_GLOBAL", agent_defaults["enable_thinking"]))
 
         cursor.execute("""
-            INSERT OR REPLACE INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
+            INSERT OR IGNORE INTO agent_configs (agent_name, api_key, base_url, model, temperature, top_p, max_tokens, enable_thinking)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (agent, api_key, base_url, model, temperature, top_p, max_tokens, int(enable_thinking)))
 
@@ -234,6 +238,10 @@ def db_init():
         cursor.execute("ALTER TABLE chat_memory ADD COLUMN message_type TEXT DEFAULT 'chat'")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_memory_lookup ON chat_memory (novel_id, message_type, id DESC)")
+    except sqlite3.OperationalError:
+        pass
     
     # 💡 Migrate historical director decisions to avoid token limit issues in existing databases
     try:
@@ -323,7 +331,8 @@ def db_init():
     except sqlite3.OperationalError:
         pass
     
-    # Sync all configurations from .env on start to ensure DB is always up to date
+    # Seed .env defaults into DB only for agents without existing rows.
+    # Existing (user-saved) rows in agent_configs must NOT be overwritten on restart.
     sync_agent_configs_from_env(cursor)
     
     
@@ -471,5 +480,86 @@ def db_init():
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create prompt_overrides table: {e}")
+
+    # 9.8. Graphiti Temporal Knowledge Graph & Story Extensions
+    try:
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS temporal_episodes (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            chapter_index INTEGER NOT NULL,
+            content_hash TEXT,
+            summary TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_episodes_novel_ch ON temporal_episodes(novel_id, chapter_index)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS temporal_entities (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            summary TEXT,
+            attributes_json TEXT,
+            created_chapter INTEGER DEFAULT 1,
+            updated_chapter INTEGER DEFAULT 1,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entities_novel_name ON temporal_entities(novel_id, name)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS temporal_facts (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            source_entity_id TEXT,
+            target_entity_id TEXT,
+            relation_type TEXT,
+            fact_statement TEXT NOT NULL,
+            valid_from_chapter INTEGER NOT NULL,
+            invalid_from_chapter INTEGER,
+            is_active INTEGER DEFAULT 1,
+            superseded_by TEXT,
+            episode_id TEXT,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE,
+            FOREIGN KEY (episode_id) REFERENCES temporal_episodes(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_facts_novel_valid ON temporal_facts(novel_id, valid_from_chapter, invalid_from_chapter)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS story_terms (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            term TEXT NOT NULL,
+            definition TEXT NOT NULL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_novel ON story_terms(novel_id, category)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS draft_proposals (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            chapter_index INTEGER NOT NULL,
+            original_text TEXT,
+            proposed_text TEXT NOT NULL,
+            review_comments_json TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_proposals_novel_ch ON draft_proposals(novel_id, chapter_index)")
+        conn.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to create temporal_graph / story extension tables: {e}")
 
 # --- PROMPT OVERRIDES ---

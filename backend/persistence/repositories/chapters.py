@@ -101,6 +101,43 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
         except:
             pass
 
+    # 判斷是否為篇卷結構 (Volume Array 或 {"volumes": [...]})
+    is_volumes_payload = False
+    volumes_payload = []
+    if isinstance(parsed_dict, list) and len(parsed_dict) > 0:
+        if any("volume_index" in item or "chapters_outline" in item for item in parsed_dict if isinstance(item, dict)):
+            is_volumes_payload = True
+            volumes_payload = parsed_dict
+    elif isinstance(parsed_dict, dict) and "volumes" in parsed_dict and isinstance(parsed_dict["volumes"], list):
+        is_volumes_payload = True
+        volumes_payload = parsed_dict["volumes"]
+
+    if is_volumes_payload:
+        from backend.persistence.repositories.volumes import save_volumes
+        save_volumes(novel_id, volumes_payload, clear_downstream=clear_chapters)
+        
+        # 提取全書在 incoming volumes 中的 chapter_index 集合
+        all_incoming_chapter_indices = set()
+        for vol in volumes_payload:
+            if isinstance(vol, dict) and isinstance(vol.get("chapters_outline"), list):
+                for ch in vol["chapters_outline"]:
+                    if isinstance(ch, dict):
+                        try:
+                            c_idx = int(ch.get("chapter_index", 0))
+                            if c_idx > 0:
+                                all_incoming_chapter_indices.add(c_idx)
+                        except:
+                            pass
+        if all_incoming_chapter_indices:
+            max_incoming = max(all_incoming_chapter_indices)
+            conn = get_db_connection()
+            with conn:
+                cursor = conn.cursor()
+                # 刪除超出大綱範圍的已寫章節
+                cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index > ?", (novel_id, max_incoming))
+                cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index > ?", (novel_id, max_incoming))
+        return 1
+
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
@@ -333,6 +370,24 @@ def save_chat_message(novel_id, role, content, thinking=None, message_type='chat
             "INSERT INTO chat_memory (novel_id, role, content, thinking, message_type) VALUES (?, ?, ?, ?, ?)",
             (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
         )
+        if message_type == 'pipeline':
+            # 滑動保留：僅保留每部小說最新的 300 則 pipeline 執行訊息，防止日誌無限成長
+            try:
+                cursor.execute(
+                    """
+                    DELETE FROM chat_memory
+                    WHERE novel_id = ?
+                      AND message_type = 'pipeline'
+                      AND id NOT IN (
+                          SELECT id FROM chat_memory
+                          WHERE novel_id = ? AND message_type = 'pipeline'
+                          ORDER BY id DESC LIMIT 300
+                      )
+                    """,
+                    (novel_id, novel_id)
+                )
+            except Exception:
+                pass
 
 
 def save_director_review_status(

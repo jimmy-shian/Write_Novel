@@ -63,7 +63,7 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx):
+def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx, novel_id=None):
     """篇卷規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("volumes")
     from backend.agents.story_architect.prompts import parse_quantity_constraints, format_prompt_constraints
@@ -73,19 +73,21 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
     system_prompt = f"{VOLUMES_PLANNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{guidelines_fmt}\n"
     system_prompt += build_agent_context_contract(
         "Volumes Planner / 篇卷規劃師",
-        "- 經後端挑選的世界觀、macro_outline、多幕結構與必要設定。\n- patch 模式會提供目標卷前後卷概要與總監提示。",
-        "只規劃全書卷列表或指定卷修補，讓每卷承接世界觀主軸與多幕起伏。",
+        "- 經後端挑選的世界觀、macro_outline、多幕結構與作品核心基石。\n- patch 模式會提供目標卷前後卷概要與總監提示。",
+        "只規劃全書卷列表或指定卷修補，讓每卷承接世界觀主軸、作品核心能力/衝突與多幕起伏。",
         "輸出 volumes JSON；不要生成章節骨架、正文或角色卡。patch 模式只回傳指定卷，不要重寫其他卷。"
     )
     
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
     if mode == "generate":
-        user_content = f"""【世界觀背景】
+        user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【使用者大綱/要求】
-{user_prompt or "請根據完整世界觀，自行決定全書的卷數、每卷標題、概要與章節數量設定。"}
+{user_prompt or "請根據作品核心基石與完整世界觀，規劃全書的卷數、每卷標題、概要與章節數量設定。"}
 
 請為本作品生成符合結構的篇卷 JSON 清單。
+各卷之核心矛盾、主線推進與高潮事件必須緊扣作品核心基石（如主角的能力與原案主線），嚴禁偏離設定。
 """
     else:  # patch/add specific idx
         v_idx = target_vol_idx or 1
@@ -98,7 +100,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
         if next_vol:
             surrounding_context += f"\n【後 1 卷 (卷 {v_idx + 1}) 大綱與概要】\n標題：{next_vol['title']}\n概要：{next_vol['summary']}\n"
             
-        user_content = f"""【世界觀背景】
+        user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 {surrounding_context}
 【修補指定卷目標】

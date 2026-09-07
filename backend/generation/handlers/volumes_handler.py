@@ -17,8 +17,11 @@ def _resolve_mode(task: GenerationTaskRequest) -> str:
     return "generate"
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_volumes_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請根據作品核心基石與世界觀，規劃全書篇卷結構、分卷標題、概要與章數設定")
     mode = _resolve_mode(task)
     target_vol_idx = task.target.volume_index
     if target_vol_idx is None and task.target.section_index is not None:

@@ -63,33 +63,35 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index):
+def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=None):
     """角色設計師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("character")
     system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Designer / 角色設計師",
-        "- 經後端挑選的世界觀背景，必須包含或摘要呈現 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：通常只有世界觀，沒有現有角色；這是建立角色聖經與關係網的第一次定稿。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
-        "根據可見世界觀設計或修補角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者需求；不得用空世界觀硬編角色。",
+        "- 經後端挑選的世界觀背景與作品核心基石，必須包含或摘要呈現 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：通常只有世界觀，沒有現有角色；這是建立角色聖經與關係網的第一次定稿。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
+        "根據作品核心基石與可見世界觀設計或修補角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者原案需求；不得用空世界觀硬編角色。",
         "輸出完整合法的 characters JSON。generate 必須建立核心角色表、勢力歸屬、角色之間的關聯與可供卷/骨架/writer 使用的生成設定；expand/modify 應保留既有角色並補充或修正，避免刪除無關角色。"
     )
     
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
     if mode == "generate":
-        user_content = f"""【世界觀背景】
+        user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【使用者要求】
-{user_prompt or "請根據世界觀，為我們設計核心角色與配角群像。"}
+{user_prompt or "請根據作品核心基石與世界觀，為我們設計核心角色與配角群像。"}
 
 請為本作品生成符合結構的角色 Bible JSON 設定。
 硬性要求：
-1. 必須讀取並落實世界觀中的 `factions` / 勢力設定，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
-2. 必須讀取並落實 `progressive_character_plan` / 角色登場策略，讓角色功能、首次登場階段與群像節奏對齊。
-3. 必須建立可供後續 volumes、volume_skeleton、writer 使用的角色關係資料，例如 relationships / relationship_matrix / role / faction / entry_phase 等 schema 允許欄位。
-4. 不要只列人物簡介；每位核心角色都要有可寫作的動機、弱點、成長弧線、聲音/行為特徵與關係張力。
+1. 核心主角群的人設、動機、特殊能力與弱點必須嚴格契合【作品核心基石】（例如主角的專屬能力與原創設定），嚴禁脫離原案瞎編其他設定。
+2. 必須讀取並落實世界觀中的 `factions` / 勢力設定，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
+3. 必須讀取並落實 `progressive_character_plan` / 角色登場策略，讓角色功能、首次登場階段與群像節奏對齊。
+4. 必須建立可供後續 volumes、volume_skeleton、writer 使用的角色關係資料，例如 relationships / relationship_matrix / role / faction / entry_phase 等 schema 允許欄位。
+5. 不要只列人物簡介；每位核心角色都要有可寫作的動機、弱點、成長弧線、聲音/行為特徵與關係張力。
 """
     elif mode == "expand":
-        user_content = f"""【世界觀背景】
+        user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【現有角色聖經】
@@ -101,7 +103,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 【一般提示詞 (Prompt)】
 {user_prompt or "請在現有角色基礎上進行增量擴展，追加新角色。"}
 
-請根據總監提示，追加新角色。
+請根據作品核心基石與總監提示，追加新角色。
 [極重要要求]：
 請只生成本次需要「新增/追加」的角色清單，並回傳格式完全合法的 characters JSON（例如 `{{ "characters": [...] }}`），列表中應「僅」包含本次新增的角色，千萬不要重寫、輸出或複製任何未修改的既有角色。
 擴增角色時仍必須遵守世界觀勢力設定；新角色的 faction、登場功能與關係網必須能回接既有角色聖經，不能只新增孤立人物。

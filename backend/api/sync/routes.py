@@ -1,20 +1,41 @@
 # -*- coding: utf-8 -*-
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from typing import Optional
+from pydantic import BaseModel
+
 from backend.services.hf_sync import (
     get_sync_status,
     backup_database,
     restore_database,
     async_backup,
     is_hf_sync_available,
+    update_sync_config,
 )
 
 router = APIRouter(prefix="/sync", tags=["Cloud Sync"])
 
 
+class CloudConfigPayload(BaseModel):
+    storage_bucket: Optional[str] = None
+    dataset_repo: Optional[str] = None
+    token: Optional[str] = None
+
+
 @router.get("/status")
 def api_get_sync_status():
-    """取得當前 Hugging Face Dataset 雲端資料庫同步狀態。"""
+    """取得當前 Hugging Face 雲端資料庫同步狀態。"""
     return get_sync_status()
+
+
+@router.post("/config")
+def api_update_sync_config(payload: CloudConfigPayload):
+    """更新雲端持久化儲存設定 (儲存庫名稱與金鑰)"""
+    update_sync_config(
+        storage_bucket=payload.storage_bucket,
+        dataset_repo=payload.dataset_repo,
+        token=payload.token,
+    )
+    return {"status": "success", "config": get_sync_status()}
 
 
 @router.post("/backup")

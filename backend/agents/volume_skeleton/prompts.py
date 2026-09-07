@@ -62,7 +62,7 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_volume_skeleton_planner_messages(worldview_text, volume_index, current_vol, start_ch, end_ch, vol_chapter_count, surrounding_context, precalc_clues, user_prompt):
+def build_volume_skeleton_planner_messages(worldview_text, volume_index, current_vol, start_ch, end_ch, vol_chapter_count, surrounding_context, precalc_clues, user_prompt, novel_id=None):
     """卷骨架大綱規劃師提示詞拼接"""
     schema_snippet = get_json_schema_prompt_snippet("skeleton")
     system_prompt = f"{VOLUME_SKELETON_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{VOLUME_SKELETON_GUIDELINES}\n"
@@ -84,7 +84,8 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
         "applicable_rules": current_vol.get("applicable_rules"),
     }
     
-    user_content = f"""【世界觀背景】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【當前特定篇卷任務：整卷一次生成】
@@ -143,7 +144,7 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 
 def build_volume_skeleton_completion_messages(
     worldview_text, volume_index, current_vol, start_ch, end_ch, batch_count,
-    surrounding_context, precalc_clues, user_prompt, prior_segment_json
+    surrounding_context, precalc_clues, user_prompt, prior_segment_json, novel_id=None
 ):
     """
     卷骨架「分段補全」提示詞拼接（completion 模式）。
@@ -158,7 +159,8 @@ def build_volume_skeleton_completion_messages(
         "輸出只包含補全範圍的 chapters_skeleton 元素；必須延續前段脈絡並保持 JSON 可解析。"
     )
 
-    user_content = f"""【世界觀背景】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【當前特定篇卷任務 — 分段補全 (Completion)】
@@ -213,7 +215,7 @@ def build_volume_skeleton_completion_messages(
     return messages
 
 
-def build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint):
+def build_incremental_skeleton_messages(worldview_text, volume_index, existing_skeleton, user_hint, novel_id=None):
     """卷骨架增量修正提示詞拼接"""
     patch_schema = {
         "volume_index": volume_index,
@@ -241,7 +243,8 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
         "輸出 chapters_skeleton patch JSON；每個回傳章節必須含 chapter_index。未修改章節不要回傳。"
     )
     
-    user_content = f"""【世界觀背景】
+    core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
 【當前篇卷】

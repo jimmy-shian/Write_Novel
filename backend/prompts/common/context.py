@@ -548,12 +548,39 @@ def select_worldview_context(worldview_text, current_stage="copilot", query_text
     # Apply structural JSON compaction to prevent breaking JSON by simple string truncation
     compacted_selected = compact_json_data(selected, max_list_items=10)
 
-    result = {
-        "selection_policy": f"依 current_stage={stage} 選入必要世界觀欄位；只有被本次任務命中的額外欄位才追加。長度上限僅作溢位保護。",
-        "selected_fields": selected_keys,
-        "worldview_context": compacted_selected,
-    }
-    return compact_context_text(_json_text(result), limit, "任務相關世界觀上下文")
+    return compact_context_text(_json_text(compacted_selected), limit, "任務相關世界觀上下文")
+
+
+def format_novel_core_context(novel_id: str) -> str:
+    """
+    格式化小說核心基石設定（標題、題材類型、寫作風格、大綱靈感 Pipeline Prompt）。
+    此區塊為不可動搖的全域最高綱領，硬性注入至所有 Agent 上下文最前端。
+    """
+    if not novel_id:
+        return ""
+    try:
+        novel = db.get_novel(novel_id)
+    except Exception:
+        novel = None
+    if not novel:
+        return ""
+
+    title = (novel.get("title") or "").strip()
+    genre = (novel.get("genre") or "").strip()
+    style = (novel.get("style") or "").strip()
+    pipeline_prompt = (novel.get("pipeline_prompt") or "").strip()
+
+    lines = ["### 🏛️【作品核心基石設定 (硬性不可背離之創作原案)】"]
+    if title:
+        lines.append(f"- **作品名稱**：《{title}》")
+    if genre:
+        lines.append(f"- **題材類型**：{genre}")
+    if style:
+        lines.append(f"- **風格基調**：{style}")
+    if pipeline_prompt:
+        lines.append(f"- **故事簡述 / 大綱靈感 (Pipeline Prompt)**：\n  {pipeline_prompt}")
+
+    return "\n".join(lines)
 
 
 def extract_character_basic(characters_data):

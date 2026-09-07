@@ -113,16 +113,188 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 worldview_text = json.dumps(_wv_tmp, ensure_ascii=False, indent=2)
     except Exception:
         pass
-    
+
     char_data = db.get_latest_characters(novel_id)
     characters_json = json.dumps(extract_character_basic(char_data["parsed_data"]), ensure_ascii=False) if char_data else "{'characters': []}"
-    
-    messages = build_foreshadowing_messages(worldview_text, characters_json, user_prompt, target_field=target_field)
-    
+
     field_label = {"foreshadowing_seeds": "伏筆種子", "key_turning_points": "關鍵轉折點"}.get(target_field or "", "伏筆與轉折")
-    db.save_chat_message(novel_id, "user", f"執行{field_label}獨立生成。要求: {user_prompt}", message_type="pipeline")
-    
-    llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json) # Map to architect model preset
+    db.save_chat_message(novel_id, "user", f"執行{field_label}生成（自動分批累加至 50 條）。要求: {user_prompt}", message_type="pipeline")
+
+    wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
+    if not wb_dict:
+        error_message = "世界觀內容為空或無法解析，禁止以空資料覆蓋既有設定。請先完成或修復世界觀生成後再繼續。"
+        db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    from backend.models.parsers import extract_json_block
+
+    # =========================================================================
+    # 模式 A: 伏筆種子分批累加生成 (Target: 50 條，每批 15 條)
+    # =========================================================================
+    if target_field == "foreshadowing_seeds":
+        target_count = 50
+        batch_size = 15
+        max_batches = 4
+
+        current_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
+        batch_idx = 0
+
+        while len(current_seeds) < target_count and batch_idx < max_batches:
+            batch_idx += 1
+            needed = min(batch_size, target_count - len(current_seeds))
+            start_id = len(current_seeds) + 1
+            yield "data: " + json.dumps({
+                "type": "status",
+                "message": f"正在生成伏筆種子批次 {batch_idx}/{max_batches} (目前已累積 {len(current_seeds)}/{target_count}，本批預計生成 {needed} 個)..."
+            }, ensure_ascii=False) + "\n\n"
+
+            messages = build_foreshadowing_messages(
+                worldview_text, characters_json, user_prompt,
+                target_field="foreshadowing_seeds", novel_id=novel_id,
+                batch_size=needed, existing_items=current_seeds, start_id=start_id
+            )
+
+            llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
+            acc = StreamAccumulator(llm_stream)
+            for chunk in acc:
+                yield chunk
+            batch_text = acc.content
+
+            if _handle_director_context_request(novel_id, "伏筆與轉折編織師", batch_text):
+                yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            parsed_foreshadowing = extract_json_block(batch_text)
+            normalized_foreshadowing = _normalize_foreshadowing_output(parsed_foreshadowing)
+            new_seeds = normalized_foreshadowing.get("foreshadowing_seeds", [])
+
+            if not new_seeds:
+                if len(current_seeds) >= 10:
+                    break
+                error_message = f"伏筆種子批次 {batch_idx} 未取得任何有效的種子輸出。"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            existing_names = set(
+                str(s.get("name") or "").strip().lower() for s in current_seeds
+            )
+            for s in new_seeds:
+                if not isinstance(s, dict):
+                    continue
+                s_name = str(s.get("name") or "").strip()
+                if not s_name or s_name.lower() in existing_names:
+                    continue
+                existing_names.add(s_name.lower())
+                s["id"] = len(current_seeds) + 1
+                current_seeds.append(s)
+
+            wb_dict["foreshadowing_seeds"] = current_seeds
+            updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
+            db.save_worldbuilding(novel_id, updated_content, validate=False)
+            db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), batch_text)
+            yield "data: " + json.dumps({
+                "type": "status",
+                "message": f"伏筆種子批次 {batch_idx} 完成，已成功存入 {len(current_seeds)}/{target_count} 個種子。"
+            }, ensure_ascii=False) + "\n\n"
+
+        db.save_chat_message(novel_id, "assistant", f"伏筆種子分批累加生成成功！共 {len(current_seeds)} 個，已寫入世界觀。", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "status", "message": f"伏筆種子生成完成，共 {len(current_seeds)} 個。"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    # =========================================================================
+    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50 條，每批 15 條)
+    # =========================================================================
+    elif target_field == "key_turning_points":
+        target_count = 50
+        batch_size = 15
+        max_batches = 4
+
+        current_turns = [t for t in (wb_dict.get("key_turning_points") or []) if isinstance(t, dict)]
+        batch_idx = 0
+
+        while len(current_turns) < target_count and batch_idx < max_batches:
+            batch_idx += 1
+            needed = min(batch_size, target_count - len(current_turns))
+            start_id = len(current_turns) + 1
+            yield "data: " + json.dumps({
+                "type": "status",
+                "message": f"正在規劃關鍵轉折點批次 {batch_idx}/{max_batches} (目前已累積 {len(current_turns)}/{target_count}，本批預計生成 {needed} 個)..."
+            }, ensure_ascii=False) + "\n\n"
+
+            messages = build_foreshadowing_messages(
+                worldview_text, characters_json, user_prompt,
+                target_field="key_turning_points", novel_id=novel_id,
+                batch_size=needed, existing_items=current_turns, start_id=start_id
+            )
+
+            llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
+            acc = StreamAccumulator(llm_stream)
+            for chunk in acc:
+                yield chunk
+            batch_text = acc.content
+
+            if _handle_director_context_request(novel_id, "伏筆與轉折編織師", batch_text):
+                yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            parsed_foreshadowing = extract_json_block(batch_text)
+            normalized_foreshadowing = _normalize_foreshadowing_output(parsed_foreshadowing)
+            new_turns = normalized_foreshadowing.get("key_turning_points", [])
+
+            if not new_turns:
+                if len(current_turns) >= 10:
+                    break
+                error_message = f"關鍵轉折點批次 {batch_idx} 未取得任何有效的轉折點輸出。"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            existing_names = set(
+                str(t.get("turning_point_name") or t.get("name") or "").strip().lower() for t in current_turns
+            )
+            for t in new_turns:
+                if not isinstance(t, dict):
+                    continue
+                t_name = str(t.get("turning_point_name") or t.get("name") or "").strip()
+                if not t_name or t_name.lower() in existing_names:
+                    continue
+                existing_names.add(t_name.lower())
+                t["id"] = len(current_turns) + 1
+                current_turns.append(t)
+
+            wb_dict["key_turning_points"] = current_turns
+            updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
+            db.save_worldbuilding(novel_id, updated_content, validate=False)
+            db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), batch_text)
+            yield "data: " + json.dumps({
+                "type": "status",
+                "message": f"關鍵轉折點批次 {batch_idx} 完成，已成功存入 {len(current_turns)}/{target_count} 個轉折點。"
+            }, ensure_ascii=False) + "\n\n"
+
+        try:
+            if db.get_volumes(novel_id):
+                db.precompute_global_foreshadowing(novel_id)
+        except Exception as e:
+            print(f"[WARN] Failed to precompute global foreshadowing after key_turning_points: {e}")
+
+        db.save_chat_message(novel_id, "assistant", f"關鍵轉折點分批累加生成成功！共 {len(current_turns)} 個，已寫入世界觀。", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "status", "message": f"關鍵轉折點生成完成，共 {len(current_turns)} 個。"}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    # =========================================================================
+    # 模式 C: 全量模式（target_field=None）：依序執行 seeds 與 turns 批次
+    # =========================================================================
+    messages = build_foreshadowing_messages(worldview_text, characters_json, user_prompt, target_field=None, novel_id=novel_id, batch_size=15)
+    llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(llm_stream)
     for chunk in acc:
         yield chunk
@@ -132,124 +304,23 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
-        # Parse the JSON block and merge back into worldview.
-        from backend.models.parsers import extract_json_block
         parsed_foreshadowing = extract_json_block(full_text)
         normalized_foreshadowing = _normalize_foreshadowing_output(parsed_foreshadowing)
         seeds = normalized_foreshadowing.get("foreshadowing_seeds", [])
         turns = normalized_foreshadowing.get("key_turning_points", [])
 
-        # --- 分批模式：只驗證本批次目標欄位 ---
-        if target_field == "foreshadowing_seeds":
-            # 只生成 seeds，turns 保留現有值
-            if not seeds:
-                error_message = "伏筆種子生成失敗：未取得任何有效的 foreshadowing_seeds。請重新生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-                return
-            schema_error = _foreshadowing_schema_error(seeds, [])  # 只校驗 seeds
-            if schema_error:
-                error_message = f"伏筆種子生成失敗：JSON 欄位不合規：{schema_error}。請重新生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
-            wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
-            if not wb_dict:
-                error_message = "世界觀內容為空或無法解析，禁止以空資料覆蓋既有設定。請先完成或修復世界觀生成後再繼續。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
-            if wb and wb_dict is None:
-                error_message = "伏筆種子生成已完成，但既有世界觀不是可安全合併的 JSON；本次不保存。請先修復世界觀後再生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
+        if not seeds and not turns:
+            error_message = "伏筆與轉折生成失敗：未取得任何有效的 seeds 或 turning_points。"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
+        if seeds:
             wb_dict["foreshadowing_seeds"] = seeds
-            # 保留現有的 key_turning_points
-            updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
-            db.save_worldbuilding(novel_id, updated_content, validate=False)
-            db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-            db.save_chat_message(novel_id, "assistant", f"伏筆種子生成成功！共 {len(seeds)} 個，已寫入世界觀。", message_type="pipeline")
-            yield "data: " + json.dumps({"type": "status", "message": f"伏筆種子生成完成，共 {len(seeds)} 個。"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        elif target_field == "key_turning_points":
-            # 只生成 turns，seeds 保留現有值
-            if not turns:
-                error_message = "關鍵轉折點生成失敗：未取得任何有效的 key_turning_points。請重新生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-                return
-            schema_error = _foreshadowing_schema_error([], turns)  # 只校驗 turns
-            if schema_error:
-                error_message = f"關鍵轉折點生成失敗：JSON 欄位不合規：{schema_error}。請重新生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
-            wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
-            if not wb_dict:
-                error_message = "世界觀內容為空或無法解析，禁止以空資料覆蓋既有設定。請先完成或修復世界觀生成後再繼續。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
-            if wb and wb_dict is None:
-                error_message = "關鍵轉折點生成已完成，但既有世界觀不是可安全合併的 JSON；本次不保存。請先修復世界觀後再生成。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                return
+        if turns:
             wb_dict["key_turning_points"] = turns
-            # 保留現有的 foreshadowing_seeds
-            updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
-            db.save_worldbuilding(novel_id, updated_content, validate=False)
-            db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-            # 生成完 turns 後，嘗試預計算分配藍圖
-            try:
-                if db.get_volumes(novel_id):
-                    db.precompute_global_foreshadowing(novel_id)
-            except Exception as e:
-                print(f"[WARN] Failed to precompute global foreshadowing after key_turning_points: {e}")
-            db.save_chat_message(novel_id, "assistant", f"關鍵轉折點生成成功！共 {len(turns)} 個，已寫入世界觀。", message_type="pipeline")
-            yield "data: " + json.dumps({"type": "status", "message": f"關鍵轉折點生成完成，共 {len(turns)} 個。"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
 
-        # --- 全量模式（target_field=None）：同時驗證兩個欄位 ---
-        quantity_error = _foreshadowing_quantity_error(seeds, turns)
-        if quantity_error:
-            error_message = f"伏筆與轉折生成失敗：{quantity_error}。請重新生成，不會保存本次不足量輸出。"
-            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        schema_error = _foreshadowing_schema_error(seeds, turns)
-        if schema_error:
-            error_message = f"伏筆與轉折生成失敗：JSON 欄位不合規：{schema_error}。請重新生成，不會保存本次欄位錯誤輸出。"
-            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
-        if not wb_dict:
-            error_message = "世界觀內容為空或無法解析，為避免空資料覆蓋既有設定，本次不保存。請先完成或修復核心世界觀生成後再繼續。"
-            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-        if wb and wb_dict is None:
-            error_message = "伏筆與轉折生成已完成，但既有世界觀不是可安全合併的 JSON；為避免覆蓋前面的世界觀資料，本次不保存。請先修復/重新保存世界觀 JSON 後再生成。"
-            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        wb_dict["foreshadowing_seeds"] = seeds
-        wb_dict["key_turning_points"] = turns
-        
         updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
         db.save_worldbuilding(novel_id, updated_content, validate=False)
         db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
@@ -257,8 +328,8 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             if db.get_volumes(novel_id):
                 db.precompute_global_foreshadowing(novel_id)
         except Exception as e:
-            print(f"[WARN] Failed to precompute global foreshadowing after foreshadowing generation: {e}")
-        db.save_chat_message(novel_id, "assistant", f"獨立伏筆與轉折生成成功！已寫入世界觀設定中。", message_type="pipeline")
+            print(f"[WARN] Failed to precompute global foreshadowing: {e}")
+        db.save_chat_message(novel_id, "assistant", "全書伏筆與關鍵轉折藍圖已成功寫入世界觀設定中。", message_type="pipeline")
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 

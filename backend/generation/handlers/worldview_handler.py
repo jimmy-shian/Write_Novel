@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from backend import persistence as db
 from backend.generation.routing.schema import GenerationTaskRequest
 from backend.agents.story_architect.runner import run_story_architect
 from backend.agents.incremental.runner import run_incremental_architect
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_worldview_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請為本小說構建完整的世界觀設定、力量體系與時代背景")
     target_section = getattr(task, "target_section", None)
     if task.task_type == "patch" and target_section:
         return run_incremental_architect(

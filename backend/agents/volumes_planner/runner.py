@@ -97,7 +97,7 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
     
     existing_vols = [] if mode == "generate" else db.get_volumes(novel_id)
     
-    messages = build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx)
+    messages = build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, hint, mode, target_vol_idx, novel_id=novel_id)
     
     db.save_chat_message(novel_id, "user", f"執行篇卷規劃。模式: {mode}, 卷數: {target_vol_idx or '全書'}", message_type="pipeline")
     
@@ -116,40 +116,46 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
         parsed_vols = extract_json_block(full_text)
         vols_list = parsed_vols.get("volumes", []) if isinstance(parsed_vols, dict) else (parsed_vols if isinstance(parsed_vols, list) else [])
         
-        if vols_list:
-            adjusted_vols = []
-            for i, vol in enumerate(vols_list):
-                try:
-                    vol_idx = int(vol.get("volume_index", i + 1))
-                except Exception:
-                    vol_idx = i + 1
-                vol["volume_index"] = vol_idx
-                try:
-                    vol["chapter_count"] = int(vol.get("chapter_count", 0))
-                except Exception:
-                    vol["chapter_count"] = 0
-                adjusted_vols.append(vol)
+        if not vols_list:
+            error_message = "篇卷規劃生成失敗：未能解析出任何合規篇卷列表結構。請重試。"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
 
-            validation_error = _volume_plan_validation_error(adjusted_vols, mode=mode)
-            if validation_error:
-                error_message = f"篇卷規劃生成失敗：{validation_error}。請重新生成，不會保存本次不合規輸出。"
-                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-                return
-
-            if mode == "patch" and target_vol_idx is not None:
-                # Patch mode: upsert only the target volume, preserve all others
-                db.save_volumes(novel_id, adjusted_vols, clear_downstream=False, target_vol_idx=target_vol_idx)
-            else:
-                db.save_volumes(novel_id, adjusted_vols, clear_downstream=True)
-            
-            # 預計算全局伏筆與轉折藍圖
+        adjusted_vols = []
+        for i, vol in enumerate(vols_list):
             try:
-                db.precompute_global_foreshadowing(novel_id)
-            except Exception as e:
-                print(f"[WARN] Failed to precompute global foreshadowing in run_volumes_planner: {e}")
-                
+                vol_idx = int(vol.get("volume_index", i + 1))
+            except Exception:
+                vol_idx = i + 1
+            vol["volume_index"] = vol_idx
+            try:
+                vol["chapter_count"] = int(vol.get("chapter_count", 0))
+            except Exception:
+                vol["chapter_count"] = 0
+            adjusted_vols.append(vol)
+
+        validation_error = _volume_plan_validation_error(adjusted_vols, mode=mode)
+        if validation_error:
+            error_message = f"篇卷規劃生成失敗：{validation_error}。請重新生成，不會保存本次不合規輸出。"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
+        if mode == "patch" and target_vol_idx is not None:
+            # Patch mode: upsert only the target volume, preserve all others
+            db.save_volumes(novel_id, adjusted_vols, clear_downstream=False, target_vol_idx=target_vol_idx)
+        else:
+            db.save_volumes(novel_id, adjusted_vols, clear_downstream=True)
+        
+        # 預計算全局伏筆與轉折藍圖
+        try:
+            db.precompute_global_foreshadowing(novel_id)
+        except Exception as e:
+            print(f"[WARN] Failed to precompute global foreshadowing in run_volumes_planner: {e}")
+            
         db.save_last_agent_run(novel_id, "volumes", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"篇卷結構已儲存成功！", message_type="pipeline")
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"

@@ -24,6 +24,10 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
+        # 先備份現有各卷的 chapters_outline，以防未傳遞 chapters_outline 時被意外抹除
+        cursor.execute("SELECT volume_index, chapters_outline FROM volumes WHERE novel_id = ?", (novel_id,))
+        existing_outlines = {r["volume_index"]: r["chapters_outline"] for r in cursor.fetchall() if r["chapters_outline"]}
+
         if target_vol_idx is not None:
             cursor.execute(
                 "DELETE FROM volumes WHERE novel_id = ? AND volume_index = ?",
@@ -64,11 +68,21 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
                 applicable_rules = json.dumps(_convert_obj_to_traditional(applicable_rules), ensure_ascii=False)
             else:
                 applicable_rules = _to_traditional(applicable_rules)
+
+            # 章節細綱骨架欄位 chapters_outline 持久化與容錯
+            chapters_outline = vol.get("chapters_outline")
+            if chapters_outline is not None:
+                if isinstance(chapters_outline, list) or isinstance(chapters_outline, dict):
+                    chapters_outline_str = json.dumps(_convert_obj_to_traditional(chapters_outline), ensure_ascii=False)
+                else:
+                    chapters_outline_str = _to_traditional(str(chapters_outline))
+            else:
+                chapters_outline_str = existing_outlines.get(volume_index)
                 
             cursor.execute(
-                "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules)
+                "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules, chapters_outline) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules, chapters_outline_str)
             )
     
     try:

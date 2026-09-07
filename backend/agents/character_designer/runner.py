@@ -201,7 +201,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
             print(f"[WARN] Auto-expand missing characters scan/loop failed: {e}")
             traceback.print_exc()
 
-    messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index)
+    messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=novel_id)
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")
     

@@ -129,8 +129,10 @@ def api_novel_retrospective(novel_id: str):
     safe_title = gold_rules_filename(novel["title"])
     filepath = os.path.join(gold_rules_dir, f"{safe_title}_retrospective_gold_rules.md")
 
-    with open(filepath, "w", encoding="utf-8") as f:
+    tmp_filepath = f"{filepath}.tmp.{os.getpid()}"
+    with open(tmp_filepath, "w", encoding="utf-8") as f:
         f.write(final_markdown)
+    os.replace(tmp_filepath, filepath)
 
     # 同步由 GoldRulesManager 解析並儲存為結構化治理規則（標記為 draft 待審核，避免偏誤自強化）
     mgr = get_gold_rules_manager()

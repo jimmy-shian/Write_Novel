@@ -58,6 +58,26 @@ def delete_novel(novel_id):
     cursor.execute("DELETE FROM novels WHERE id = ?", (novel_id,))
     conn.commit()
 
+def reset_novel_content(novel_id):
+    """
+    清空小說的所有已生成內容（世界觀、角色、伏筆、章節大綱、正文、對話記憶、篇卷），
+    將小說重置回剛創建時的狀態（保留 id, title, genre, style, pipeline_prompt）。
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM worldbuilding WHERE novel_id = ?", (novel_id,))
+    cursor.execute("DELETE FROM characters WHERE novel_id = ?", (novel_id,))
+    cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
+    cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+    cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
+    cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
+    try:
+        cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+    except sqlite3.OperationalError:
+        pass
+    cursor.execute("UPDATE novels SET worldview_patches = '[]' WHERE id = ?", (novel_id,))
+    conn.commit()
+
 # --- VOLUMES (篇卷) HELPERS ---
 
 # Cross-repository imports used by legacy domain functions during runtime.

@@ -1,28 +1,61 @@
 import json
 import re
 
-def _try_parse_json_with_repair(json_str: str) -> dict:
-    """Attempts to parse JSON, and if it fails, tries to close open brackets/braces."""
+def _salvage_truncated_candidate(candidate: str) -> any:
+    """
+    Attempts to parse a JSON candidate string.
+    1. Direct json.loads
+    2. Try simple bracket/brace closures
+    3. Truncated array / object auto-salvage: backtrack to the last complete item ending in '}'
+       and close brackets/braces.
+    """
+    if not candidate:
+        return None
+
     try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
+        return json.loads(candidate)
+    except Exception:
         pass
-    
-    # Very simple repair for truncated generation
-    for suffix in ["]}", "}", "]}", "]", "\"}"]:
+
+    # Simple closures (e.g. if only missing closing bracket or brace)
+    for suffix in ["]}", "}", "]", "\"\n}\n]", "\"\n}\n}\n]", "\"\n}\n}"]:
         try:
-            return json.loads(json_str + suffix)
-        except json.JSONDecodeError:
+            return json.loads(candidate + suffix)
+        except Exception:
             pass
-            
+
+    # Backtracking salvage for truncated arrays/objects
+    idx = len(candidate)
+    attempts = 0
+    while attempts < 150:
+        attempts += 1
+        last_brace = candidate.rfind("}", 0, idx)
+        if last_brace == -1:
+            break
+        prefix = candidate[:last_brace + 1].rstrip()
+        if prefix.endswith(","):
+            prefix = prefix[:-1].rstrip()
+
+        for suffix in ["]}", "]", "}", "\n]\n}", "\n}\n}", "\n}"]:
+            try:
+                val = json.loads(prefix + suffix)
+                return val
+            except Exception:
+                pass
+        idx = last_brace
+
     return None
+
+def _try_parse_json_with_repair(json_str: str) -> any:
+    """Attempts to parse JSON with salvage fallback."""
+    return _salvage_truncated_candidate(json_str)
 
 def _unwrap_single_nested_key(parsed: any) -> any:
     if isinstance(parsed, dict) and len(parsed) == 1:
         key = list(parsed.keys())[0]
         if key.strip() == "":
             val = parsed[key]
-            if isinstance(val, dict):
+            if isinstance(val, (dict, list)):
                 return _unwrap_single_nested_key(val)
     return parsed
 
@@ -36,16 +69,16 @@ def _parse_last_json_value(text: str):
             value, _ = decoder.raw_decode(candidate)
             last_value = value
         except json.JSONDecodeError:
-            repaired = _try_parse_json_with_repair(candidate)
+            repaired = _salvage_truncated_candidate(candidate)
             if repaired is not None:
                 last_value = repaired
     return last_value
 
-def extract_json_block(text: str) -> dict:
+def extract_json_block(text: str) -> any:
     """
     Robustly extracts a JSON object or array from response text.
     Handles markdown blocks (```json ... ```), removes inline thinking tags (<think>...</think>),
-    and attempts to parse the content. Supports truncated responses.
+    and attempts to parse the content. Supports truncated responses via array auto-salvage.
     """
     if not text:
         return {}
@@ -53,40 +86,41 @@ def extract_json_block(text: str) -> dict:
     # 1. Strip thinking blocks
     cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-    parsed_result = None
+    candidates = []
 
-    # 2. Match markdown codeblocks if they exist (can be array or dict).
-    # Director prompts promise that the last JSON block is authoritative; earlier
-    # blocks may be examples, tool calls, or tool results.
-    json_matches = list(re.finditer(r"```(?:json)?\s*([\{\[].*?)\s*```", cleaned_text, flags=re.DOTALL))
-    for json_match in reversed(json_matches):
-        parsed_result = _try_parse_json_with_repair(json_match.group(1).strip())
-        if parsed_result is not None:
-            break
+    # 2. Extract codeblocks from last to first (authoritative block is usually the final one)
+    codeblock_starts = [m.end() for m in re.finditer(r"```(?:json)?", cleaned_text, flags=re.IGNORECASE)]
+    if codeblock_starts:
+        for start_idx in reversed(codeblock_starts):
+            snippet = cleaned_text[start_idx:]
+            end_idx = snippet.find("```")
+            if end_idx != -1:
+                content = snippet[:end_idx].strip()
+            else:
+                content = snippet.strip()
+            if content.startswith("{") or content.startswith("["):
+                candidates.append(content)
 
-    # 3. Fallback: try standard raw load of the entire cleaned text first
-    if parsed_result is None:
-        parsed_result = _try_parse_json_with_repair(cleaned_text)
+    # 3. Fallback: extract from first '{' or '[' to end
+    first_brace = cleaned_text.find("{")
+    if first_brace != -1:
+        candidates.append(cleaned_text[first_brace:].strip())
+    first_bracket = cleaned_text.find("[")
+    if first_bracket != -1:
+        candidates.append(cleaned_text[first_bracket:].strip())
 
-    # 4. Fallback: try extracting from first '{'/'[' to last '}'/']'
-    if parsed_result is None:
-        first_brace = cleaned_text.find("{")
-        last_brace = cleaned_text.rfind("}")
-        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-            parsed_result = _try_parse_json_with_repair(cleaned_text[first_brace:last_brace + 1].strip())
-            
-        if parsed_result is None:
-            first_bracket = cleaned_text.find("[")
-            last_bracket = cleaned_text.rfind("]")
-            if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-                parsed_result = _try_parse_json_with_repair(cleaned_text[first_bracket:last_bracket + 1].strip())
+    # 4. Fallback: entire cleaned text
+    candidates.append(cleaned_text)
 
-    # 5. Fallback: scan for the last standalone JSON value (e.g. for mixed content with tools/transcripts)
-    if parsed_result is None:
-        parsed_result = _parse_last_json_value(cleaned_text)
+    for candidate in candidates:
+        parsed = _salvage_truncated_candidate(candidate)
+        if parsed is not None:
+            return _unwrap_single_nested_key(parsed)
 
-    if parsed_result is not None:
-        return _unwrap_single_nested_key(parsed_result)
+    # 5. Last resort: scan for last standalone value
+    last_val = _parse_last_json_value(cleaned_text)
+    if last_val is not None:
+        return _unwrap_single_nested_key(last_val)
 
     return {}
 

@@ -6,8 +6,11 @@ from backend.generation.routing.schema import GenerationTaskRequest
 from backend.agents.chapter_writer.runner import run_chapter_writer
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_writer_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請根據章節細綱、場景契約與角色狀態，撰寫高水準小說正文")
     chapter_index = task.target.chapter_index
     if chapter_index is None and task.frontend_state:
         chapter_index = getattr(task.frontend_state, "active_chapter_index", None) or getattr(task.frontend_state, "selected_chapter", None)

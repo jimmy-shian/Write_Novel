@@ -93,6 +93,12 @@ def _characters_ready(novel_id: str) -> bool:
 
 
 def _redirect_to_characters(task: GenerationTaskRequest, prompt: str):
+    if not task.options.stream:
+        def _error_stream():
+            yield "data: " + json.dumps({"type": "error", "message": "伏筆生成前置檢查失敗：角色 Bible 尚未就緒"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return _error_stream()
+
     decision = {
         "action": "CONTINUE",
         "target": "characters",
@@ -116,8 +122,11 @@ def _redirect_to_characters(task: GenerationTaskRequest, prompt: str):
     return _generator()
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_foreshadowing_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請為全書埋設貫穿全局的重大懸念、長線伏筆與核心關鍵轉折點")
 
     # 優先從 task 直接屬性讀取（若前端或 copilot 已明確傳入）
     target_field = _normalize_target_field(getattr(task, "target_field", None) or None)

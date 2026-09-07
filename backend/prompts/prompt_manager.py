@@ -5,22 +5,27 @@ Prompt 設定管理 - 集中管理/快取/動態組合全流程 prompt template
 
 import json
 import os
+import threading
 from typing import Dict, Any, Optional
 
 PROMPT_MANAGER_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE: Dict[str, str] = {}
+_PROMPT_CACHE_LOCK = threading.RLock()
 
 
 def load_prompt_template(template_name: str) -> str:
     """讀取特定 prompt template"""
-    if template_name in CACHE:
-        return CACHE[template_name]
+    with _PROMPT_CACHE_LOCK:
+        if template_name in CACHE:
+            return CACHE[template_name]
 
     fallback = os.path.join(PROMPT_MANAGER_DIR, f"{template_name}.txt")
     if os.path.exists(fallback):
         with open(fallback, "r", encoding="utf-8") as f:
-            CACHE[template_name] = f.read()
-            return CACHE[template_name]
+            content = f.read()
+            with _PROMPT_CACHE_LOCK:
+                CACHE[template_name] = content
+            return content
 
     return ""
 

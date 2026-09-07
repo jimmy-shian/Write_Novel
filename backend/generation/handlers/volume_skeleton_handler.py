@@ -83,8 +83,11 @@ def _resolve_single_volume_index(task: GenerationTaskRequest) -> int:
     return 1
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_volume_skeleton_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請為本卷規劃完整連貫的輕量章節骨架，落實伏筆埋設與關鍵轉折任務")
 
     # --- patch 模式：增量修正單卷骨架 ---
     if task.task_type == "patch":

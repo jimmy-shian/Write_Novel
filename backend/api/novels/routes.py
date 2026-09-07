@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Any
 import uuid
+import json
 
 from backend import persistence as db
 
@@ -14,6 +15,7 @@ class NovelCreate(BaseModel):
     title: str
     genre: Optional[str] = "Fantasy"
     style: Optional[str] = "Classic Modernism"
+    pipeline_prompt: Optional[str] = None
 
 class WorldbuildingSave(BaseModel):
     content: str
@@ -23,6 +25,9 @@ class CharactersSave(BaseModel):
 
 class PlotSave(BaseModel):
     outline_json: Any
+
+class VolumesSave(BaseModel):
+    volumes: Any
 
 class ChapterSave(BaseModel):
     content: str
@@ -49,6 +54,8 @@ def api_list_novels():
 def api_create_novel(novel: NovelCreate):
     novel_id = str(uuid.uuid4())
     db.create_novel(novel_id, novel.title, novel.genre, novel.style)
+    if novel.pipeline_prompt and str(novel.pipeline_prompt).strip():
+        db.update_novel_pipeline_prompt(novel_id, str(novel.pipeline_prompt).strip())
     return {"status": "success", "novel_id": novel_id}
 
 @router.get("/novels/{novel_id}")
@@ -71,7 +78,7 @@ def api_get_novel(novel_id: str):
         "characters_raw": char["json_data"] if char else "",
         "characters_version": char["version"] if char else 0,
         "plot": plot_data if plot_data else {"chapters": []},
-        "plot_raw": str(plot_data) if plot_data else "{}",
+        "plot_raw": json.dumps(plot_data, ensure_ascii=False) if plot_data else "{}",
         "plot_version": 1,
         "chapters": written_ch,
         "chat_memory": memory,
@@ -83,6 +90,26 @@ def api_get_novel(novel_id: str):
 def api_delete_novel(novel_id: str):
     db.delete_novel(novel_id)
     return {"status": "success"}
+
+@router.post("/novels/{novel_id}/reset-content")
+def api_reset_novel_content(novel_id: str):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+
+    try:
+        from backend.services.autonomous_pipeline import autonomous_manager
+        autonomous_manager.stop_pipeline(novel_id)
+    except Exception:
+        pass
+
+    db.reset_novel_content(novel_id)
+    return {
+        "status": "success",
+        "success": True,
+        "novel_id": novel_id,
+        "message": f"小說《{novel.get('title', '')}》已成功清空所有生成內容，重置回初始設定狀態。"
+    }
 
 class NovelCopyRequest(BaseModel):
     title: Optional[str] = None
@@ -138,6 +165,16 @@ def api_deduplicate_characters(novel_id: str):
 def api_save_plot(novel_id: str, payload: PlotSave):
     v = db.save_plot_chapters(novel_id, payload.outline_json)
     return {"status": "success", "version": v}
+
+@router.post("/novels/{novel_id}/volumes")
+def api_save_volumes(novel_id: str, payload: VolumesSave):
+    vol_data = payload.volumes
+    if isinstance(vol_data, dict) and "volumes" in vol_data:
+        vol_data = vol_data["volumes"]
+    if not isinstance(vol_data, list):
+        raise HTTPException(status_code=400, detail="volumes 必須是清單結構")
+    db.save_volumes(novel_id, vol_data)
+    return {"status": "success"}
 
 @router.post("/novels/{novel_id}/chapters/{chapter_index}")
 def api_save_chapter(novel_id: str, chapter_index: int, payload: ChapterSave):

@@ -5,10 +5,11 @@ Autonomous Background Pipeline Service (雲端多小說並行無人值守自主�
 具備自動重試防卡死機制 (Auto-Retry with Exponential Backoff) 與即時總監對話通報。
 """
 
+import json
 import threading
 import time
 import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 
 from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
@@ -41,13 +42,21 @@ class NovelPipelineTask:
         self.logs.append(entry)
         if len(self.logs) > 100:
             self.logs = self.logs[-100:]
-        print(f"[AutoPipeline][{self.novel_title}][{now_str}] {message}")
+        try:
+            print(f"[AutoPipeline][{self.novel_title}][{now_str}] {message}")
+        except Exception:
+            try:
+                safe_msg = message.encode("ascii", errors="backslashreplace").decode("ascii")
+                print(f"[AutoPipeline][{now_str}] {safe_msg}")
+            except Exception:
+                pass
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "novel_id": self.novel_id,
             "novel_title": self.novel_title,
             "is_running": self.is_running,
+            "running": self.is_running,
             "current_stage": self.current_stage,
             "current_chapter": self.current_chapter,
             "total_chapters": self.total_chapters,
@@ -104,6 +113,7 @@ class AutonomousPipelineManager:
             # 全空閒狀態
             return {
                 "is_running": False,
+                "running": False,
                 "novel_id": None,
                 "novel_title": "",
                 "current_stage": "idle",
@@ -123,6 +133,7 @@ class AutonomousPipelineManager:
             if novel_id in self.tasks and self.tasks[novel_id].is_running:
                 return {
                     "status": "already_running",
+                    "success": True,
                     "novel_id": novel_id,
                     "novel_title": self.tasks[novel_id].novel_title,
                     "message": f"小說《{self.tasks[novel_id].novel_title}》已有自主生成任務在背景運行中",
@@ -130,7 +141,9 @@ class AutonomousPipelineManager:
 
             novel = db.get_novel(novel_id)
             if not novel:
-                return {"status": "error", "message": f"找不到小說 (ID: {novel_id})"}
+                return {"status": "error", "success": False, "message": f"找不到小說 (ID: {novel_id})"}
+
+            effective_prompt = prompt.strip() if (prompt and prompt.strip()) else (novel.get("pipeline_prompt") or "").strip()
 
             task = NovelPipelineTask(novel_id, novel.get("title", "未命名小說"))
             task.is_running = True
@@ -143,7 +156,7 @@ class AutonomousPipelineManager:
 
             worker = threading.Thread(
                 target=self._run_autonomous_flow,
-                args=(task, prompt, max_chapters),
+                args=(task, effective_prompt, max_chapters),
                 daemon=True,
             )
             task.worker_thread = worker
@@ -152,6 +165,7 @@ class AutonomousPipelineManager:
             active_count = len([t for t in self.tasks.values() if t.is_running])
             return {
                 "status": "started",
+                "success": True,
                 "novel_id": novel_id,
                 "novel_title": task.novel_title,
                 "active_tasks_count": active_count,
@@ -162,21 +176,21 @@ class AutonomousPipelineManager:
         with self._lock:
             if novel_id:
                 if novel_id not in self.tasks or not self.tasks[novel_id].is_running:
-                    return {"status": "not_running", "message": "該小說目前沒有正在運行的任務"}
+                    return {"status": "not_running", "success": False, "message": "該小說目前沒有正在運行的任務"}
                 task = self.tasks[novel_id]
                 task.stop_requested = True
                 task.status_message = "🛑 正在等待當前步驟完成後中止..."
                 task.log("使用者請求中止本小說的雲端自主生成任務", level="warn")
-                return {"status": "stopping", "novel_id": novel_id, "message": f"已發送中止請求，小說《{task.novel_title}》將於當前章節完成後安全停止"}
+                return {"status": "stopping", "success": True, "novel_id": novel_id, "message": f"已發送中止請求，小說《{task.novel_title}》將於當前章節完成後安全停止"}
             else:
                 running_tasks = [t for t in self.tasks.values() if t.is_running]
                 if not running_tasks:
-                    return {"status": "not_running", "message": "目前沒有任何正在運行的任務"}
+                    return {"status": "not_running", "success": False, "message": "目前沒有任何正在運行的任務"}
                 for t in running_tasks:
                     t.stop_requested = True
                     t.status_message = "🛑 正在等待當前步驟完成後中止..."
                     t.log("使用者請求全域中止雲端任務", level="warn")
-                return {"status": "stopping", "message": f"已對所有 {len(running_tasks)} 本正在生成的小說發送中止請求"}
+                return {"status": "stopping", "success": True, "message": f"已對所有 {len(running_tasks)} 本正在生成的小說發送中止請求"}
 
     def _execute_stage_with_retry(
         self,
@@ -188,9 +202,10 @@ class AutonomousPipelineManager:
         scope: str = "global",
         target: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        verify_fn: Optional[Callable[[], bool]] = None,
         max_retries: int = 5,
     ) -> Any:
-        """具備指數退避自動重試與防卡死機制的 Stage 執行器"""
+        """具備指數退避自動重試、防卡死機制與實質資料庫校驗的 Stage 執行器"""
         last_exc = None
         for attempt in range(1, max_retries + 1):
             if task.stop_requested:
@@ -219,6 +234,11 @@ class AutonomousPipelineManager:
                 if not resp or not resp.ok:
                     err_detail = resp.error if resp else "Empty response returned from generation router"
                     raise RuntimeError(err_detail)
+
+                # 實質校驗：確認該階段所需的成品已真正寫入資料庫
+                if verify_fn and not verify_fn():
+                    raise RuntimeError(f"階段 [{stage}] 執行結束，但資料庫實質校驗未通過（未持久化實質資料）。")
+
                 return resp
 
             except Exception as exc:
@@ -236,8 +256,7 @@ class AutonomousPipelineManager:
         try:
             # 1. 檢查並生成世界觀
             if task.stop_requested: return
-            wb = db.get_latest_worldbuilding(novel_id)
-            if not wb or not wb.get("content"):
+            if not _is_worldview_ready(novel_id):
                 task.current_stage = "worldview"
                 task.progress_percent = 5
                 task.status_message = "正在由總監規劃宏觀世界觀與核心設定..."
@@ -248,14 +267,16 @@ class AutonomousPipelineManager:
                     task_type="generate",
                     instruction="請為本小說構建完整的世界觀設定、力量體系與時代背景",
                     user_prompt=initial_prompt or "請根據小說核心構想設計世界觀",
+                    verify_fn=lambda: _is_worldview_ready(novel_id),
                 )
                 task.log("✅ 世界觀設定已完成並持久化！")
                 db.save_chat_message(novel_id, "assistant", "🌍 **【總監通報】** 世界觀設定與力量體系已規劃完成並存入數據庫！", message_type="chat")
+            else:
+                task.log("世界觀設定已就緒，跳過生成。")
 
             # 2. 檢查並生成主要角色設定
             if task.stop_requested: return
-            chars = db.get_latest_characters(novel_id)
-            if not chars or not chars.get("parsed_data"):
+            if not _are_characters_ready(novel_id):
                 task.current_stage = "characters"
                 task.progress_percent = 15
                 task.status_message = "正在設計核心主角群與配角人設檔案..."
@@ -266,14 +287,16 @@ class AutonomousPipelineManager:
                     task_type="generate",
                     instruction="請設計立體豐富的主角、主要配角與反派角色設定",
                     user_prompt=initial_prompt or "請根據世界觀塑造核心角色",
+                    verify_fn=lambda: _are_characters_ready(novel_id),
                 )
                 task.log("✅ 角色設定已完成並持久化！")
                 db.save_chat_message(novel_id, "assistant", "👥 **【總監通報】** 核心主角群與配角人設檔案已設計完成！", message_type="chat")
+            else:
+                task.log("角色設定已就緒，跳過生成。")
 
             # 3. 檢查並編織全局伏筆與關鍵轉折
             if task.stop_requested: return
-            seeds = db.get_foreshadowing_seeds(novel_id)
-            if not seeds or len(seeds) < 10:
+            if not _are_seeds_ready(novel_id, min_count=10):
                 task.current_stage = "foreshadowing_seeds"
                 task.progress_percent = 22
                 task.status_message = "正在編織全局懸念與長線伏筆網絡..."
@@ -284,13 +307,15 @@ class AutonomousPipelineManager:
                     task_type="generate",
                     instruction="[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆",
                     user_prompt="設計核心主線伏筆",
+                    verify_fn=lambda: _are_seeds_ready(novel_id, min_count=5),
                 )
                 task.log("✅ 伏筆網絡已編織完成！")
                 db.save_chat_message(novel_id, "assistant", "🕸️ **【總監通報】** 全局懸念與長線伏筆網絡已編織完成！", message_type="chat")
+            else:
+                task.log("全書伏筆網絡已就緒，跳過生成。")
 
             if task.stop_requested: return
-            turns = db.get_key_turning_points(novel_id) if hasattr(db, "get_key_turning_points") else []
-            if not turns or len(turns) < 10:
+            if not _are_turning_points_ready(novel_id, min_count=10):
                 task.current_stage = "foreshadowing_turns"
                 task.progress_percent = 28
                 task.status_message = "正在規劃全書核心關鍵轉折點與高潮逆轉事件..."
@@ -301,14 +326,16 @@ class AutonomousPipelineManager:
                     task_type="generate",
                     instruction="[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件",
                     user_prompt="設計核心關鍵轉折點",
+                    verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=5),
                 )
                 task.log("✅ 關鍵轉折點已規劃完成！")
                 db.save_chat_message(novel_id, "assistant", "🎭 **【總監通報】** 全書核心關鍵轉折點已規劃就緒！", message_type="chat")
+            else:
+                task.log("全書關鍵轉折點已就緒，跳過生成。")
 
             # 4. 檢查並規劃分卷結構
             if task.stop_requested: return
-            vols = db.get_volumes(novel_id)
-            if not vols:
+            if not _are_volumes_ready(novel_id):
                 task.current_stage = "volumes"
                 task.progress_percent = 35
                 task.status_message = "正在規劃全書分卷大綱與高潮節奏..."
@@ -319,48 +346,55 @@ class AutonomousPipelineManager:
                     task_type="generate",
                     instruction="請規劃全書分卷架構，包含各卷核心矛盾、起承轉合與終局高潮",
                     user_prompt="規劃分卷大綱",
+                    verify_fn=lambda: _are_volumes_ready(novel_id),
                 )
                 task.log("✅ 分卷架構規劃完成！")
                 db.save_chat_message(novel_id, "assistant", "📚 **【總監通報】** 全書分卷結構與高潮節奏已規劃就緒！", message_type="chat")
                 async_backup(reason=f"Auto flow [{task.novel_title}]: volumes finished")
-                vols = db.get_volumes(novel_id)
+            else:
+                task.log("分卷架構已就緒，跳過生成。")
+
+            vols = db.get_volumes(novel_id)
+            if not vols:
+                raise RuntimeError("分卷結構尚未生成成功，無法繼續後續流程。")
 
             # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆 100% 具備細綱)
             if task.stop_requested: return
-            vols = db.get_volumes(novel_id)
-            if vols:
-                for v_idx, vol in enumerate(vols, start=1):
-                    if task.stop_requested: return
-                    vol_idx = int(vol.get("volume_index") or v_idx)
-                    vol_title = vol.get("title", f"第 {vol_idx} 卷")
-                    missing_chapters = db.volume_missing_chapter_indexes(vols, vol_idx)
-                    if missing_chapters:
-                        task.current_stage = f"volume_skeleton_vol{vol_idx}"
-                        task.progress_percent = 40 + int((v_idx / len(vols)) * 10)
-                        task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架 (缺失 {len(missing_chapters)} 章)..."
-                        task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱 (目標缺失章節: {missing_chapters})...")
-                        self._execute_stage_with_retry(
-                            task=task,
-                            stage="volume_skeleton",
-                            task_type="generate",
-                            target={"volume_index": vol_idx},
-                            instruction=f"請詳細規劃第 {vol_idx} 卷（{vol_title}）各章的情節要點、視角人物、場景與伏筆回收點",
-                            user_prompt=f"生成第 {vol_idx} 卷詳細細綱",
-                        )
-                        task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】章節細綱骨架規劃完成！")
-                        vols = db.get_volumes(novel_id)
-                
-                db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
-                async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
+            for v_idx, vol in enumerate(vols, start=1):
+                if task.stop_requested: return
+                vol_idx = int(vol.get("volume_index") or v_idx)
+                vol_title = vol.get("title", f"第 {vol_idx} 卷")
+                missing_chapters = db.volume_missing_chapter_indexes(vols, vol_idx)
+                if missing_chapters:
+                    task.current_stage = f"volume_skeleton_vol{vol_idx}"
+                    task.progress_percent = 40 + int((v_idx / len(vols)) * 10)
+                    task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架 (缺失 {len(missing_chapters)} 章)..."
+                    task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱 (目標缺失章節: {missing_chapters})...")
+                    self._execute_stage_with_retry(
+                        task=task,
+                        stage="volume_skeleton",
+                        task_type="generate",
+                        target={"volume_index": vol_idx},
+                        instruction=f"請詳細規劃第 {vol_idx} 卷（{vol_title}）各章的情節要點、視角人物、場景與伏筆回收點",
+                        user_prompt=f"生成第 {vol_idx} 卷詳細細綱",
+                        verify_fn=lambda v=vol_idx: _has_volume_skeleton(novel_id, v),
+                    )
+                    task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】章節細綱骨架規劃完成！")
+                    vols = db.get_volumes(novel_id)
+            
+            db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
+            async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
 
             # 6. 逐章撰寫與精修 (智慧接續未完成之章節)
             vols = db.get_volumes(novel_id)
+            if not vols:
+                raise RuntimeError("分卷結構尚未就緒，無法進入正文撰寫流水線。")
             plot_data = db.get_stitched_plot(novel_id)
             planned_chapters = plot_data.get("chapters", []) if plot_data else []
-            total_target = len(planned_chapters) if planned_chapters else (db.get_total_chapter_count(vols) if vols else max_chapters)
-            if total_target <= 0:
-                total_target = max_chapters or 10
+            if not planned_chapters:
+                raise RuntimeError("全書章節細綱尚未就緒，無法進入正文撰寫流水線。")
 
+            total_target = len(planned_chapters)
             task.total_chapters = total_target
             task.log(f"進入正文寫作流水線，全書共規劃 {total_target} 章節")
 
@@ -395,10 +429,11 @@ class AutonomousPipelineManager:
                             target={"volume_index": int(curr_vol_idx)},
                             instruction=f"請詳細規劃第 {curr_vol_idx} 卷各章的情節要點、視角人物、場景與伏筆回收點",
                             user_prompt=f"生成第 {curr_vol_idx} 卷詳細細綱",
+                            verify_fn=lambda v=int(curr_vol_idx): _has_volume_skeleton(novel_id, v),
                         )
                         vols = db.get_volumes(novel_id)
 
-                # (1) 正文寫作 (含 5 次自動重試)
+                # (1) 正文寫作 (含 5 次自動重試與驗證)
                 task.current_stage = f"writer_ch{ch_idx}"
                 task.status_message = f"✍️ 正在由 Writer Agent 撰寫第 {ch_idx}/{total_target} 章正文..."
                 task.log(f"開始撰寫第 {ch_idx} 章正文...")
@@ -411,10 +446,11 @@ class AutonomousPipelineManager:
                     target={"chapter_index": ch_idx},
                     instruction=f"請根據大綱撰寫第 {ch_idx} 章的完整故事正文，著重視角、心理、對白與感官細節",
                     user_prompt=f"撰寫第 {ch_idx} 章",
+                    verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
                 )
                 task.log(f"第 {ch_idx} 章初稿撰寫完成！")
 
-                # (2) 編輯精修 (含 5 次自動重試)
+                # (2) 編輯精修 (含 5 次自動重試與驗證)
                 if task.stop_requested: break
                 task.current_stage = f"editor_ch{ch_idx}"
                 task.status_message = f"🔍 正在由 Editor Agent 精修第 {ch_idx}/{total_target} 章文字與修辭..."
@@ -428,6 +464,7 @@ class AutonomousPipelineManager:
                     target={"chapter_index": ch_idx},
                     instruction=f"請對第 {ch_idx} 章進行修辭優化、節奏微調與行文潤色",
                     user_prompt=f"精修第 {ch_idx} 章",
+                    verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
                 )
                 task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
                 db.save_chat_message(
@@ -453,9 +490,118 @@ class AutonomousPipelineManager:
             task.current_stage = "error"
             task.status_message = f"❌ 執行中斷: {err_msg}"
             task.log(f"執行出錯: {err_msg}", level="error")
+            try:
+                db.save_chat_message(novel_id, "assistant", f"⚠️ **【系統通報】** 雲端自主創作任務異常中斷：{err_msg}", message_type="chat")
+            except Exception:
+                pass
         finally:
             task.is_running = False
             task.stop_requested = False
+            try:
+                db.release_pipeline_lock(novel_id)
+            except Exception as e:
+                print(f"[WARN] Failed to release pipeline lock for novel {novel_id}: {e}")
+
+
+# =============================================================================
+# 實質校驗輔助函數 (Substantive Validation Helpers)
+# =============================================================================
+
+def _is_worldview_ready(novel_id: str) -> bool:
+    wb = db.get_latest_worldbuilding(novel_id)
+    if not wb or not wb.get("content"):
+        return False
+    try:
+        parsed = db.parse_worldview_to_json(wb["content"])
+        if not isinstance(parsed, dict):
+            return False
+        # 需確保 theme、worldview 或 macro_outline 具備實質故事文本 (>= 20 字)
+        theme_val = (parsed.get("theme") or "").strip()
+        wv_val = (parsed.get("worldview") or "").strip()
+        macro_val = (parsed.get("macro_outline") or "").strip()
+        return bool(len(theme_val) >= 20 or len(wv_val) >= 20 or len(macro_val) >= 20)
+    except Exception:
+        return False
+
+
+def _are_characters_ready(novel_id: str) -> bool:
+    char_data = db.get_latest_characters(novel_id)
+    if not char_data:
+        return False
+    candidates = []
+    if char_data.get("json_data"):
+        try:
+            candidates.append(json.loads(char_data.get("json_data") or "{}"))
+        except Exception:
+            pass
+    if char_data.get("parsed_data") is not None:
+        candidates.append(char_data.get("parsed_data"))
+
+    placeholder_names = {
+        "新登場的次要角色", "待補充", "暫無", "placeholder", "新角色", "路人", 
+        "客棧老闆", "符合人設說話風格", "todo", "新登場次要角色"
+    }
+
+    for parsed in candidates:
+        if isinstance(parsed, dict):
+            chars = parsed.get("characters", [])
+        elif isinstance(parsed, list):
+            chars = parsed
+        else:
+            chars = []
+        if isinstance(chars, list) and len(chars) > 0:
+            valid_chars = [
+                c for c in chars
+                if isinstance(c, dict)
+                and (c.get("name") or "").strip()
+                and not any(pn in (c.get("name") or "").lower() for pn in placeholder_names)
+            ]
+            if len(valid_chars) > 0:
+                return True
+    return False
+
+
+def _are_seeds_ready(novel_id: str, min_count: int = 5) -> bool:
+    seeds = db.get_foreshadowing_seeds(novel_id)
+    return bool(seeds and len(seeds) >= min_count)
+
+
+def _are_turning_points_ready(novel_id: str, min_count: int = 5) -> bool:
+    turns = db.get_key_turning_points(novel_id) if hasattr(db, "get_key_turning_points") else []
+    return bool(turns and len(turns) >= min_count)
+
+
+def _are_volumes_ready(novel_id: str) -> bool:
+    vols = db.get_volumes(novel_id)
+    return bool(vols and len(vols) > 0)
+
+
+def _has_volume_skeleton(novel_id: str, volume_index: int) -> bool:
+    vols = db.get_volumes(novel_id)
+    if not vols:
+        return False
+    for v in vols:
+        v_idx = int(v.get("volume_index") or 0)
+        if v_idx == volume_index:
+            chapters = v.get("chapters_outline") or []
+            if isinstance(chapters, str):
+                try:
+                    chapters = json.loads(chapters)
+                except Exception:
+                    chapters = []
+            if isinstance(chapters, list) and len(chapters) > 0:
+                return True
+    return False
+
+
+def _is_chapter_written(novel_id: str, chapter_index: int) -> bool:
+    chapters = db.get_chapters(novel_id)
+    for c in chapters:
+        if int(c.get("chapter_index") or 0) == chapter_index:
+            content = (c.get("content") or "").strip()
+            if len(content) >= 50:
+                return True
+    return False
 
 
 # 全域單例管理器

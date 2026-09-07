@@ -7,8 +7,11 @@ from backend.generation.routing.schema import GenerationTaskRequest
 from backend.agents.editor.runner import run_editor_agent
 
 
+from backend.generation.handlers import resolve_handler_prompt
+
+
 def run_editor_task(task: GenerationTaskRequest, context=None):
-    prompt = (task.instruction or task.user_prompt or task.hint or "").strip()
+    prompt = resolve_handler_prompt(task, default_instruction="請根據文學標準潤飾、修正情節漏洞與提升文筆張力")
     chapter_index = task.target.chapter_index
     if chapter_index is None:
         raise ValueError("editor 階段必須由總監明確指定 chapter_index，禁止後端默認第 1 章。")

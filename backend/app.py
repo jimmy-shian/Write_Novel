@@ -39,16 +39,28 @@ from backend.api.volumes.routes import router as volumes_router
 from backend.api.diagnostics.routes import router as diagnostics_router
 from backend.api.sync.routes import router as sync_router
 from backend.api.autonomous.routes import router as autonomous_router
-from backend.services.hf_sync import restore_database, async_backup
+from backend.api.temporal_graph.routes import router as temporal_graph_router
+from backend.api.terms.routes import router as terms_router
+from backend.api.proposals.routes import router as proposals_router
+from backend.services.hf_sync import restore_database, async_backup, is_hf_sync_available, DB_PATH
 
 # Restore database from Hugging Face Dataset if running in cloud / configured
-restore_database(force=False)
+restore_ok = restore_database(force=False)
+if is_hf_sync_available() and not restore_ok:
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+        raise RuntimeError(
+            "[CRITICAL] Cloud restore failed and no local database exists. "
+            "Halting startup to prevent initializing an empty database that would overwrite cloud storage. "
+            "Please check HF_TOKEN and storage configuration or network connectivity."
+        )
 
 # Initialize database (must happen before routes)
 from backend import persistence as db
 db.db_init()
 
-app = FastAPI(title="AI Novel Factory API", version="3.0.0")
+from backend.common.version import get_version
+
+app = FastAPI(title="AI Novel Factory API", version=get_version())
 
 # Enable CORS for local development
 app.add_middleware(
@@ -67,6 +79,9 @@ app.include_router(volumes_router, prefix="/api")
 app.include_router(diagnostics_router, prefix="/api")
 app.include_router(sync_router, prefix="/api")
 app.include_router(autonomous_router, prefix="/api")
+app.include_router(temporal_graph_router, prefix="/api")
+app.include_router(terms_router, prefix="/api")
+app.include_router(proposals_router, prefix="/api")
 
 # --- GENERATION TASK ENDPOINT (kept inline for now as core feature) ---
 @app.post("/api/generation-task")
@@ -104,14 +119,19 @@ def api_generation_task(payload: dict = Body(...)):
 
 
 # --- STATIC CONTENT HOSTING ---
-static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "static")
+base_frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+dist_dir = os.path.join(base_frontend_dir, "dist")
+legacy_static_dir = os.path.join(base_frontend_dir, "static")
+
+static_dir = dist_dir if (os.path.exists(dist_dir) and os.path.exists(os.path.join(dist_dir, "index.html"))) else legacy_static_dir
 
 @app.get("/")
 def serve_index():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
         from fastapi.responses import FileResponse
-        return FileResponse(index_path)
-    return {"message": "AI Novel Factory UI files missing from /static"}
+        return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    return {"message": "AI Novel Factory UI files missing"}
 
-app.mount("/", StaticFiles(directory=static_dir), name="static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir), name="static")
