@@ -1,259 +1,188 @@
-# 🛠️ AI Novel Factory - 開發者與工程師指南
+# 🛠️ AI Novel Factory - 開發者與工程師手冊 (v4.0.0)
 
-本文件專為工程師與開發人員設計，詳細說明 **AI Novel Factory** 專案的啟動方式、環境配置、SQLite 資料庫架構、常用維護與清理指令、程式碼邏輯結構，以及測試執行。
+本手冊專為參與 **AI Novel Factory** 專案維護與開發之工程師編寫，涵蓋環境建置、版本控制原則、開源授權邊界、SQLite 資料庫架構、Graphiti 時序動態記憶引擎、React + Vite 前端架構、OpenDesign 規範與自動化測試套件。
 
 ---
 
-## 🚀 1. 環境準備與服務啟動
+## 🚀 1. 開發環境配置與服務啟動
 
-### 執行環境
-- **作業系統**：Windows
-- **指定 Python 虛擬環境路徑**：`C:\Users\user\venv\Scripts\python.exe`
-- **編碼規範**：系統所有中文處理與檔案讀寫一律強制使用 **`UTF-8`** 編碼。
+### 核心環境規範
+- **作業系統**：Windows 10 / 11
+- **指定 Python 虛擬環境路徑**：`C:\Users\Administrator\venv\Scripts\python.exe`
+- **指定 Node.js 環境**：Node.js v20+ / v22+ 與 npm
+- **編碼規範**：所有 Python 檔案、TypeScript 檔案與資料庫交互一律強制採用 **`UTF-8 (無 BOM)`** 編碼。
+- **樣式與介面規範**：**嚴格禁止 Inline Styles**，全站 100% 透過 `opendesign.css` 管理；**禁止裝飾性卡通 Emoji**，全面採用精準 SVG 與 6px 狀態指示點。
 
 ### 服務啟動步驟
-1. 開啟 Windows **PowerShell** 或 **命令提示字元 (CMD)**。
-2. 切換至專案根目錄：
-   ```powershell
-   cd "c:\Users\user\Desktop\test_html\Write_Novel"
-   ```
-3. 使用虛擬環境 Python 啟動 Uvicorn 伺服器：
-   ```powershell
-   C:\Users\user\venv\Scripts\python.exe -m pip install -r requirements.txt
-   C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
-   ```
-4. 啟動成功後，造訪本地服務網址：
-   👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
 
-### 關閉服務
-在執行啟動指令的終端機視窗中，同時按下 **`Ctrl + C`** 即可安全關閉伺服器。
-
----
-
-## ⚙️ 2. 環境變數配置 (`.env`)
-
-所有敏感資訊與 API Keys 均儲存於專案根目錄的 `.env` 檔案中，請勿提交至 Git 倉庫。
-
-### 環境變數配置說明
-- **`NVIDIA_API_KEY_*`**：各智能體的 API Key。支援為不同 Agent 設定獨立的金鑰。
-- **`MODEL_*`**：各智能體預設套用的模型名稱。
-- **`DEFAULT_*`**：全域預設值，例如 `DEFAULT_BASE_URL` 指向 NVIDIA API 網址，以及預設的 `DEFAULT_TEMPERATURE` 等。
-
-### 配置讀取優先權
-1. **資料庫設定**：在網頁前端「⚙️ 模型設定 & API Key」中所儲存並修改的設定（優先權最高）。
-2. **本地環境變數 (`.env`)**：專案設定預設值。
-3. **程式碼內置備援值**：若以上兩者皆缺少時的 Fallback 模型與參數。
-
----
-
-## 統一校閱標準
-
-總監審核先走程式硬性檢查，再做內容品質判斷。
-
-- `backend/services/director_tools.py::evaluate_output` 統一檢查 `worldview`、`foreshadowing`、`characters`、`volumes`、`volume_skeleton`、`writer`、`editor`。
-- 硬性檢查範圍包含 JSON 解析、必填欄位、數量限制、章節/卷索引連續性、正文基本長度與占位內容。
-- 長列表或完整章節不得只看摘要。總監需呼叫 `inspect_content_block` 或 `expand_collapsed_json` 分段展開，再判斷內容品質。
-- 只有硬性檢查失敗或內容問題有明確位置時才退回；一般風格建議應寫成 feedback，不阻斷流程。
-
----
-
-## 📊 3. SQLite 資料庫架構
-
-資料庫名稱為 [novel_factory.db](file:///c:/Users/user/Desktop/test_html/Write_Novel/novel_factory.db)，包含以下 **9 個核心資料表**：
-
-### 1. `novels` (小說元數據表)
-儲存小說的基本屬性。
-- `id` (TEXT PRIMARY KEY) - UUID。
-- `title` (TEXT) - 小說名稱。
-- `genre` (TEXT) - 題材類型。
-- `style` (TEXT) - 寫作風格。
-- `pipeline_prompt` (TEXT) - 大綱生成初始提示詞。
-- `worldview_patches` (TEXT) - 儲存後續增量修補的世界觀修補記錄 (JSON Array)。
-- `created_at` (TIMESTAMP)
-
-### 2. `worldbuilding` (世界觀表)
-採用版本化管理，保留每次修改的世界觀歷史。
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `content` (TEXT) - 完整世界觀設定（JSON 格式）。
-- `version` (INTEGER) - 版本號，從 1 開始遞增。
-- `created_at` (TIMESTAMP)
-
-### 3. `characters` (角色聖經表)
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `json_data` (TEXT) - 完整的角色聖經 JSON 數據。
-- `version` (INTEGER)
-- `created_at` (TIMESTAMP)
-
-### 4. `plot_chapters` (主大綱章節表)
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `outline_json` (TEXT) - 全書劇情大綱主 JSON。
-- `version` (INTEGER)
-- `is_dirty` (INTEGER) - 標記是否被修改但未寫入。
-- `created_at` (TIMESTAMP)
-
-### 5. `chapters` (正文章節內容表)
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `chapter_index` (INTEGER) - 章節索引（1-indexed）。
-- `content` (TEXT) - 已撰寫好的正文。
-- `synopsis` (TEXT) - 該章大綱摘要。
-- `thinking` (TEXT) - AI 寫作正文時的深度思考推理過程 (Reasoning Process)。
-- `is_dirty` (INTEGER)
-- `version` (INTEGER)
-- `created_at` (TIMESTAMP)
-
-### 6. `chat_memory` (對話記憶與總監日誌表)
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `role` (TEXT) - 發言角色 (`user` / `assistant`)。
-- `content` (TEXT) - 對話內容。
-- `thinking` (TEXT) - 側邊欄 Copilot 的深度思考過程。
-- `message_type` (TEXT) - 消息類型：`chat` (普通對談) 或 `director` (總監分析日誌，用以避免 Token 爆炸)。
-- `timestamp` (DATETIME)
-
-### 7. `agent_configs` (智能體設定表)
-- `agent_name` (TEXT PRIMARY KEY) - 例如 `writer`, `plot`, `architect` 等。
-- `api_key` (TEXT)
-- `base_url` (TEXT)
-- `model` (TEXT)
-- `temperature` (REAL)
-- `top_p` (REAL)
-- `max_tokens` (INTEGER)
-- `enable_thinking` (INTEGER) - 1 為啟用，0 為停用。
-
-### 8. `volumes` (篇卷架構與大綱表)
-大綱生成策略的中間橋樑層，管理各卷的微觀章節骨架。
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
-- `novel_id` (TEXT, 外鍵)
-- `volume_index` (INTEGER) - 卷索引。
-- `title` (TEXT) - 卷標題。
-- `summary` (TEXT) - 卷大綱與劇情走勢。
-- `factions` (TEXT) - 涉及的勢力範圍。
-- `chapter_count` (INTEGER) - 本卷規劃章節數（預設 50）。
-- `time_timeline` (TEXT) - 時間線設定。
-- `sequence_context` (TEXT) - 上下文關係。
-- `applicable_rules` (TEXT) - 適用法則。
-- `chapters_outline` (TEXT) - 本卷內所有章節的骨架與詳細微觀大綱 (JSON 格式)。
-- `is_dirty` (INTEGER)
-- `created_at` (TIMESTAMP)
-
-### 9. `foreshadowing_blueprints` (全局伏筆藍圖表)
-- `novel_id` (TEXT PRIMARY KEY)
-- `blueprint_json` (TEXT) - 儲存跨卷伏筆鋪墊 (Plants) 與回收 (Payoffs) 節點的藍圖。
-- `updated_at` (TIMESTAMP)
-
----
-
-## 🛠️ 4. 常用運維操作與細項指令
-
-### A. 資料庫內容完全清理
-在開發與調試期間，若需要**保留小說列表 (`novels` 表)** 但**清空所有生成的設定與正文**（包括角色、篇卷、正文、大綱、記憶與伏筆表），可使用以下指令：
-
+#### A. 前端構建與啟動
 ```powershell
-# 1. 執行清理腳本
-C:\Users\user\venv\Scripts\python.exe scratch/clear_generated_content.py
+# 1. 進入前端目錄
+cd frontend
 
-# 2. 驗證清理後的資料庫狀態
-C:\Users\user\venv\Scripts\python.exe scratch/verify_after_clear.py
+# 2. 安裝相依套件 (初次執行)
+npm install
+
+# 3. 構建生產發布包 (輸出至 frontend/dist/)
+npm run build
+
+# 4. (選用) 獨立前端熱重載開發模式
+npm run dev
 ```
 
-快捷的合併命令：
+#### B. 後端伺服器啟動
 ```powershell
-C:\Users\user\venv\Scripts\python.exe scratch/clear_generated_content.py && C:\Users\user\venv\Scripts\python.exe scratch/verify_after_clear.py
-```
+# 切換回專案根目錄
+cd ..
 
-### B. 部分數據修補與重置
-若僅需要將已生成的詳細大綱回退至初始的「骨架大綱」、保留首 10 個核心角色、並清空 plot_chapters 表以進行重新展開，可執行：
-```powershell
-C:\Users\user\venv\Scripts\python.exe scratch/clear_data.py
+# 透過指定虛擬環境啟動 Uvicorn 伺服器
+C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 ```
-> [!NOTE]
-> `clear_data.py` 預設的 `novel_id` 需手動修改為您當前要測試的小說 UUID。
+後端啟動後，FastAPI 會**自動優先掛載並提供 `frontend/dist/` 打包產物**。造訪 `http://127.0.0.1:8000/` 即可直接進入最新版 React 創作工作台。
 
 ---
 
-## 🧪 5. 整合單一測試套件執行
+## ⚖️ 2. 開源授權邊界與 Clean-Room 實作原則
 
-根據本專案的測試規範，**所有測試代碼均整合在單一 Python 檔案內**，禁止分次或分檔案執行。
+本專案在整併與參考開源專案時，嚴格恪守開源授權界限（詳見 [THIRD_PARTY_NOTICES.md](file:///c:/Users/Administrator/Desktop/Write_Novel/THIRD_PARTY_NOTICES.md)）：
 
-### 執行單一完整測試
-請在專案根目錄下執行以下指令：
-```powershell
-C:\Users\user\venv\Scripts\python.exe test_all.py
-```
-此測試會自動初始化一個測試資料庫、執行資料庫的 CRUD 驗證、版本管理測試、格式解析測試，以及 API 連通性測試。
+1. **`AI-Novel-Writer` (GPL-3.0) 授權界限**：
+   - 僅作為功能架構、使用者介面排版（4 欄 IDE 網格、抽屜交互）與審閱工作流的**概念與行為規格參考**。
+   - **絕對禁止代碼複製**：嚴禁複製、移植、翻譯或機械改寫任何 GPL-3.0 代碼，本專案所有 React 元件、Hook、演算法（包括 LCS Line Diff）皆為純粹根據行為規格獨立全新實作之 Clean-Room 代碼。
+2. **`Monogatari-Assistant-FE` (Apache-2.0)**：
+   - 元素間距、排版概念與靈感借鑒，已保留完整 NOTICE 與 Attribution 標註。
+3. **`Graphiti` (Apache-2.0)**：
+   - 時序知識圖譜、Episode 抽取與事實作廢追蹤之概念與架構參考，已於 `THIRD_PARTY_NOTICES.md` 完整聲明。
 
 ---
 
-## 📦 6. 資料匯出技術細節與整合
+## 🔢 3. 單一事實來源版本號管理 (SSOT)
 
-### 1. 後端 API 設計
-系統提供以下 FastAPI API 用於小說數據導出：
-- **端點路徑**：`GET /api/novels/{novel_id}/export`
-- **查詢參數**：
-  - `format`：`txt` (純文字正文) 或 `markdown` (包含設定與正文的 Markdown)
-- **處理常式位置**：[app.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/app.py) 中的 `export_novel` 端點。
-- **編碼頭**：
-  ```python
-  headers = {
-      "Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"
+本專案版本號遵循 **Single Source of Truth** 原則：
+- **唯一維護位置**：專案根目錄 [`version.json`](file:///c:/Users/Administrator/Desktop/Write_Novel/version.json)
+  ```json
+  {
+    "name": "AI Novel Factory",
+    "version": "4.0.0",
+    "codename": "ObsidianGraphiti",
+    "release_date": "2026-09-05"
   }
   ```
-
-### 2. 命令列匯出工具 (`export_novel.py`)
-除了 Web 端，開發者也可以使用命令列工具 [export_novel.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/export_novel.py) 進行資料提取：
-
-- **列出資料庫中所有可用的小說與 UUID**：
-  ```powershell
-  C:\Users\user\venv\Scripts\python.exe export_novel.py --list
-  ```
-- **匯出為 TXT 格式**：
-  ```powershell
-  C:\Users\user\venv\Scripts\python.exe export_novel.py --novel-id <NOVEL_UUID> --format txt
-  ```
-- **匯出為 Markdown 格式**：
-  ```powershell
-  C:\Users\user\venv\Scripts\python.exe export_novel.py --novel-id <NOVEL_UUID> --format markdown
-  ```
-- **指定自訂輸出路徑**：
-  ```powershell
-  C:\Users\user\venv\Scripts\python.exe export_novel.py --novel-id <NOVEL_UUID> --format markdown --output "./scratch/my_novel.md"
-  ```
-
-### 3. 前端 UI 整合代碼範例
-若前端需要調用此導出 API，可在 [static/index.html](file:///c:/Users/user/Desktop/test_html/Write_Novel/static/index.html) 或對應的 JS 控制器中，為按鈕綁定以下點擊事件：
-
-```javascript
-function downloadNovel(novelId, format = 'txt') {
-  if (!novelId) {
-    showToast('請先選擇小說');
-    return;
-  }
-  
-  // 構建 API 下載請求
-  const url = `/api/novels/${novelId}/export?format=${format}`;
-  
-  // 建立隱藏的 a 標籤觸發下載
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = ''; // 讓伺服器 header 決定檔名
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  
-  showToast(`正在發送匯出請求 (${format.toUpperCase()})...`);
-}
-```
+- **引用規範**：
+  - 後端：透過 `from backend.common.version import get_version, get_app_info` 動態讀取。
+  - 前端：透過 `import versionConfig from '../../../version.json'`（定義於 `frontend/src/config/version.ts`）取得常數。
+  - **嚴禁在任何其他代碼檔案中手動硬編碼版本號字串**。
 
 ---
 
-## 🧭 7. 原始碼結構與邏輯說明
+## 📊 4. SQLite 資料庫完整架構 (`novel_factory.db`)
 
-- **[backend/app.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/app.py)**：FastAPI 應用入口，註冊 API 路由、靜態前端與 `/api/generation-task`。
-- **[backend/db.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/db.py)**：SQLite 資料庫存取層。提供小說設定、版本管理、對話紀錄與 Agent 配置等讀寫介面。
-- **[backend/generation/agent_runners.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/generation/agent_runners.py)**：正式 Agent 執行器。`agents.py` 已移至 `_archive/legacy/`，不再作為 runtime 入口。
-- **[backend/schemas/agent_json.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/schemas/agent_json.py)**：定義各個智能體輸出內容的 JSON Schema 與通過標準。
-- **[backend/services/director_tools.py](file:///c:/Users/user/Desktop/test_html/Write_Novel/backend/services/director_tools.py)**：總監工具層，包含 `evaluate_output`、內容展開、局部補強與子代理呼叫。
+資料庫由 [`backend/persistence/schema.py`](file:///c:/Users/Administrator/Desktop/Write_Novel/backend/persistence/schema.py) 進行集中建表與升級維護，包含 14 個主要資料表：
+
+### A. 小說核心表
+1. **`novels`**：作品元資訊 (`id`, `title`, `genre`, `style`, `pipeline_prompt`, `created_at`)。
+2. **`worldbuilding`**：版本化世界觀歷史設定 (`id`, `novel_id`, `content`, `version`)。
+3. **`characters`**：角色聖經與關聯網絡 (`id`, `novel_id`, `json_data`, `version`)。
+4. **`plot_chapters`**：全書大綱主 JSON 表。
+5. **`chapters`**：章節正文與思考歷程 (`novel_id`, `chapter_index`, `content`, `synopsis`, `thinking`, `is_dirty`, `version`)。
+6. **`volumes`**：篇卷結構與 50 章微觀大綱。
+7. **`foreshadowing_blueprints`**：全局伏筆鋪設與回收藍圖。
+8. **`chat_memory`**：對話記憶與總監日誌。
+9. **`agent_configs`**：LLM 智能體參數快取備份。
+
+### B. Graphiti 時序記憶圖譜專用表
+10. **`temporal_episodes`**：
+    - 紀錄每一章節的情節片段摘要與內容雜湊。
+    - 欄位：`id` (UUID), `novel_id`, `chapter_index`, `summary`, `content_hash`, `created_at`。
+11. **`temporal_entities`**：
+    - 追蹤登場之角色、物品、地點、勢力或修煉概念。
+    - 欄位：`id`, `novel_id`, `name`, `entity_type`, `summary`, `attributes` (JSON), `created_chapter`, `updated_chapter`。
+12. **`temporal_facts`**：
+    - 時序事實命題核心表，支援生命週期與動態作廢。
+    - 欄位：`id`, `novel_id`, `source_entity_id`, `target_entity_id`, `relation_type`, `fact_statement`, `valid_from_chapter`, `invalid_from_chapter`, `is_active`, `superseded_by`。
+    - **切片邏輯**：當查詢第 $N$ 章記憶時，條件為 `valid_from_chapter <= N AND (invalid_from_chapter IS NULL OR invalid_from_chapter > N)`。
+
+### C. 專用術語庫與草稿提案表
+13. **`story_terms`**：
+    - 專用名詞庫，自動作為 Prompt 約束注入。
+    - 欄位：`id`, `novel_id`, `category`, `term`, `definition`, `notes`, `created_at`。
+14. **`draft_proposals`**：
+    - 暫存 AI 總監或編輯產出的修改建議。
+    - 欄位：`id`, `novel_id`, `chapter_index`, `original_text`, `proposed_text`, `review_comments` (JSON), `status` (`pending` / `accepted` / `rejected`), `created_at`。
+
+---
+
+## 🎨 5. 前端架構與 OpenDesign 規範
+
+前端採用 **React 18 + TypeScript + Vite**，位於 `frontend/` 目錄：
+
+```
+frontend/src/
+├── api/                  # 封裝型別化的後端端點請求 (client, novels, temporal, terms, proposals, generation, settings)
+├── components/
+│   ├── common/           # Button, Badge, StatusDot (6px), CopyCard, ModelChip, Modal, Icons (向量 SVG)
+│   ├── layout/           # ActivityRail (48px), ExplorerDrawer (260px), WorkspaceHeader, BottomDock, MobileNav
+│   ├── editor/           # EditorPane (正文畫布), DiffViewer (行級差異對比), ProposalInbox (提案收件箱)
+│   ├── graph/            # TemporalGraphBoard (時序切片與事實作廢面板)
+│   ├── copilot/          # CopilotDrawer (AI 導演總控與串流推理歷程)
+│   └── settings/         # SettingsModal (API 參數與動態模型選單), TermsModal (術語庫維護)
+├── config/               # 引用 version.json
+├── hooks/                # useNovel, useTemporalGraph, useProposals 狀態機與 Dirty Check
+├── platform/             # 平台抽象層 (Web / Android APK / Desktop)，解耦 API Base URL 與硬體能力
+├── styles/               # opendesign.css (Zinc/Obsidian 暗黑設計系統)
+└── utils/                # diff.ts (LCS 行級對比演算法), clipboard.ts (零 Inline Style 剪貼簿工具)
+```
+
+### 關鍵技術規範
+1. **嚴格零 Inline Style**：
+   - 全專案無任何 `style="..."` 或 JSX `style={{...}}`。
+   - 所有元素樣式皆由 `opendesign.css` 中具備語意之 CSS Class 控制。
+2. **極簡無 Emoji 政策**：
+   - 統一使用輕量向量 SVG（`components/common/Icons.tsx`）與 6px 狀態圓點（`.status-dot.success`, `.status-dot.danger` 等）。
+3. **平台解耦與 APK 打包相容**：
+   - 前端所有資源引用均使用相對路徑（`base: './'`）。
+   - `platform/index.ts` 抽象平台能力，在 Android 環境（Capacitor/Cordova）可透過 LocalStorage 指定後端 API 伺服器，或在同一設備上運行。
+
+---
+
+## 🧪 6. 自動化測試規範
+
+專案採用 **Pytest** 作為後端與整合測試驅動器，配置於 [`pytest.ini`](file:///c:/Users/Administrator/Desktop/Write_Novel/pytest.ini)。
+
+### 執行全套測試
+```powershell
+C:\Users\Administrator\venv\Scripts\python.exe -m pytest
+```
+
+### 測試模組一覽
+- **`tests/test_frontend_build_integration.py`**：驗證 FastAPI 靜態掛載優先級與 SSOT 版本號讀取。
+- **`tests/test_temporal_and_story_extensions.py`**：驗證時序事實生命週期、作廢機制、術語庫約束與提案流程。
+- **`tests/unit/test_writer_context_builder.py`**：驗證 Graphiti 時序記憶在正文生成時之動態注入。
+- **`tests/unit/test_gold_rules_governance.py`**：驗證黃金規則治理邏輯。
+- **`tests/unit/test_tool_loop_fix.py`**：驗證 Agent 工具調用死循環自癒防護。
+- **`tests/narrative_regression/test_narrative_benchmark.py`**：敘事長篇基準測試。
+
+> 當前測試狀態：**34 passed (100% 通過，0 failed)**。
+
+
+## 📦 7. 本地打包與 GitHub Actions 遠端 CI/CD
+
+### A. 本地一鍵打包腳本 (uild_app.py)
+專案提供統一的封裝控制器，支援多種打包目標：
+`powershell
+# 1. 互動式選單
+python build_app.py
+
+# 2. 指定非互動參數
+python build_app.py --target apk   # 打包 Android Release APK (使用 mykey 簽名)
+python build_app.py --target exe   # 打包 Windows 獨立綠色版桌面程式 (.EXE)
+python build_app.py --target all   # 同步編譯 APK 與 EXE
+python build_app.py --target web   # 僅構建前端發布包
+`
+編譯成品將統一輸出至專案根目錄 dist-packages/。
+
+### B. 遠端自動編譯工作流 (.github/workflows/build_and_release.yml)
+在推送至 master 分支或建立發布標籤 (*) 時自動觸發：
+1. **test-and-build-web**：Python 3.11 環境執行 Pytest 測試套件，Node.js 20 構建前端。
+2. **build-android-apk**：配置 JDK 21 與 Android SDK，使用 Gradle assembleRelease 自動生成已簽名之 AI_Novel_Factory_signed.apk 並上傳為 Artifact。
+3. **build-windows-exe**：Windows Runner 上以 PyInstaller 打包完整應用並壓縮為 AI_Novel_Factory_Windows_x64.zip 上傳為 Artifact。

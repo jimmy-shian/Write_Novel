@@ -9,22 +9,21 @@ app_file: app.py
 pinned: false
 ---
 
-# AI Novel Factory (AI 小說工廠)
+# AI Novel Factory (AI 小說工廠) v4.0.0
 
-> 智能長篇小說創作系統 — 採用多 AI 代理協作（Multi-Agent Collaboration）與總監驅動管線（Director-Driven Pipeline）架構。
-
+> 智能長篇小說創作系統 — 採用多 AI 代理協作（Multi-Agent Collaboration）、Graphiti 時序動態記憶圖譜（Temporal Knowledge Graph）、OpenDesign 極簡暗黑架構與 React 現代化工作台。
 
 ---
 
 <!-- 頁籤式導航列 (Tab Navigation Bar) -->
-| 📖 [專案總覽](#-1-專案總覽) | 🚀 [快速開始](#-2-快速開始與環境變數) | 🏛️ [技術架構詳解](#-3-系統技術架構-架構頁籤) | 📡 [核心 API](#-4-核心-api-端點) | 🧪 [測試與規範](#-5-測試與開發規範) |
-| :---: | :---: | :---: | :---: | :---: |
+| [專案總覽](#-1-專案總覽) | [快速開始](#-2-快速開始與環境配置) | [核心新特性 (v4.0.0)](#-3-v400-核心新特性) | [系統技術架構](#-4-系統技術架構) | [核心 API 端點](#-5-核心-api-端點) | [測試與開源授權](#-6-測試與開源授權界限) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
 
 ---
 
-## 📖 1. 專案總覽
+## 1. 專案總覽
 
-AI 小說工廠是一個高度模組化、多代理協作的長篇小說自動創作系統。系統透過 7 個核心創作階段（Stage）與 1 個智慧總監評估階段，由 AI 總監（AI Director Copilot）依序派發任務、審查品質、修補錯誤，實現百萬字級長篇小說的結構化生成。
+AI 小說工廠是一個高度模組化、多代理協作的長篇小說自動創作與輔助寫作系統。系統透過 7 個核心創作階段（Stage）與智慧總監評估階段，由 AI 總監（AI Director Copilot）依序派發任務、審查品質、修補錯誤，並結合 **Graphiti 時序動態記憶圖譜**，實現百萬字級長篇小說的結構化生成與前後文連貫性保障。
 
 ### 核心創作階段一覽
 
@@ -35,251 +34,200 @@ AI 小說工廠是一個高度模組化、多代理協作的長篇小說自動�
 | 3 | `foreshadowing`| **Foreshadowing Orchestrator** (伏筆編織師) | 全局伏筆種子埋設、觸發章節與關鍵高潮轉折點編排 |
 | 4 | `volumes` | **Volumes Planner** (篇卷結構規劃師) | 劃分全書 10~20 卷宏觀節奏與卷主線目標 |
 | 5 | `volume_skeleton`| **Volume Skeleton Planner** (骨架規劃師) | 規劃逐卷逐章細部骨架大綱（40~50 章/卷） |
-| 6 | `writer` | **Chapter Writer** (正文寫作作家) | 撰寫高品質小說正文（單章 1500~3000 字） |
-| 7 | `editor` | **Editor Agent** (精緻文風編輯) | 潤色行文修辭、統一用詞規範與文風昇華 |
+| 6 | `writer` | **Chapter Writer** (正文寫作作家) | 結合時序記憶與術語庫撰寫高品質小說正文（單章 1500~3000 字） |
+| 7 | `editor` | **Editor Agent** (精緻文風編輯) | 潤色行文修辭、產出審閱修改提案與文風昇華 |
 | — | `evaluate` | **AI Director Copilot** (總監評估調度) | 階段性產出品質審查、錯誤自癒與管線下一步決策 |
+
+### 專案目錄結構
 
 ```
 Write_Novel/
-├── backend/
-│   ├── app.py                    # FastAPI 核心應用與全域路由註冊
-│   ├── api/                      # RESTful 資源路由層 (novels, settings, export, volumes)
-│   ├── agents/                   # 獨立 Agent 執行包 (architect, character, writer, etc.)
-│   ├── common/                   # LLM 傳輸、設定解析與全域工具 (llm.py)
-│   ├── generation/               # 統一生成引擎 (routing, orchestration, handlers)
-│   ├── persistence/              # SQLite 持久化層與 Repositories (novel_factory.db)
-│   ├── prompts/                  # 提示詞模板與上下文組裝
-│   ├── schemas/                  # Pydantic 輸出資料結構與校驗
-│   └── services/                 # 記憶體服務、診斷工具、環境變數管理 (env_manager.py)
-├── frontend/                     # 前端單頁應用程式靜態資源 (HTML / Vanilla CSS / ES Modules)
-├── data/                         # 資料庫檔案與黃金規則庫
-├── docs/                         # 專案詳細架構與開發指引文件
-└── test_all.py                   # 單一整合型全自動化測試套件
+├── version.json                  # 全專案唯一版本來源 (Single Source of Truth, v4.0.0)
+├── THIRD_PARTY_NOTICES.md        # 第三方開源授權與 Clean-Room 淨室聲明
+├── pytest.ini                    # Pytest 自動化測試配置
+├── requirements.txt              # Python 後端依賴清單
+├── backend/                      # Python FastAPI 後端
+│   ├── app.py                    # FastAPI 核心應用、路由註冊與靜態發布包掛載
+│   ├── api/                      # RESTful 資源路由層
+│   │   ├── novels/               # 小說 CRUD、章節與大綱存取
+│   │   ├── temporal_graph/       # Graphiti 時序記憶圖譜與切片端點
+│   │   ├── terms/                # 故事專用術語庫 (Glossary) 端點
+│   │   ├── proposals/            # 草稿修訂提案與 Diff 套用端點
+│   │   ├── settings/             # 系統設定與動態模型探索
+│   │   ├── autonomous/           # 全自動自主寫作管線控制
+│   │   └── export/               # 多格式導出 (TXT / Markdown / 便攜 HTML)
+│   ├── common/                   # 全域版本讀取 (version.py)、LLM 介面 (llm.py)
+│   ├── generation/               # 生成路由引擎 (routing, orchestration, handlers)
+│   ├── persistence/              # SQLite 持久化層 (schema.py, repositories/)
+│   └── services/                 # Graphiti 引擎、上下文建構器、無人值守排程器
+├── frontend/                     # React 現代化單頁應用 (Vite + TS)
+│   ├── package.json              # 前端相依套件 (React 18, Lucide-like SVG, Vite)
+│   ├── vite.config.ts            # Vite 構建配置 (相對路徑 base: './', API Proxy)
+│   ├── src/
+│   │   ├── api/                  # 統一型別化 API 客戶端
+│   │   ├── components/           # OpenDesign 極簡元件 (layout, editor, graph, copilot, common)
+│   │   ├── config/               # 版本號引用 (version.ts)
+│   │   ├── hooks/                # 業務邏輯自訂 Hook (useNovel, useTemporalGraph, useProposals)
+│   │   ├── platform/             # 平台抽象層 (Web, Android APK, Desktop)
+│   │   ├── styles/               # OpenDesign CSS 框架 (opendesign.css，嚴格 0 inline styles)
+│   │   └── utils/                # LCS 行級 Diff 演算法、剪貼簿工具
+│   └── dist/                     # 前端生產環境打包產物 (FastAPI 自動服務)
+├── tests/                        # 自動化測試套件 (34 項單元與整合測試全數通過)
+└── data/                         # 本地資料庫與快取 (novel_factory.db)
 ```
 
 ---
 
-## 🚀 2. 快速開始與環境變數
+## 2. 快速開始與環境配置
+
+### 系統需求
+- **作業系統**：Windows 10 / 11
+- **Python**：3.10+（推薦使用虛擬環境 `C:\Users\Administrator\venv\Scripts\python.exe`）
+- **Node.js**：18+（推薦 v20+ 或 v22+）
 
 ### 啟動服務
 
-```bash
-# 1. 安裝必要依賴
-pip install -r requirements.txt
+#### 1. 前端構建（初次運行或代碼變更時）
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+```
+> `npm run build` 會產出高效率靜態發布包至 `frontend/dist/`。
 
-# 2. 啟動 FastAPI 本地開發伺服器
-python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
-
-# 3. 於瀏覽器開啟工作台
-http://127.0.0.1:8000
+#### 2. 啟動後端服務
+```powershell
+C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 環境變數設定檔 (`.env`)
-
-系統支援於網頁工作台「**模型設置 & Agent 團隊 API 金鑰**」介面直接編輯、向端點動態查詢 `/models` 清單，並在點擊儲存時**即時同步寫入根目錄 `.env` 檔案**。
-
-<details>
-<summary><b>點擊展開檢視 .env 完整範本與參數說明</b></summary>
-
-```dotenv
-# ==========================================
-# AI Novel Factory - Environment Configuration
-# ==========================================
-
-# --- 各 Agent 獨立 API Key (NVIDIA / OpenAI / Custom) ---
-NVIDIA_API_KEY_GLOBAL="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_ARCHITECT="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_CHARACTER="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_VOLUMES="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_VOLUME_SKELETON="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_PLOT="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_WRITER="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_EDITOR="nvapi-YOUR_KEY_HERE"
-NVIDIA_API_KEY_COPILOT="nvapi-YOUR_KEY_HERE"
-
-# --- 全域預設設定 (Global Defaults) ---
-MODEL_GLOBAL="openai/gpt-oss-120b"
-BASE_URL_GLOBAL="https://integrate.api.nvidia.com/v1"
-TEMPERATURE_GLOBAL=1.0
-TOP_P_GLOBAL=0.95
-MAX_TOKENS_GLOBAL=16384
-ENABLE_THINKING_GLOBAL=0
-
-# --- 各代理個別覆寫設定範例 ---
-MODEL_ARCHITECT="openai/gpt-oss-120b"
-BASE_URL_ARCHITECT="https://integrate.api.nvidia.com/v1"
-TEMPERATURE_ARCHITECT=1.0
-TOP_P_ARCHITECT=0.95
-MAX_TOKENS_ARCHITECT=16384
-ENABLE_THINKING_ARCHITECT=0
-
-DEFAULT_BASE_URL="https://integrate.api.nvidia.com/v1"
-DEFAULT_TEMPERATURE=1.0
-DEFAULT_TOP_P=0.95
-DEFAULT_MAX_TOKENS=16384
-DEFAULT_ENABLE_THINKING=0
-```
-
-| 變數前綴/名稱 | 類型 | 說明 |
-|:---|:---:|:---|
-| `NVIDIA_API_KEY_{AGENT}` | String | 該 Agent 專用 API Key；留空時自動繼承 Global Key |
-| `MODEL_{AGENT}` | String | 該 Agent 專用模型名稱；留空時繼承 Global Model |
-| `BASE_URL_{AGENT}` | String | 該 Agent 呼叫端點 URL；留空時繼承 Global Base URL |
-| `TEMPERATURE_{AGENT}` | Float | 生成多樣性溫度 (0.0 ~ 2.0) |
-| `TOP_P_{AGENT}` | Float | 核採樣機率閾值 (0.0 ~ 1.0) |
-| `MAX_TOKENS_{AGENT}` | Int | 單次最大輸出 Token 數量 |
-| `ENABLE_THINKING_{AGENT}` | Int (0/1) | 是否啟用推理思考模式（Reasoning Stream） |
-
-</details>
+#### 3. 進入創作工作台
+開啟瀏覽器訪問：
+👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
+FastAPI 會自動服務 `frontend/dist/` 所構建出的現代化 OpenDesign 工作台。
 
 ---
 
-## 🏛️ 3. 系統技術架構 (架構頁籤)
+## 3. v4.0.0 核心新特性
 
-以下收錄系統各模組技術細節，可點擊各主題分頁展開閱讀：
+### A. Graphiti 時序動態記憶圖譜（打破固定上下文窗口）
+- **時間切片查詢**：依據章節索引動態檢索 `valid_from_chapter <= N < invalid_from_chapter` 的有效事實，避免上下文被淘汰設定干擾。
+- **衝突與作廢追蹤（Invalidation Tracking）**：當情節發展導致既有事實改變（例如「林霄修為突破築基」、「玄火令被奪」），系統自動記錄作廢章節與取代資訊（Superseded by）。
+- **章節事實自動抽取**：點擊一鍵「本章事實自動提取」，AI 分析正文並自動向圖譜登錄新實體與關係命題。
+
+### B. 複合創作與審閱流（Composite Workflow）
+- **手動創作**：無干擾寫作畫布，即時字數/行數統計，1-Click 一鍵複製，`Ctrl + S` 快速儲存。
+- **草稿建議收件箱（Proposal Inbox）**：AI 總監與精修編輯產出的修改案自動存入提案表，保留審閱意見分類（節奏、語氣、漏洞、氛圍、語法）。
+- **行級差異對比器（Diff Viewer）**：基於 LCS 演算法自製的高效行級 Diff，高亮顯示 `+` 新增行與 `-` 刪除行，提供「一鍵套用」與「放棄建議」。
+
+### C. 故事專用術語庫（Glossary Constraints）
+- 支援分類維護專用名詞（通用術語、修煉體系、地理名詞、功法法寶、宗門勢力）。
+- 術語定義與約束規範在後端生成時**自動作為強制約束注入 Prompt**，有效防止 AI 發生名詞漂移與設定矛盾。
+
+### D. OpenDesign 極簡主義無 Emoji 設計系統
+- **嚴格 0 Inline Style**：全專案 HTML、JSX、動態 DOM 檢驗結果均為 0 處 inline styles，所有視覺表現均由 [`opendesign.css`](file:///c:/Users/Administrator/Desktop/Write_Novel/frontend/src/styles/opendesign.css) 統一維護。
+- **去除裝飾性卡通 Emoji**：全面採用乾淨精準的向量 SVG 圖標與 6px 狀態指示圓點（`.status-dot`）。
+- **動態模型標籤（Model Chips）**：透過端點即時獲取可用模型清單，支援一鍵切換與設定儲存。
+
+### E. 響應式佈局 (RWD) 與 Android APK 支援
+- **桌面端**：4 欄 IDE 網格佈局（48px 活動列 + 260px 目錄抽屜 + 彈性主畫布 + 320px 導演抽屜 + 底部可收合日誌）。
+- **行動端 (< 768px)**：底欄 3 按鈕導航（目錄、正文、導演），左右抽屜平滑覆蓋，操作流暢。
+- **跨平台解耦**：前端 Vite 配置 `base: './'`，產出的發布包可直接封裝入 Capacitor 或 Cordova 作為 Android APK 離線運行。
+
+### F. 單一事實來源版本號（SSOT）
+- 專案版本號嚴格唯一定義於根目錄 [`version.json`](file:///c:/Users/Administrator/Desktop/Write_Novel/version.json)。
+- 後端與前端均動態引用此檔，杜絕跨檔案硬編碼與版本不一致問題。
+
+---
+
+
+### G. 一鍵本地打包與 GitHub Actions 遠端自動編譯
+- **本地一鍵封裝控制 (uild_app.py)**：支援互動式選單或 CLI 參數 (--target apk|exe|all|web)，自動配置 Android SDK 與 JDK 環境變數，使用固定金鑰庫 (mykey.keystore) 簽名 Release APK，並支援 PyInstaller 獨立綠色版桌面程式 (.EXE) 打包。
+- **CI/CD 自動編譯工作流 (.github/workflows/build_and_release.yml)**：master 分支推送自動觸發全套自動化測試、網頁資源構建、Android APK 簽名封裝與 Windows EXE 打包，產物自動上傳至 GitHub Actions Artifacts。
+
+## 4. 系統技術架構
 
 ```mermaid
 graph TB
-    subgraph Frontend["前端層 (Frontend UI)"]
-        UI["工作台介面 (HTML/CSS/JS)"]
-        Pipeline["pipeline.js (管線引擎)"]
-        TaskClient["generationTaskClient.js (SSE 客戶端)"]
-        SSEHandler["generationSseHandler.js (事件解析)"]
-        ResultApplier["generationResultApplier.js (狀態修補)"]
+    subgraph Frontend["前端層 (React 18 + Vite + TypeScript)"]
+        UI["OpenDesign 現代化工作台"]
+        EditorView["編輯器畫布 (EditorPane)"]
+        DiffView["行級差異檢視器 (DiffViewer)"]
+        GraphView["時序圖譜檢視面板 (TemporalGraphBoard)"]
+        CopilotView["AI 導演總控室 (CopilotDrawer)"]
+        PlatformAdapter["平台抽象層 (platform/index.ts)"]
     end
     
-    subgraph BackendAPI["後端路由層 (FastAPI API)"]
-        FastAPI["POST /api/generation-task"]
-        SettingsAPI["POST /api/settings/fetch-models"]
+    subgraph BackendAPI["後端 API 層 (FastAPI)"]
+        NovelsAPI["/api/novels (小說與章節)"]
+        TemporalAPI["/api/novels/{id}/temporal-graph (時序記憶)"]
+        TermsAPI["/api/novels/{id}/terms (術語庫)"]
+        ProposalsAPI["/api/novels/{id}/proposals (草稿提案)"]
+        GenTaskAPI["/api/generation-task (串流任務分發)"]
+        SettingsAPI["/api/settings (配置與動態模型)"]
     end
     
-    subgraph GenerationRouting["生成路由與調度 (Generation Routing)"]
-        Router["router.py (主調度分發)"]
-        Validator["validator.py (請求校驗)"]
-        LockManager["lock_manager.py (管線分散式鎖)"]
-        ContextBuilder["context_builder.py (上下文組裝)"]
-        PostProcessor["post_processor.py (串流與後處理)"]
+    subgraph CoreEngines["核心處理引擎"]
+        GraphitiEngine["Graphiti 時序圖譜記憶引擎"]
+        WriterContext["WriterContextBuilder (動態上下文組裝)"]
+        PipelineManager["AutonomousPipelineManager (自主寫作管理)"]
+        Router["Generation Router (調度與取鎖)"]
     end
     
-    subgraph Handlers["創作階段處理器 (Stage Handlers)"]
-        WorldviewH["worldview_handler.py"]
-        CharactersH["characters_handler.py"]
-        ForeshadowingH["foreshadowing_handler.py"]
-        VolumesH["volumes_handler.py"]
-        SkeletonH["volume_skeleton_handler.py"]
-        WriterH["writer_handler.py"]
-        EditorH["editor_handler.py"]
-        DirectorH["director_handler.py"]
+    subgraph Persistence["資料庫層 (SQLite - novel_factory.db)"]
+        T_Novels[(novels / chapters)]
+        T_Temporal[(temporal_episodes / entities / facts)]
+        T_Terms[(story_terms)]
+        T_Proposals[(draft_proposals)]
     end
     
-    subgraph Services["核心服務與記憶體 (Services)"]
-        NarrativeMemory["narrative_memory.py (敘事記憶鏈)"]
-        EnvManager["env_manager.py (.env 讀寫同步)"]
-        DirectorTools["director/tools.py (總監工具庫)"]
-        Diagnostics["diagnostics/report.py (健康度診斷)"]
-    end
-    
-    subgraph Persistence["持久化層 (SQLite Persistence)"]
-        DB[(novel_factory.db)]
-    end
-    
-    UI --> Pipeline --> TaskClient -->|"SSE Request"| FastAPI
-    FastAPI --> Router
-    Router --> Validator & LockManager & ContextBuilder
-    Router --> Handlers
-    Handlers --> Services & Persistence
-    PostProcessor -->|"SSE Event Stream"| SSEHandler --> ResultApplier --> UI
+    UI --> EditorView & DiffView & GraphView & CopilotView
+    EditorView & DiffView & GraphView & CopilotView --> PlatformAdapter
+    PlatformAdapter -->|"HTTP / SSE"| BackendAPI
+    BackendAPI --> CoreEngines
+    CoreEngines --> Persistence
 ```
-
-<details open>
-<summary><b>📑 頁籤 A：前端管線與 SSE 協議 (Frontend Pipeline & SSE)</b></summary>
-
-### 核心前端模組
-- **`pipeline.js`**：管線主控引擎，負責管理 `isPipelineRunning` 狀態、階段切換與總監審查循環。
-- **`generationTaskClient.js`**：封裝底層 SSE 請求，支援連線中斷自動退避重試（Exponential Backoff）。
-- **`generationSseHandler.js`**：即時解析後端推播之 `thinking`、`content`、`error`、`retrying` 與 `done` 封包。
-- **`ui/settings.js`**：模型設置管理介面，實作 Base URL 動態拉取模型清單、快取與 `.env` 同步寫入。
-
-### SSE 串流封包規格
-```text
-data: {"type": "thinking", "delta": "正在推導主角動機..."}
-data: {"type": "content", "delta": "第一章 正文內容..."}
-data: {"type": "retrying", "message": "格式校驗修正中..."}
-data: {"type": "done", "ok": true, "result": {...}, "patches": [...], "lock_released": true}
-```
-
-</details>
-
-<details>
-<summary><b>📑 頁籤 B：後端生成路由與調度 (Generation Routing & Orchestration)</b></summary>
-
-### 生成路由核心架構
-- **`router.py`**：生成任務的統一進入點，協調生命週期：`驗證` ➔ `取鎖` ➔ `建構上下文` ➔ `派發 Handler` ➔ `後處理與存檔` ➔ `釋放鎖`。
-- **`lock_manager.py`**：小說級別管線鎖（Pipeline Lock），防止同一小說專案併發寫入衝突，支援定期 Heartbeat 續期機制。
-- **`context_builder.py`**：智能彙整當前創作階段所需之世界觀、前卷記憶、角色狀態與歷史摘要。
-- **`post_processor.py`**：負責串流結果攔截、JSON 格式強制解析、自動儲存至 SQLite 並產生增量 JSON Patches。
-
-</details>
-
-<details>
-<summary><b>📑 頁籤 C：Agent 系統與總監審查機制 (Agent System & Director)</b></summary>
-
-### 總監評估雙層機制 (Two-Tier Evaluation)
-1. **硬性格式檢查 (Hard Schema Check)**：`evaluate_output` 嚴格校驗 JSON 欄位完整性、章節索引連續性、空章節偵測。若失敗則自動重試或由總監介入修復。
-2. **內容品質審查 (Quality Inspection)**：透過 `inspect_content_block` 與 `expand_collapsed_json` 工具分段展開大綱與章節，評估伏筆呼應度與行文節奏。
-
-### 敘事記憶系統 (`narrative_memory.py`)
-- **章節記憶 (Chapter Memory)**：記錄每章的出場角色、狀態變更、關鍵事件與情報揭露。
-- **篇卷弧線摘要 (Arc Summaries)**：自動壓縮歷史章節為卷級記憶，保持超長篇小說上下文不溢出且設定不吃書。
-
-</details>
-
-<details>
-<summary><b>📑 頁籤 D：持久化與資料庫 (Persistence & SQLite Schema)</b></summary>
-
-### 資料表結構
-- `novels`：小說基本資訊、主線進度與 Prompt。
-- `worldbuilding`：世界觀背景設定、地理勢力與力量等級。
-- `characters`：角色資料卡與關係網絡。
-- `volumes`：篇卷劃分、卷大綱與目標。
-- `chapters`：章節大綱、正文草稿與潤色終稿。
-- `foreshadowing`：伏筆種子、狀態（已埋下/已揭露）與關聯章節。
-- `agent_configs`：各 Agent 之資料庫設定備份。
-- `pipeline_locks`：管線鎖定狀態與 Heartbeat 時間戳。
-
-</details>
 
 ---
 
-## 📡 4. 核心 API 端點
+## 5. 核心 API 端點
 
 | HTTP 方法 | API 路徑 | 說明 | 備註 |
 |:---:|:---|:---|:---|
-| `POST` | `/api/generation-task` | **統一生成調度端點** | 支援 SSE 串流與 JSON 同步模式 |
-| `GET` | `/api/settings` | 獲取當前所有 Agent 之配置快照 | 整合 `.env` 與資料庫設定 |
-| `POST` | `/api/settings` | 儲存 Agent 設定 | **即時同步修改專案根目錄 `.env`** |
-| `POST` | `/api/settings/fetch-models` | **動態查詢可用模型清單** | 支援 OpenAI / NVIDIA / Ollama `/models` 端點 |
-| `GET` | `/api/novels` | 列出所有小說專案 | 支援分頁與狀態統計 |
-| `POST` | `/api/novels` | 建立全新小說專案 | 包含標題、題材、風格設定 |
-| `GET` | `/api/novels/{id}` | 取得指定小說完整資料 | 含世界觀、角色、篇卷與章節全貌 |
-| `POST` | `/api/novels/{id}/copy` | 複製小說專案 | 複製同風格與設定之空書目專案 |
-| `GET` | `/api/novels/{id}/export` | 匯出小說全書 | 支援 **離線便攜 HTML 閱讀器** 與純文字 TXT |
+| `POST` | `/api/generation-task` | **統一生成調度端點** | 支援 SSE 串流 (`text/event-stream`) |
+| `GET` | `/api/novels/{id}/temporal-graph` | **時序記憶圖譜切片** | 支援 `?chapter=N` 查詢有效事實 |
+| `POST` | `/api/novels/{id}/temporal-graph/facts` | 新增時序事實命題 | 紀錄起始章節 `valid_from_chapter` |
+| `POST` | `/api/novels/{id}/temporal-graph/facts/{fid}/invalidate` | **作廢時序事實** | 登記作廢章節與取代資訊 |
+| `POST` | `/api/novels/{id}/temporal-graph/extract-from-chapter` | **章節事實自動提取** | 呼叫 AI 解析正文並登錄實體與事實 |
+| `GET` | `/api/novels/{id}/terms` | 取得小說專用術語庫 | 可依 `?category=...` 篩選 |
+| `POST` | `/api/novels/{id}/terms` | 新增故事術語 | 術語定義自動作為 Prompt 約束注入 |
+| `GET` | `/api/novels/{id}/proposals` | 取得草稿修改提案清單 | 支援依章節與狀態 (`pending`) 篩選 |
+| `POST` | `/api/novels/{id}/proposals/{pid}/apply` | **一鍵套用修改提案** | 將提案覆蓋章節正文並更新狀態 |
+| `POST` | `/api/pipeline/auto-run` | 啟動全自動自主寫作 | 後端背景多執行緒自驅推進 |
+| `GET` | `/api/pipeline/auto-status` | 查詢自主寫作即時狀態 | 輪詢當前章節、階段與進度 |
+| `POST` | `/api/settings/fetch-models` | 動態探索端點可用模型 | 支援 OpenAI / NVIDIA / Ollama `/models` |
 
 ---
 
-## 🧪 5. 測試與開發規範
+## 6. 測試與開源授權界限
 
-本專案遵循嚴格的品質與跨平台相容規範：
-
-- **純 Windows / PowerShell 環境相容**：所有指令與路徑處理完全適配 Windows，禁止相依 Linux 特有命令。
-- **全流程 UTF-8 強制編碼**：所有中文字串與檔案讀寫強制宣告 `encoding='utf-8'`，嚴防 `cp950` 編碼異常。
-- **單一整合測試套件**：所有單元測試、API 整合測試、模型查詢與 `.env` 同步驗證皆整合於單一檔案 `test_all.py`。
-
-### 執行完整自動化測試
-
+### 自動化測試套件
+專案具備完整的自動化測試，使用專用虛擬環境執行：
 ```powershell
-C:\Users\user\venv\Scripts\python.exe test_all.py
+C:\Users\Administrator\venv\Scripts\python.exe -m pytest
 ```
+- **測試涵蓋範圍**：
+  - `tests/test_frontend_build_integration.py`：驗證 FastAPI 靜態掛載 React 發布包與 SSOT 版本號。
+  - `tests/test_temporal_and_story_extensions.py`：驗證時序事實生命週期、作廢機制、術語庫約束與提案流程。
+  - `tests/unit/test_writer_context_builder.py`：驗證時序圖譜動態注入寫作上下文。
+  - `tests/unit/test_gold_rules_governance.py`、`test_tool_loop_fix.py`、`test_narrative_benchmark.py`。
+- **測試結果**：**34 passed, 0 failed**。
+
+### 開源授權與 Clean-Room 聲明
+詳見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)：
+1. **`AI-Novel-Writer` (GPL-3.0)**：採嚴格淨室（Clean-Room）獨立開發原則，僅作介面交互與功能流程概念參考，本專案無任何複製、移植、翻譯或機械改寫之代碼。
+2. **`Monogatari-Assistant-FE` (Apache-2.0)**：設計排版理念參考，已於告示文件標註 Attribution。
+3. **`Graphiti` (Apache-2.0)**：時序動態知識圖譜概念參考，已於告示文件標註 Attribution。
 
 ---
 
@@ -287,3 +235,5 @@ C:\Users\user\venv\Scripts\python.exe test_all.py
 
 - 📖 [使用者操作指南 (USER_GUIDE.md)](USER_GUIDE.md)
 - 💻 [開發者指南 (DEVELOPER_GUIDE.md)](DEVELOPER_GUIDE.md)
+- 🚀 [開發與雲端部署守則 (DEVELOPMENT_DEPLOYMENT_GUIDE.md)](DEVELOPMENT_DEPLOYMENT_GUIDE.md)
+- ⚖️ [第三方授權告示 (THIRD_PARTY_NOTICES.md)](THIRD_PARTY_NOTICES.md)

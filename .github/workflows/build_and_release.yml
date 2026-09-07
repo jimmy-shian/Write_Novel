@@ -1,0 +1,158 @@
+﻿name: Build & Release Packages
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  test-and-build-web:
+    name: Run Tests & Build Web Assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest pytest-asyncio fastapi httpx uvicorn
+
+      - name: Run Pytest Test Suite
+        run: |
+          python -m pytest tests/
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Web Dist
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+  build-android-apk:
+    name: Build Signed Android APK
+    needs: test-and-build-web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'microsoft'
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Frontend & Sync Capacitor
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Make Gradlew Executable
+        run: |
+          chmod +x frontend/android/gradlew
+
+      - name: Build Release APK with Gradle
+        run: |
+          cd frontend/android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Collect and Rename APK
+        run: |
+          mkdir -p dist-packages
+          cp frontend/android/app/build/outputs/apk/release/app-release.apk dist-packages/AI_Novel_Factory_signed.apk
+
+      - name: Upload Signed APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI_Novel_Factory_signed_apk
+          path: dist-packages/AI_Novel_Factory_signed.apk
+          if-no-files-found: error
+
+  build-windows-exe:
+    name: Build Windows Desktop EXE & NSIS Setup
+    needs: test-and-build-web
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          pip install pyinstaller uvicorn fastapi opencc pydantic pillow
+
+      - name: Build Frontend Dist
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          cd ..
+
+      - name: Build Windows EXE with PyInstaller
+        run: |
+          python build_app.py --target exe
+
+      - name: Compile NSIS Setup Installer
+        run: |
+          python build_app.py --target installer
+
+      - name: Archive Portable EXE Folder
+        run: |
+          Compress-Archive -Path dist-packages\AI_Novel_Factory -DestinationPath dist-packages\AI_Novel_Factory_Portable_x64.zip -Force
+
+      - name: Upload Windows Setup Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI_Novel_Factory_Setup_Installer
+          path: dist-packages/AI_Novel_Factory_v*_Setup.exe
+          if-no-files-found: error
+
+      - name: Upload Portable Windows ZIP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI_Novel_Factory_Portable_x64
+          path: dist-packages/AI_Novel_Factory_Portable_x64.zip
+          if-no-files-found: error
