@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 AI Novel Factory - Unified Local Packaging & Build Tool
 小說工廠一鍵打包編譯控制腳本 (Android APK / Windows EXE / NSIS 安裝包)
@@ -13,6 +13,18 @@ AI Novel Factory - Unified Local Packaging & Build Tool
 
 import os
 import sys
+
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 import shutil
 import subprocess
 import argparse
