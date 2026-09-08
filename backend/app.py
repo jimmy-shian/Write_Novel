@@ -25,7 +25,7 @@ if sys.platform == 'win32':
         pass
 
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -60,35 +60,9 @@ db.db_init()
 
 from backend.common.version import get_version
 
-app = FastAPI(title="AI Novel Factory API", version=get_version())
-
-# Enable CORS for local development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include route modules
-app.include_router(novels_router, prefix="/api")
-app.include_router(settings_router, prefix="/api")
-app.include_router(export_router, prefix="/api")
-app.include_router(volumes_router, prefix="/api")
-app.include_router(diagnostics_router, prefix="/api")
-app.include_router(sync_router, prefix="/api")
-app.include_router(autonomous_router, prefix="/api")
-app.include_router(temporal_graph_router, prefix="/api")
-app.include_router(terms_router, prefix="/api")
-app.include_router(proposals_router, prefix="/api")
-
-# --- GENERATION TASK ENDPOINT (kept inline for now as core feature) ---
-@app.post("/api/generation-task")
+# --- GENERATION TASK ENDPOINT (Core orchestration endpoint) ---
 def api_generation_task(payload: dict = Body(...)):
     from backend.generation import coerce_generation_task_request, execute_generation_task, stream_generation_task
-    from fastapi import HTTPException
-    from fastapi.responses import StreamingResponse
 
     try:
         task = coerce_generation_task_request(payload)
@@ -117,21 +91,62 @@ def api_generation_task(payload: dict = Body(...)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+# --- UNIFIED API ROUTER (Single Source of Truth for all routes) ---
+api_routers = [
+    novels_router,
+    settings_router,
+    export_router,
+    volumes_router,
+    diagnostics_router,
+    sync_router,
+    autonomous_router,
+    temporal_graph_router,
+    terms_router,
+    proposals_router,
+]
+
+api_router = APIRouter(prefix="/api")
+for sub_router in api_routers:
+    api_router.include_router(sub_router)
+api_router.add_api_route("/generation-task", api_generation_task, methods=["POST"])
+
+# --- STATIC CONTENT RESOLVER ---
+def get_static_dir():
+    base_frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+    dist_dir = os.path.join(base_frontend_dir, "dist")
+    legacy_static_dir = os.path.join(base_frontend_dir, "static")
+    if os.path.exists(dist_dir) and os.path.exists(os.path.join(dist_dir, "index.html")):
+        return dist_dir
+    if os.path.exists(legacy_static_dir):
+        return legacy_static_dir
+    return None
+
+# --- FASTAPI APPLICATION INSTANCE ---
+app = FastAPI(title="AI Novel Factory API", version=get_version())
+
+# Enable CORS for local development & cross-origin access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include unified API router
+app.include_router(api_router)
 
 # --- STATIC CONTENT HOSTING ---
-base_frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
-dist_dir = os.path.join(base_frontend_dir, "dist")
-legacy_static_dir = os.path.join(base_frontend_dir, "static")
-
-static_dir = dist_dir if (os.path.exists(dist_dir) and os.path.exists(os.path.join(dist_dir, "index.html"))) else legacy_static_dir
+static_dir = get_static_dir()
 
 @app.get("/")
 def serve_index():
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        from fastapi.responses import FileResponse
-        return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    if static_dir:
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            from fastapi.responses import FileResponse
+            return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return {"message": "AI Novel Factory UI files missing"}
 
-if os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir), name="static")
+if static_dir and os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir), name="static")
