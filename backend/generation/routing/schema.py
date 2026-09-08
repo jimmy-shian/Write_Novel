@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from .stage_registry import (
     default_scope_for_stage,
@@ -22,6 +22,8 @@ CONTEXT_MODES = ("full", "compact", "minimal")
 
 
 class GenerationTaskTarget(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     volume_id: Optional[str] = None
     chapter_id: Optional[str] = None
     section_id: Optional[str] = None
@@ -30,30 +32,27 @@ class GenerationTaskTarget(BaseModel):
     section_index: Optional[int] = None
     selection: Optional[List[Any]] = None
 
-    class Config:
-        extra = "allow"
-
 
 class GenerationTaskOptions(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     batch: bool = False
     overwrite: bool = False
     stream: bool = True
     dry_run: bool = False
 
-    class Config:
-        extra = "allow"
-
 
 class GenerationTaskFrontendState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     current_stage: Optional[str] = None
     selected_volume: Optional[Any] = None
     selected_chapter: Optional[Any] = None
 
-    class Config:
-        extra = "allow"
-
 
 class GenerationTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     novel_id: str
     task_type: str = "generate"
     stage: Optional[str] = None
@@ -71,11 +70,10 @@ class GenerationTaskRequest(BaseModel):
     extra_context: Optional[str] = None
     target_field: Optional[str] = None
 
-    class Config:
-        extra = "allow"
-
 
 class GenerationTaskResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     ok: bool
     task_id: str
     task_type: str
@@ -87,11 +85,10 @@ class GenerationTaskResponse(BaseModel):
     state_updates: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Any] = None
 
-    class Config:
-        extra = "allow"
-
 
 class GenerationPostProcessResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     ok: bool
     task_id: str
     task_type: str
@@ -103,9 +100,6 @@ class GenerationPostProcessResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     error: Optional[Any] = None
     lock_released: bool = False
-
-    class Config:
-        extra = "allow"
 
 
 def coerce_generation_task_request(payload: Any) -> GenerationTaskRequest:
