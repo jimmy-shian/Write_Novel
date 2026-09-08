@@ -1,4 +1,4 @@
-import { getPlatformAdapter } from '../platform';
+import { buildApiUrl, getAuthHeaders } from '../platform';
 import { request } from './client';
 
 export interface GenerationTaskEvent {
@@ -48,9 +48,8 @@ export async function streamGenerationTask(
   },
   callbacks: StreamGenerationOptions = {}
 ): Promise<void> {
-  const adapter = getPlatformAdapter();
-  const baseUrl = adapter.apiBaseUrl.replace(/\/+$/, '');
-  const url = `${baseUrl}/api/generation-task`;
+  const url = buildApiUrl('/api/generation-task');
+  const authHeaders = getAuthHeaders();
 
   const body = {
     ...payload,
@@ -62,7 +61,10 @@ export async function streamGenerationTask(
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+    },
     body: JSON.stringify(body),
     signal: callbacks.signal,
   });

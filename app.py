@@ -67,6 +67,15 @@ if HAS_GRADIO:
                 app.include_router(sub_router, prefix=prefix)
             app.add_api_route(f"{prefix}/generation-task", api_generation_task, methods=["POST"])
 
+        # 4. 提升自訂 API 路由至最高優先級 (避免被 Gradio 內部 catch-all 攔截導致 308 重定向)
+        api_routes = [
+            r for r in app.router.routes
+            if hasattr(r, "path") and (r.path.startswith("/api") or r.path.startswith("/gradio_api/novel"))
+        ]
+        for r in reversed(api_routes):
+            app.router.routes.remove(r)
+            app.router.routes.insert(0, r)
+
         return app
 
     App.create_app = _custom_create_app

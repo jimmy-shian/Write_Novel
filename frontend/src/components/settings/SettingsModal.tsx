@@ -12,6 +12,7 @@ import {
   CloudSyncStatus,
 } from '../../api/settings';
 import { APP_VERSION, APP_NAME } from '../../config/version';
+import { parseCloudEndpoint } from '../../platform';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -65,12 +66,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [cloudToken, setCloudToken] = useState('');
   const [enableCloudSync, setEnableCloudSync] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
 
   const isWebDeploy = typeof window !== 'undefined' && (
     window.location.protocol === 'https:' ||
     window.location.hostname.includes('huggingface') ||
-    window.location.hostname.includes('hf.space')
+    window.location.hostname.includes('hf.space') ||
+    window.location.hostname.includes('github.io') ||
+    window.location.hostname.includes('pages.dev')
   );
 
   // 本地端 (localhost / 127.0.0.1) 預設不自動勾選雲端備份
@@ -85,7 +89,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsLoading(true);
     setStatusMessage(null);
 
-    // Load Settings
+    // 優先從 localStorage 載入持久化設定
+    const savedHost = localStorage.getItem('NOVEL_FACTORY_API_HOST') || '';
+    const savedBucket = localStorage.getItem('NOVEL_FACTORY_CLOUD_BUCKET') || '';
+    const savedToken = localStorage.getItem('NOVEL_FACTORY_API_TOKEN') || '';
+
+    const effectiveBucket = savedBucket || savedHost || (isWebDeploy ? 'https://botsz-writenovel.hf.space' : '');
+    if (effectiveBucket) setCloudBucket(effectiveBucket);
+    if (savedToken) setCloudToken(savedToken);
+
+    // Load Settings from DB (if connected to HF Space, this reads from HF DB!)
     getSettings()
       .then((data) => {
         const agents = data?.agents || data;
@@ -111,7 +124,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setEnableThinking(thinking);
       })
       .catch((err) => {
-        setStatusMessage(`載入設定失敗: ${err.message}`);
+        console.warn('載入設定失敗:', err);
       })
       .finally(() => setIsLoading(false));
 
@@ -119,8 +132,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     getCloudSyncStatus()
       .then((s) => {
         setSyncStatus(s);
-        setCloudBucket(s.storage_bucket || s.dataset_repo || '');
-        setCloudToken(s.token || '');
+        if (!effectiveBucket && (s.storage_bucket || s.dataset_repo)) {
+          setCloudBucket(s.storage_bucket || s.dataset_repo);
+        }
+        if (!savedToken && s.token) {
+          setCloudToken(s.token);
+        }
         setEnableCloudSync(Boolean(isWebDeploy || (!isLocalRun && (s.storage_bucket || s.dataset_repo || s.has_token))));
       })
       .catch(() => {});
@@ -148,6 +165,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleTestConnection = async () => {
+    setIsTesting(true);
+    setStatusMessage(null);
+    try {
+      const trimmedBucket = cloudBucket.trim();
+      const trimmedToken = cloudToken.trim();
+      const { host: targetHost, bucket: targetBucket } = parseCloudEndpoint(trimmedBucket);
+
+      if (targetHost) {
+        localStorage.setItem('NOVEL_FACTORY_API_HOST', targetHost);
+      }
+      if (targetBucket) {
+        localStorage.setItem('NOVEL_FACTORY_CLOUD_BUCKET', targetBucket);
+      }
+      if (trimmedToken) {
+        localStorage.setItem('NOVEL_FACTORY_API_TOKEN', trimmedToken);
+      }
+
+      const s = await getCloudSyncStatus();
+      setSyncStatus(s);
+
+      setStatusMessage('✅ 雲端伺服器連線成功！正在重新整理頁面以載入作品與設定...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (err: any) {
+      setStatusMessage(`連線測試失敗: ${err.message || err}`);
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   const handleTriggerBackup = async () => {
     setIsBackingUp(true);
     setBackupMessage(null);
@@ -171,6 +220,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsSaving(true);
     setStatusMessage(null);
     try {
+      const trimmedBucket = cloudBucket.trim();
+      const trimmedToken = cloudToken.trim();
+      const { host: targetHost, bucket: targetBucket } = parseCloudEndpoint(trimmedBucket);
+
+      // 確實將連線資訊保存至瀏覽器 localStorage (SSOT)
+      if (targetHost) {
+        localStorage.setItem('NOVEL_FACTORY_API_HOST', targetHost);
+      }
+      if (targetBucket) {
+        localStorage.setItem('NOVEL_FACTORY_CLOUD_BUCKET', targetBucket);
+      }
+      if (trimmedToken) {
+        localStorage.setItem('NOVEL_FACTORY_API_TOKEN', trimmedToken);
+      }
+
       const directorModelToSave = directorModel.trim();
       const writerModelToSave = separateModels ? writerModel.trim() : directorModelToSave;
 
@@ -205,12 +269,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
       await saveSettings({ configs: agentsPayload, agents: agentsPayload });
 
-      if (enableCloudSync || isWebDeploy || cloudBucket.trim() || cloudToken.trim()) {
+      if (enableCloudSync || isWebDeploy || targetBucket || trimmedToken) {
         try {
           const syncRes = await saveCloudSyncConfig({
-            storage_bucket: cloudBucket.trim(),
-            dataset_repo: cloudBucket.trim(),
-            token: cloudToken.trim(),
+            storage_bucket: targetBucket,
+            dataset_repo: targetBucket,
+            token: trimmedToken,
           });
           if (syncRes.config) {
             setSyncStatus(syncRes.config);
@@ -220,9 +284,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         }
       }
 
-      setStatusMessage('設定已成功儲存！');
+      setStatusMessage('設定已成功儲存！正在重新載入雲端資料...');
       setTimeout(() => {
-        onClose();
+        window.location.reload();
       }, 800);
     } catch (err: any) {
       setStatusMessage(`儲存失敗: ${err.message}`);
@@ -346,6 +410,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
+            <span className="text-xs text-muted" style={{ display: 'block', marginTop: '4px' }}>
+              用於 AI 文本生成之大語言模型 (LLM) 接口（如 OpenAI / DeepSeek / NVIDIA NIM）；雲端資料庫請於下方「資料庫儲存與雲端備份」設定。
+            </span>
           </div>
 
           <div className="form-group">
@@ -525,15 +592,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="form-label-with-action">
             <h4 className="settings-section-title">資料庫儲存與雲端備份</h4>
             {(enableCloudSync || isWebDeploy) && (
-              <Button
-                size="xs"
-                variant="secondary"
-                onClick={handleTriggerBackup}
-                isLoading={isBackingUp}
-                disabled={isBackingUp}
-              >
-                立即備份至雲端
-              </Button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={handleTestConnection}
+                  isLoading={isTesting}
+                  disabled={isTesting || isBackingUp}
+                >
+                  測試連線
+                </Button>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={handleTriggerBackup}
+                  isLoading={isBackingUp}
+                  disabled={isBackingUp || isTesting}
+                >
+                  立即備份至雲端
+                </Button>
+              </div>
             )}
           </div>
 
@@ -586,14 +664,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {(enableCloudSync || isWebDeploy) && (
             <div className="cloud-inputs-container" style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div className="form-group">
-                <label className="form-label">雲端儲存庫名稱 (Storage Bucket / Dataset Repo)</label>
+                <label className="form-label">雲端儲存庫或 Space 位址 (HF Space 網址或 Storage Bucket)</label>
                 <input
                   type="text"
                   className="form-input font-mono"
-                  placeholder="例如: username/novel-storage"
+                  placeholder="例如: https://botsz-writenovel.hf.space 或 botsz/writenovel-storage-bucket"
                   value={cloudBucket}
                   onChange={(e) => setCloudBucket(e.target.value)}
                 />
+                <span className="text-xs text-muted" style={{ display: 'block', marginTop: '4px' }}>
+                  支援輸入 Hugging Face Space 網址（如 https://botsz-writenovel.hf.space）或儲存庫名稱，系統將自動解析後端與資料庫連線。
+                </span>
               </div>
 
               <div className="form-group">

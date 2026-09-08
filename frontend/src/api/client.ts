@@ -1,4 +1,4 @@
-import { getPlatformAdapter } from '../platform';
+import { buildApiUrl, getAuthHeaders } from '../platform';
 
 export class ApiError extends Error {
   public status: number;
@@ -16,13 +16,12 @@ export async function request<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const adapter = getPlatformAdapter();
-  const baseUrl = adapter.apiBaseUrl.replace(/\/+$/, '');
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${baseUrl}${cleanEndpoint}`;
+  const url = buildApiUrl(endpoint);
+  const authHeaders = getAuthHeaders();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...authHeaders,
     ...(options.headers as Record<string, string> || {}),
   };
 
