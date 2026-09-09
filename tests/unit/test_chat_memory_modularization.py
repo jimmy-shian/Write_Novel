@@ -52,7 +52,20 @@ def test_chat_memory_crud_and_query_all():
         assert "chat_memory" in data
         assert len(data["chat_memory"]) == 3
 
-        # Test clear_chat_memory
+        # Test single message deletion via API
+        first_msg_id = data["chat_memory"][0]["id"]
+        del_res = client.delete(f"/api/novels/{novel_id}/chat-memory/{first_msg_id}")
+        assert del_res.status_code == 200
+        after_del = get_chat_memory(novel_id)
+        assert len(after_del) == 2
+        assert not any(m["id"] == first_msg_id for m in after_del)
+
+        # Test clear_chat_memory by message_type
+        clear_chat_memory(novel_id, message_type="pipeline")
+        after_type_clear = get_chat_memory(novel_id)
+        assert not any(m["message_type"] == "pipeline" for m in after_type_clear)
+
+        # Test clear_chat_memory all
         clear_chat_memory(novel_id)
         cleared_records = get_chat_memory(novel_id)
         assert len(cleared_records) == 0

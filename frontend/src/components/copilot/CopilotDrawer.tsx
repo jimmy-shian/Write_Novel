@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CreationStage, CopilotTab, STAGE_DEFINITIONS, CopilotDrawerProps } from './types';
+import { CreationStage, CopilotTab, STAGE_DEFINITIONS, CopilotDrawerProps, RecordFilterType } from './types';
 import { StageSelector } from './StageSelector';
 import { DirectorRecordsStream } from './DirectorRecordsStream';
 import { Button } from '../common/Button';
@@ -12,7 +12,7 @@ import {
   IconLayers,
   IconSend,
 } from '../common/Icons';
-import { clearChatMemory } from '../../api/novels';
+import { clearChatMemory, deleteChatMessage } from '../../api/novels';
 
 export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   isOpenMobile,
@@ -30,6 +30,8 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   onToggleAuto,
   onClearStreaming,
   onRefreshChatMemory,
+  onDeleteChatMessage,
+  onClearChatMemory,
 }) => {
   const [activeTab, setActiveTab] = useState<CopilotTab>('stages');
   const [prompt, setPrompt] = useState('');
@@ -63,15 +65,41 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
     }
   };
 
-  const handleClearRecords = async () => {
+  const handleClearRecords = async (filter?: RecordFilterType) => {
     if (!activeNovelId) return;
-    if (window.confirm('確定要清空此小說的所有總監評斷與對話紀錄嗎？此操作無法還原。')) {
+    const filterLabel =
+      filter === 'director'
+        ? '【總監評斷】'
+        : filter === 'pipeline'
+        ? '【創作指令】'
+        : filter === 'system'
+        ? '【系統通知】'
+        : '所有';
+    if (window.confirm(`確定要清空此小說的${filterLabel}對話與紀錄嗎？此操作無法還原。`)) {
       try {
-        await clearChatMemory(activeNovelId);
-        onRefreshChatMemory?.();
+        if (onClearChatMemory) {
+          await onClearChatMemory(filter);
+        } else {
+          await clearChatMemory(activeNovelId, filter);
+          onRefreshChatMemory?.();
+        }
       } catch (err: any) {
         alert(err.message || '清空失敗');
       }
+    }
+  };
+
+  const handleDeleteRecord = async (messageId: number) => {
+    if (!activeNovelId) return;
+    try {
+      if (onDeleteChatMessage) {
+        await onDeleteChatMessage(messageId);
+      } else {
+        await deleteChatMessage(activeNovelId, messageId);
+        onRefreshChatMemory?.();
+      }
+    } catch (err: any) {
+      alert(err.message || '刪除失敗');
     }
   };
 
@@ -189,6 +217,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
             isLoading={isRefreshingMemory}
             onRefresh={handleRefreshRecords}
             onClear={handleClearRecords}
+            onDeleteMessage={handleDeleteRecord}
           />
         )}
       </div>

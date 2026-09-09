@@ -182,9 +182,30 @@ def api_save_chapter(novel_id: str, chapter_index: int, payload: ChapterSave):
     return {"status": "success", "version": v}
 
 @router.post("/novels/{novel_id}/clear-chat")
-def api_clear_chat(novel_id: str):
-    db.clear_chat_memory(novel_id)
-    return {"status": "success"}
+def api_clear_chat(novel_id: str, message_type: Optional[str] = None):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    count = db.clear_chat_memory(novel_id, message_type=message_type)
+    return {"status": "success", "deleted_count": count}
+
+@router.delete("/novels/{novel_id}/chat-memory")
+def api_clear_chat_memory_delete(novel_id: str, message_type: Optional[str] = None):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    count = db.clear_chat_memory(novel_id, message_type=message_type)
+    return {"status": "success", "deleted_count": count}
+
+@router.delete("/novels/{novel_id}/chat-memory/{message_id}")
+def api_delete_single_chat_message(novel_id: str, message_id: int):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    success = db.delete_chat_message(novel_id, message_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"status": "success", "message_id": message_id}
 
 @router.get("/novels/{novel_id}/chat-memory")
 def api_get_chat_memory(novel_id: str, limit: int = 100, message_type: Optional[str] = None):

@@ -31,13 +31,15 @@ export interface StageSelectorProps {
 export interface DirectorMessageItemProps {
   record: ChatRecord;
   onCopy?: (text: string) => void;
+  onDelete?: (id: number) => void;
 }
 
 export interface DirectorRecordsStreamProps {
   records: ChatRecord[];
   isLoading?: boolean;
   onRefresh: () => void;
-  onClear: () => void;
+  onClear: (filter?: RecordFilterType) => void;
+  onDeleteMessage?: (id: number) => void;
 }
 
 export interface CopilotDrawerProps {
@@ -56,4 +58,6 @@ export interface CopilotDrawerProps {
   onToggleAuto: () => void;
   onClearStreaming: () => void;
   onRefreshChatMemory?: () => void;
+  onDeleteChatMessage?: (messageId: number) => Promise<void> | void;
+  onClearChatMemory?: (messageType?: string) => Promise<void> | void;
 }

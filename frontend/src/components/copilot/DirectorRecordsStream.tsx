@@ -9,6 +9,7 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
   isLoading,
   onRefresh,
   onClear,
+  onDeleteMessage,
 }) => {
   const [filter, setFilter] = useState<RecordFilterType>('all');
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -117,11 +118,11 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
           <Button
             variant="ghost"
             size="xs"
-            onClick={onClear}
+            onClick={() => onClear(filter)}
             icon={<IconTrash size={12} />}
-            title="清空對話紀錄"
+            title={filter === 'all' ? '清空全部對話紀錄' : '清空當前分類紀錄'}
           >
-            清空
+            {filter === 'all' ? '清空全部' : '清空當前'}
           </Button>
         </div>
       </div>
@@ -136,7 +137,11 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
           </div>
         ) : (
           filteredRecords.map((rec, idx) => (
-            <DirectorMessageItem key={rec.id ?? idx} record={rec} />
+            <DirectorMessageItem
+              key={rec.id ?? idx}
+              record={rec}
+              onDelete={onDeleteMessage}
+            />
           ))
         )}
         <div ref={bottomRef} />

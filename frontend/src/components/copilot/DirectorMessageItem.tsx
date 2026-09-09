@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { DirectorMessageItemProps } from './types';
 import { Badge } from '../common/Badge';
-import { IconCopy, IconCheck, IconSparkles, IconChevronDown } from '../common/Icons';
+import { IconCopy, IconCheck, IconSparkles, IconChevronDown, IconTrash } from '../common/Icons';
 import { formatTaiwanTime } from '../../utils/time';
 
-export const DirectorMessageItem: React.FC<DirectorMessageItemProps> = ({ record, onCopy }) => {
+export const DirectorMessageItem: React.FC<DirectorMessageItemProps> = ({ record, onCopy, onDelete }) => {
   const [copied, setCopied] = useState(false);
   const [isThinkingOpen, setIsThinkingOpen] = useState(false);
 
@@ -45,14 +45,30 @@ export const DirectorMessageItem: React.FC<DirectorMessageItemProps> = ({ record
           <Badge variant={badgeVariant}>{badgeLabel}</Badge>
           <span className="message-card-time">{formatTaiwanTime(record.timestamp)}</span>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs message-copy-btn"
-          onClick={handleCopy}
-          title="複製內文"
-        >
-          {copied ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
-        </button>
+        <div className="message-card-actions" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs message-copy-btn"
+            onClick={handleCopy}
+            title="複製內文"
+          >
+            {copied ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
+          </button>
+          {onDelete && record.id !== undefined && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs message-delete-btn text-muted"
+              onClick={() => {
+                if (window.confirm('確定要刪除此則對話紀錄嗎？')) {
+                  onDelete(record.id!);
+                }
+              }}
+              title="刪除此則紀錄"
+            >
+              <IconTrash size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
       {record.thinking && (

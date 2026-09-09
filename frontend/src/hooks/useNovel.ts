@@ -11,6 +11,8 @@ import {
   saveCharacters,
   saveVolumes,
   getChatMemory,
+  clearChatMemory,
+  deleteChatMessage,
   NovelDetailResponse,
 } from '../api/novels';
 
@@ -98,6 +100,61 @@ export function useNovel() {
       console.warn('無法重新整理對話與指令紀錄:', err);
     }
   }, [activeNovelId]);
+
+  const handleDeleteChatMessage = useCallback(
+    async (messageId: number) => {
+      if (!activeNovelId) return;
+      try {
+        await deleteChatMessage(activeNovelId, messageId);
+        setNovelDetail((prev) => {
+          if (!prev || !prev.chat_memory) return prev;
+          return {
+            ...prev,
+            chat_memory: prev.chat_memory.filter((m: any) => m.id !== messageId),
+          };
+        });
+      } catch (err: any) {
+        setErrorMessage(err.message || '刪除對話紀錄失敗');
+        throw err;
+      }
+    },
+    [activeNovelId]
+  );
+
+  const handleClearChatMemory = useCallback(
+    async (messageType?: string) => {
+      if (!activeNovelId) return;
+      try {
+        await clearChatMemory(activeNovelId, messageType);
+        if (messageType && messageType !== 'all') {
+          setNovelDetail((prev) => {
+            if (!prev || !prev.chat_memory) return prev;
+            return {
+              ...prev,
+              chat_memory: prev.chat_memory.filter((m: any) => {
+                if (messageType === 'director') {
+                  return !(m.message_type === 'director' || m.role === 'director' || (m.content && m.content.includes('【總監')));
+                }
+                if (messageType === 'pipeline') {
+                  return !(m.message_type === 'pipeline' || (m.content && (m.content.includes('自主寫作') || m.content.includes('章節') || m.content.includes('骨架'))));
+                }
+                if (messageType === 'system') {
+                  return !(m.role === 'system' || (m.content && m.content.includes('【系統通報】')));
+                }
+                return m.message_type !== messageType;
+              }),
+            };
+          });
+        } else {
+          setNovelDetail((prev) => (prev ? { ...prev, chat_memory: [] } : prev));
+        }
+      } catch (err: any) {
+        setErrorMessage(err.message || '清空對話紀錄失敗');
+        throw err;
+      }
+    },
+    [activeNovelId]
+  );
 
   useEffect(() => {
     if (activeNovelId) {
@@ -505,6 +562,8 @@ export function useNovel() {
     refreshActiveNovel,
     refreshChatMemory,
     refreshNovels,
+    handleDeleteChatMessage,
+    handleClearChatMemory,
     saveWorldbuildingData,
     saveCharactersData,
     saveVolumesData,

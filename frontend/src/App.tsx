@@ -45,6 +45,8 @@ export const App: React.FC = () => {
     handleResetNovelContent,
     refreshActiveNovel,
     refreshChatMemory,
+    handleDeleteChatMessage,
+    handleClearChatMemory,
     deleteTurningPoint,
     deleteForeshadowingSeed,
     deleteCharacter,
@@ -685,6 +687,8 @@ export const App: React.FC = () => {
         onToggleAuto={handleToggleAuto}
         onClearStreaming={() => setStreamingContent('')}
         onRefreshChatMemory={refreshChatMemory}
+        onDeleteChatMessage={handleDeleteChatMessage}
+        onClearChatMemory={handleClearChatMemory}
       />
 
       {/* 5. Collapsible Bottom Dock */}

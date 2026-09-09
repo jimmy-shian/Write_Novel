@@ -142,7 +142,7 @@ def build_volume_skeleton_planner_messages(worldview_text, volume_index, current
 
 【完整輸出 JSON 根結構範例】
 {{
-  "volume_index": {vol_idx},
+  "volume_index": {volume_index},
   "chapters_skeleton": [
     ... // 共 {vol_chapter_count} 章節輕量骨架
   ],

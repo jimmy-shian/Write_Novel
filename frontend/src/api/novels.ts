@@ -113,9 +113,18 @@ export async function getChatMemory(
   return request(`/api/novels/${novelId}/chat-memory?${params.toString()}`);
 }
 
-export async function clearChatMemory(novelId: string): Promise<{ status: string }> {
-  return request(`/api/novels/${novelId}/clear-chat`, {
+export async function clearChatMemory(novelId: string, messageType?: string): Promise<{ status: string; deleted_count?: number }> {
+  const url = messageType && messageType !== 'all'
+    ? `/api/novels/${novelId}/clear-chat?message_type=${encodeURIComponent(messageType)}`
+    : `/api/novels/${novelId}/clear-chat`;
+  return request(url, {
     method: 'POST',
+  });
+}
+
+export async function deleteChatMessage(novelId: string, messageId: number): Promise<{ status: string; message_id: number }> {
+  return request(`/api/novels/${novelId}/chat-memory/${messageId}`, {
+    method: 'DELETE',
   });
 }
 

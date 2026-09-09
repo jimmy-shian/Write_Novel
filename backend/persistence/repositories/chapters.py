@@ -352,6 +352,7 @@ from backend.persistence.repositories.chat_memory import (  # noqa: E402
     get_chat_memory,
     save_chat_message,
     clear_chat_memory,
+    delete_chat_message,
     save_director_review_status,
     get_latest_director_review_status,
 )

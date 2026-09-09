@@ -75,12 +75,25 @@ def save_chat_message(
                 pass
 
 
-def clear_chat_memory(novel_id: str) -> None:
-    """Clear all chat_memory records for a specific novel."""
+def delete_chat_message(novel_id: str, message_id: int) -> bool:
+    """Delete a single chat_memory record by ID for a specific novel."""
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
+        res = cursor.execute("DELETE FROM chat_memory WHERE novel_id = ? AND id = ?", (novel_id, message_id))
+        return res.rowcount > 0
+
+
+def clear_chat_memory(novel_id: str, message_type: Optional[str] = None) -> int:
+    """Clear chat_memory records for a specific novel, optionally filtered by message_type."""
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        if message_type and message_type != 'all':
+            res = cursor.execute("DELETE FROM chat_memory WHERE novel_id = ? AND message_type = ?", (novel_id, message_type))
+        else:
+            res = cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
+        return res.rowcount
 
 
 def save_director_review_status(
