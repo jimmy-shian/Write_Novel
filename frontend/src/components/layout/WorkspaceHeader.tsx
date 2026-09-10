@@ -12,6 +12,7 @@ interface WorkspaceHeaderProps {
   activeChapterIndex: number;
   isDirty: boolean;
   isSaving: boolean;
+  isLoading?: boolean;
   activeView: ActiveView;
   onSave: () => void;
   onToggleExplorerMobile: () => void;
@@ -31,6 +32,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   activeChapterIndex,
   isDirty,
   isSaving,
+  isLoading = false,
   activeView,
   onSave,
   onToggleExplorerMobile,
@@ -77,6 +79,9 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         >
           {activeNovel ? activeNovel.title : '未選擇作品'}
         </span>
+        {isLoading && (
+          <span className="select-spinner" title="正在載入作品與章節資料..." style={{ width: 13, height: 13, borderWidth: 2 }} />
+        )}
         <span className="topbar-separator">/</span>
         <span className="chapter-title-text">第 {activeChapterIndex} 章</span>
 

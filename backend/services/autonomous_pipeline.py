@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Callable
 from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
 from backend.generation.routing.router import execute_generation_task
+from backend.services.graphiti.extractor import ChapterFactExtractor
 
 
 class NovelPipelineTask:
@@ -89,14 +90,32 @@ class AutonomousPipelineManager:
         with self._lock:
             active_list = [t.to_dict() for t in self.tasks.values() if t.is_running]
             
-            # 若指定 novel_id 且存在該任務
-            if novel_id and novel_id in self.tasks:
-                res = self.tasks[novel_id].to_dict()
-                res["active_tasks_count"] = len(active_list)
-                res["active_tasks"] = active_list
-                return res
+            # 若有指定 novel_id
+            if novel_id:
+                if novel_id in self.tasks:
+                    res = self.tasks[novel_id].to_dict()
+                    res["active_tasks_count"] = len(active_list)
+                    res["active_tasks"] = active_list
+                    return res
+                # 該小說未曾運行任務，回傳空閒/未運行狀態，同時附帶目前背景正在運行的任務列表
+                return {
+                    "is_running": False,
+                    "running": False,
+                    "novel_id": novel_id,
+                    "novel_title": "",
+                    "current_stage": "idle",
+                    "current_chapter": 0,
+                    "total_chapters": 0,
+                    "progress_percent": 0,
+                    "status_message": "未運行",
+                    "logs": [],
+                    "error": None,
+                    "start_time": None,
+                    "active_tasks_count": len(active_list),
+                    "active_tasks": active_list,
+                }
 
-            # 若未指定或找不到指定小說，優先回傳任一正在運行的任務
+            # 若未指定 novel_id (全域查詢)，優先回傳任一正在運行的任務
             if active_list:
                 res = dict(active_list[0])
                 res["active_tasks_count"] = len(active_list)
@@ -525,6 +544,24 @@ class AutonomousPipelineManager:
                     verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
                 )
                 task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
+
+                # (2.5) 同步提取時序事實與動態圖譜 (Graphiti Temporal Graph)
+                try:
+                    task.log(f"🧠 正在為第 {ch_idx} 章同步提取時序記憶圖譜事實...")
+                    ch_obj = db.get_chapter(novel_id, ch_idx)
+                    ch_text = (ch_obj.get("content") or "") if ch_obj else ""
+                    if ch_text and len(ch_text.strip()) > 50:
+                        graph_res = ChapterFactExtractor.process_chapter_prose(
+                            novel_id=novel_id,
+                            chapter_index=ch_idx,
+                            chapter_text=ch_text,
+                            agent_name="copilot"
+                        )
+                        facts_added = graph_res.get("facts_added", 0)
+                        task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實)")
+                except Exception as g_exc:
+                    task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
+
                 db.save_chat_message(
                     novel_id,
                     "assistant",

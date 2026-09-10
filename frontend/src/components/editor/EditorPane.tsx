@@ -9,6 +9,7 @@ interface EditorPaneProps {
   chapterIndex: number;
   isDirty: boolean;
   isSaving: boolean;
+  isLoading?: boolean;
   fontSize?: number;
   onFontSizeChange?: (size: number) => void;
   onChangeContent: (text: string) => void;
@@ -20,6 +21,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
   chapterIndex,
   isDirty,
   isSaving,
+  isLoading = false,
   fontSize = 16,
   onFontSizeChange,
   onChangeContent,
@@ -94,15 +96,24 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
         </div>
       </div>
 
-      <textarea
-        className="editor-textarea"
-        style={{ fontSize: `${fontSize}px` }}
-        placeholder="在此開始手動創作，或透過右側 AI 導演協助生成章節段落..."
-        value={content}
-        onChange={(e) => onChangeContent(e.target.value)}
-        onKeyDown={handleKeyDown}
-        spellCheck={false}
-      />
+      <div className={`editor-textarea-wrapper ${isLoading ? 'editor-content-fade is-loading' : 'editor-content-fade'}`} style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {isLoading && (
+          <div className="editor-loading-mask">
+            <span className="select-spinner" style={{ width: 22, height: 22, borderWidth: 2 }} />
+            <span>作品與章節內容載入中...</span>
+          </div>
+        )}
+        <textarea
+          className="editor-textarea"
+          style={{ fontSize: `${fontSize}px` }}
+          placeholder="在此開始手動創作，或透過右側 AI 導演協助生成章節段落..."
+          value={content}
+          onChange={(e) => onChangeContent(e.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          disabled={isLoading}
+        />
+      </div>
     </div>
   );
 };

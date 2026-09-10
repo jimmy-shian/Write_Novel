@@ -37,6 +37,7 @@ export const App: React.FC = () => {
     setContent,
     isDirty,
     isSaving,
+    isLoading: isNovelLoading,
     selectChapter,
     saveActiveChapter,
     createChapter,
@@ -224,93 +225,118 @@ export const App: React.FC = () => {
   const autoPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSeenLogCountRef = useRef<number>(0);
   const prevAutoStageRef = useRef<string | null>(null);
+  const hasMountedReconnectRef = useRef<boolean>(false);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev, `[${timestamp}] ${message}`]);
   }, []);
 
-  // Reconnect on mount if autonomous writing is actively running in background
+  // Reconnect on mount if autonomous writing is actively running in background (one-time check)
   useEffect(() => {
-    getAutoPipelineStatus(activeNovelId || undefined)
+    if (hasMountedReconnectRef.current) return;
+    hasMountedReconnectRef.current = true;
+
+    getAutoPipelineStatus(undefined)
       .then((status) => {
         const running = Boolean(status.is_running ?? status.running);
-        if (running) {
-          setIsAutoRunning(true);
+        const activeTasks = Array.isArray(status.active_tasks) ? status.active_tasks : [];
+        if (running || activeTasks.length > 0) {
           setIsBottomDockOpen(true);
-          if (status.novel_id && (!activeNovelId || activeNovelId !== status.novel_id)) {
-            setActiveNovelId(status.novel_id);
+          const activeTask = running ? status : activeTasks[0];
+          // 僅在前端初次進入且尚未選擇任何作品時，才自動切換至運行中的那本
+          if (activeTask.novel_id && !activeNovelId) {
+            setActiveNovelId(activeTask.novel_id);
+            setIsAutoRunning(true);
+          } else if (activeTask.novel_id && activeTask.novel_id === activeNovelId) {
+            setIsAutoRunning(true);
           }
+          if (activeTask.status_message || activeTask.current_stage) {
+            setAutoStatusText(
+              `作品: ${activeTask.novel_title || '進行中'}\n當前章節: 第 ${activeTask.current_chapter || 0} 章\n階段: ${activeTask.status_message || activeTask.current_stage}\n進度: ${activeTask.progress_percent || 0}%`
+            );
+          }
+          if (activeTask.logs && Array.isArray(activeTask.logs)) {
+            lastSeenLogCountRef.current = activeTask.logs.length;
+          }
+          addLog(`已連線至背景自主寫作流水線 (${activeTask.novel_title || '小說'} / ${activeTask.status_message || activeTask.current_stage})`);
+        }
+      })
+      .catch((err) => console.warn('檢查背景自主流水線狀態失敗:', err));
+  }, []); // 僅在 mount 時執行一次，絕不可將 activeNovelId 放入依賴項
+
+  // Continuous background monitoring: polls current novel & active background tasks without hijacking active view
+  useEffect(() => {
+    const pollFn = async () => {
+      try {
+        const status = await getAutoPipelineStatus(activeNovelId || undefined);
+        const isCurrentRunning = Boolean(status.is_running ?? status.running);
+        const activeTasks = Array.isArray(status.active_tasks) ? status.active_tasks : [];
+
+        // 更新當前檢視小說的運行狀態 (決定啟動/中止按鈕)
+        setIsAutoRunning(isCurrentRunning);
+
+        if (isCurrentRunning) {
+          // 當前小說正在背景運行
           if (status.status_message || status.current_stage) {
             setAutoStatusText(
               `當前章節: 第 ${status.current_chapter || 0} 章\n階段: ${status.status_message || status.current_stage}\n進度: ${status.progress_percent || 0}%`
             );
           }
+
+          let stageCompleted = false;
           if (status.logs && Array.isArray(status.logs)) {
-            lastSeenLogCountRef.current = status.logs.length;
+            if (status.logs.length > lastSeenLogCountRef.current) {
+              const newEntries = status.logs.slice(lastSeenLogCountRef.current);
+              newEntries.forEach((entry) => {
+                addLog(`[雲端] ${entry.msg}`);
+                if (
+                  entry.msg.includes('✅') ||
+                  entry.msg.includes('完成') ||
+                  entry.msg.includes('就緒') ||
+                  entry.msg.includes('持久化')
+                ) {
+                  stageCompleted = true;
+                }
+              });
+              lastSeenLogCountRef.current = status.logs.length;
+            }
           }
-          addLog(`已重新連線至背景自主寫作流水線 (${status.novel_title || '小說'} / ${status.status_message || status.current_stage})`);
-        }
-      })
-      .catch((err) => console.warn('檢查背景自主流水線狀態失敗:', err));
-  }, [activeNovelId, setActiveNovelId, addLog]);
 
-  // Poll autonomous pipeline status
-  useEffect(() => {
-    if (!isAutoRunning) {
-      if (autoPollTimerRef.current) {
-        clearInterval(autoPollTimerRef.current);
-        autoPollTimerRef.current = null;
-      }
-      return;
-    }
+          const currStage = status.current_stage || null;
+          if (currStage && currStage !== prevAutoStageRef.current) {
+            if (prevAutoStageRef.current !== null) {
+              stageCompleted = true;
+            }
+            prevAutoStageRef.current = currStage;
+          }
 
-    autoPollTimerRef.current = setInterval(async () => {
-      try {
-        const status = await getAutoPipelineStatus(activeNovelId || undefined);
-        const running = Boolean(status.is_running ?? status.running);
-        setIsAutoRunning(running);
-        if (status.status_message || status.current_stage) {
+          if (stageCompleted) {
+            refreshActiveNovel();
+            refreshGraph();
+            refreshChatMemory();
+          }
+        } else if (activeTasks.length > 0) {
+          // 當前小說未在運行，但背景有其他小說正在自主寫作中
+          const bgTask = activeTasks[0];
           setAutoStatusText(
-            `當前章節: 第 ${status.current_chapter || 0} 章\n階段: ${status.status_message || status.current_stage}\n進度: ${status.progress_percent || 0}%`
+            `【背景創作進行中】作品：《${bgTask.novel_title}》\n當前進度: 第 ${bgTask.current_chapter || 0}/${bgTask.total_chapters || 0} 章 (${bgTask.progress_percent || 0}%)\n當前階段: ${bgTask.status_message || bgTask.current_stage}\n\n(提示：您目前正在瀏覽其他小說，背景任務持續穩定運行中)`
           );
-        }
 
-        let stageCompleted = false;
-        // 同步後端任務即時 logs 到前端日誌池
-        if (status.logs && Array.isArray(status.logs)) {
-          if (status.logs.length > lastSeenLogCountRef.current) {
-            const newEntries = status.logs.slice(lastSeenLogCountRef.current);
-            newEntries.forEach((entry) => {
-              addLog(`[雲端] ${entry.msg}`);
-              if (
-                entry.msg.includes('✅') ||
-                entry.msg.includes('完成') ||
-                entry.msg.includes('就緒') ||
-                entry.msg.includes('持久化')
-              ) {
-                stageCompleted = true;
-              }
-            });
-            lastSeenLogCountRef.current = status.logs.length;
+          // 仍可同步背景任務的新日誌至 dock
+          if (bgTask.logs && Array.isArray(bgTask.logs)) {
+            if (bgTask.logs.length > lastSeenLogCountRef.current) {
+              const newEntries = bgTask.logs.slice(lastSeenLogCountRef.current);
+              newEntries.forEach((entry: any) => {
+                addLog(`[雲端·${bgTask.novel_title}] ${entry.msg}`);
+              });
+              lastSeenLogCountRef.current = bgTask.logs.length;
+            }
           }
         }
 
-        const currStage = status.current_stage || null;
-        if (currStage && currStage !== prevAutoStageRef.current) {
-          if (prevAutoStageRef.current !== null) {
-            stageCompleted = true;
-          }
-          prevAutoStageRef.current = currStage;
-        }
-
-        if (stageCompleted) {
-          refreshActiveNovel();
-          refreshGraph();
-          refreshChatMemory();
-        }
-
-        if (!running) {
+        // 當前小說剛結束運行的提示與重新整理
+        if (!isCurrentRunning && prevAutoStageRef.current && prevAutoStageRef.current !== 'idle') {
           if (status.error || status.current_stage === 'error') {
             addLog(`[任務中斷] 自主寫作異常中斷: ${status.error || status.status_message || '未知錯誤'}`);
             showToast(`自主寫作異常中斷: ${status.error || status.status_message || '未知錯誤'}`, 'danger');
@@ -320,25 +346,25 @@ export const App: React.FC = () => {
           } else if (status.stop_requested) {
             addLog(`[任務中止] 自主寫作已由使用者中止 (${status.status_message || '已停止'})`);
             showToast('自主寫作已停止', 'info');
-          } else {
-            addLog(`[任務結束] 自主寫作流水線已結束 (${status.status_message || '等待啟動'})`);
           }
+          prevAutoStageRef.current = 'idle';
           refreshActiveNovel();
           refreshGraph();
           refreshProposals();
           refreshChatMemory();
         }
       } catch (err) {
-        console.error('輪詢自主流水線狀態失敗:', err);
+        // 忽略偶發網路抖動
       }
-    }, 3000);
+    };
 
+    autoPollTimerRef.current = setInterval(pollFn, 3000);
     return () => {
       if (autoPollTimerRef.current) {
         clearInterval(autoPollTimerRef.current);
       }
     };
-  }, [isAutoRunning, activeNovelId, addLog, refreshActiveNovel, refreshGraph, refreshProposals, refreshChatMemory]);
+  }, [activeNovelId, addLog, refreshActiveNovel, refreshGraph, refreshProposals, refreshChatMemory]);
 
   // Handle stage execution
   const handleTriggerStage = async (stage: CreationStage, prompt: string) => {
@@ -536,6 +562,7 @@ export const App: React.FC = () => {
         volumes={novelDetail?.volumes || []}
         plot={novelDetail?.plot}
         expansionSync={expansionSync}
+        isLoadingNovel={isNovelLoading}
         onSelectWorldviewTab={(tab) => {
           setActiveView('worldview');
           setWorldviewTab(tab);
@@ -573,6 +600,7 @@ export const App: React.FC = () => {
           activeChapterIndex={activeChapterIndex}
           isDirty={isDirty}
           isSaving={isSaving}
+          isLoading={isNovelLoading}
           activeView={activeView}
           onSave={saveActiveChapter}
           onToggleExplorerMobile={() => setIsExplorerOpenMobile(!isExplorerOpenMobile)}
@@ -590,6 +618,7 @@ export const App: React.FC = () => {
               chapterIndex={activeChapterIndex}
               isDirty={isDirty}
               isSaving={isSaving}
+              isLoading={isNovelLoading}
               fontSize={editorFontSize}
               onFontSizeChange={handleFontSizeChange}
               onChangeContent={setContent}

@@ -39,6 +39,7 @@ interface ExplorerDrawerProps {
   }) => void;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
+  isLoadingNovel?: boolean;
   onSelectNovel: (id: string) => void;
   onSelectChapter: (chapterIndex: number) => void;
   onCreateNovel: (title: string, genre: string, style: string, synopsis?: string) => Promise<any> | any;
@@ -66,6 +67,7 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
   onWorldviewAction,
   isOpenMobile,
   onCloseMobile,
+  isLoadingNovel = false,
   onSelectNovel,
   onSelectChapter,
   onCreateNovel,
@@ -375,7 +377,14 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
               placeholder={novels.length === 0 ? '(尚未建立小說)' : '請選擇作品...'}
               onChange={(id) => onSelectNovel(id)}
               className="novel-select-custom"
+              loading={isLoadingNovel}
             />
+            {isLoadingNovel && (
+              <div className="explorer-loading-indicator">
+                <span className="select-spinner" />
+                <span>切換載入中...</span>
+              </div>
+            )}
           </div>
 
           {/* Section Header with Dynamic Toggle */}
@@ -418,7 +427,7 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
 
           {/* Body: Either Dynamic Worldview Outline Tree OR Chapter List */}
           {showDynamicTree ? (
-            <div className="chapter-tree-list">
+            <div className={`chapter-tree-list ${isLoadingNovel ? 'editor-content-fade is-loading' : 'editor-content-fade'}`}>
               {/* 1. Worldbuilding Node with Sub-branches */}
               <div>
                 <div
@@ -1017,7 +1026,7 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
               </div>
             </div>
           ) : (
-            <div className="chapter-tree-list">
+            <div className={`chapter-tree-list ${isLoadingNovel ? 'editor-content-fade is-loading' : 'editor-content-fade'}`}>
               {displayChapters.length === 0 ? (
                 <div className="empty-tree-hint">目前無章節與大綱，點擊上方按鈕建立</div>
               ) : (

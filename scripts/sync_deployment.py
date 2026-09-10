@@ -14,13 +14,26 @@ import shutil
 import subprocess
 import sys
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 def run_cmd(cmd, cwd=None, check=True):
     print(f"[*] Executing: {cmd}")
-    res = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, encoding="utf-8")
-    if res.stdout.strip():
-        print(res.stdout)
-    if res.stderr.strip():
-        print(res.stderr)
+    res = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if res.stdout and res.stdout.strip():
+        try:
+            print(res.stdout)
+        except Exception:
+            print(res.stdout.encode("ascii", errors="replace").decode("ascii"))
+    if res.stderr and res.stderr.strip():
+        try:
+            print(res.stderr)
+        except Exception:
+            print(res.stderr.encode("ascii", errors="replace").decode("ascii"))
     if check and res.returncode != 0:
         raise RuntimeError(f"Command failed with exit code {res.returncode}: {cmd}")
     return res

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import json
 import uuid
 import pytest
@@ -108,3 +108,44 @@ def test_reset_novel_content():
 
     # 清理
     db.delete_novel(novel_id)
+
+
+def test_autonomous_pipeline_get_status_isolation():
+    from backend.services.autonomous_pipeline import AutonomousPipelineManager, NovelPipelineTask
+
+    mgr = AutonomousPipelineManager()
+    
+    # 模擬小說 A 正在背景自主寫作中
+    task_a = NovelPipelineTask("novel_A", "小說A")
+    task_a.is_running = True
+    task_a.current_chapter = 5
+    task_a.status_message = "正在撰寫第 5 章"
+    mgr.tasks["novel_A"] = task_a
+
+    try:
+        # 1. 前端查詢小說 A：應取得小說 A 的 running 狀態
+        res_a = mgr.get_status("novel_A")
+        assert res_a["novel_id"] == "novel_A"
+        assert res_a["is_running"] is True
+        assert res_a["current_chapter"] == 5
+        assert res_a["active_tasks_count"] == 1
+
+        # 2. 前端切換至小說 B (未運行)：絕對不能回傳小說 A 的狀態！
+        res_b = mgr.get_status("novel_B")
+        assert res_b["novel_id"] == "novel_B"
+        assert res_b["is_running"] is False
+        assert res_b["status_message"] == "未運行"
+        # 但 active_tasks 應包含小說 A，供前端多工顯示背景狀態
+        assert res_b["active_tasks_count"] == 1
+        assert res_b["active_tasks"][0]["novel_id"] == "novel_A"
+
+        # 3. 前端全域查詢 (None)：應回傳當前正在運行的任務 (小說 A)
+        res_global = mgr.get_status(None)
+        assert res_global["novel_id"] == "novel_A"
+        assert res_global["is_running"] is True
+
+    finally:
+        # 清理測試狀態
+        task_a.is_running = False
+        mgr.tasks.pop("novel_A", None)
+

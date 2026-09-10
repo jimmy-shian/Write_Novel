@@ -13,6 +13,7 @@ interface CustomSelectProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  loading?: boolean;
   id?: string;
 }
 
@@ -23,6 +24,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   placeholder = '請選擇...',
   className = '',
   disabled = false,
+  loading = false,
   id,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -127,7 +129,11 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
             <span className="select-placeholder">{placeholder}</span>
           )}
         </span>
-        <div className="arrow" aria-hidden="true" />
+        {loading ? (
+          <span className="select-spinner" title="載入中..." aria-label="載入中" />
+        ) : (
+          <div className="arrow" aria-hidden="true" />
+        )}
       </div>
 
       <div className="select-options" role="listbox">
