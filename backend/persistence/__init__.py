@@ -21,3 +21,5 @@ from backend.persistence.repositories.temporal_graph import *
 from backend.persistence.repositories.story_terms import *
 from backend.persistence.repositories.draft_proposals import *
 from backend.persistence.repositories.chat_memory import *
+from backend.persistence.repositories.preferences import *
+

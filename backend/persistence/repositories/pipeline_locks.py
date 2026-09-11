@@ -42,13 +42,13 @@ def acquire_pipeline_lock(novel_id, locked_by="pipeline"):
             """, (novel_id,))
             row = cursor.fetchone()
             if row:
-                # Check if heartbeat is stale (older than 5 minutes)
+                # Check if heartbeat is stale (older than 1 minute)
                 cursor.execute("""
                     SELECT (julianday('now') - julianday(heartbeat_at)) * 24 * 60 as minutes_diff
                     FROM pipeline_locks WHERE novel_id = ?
                 """, (novel_id,))
                 diff_row = cursor.fetchone()
-                if diff_row and diff_row["minutes_diff"] > 5:
+                if diff_row and diff_row["minutes_diff"] > 1.0:
                     # Stale lock - break it and acquire new one
                     cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
                     cursor.execute("""

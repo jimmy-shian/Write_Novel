@@ -6,6 +6,7 @@ import {
   getSettings,
   saveSettings,
   fetchAvailableModels,
+  testLlmConnection,
   getCloudSyncStatus,
   saveCloudSyncConfig,
   triggerCloudBackup,
@@ -13,6 +14,7 @@ import {
 } from '../../api/settings';
 import { APP_VERSION, APP_NAME } from '../../config/version';
 import { parseCloudEndpoint } from '../../platform';
+import { savePreferences } from '../../services/preferences';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -60,13 +62,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onFontSizeChange?.(size);
   };
 
-  // Cloud Sync
+  // Cloud Sync & Server Database Path
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus | null>(null);
+  const [serverDbPath, setServerDbPath] = useState<string>('');
+  const [syncLoading, setSyncLoading] = useState<boolean>(true);
   const [cloudBucket, setCloudBucket] = useState('');
   const [cloudToken, setCloudToken] = useState('');
   const [enableCloudSync, setEnableCloudSync] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isTestingLlm, setIsTestingLlm] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
 
   const isWebDeploy = typeof window !== 'undefined' && (
@@ -89,16 +94,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsLoading(true);
     setStatusMessage(null);
 
-    // 優先從 localStorage 載入持久化設定
+    // 1. 優先從 localStorage 載入持久化設定 (保證跨重新整理、雲端部署絕不丟失使用者輸入)
     const savedHost = localStorage.getItem('NOVEL_FACTORY_API_HOST') || '';
     const savedBucket = localStorage.getItem('NOVEL_FACTORY_CLOUD_BUCKET') || '';
     const savedToken = localStorage.getItem('NOVEL_FACTORY_API_TOKEN') || '';
 
-    const effectiveBucket = savedBucket || savedHost || (isWebDeploy ? 'https://botsz-writenovel.hf.space' : '');
-    if (effectiveBucket) setCloudBucket(effectiveBucket);
+    const savedBaseUrl = localStorage.getItem('NOVEL_FACTORY_LLM_BASE_URL');
+    const savedApiKey = localStorage.getItem('NOVEL_FACTORY_API_KEY');
+    const savedDirectorModel = localStorage.getItem('NOVEL_FACTORY_DIRECTOR_MODEL');
+    const savedWriterModel = localStorage.getItem('NOVEL_FACTORY_WRITER_MODEL');
+    const savedSeparateModels = localStorage.getItem('NOVEL_FACTORY_SEPARATE_MODELS');
+    const savedTemperature = localStorage.getItem('NOVEL_FACTORY_TEMPERATURE');
+    const savedEnableThinking = localStorage.getItem('NOVEL_FACTORY_ENABLE_THINKING');
+
+    if (savedBaseUrl !== null) setBaseUrl(savedBaseUrl);
+    if (savedApiKey !== null) setApiKey(savedApiKey);
+    if (savedDirectorModel !== null) setDirectorModel(savedDirectorModel);
+    if (savedWriterModel !== null) setWriterModel(savedWriterModel);
+    if (savedSeparateModels !== null) setSeparateModels(savedSeparateModels === 'true');
+    if (savedTemperature !== null) setTemperature(parseFloat(savedTemperature));
+    if (savedEnableThinking !== null) setEnableThinking(parseInt(savedEnableThinking, 10));
+
+    if (savedBucket) setCloudBucket(savedBucket);
     if (savedToken) setCloudToken(savedToken);
 
-    // Load Settings from DB (if connected to HF Space, this reads from HF DB!)
+    // 2. 從後端獲取目前運行的 DB 設定 (僅在 localStorage 無該項紀錄時作為預設填充)
     getSettings()
       .then((data) => {
         const agents = data?.agents || data;
@@ -106,33 +126,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         const architectAgent = agents?.architect || agents?.copilot;
         const writerAgent = agents?.writer;
 
-        // DB is the primary source of truth:
         const baseEndpoint = globalAgent?.base_url || architectAgent?.base_url || writerAgent?.base_url || '';
         const baseKey = globalAgent?.api_key || architectAgent?.api_key || writerAgent?.api_key || '';
         const dModel = architectAgent?.model || globalAgent?.model || '';
         const wModel = writerAgent?.model || dModel;
 
-        setApiKey(baseKey);
-        setBaseUrl(baseEndpoint);
-        setDirectorModel(dModel);
-        setWriterModel(wModel);
-        setSeparateModels(Boolean(wModel && dModel && wModel !== dModel));
+        if (savedBaseUrl === null && baseEndpoint) setBaseUrl(baseEndpoint);
+        if (savedApiKey === null && baseKey) setApiKey(baseKey);
+        if (savedDirectorModel === null && dModel) setDirectorModel(dModel);
+        if (savedWriterModel === null && wModel) setWriterModel(wModel);
+        if (savedSeparateModels === null && (wModel && dModel && wModel !== dModel)) {
+          setSeparateModels(true);
+        }
 
         const temp = architectAgent?.temperature ?? globalAgent?.temperature ?? writerAgent?.temperature ?? 0.7;
         const thinking = architectAgent?.enable_thinking ?? globalAgent?.enable_thinking ?? writerAgent?.enable_thinking ?? 1;
-        setTemperature(temp);
-        setEnableThinking(thinking);
+        if (data?._dbPath) {
+          setServerDbPath(data._dbPath);
+        }
+
+        if (savedTemperature === null) setTemperature(temp);
+        if (savedEnableThinking === null) setEnableThinking(thinking);
       })
       .catch((err) => {
-        console.warn('載入設定失敗:', err);
+        console.warn('載入後端設定失敗 (使用本機已儲存之偏好):', err);
       })
       .finally(() => setIsLoading(false));
 
-    // Load Cloud Sync Status
+    // 3. Load Cloud Sync Status
+    setSyncLoading(true);
     getCloudSyncStatus()
       .then((s) => {
         setSyncStatus(s);
-        if (!effectiveBucket && (s.storage_bucket || s.dataset_repo)) {
+        if (s?.db_path) {
+          setServerDbPath(s.db_path);
+        }
+        if (!savedBucket && (s.storage_bucket || s.dataset_repo)) {
           setCloudBucket(s.storage_bucket || s.dataset_repo);
         }
         if (!savedToken && s.token) {
@@ -140,7 +169,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         }
         setEnableCloudSync(Boolean(isWebDeploy || (!isLocalRun && (s.storage_bucket || s.dataset_repo || s.has_token))));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setSyncLoading(false);
+      });
   }, [isOpen]);
 
   const handleFetchModels = async () => {
@@ -162,6 +194,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setStatusMessage(`獲取模型列表失敗: ${err.message}`);
     } finally {
       setIsFetchingModels(false);
+    }
+  };
+
+  const handleTestLlm = async () => {
+    if (!baseUrl || !baseUrl.trim()) {
+      setStatusMessage('請先填寫 API Base URL');
+      return;
+    }
+    setIsTestingLlm(true);
+    setStatusMessage(null);
+    try {
+      const targetModel = directorModel.trim() || writerModel.trim() || 'gemini-web/pro';
+      const res = await testLlmConnection(baseUrl.trim(), apiKey.trim(), targetModel);
+      setStatusMessage(res.message);
+    } catch (err: any) {
+      setStatusMessage(`LLM 連線測試發生異常: ${err.message || err}`);
+    } finally {
+      setIsTestingLlm(false);
     }
   };
 
@@ -224,7 +274,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const trimmedToken = cloudToken.trim();
       const { host: targetHost, bucket: targetBucket } = parseCloudEndpoint(trimmedBucket);
 
-      // 確實將連線資訊保存至瀏覽器 localStorage (SSOT)
+      const directorModelToSave = directorModel.trim();
+      const writerModelToSave = separateModels ? writerModel.trim() : directorModelToSave;
+
+      // 確實將 LLM 與連線資訊保存至瀏覽器 localStorage (SSOT，保證重整不丟失)
+      localStorage.setItem('NOVEL_FACTORY_LLM_BASE_URL', baseUrl.trim());
+      localStorage.setItem('NOVEL_FACTORY_API_KEY', apiKey.trim());
+      localStorage.setItem('NOVEL_FACTORY_DIRECTOR_MODEL', directorModelToSave);
+      localStorage.setItem('NOVEL_FACTORY_WRITER_MODEL', writerModelToSave);
+      localStorage.setItem('NOVEL_FACTORY_SEPARATE_MODELS', String(separateModels));
+      localStorage.setItem('NOVEL_FACTORY_TEMPERATURE', String(temperature));
+      localStorage.setItem('NOVEL_FACTORY_ENABLE_THINKING', String(enableThinking));
+
       if (targetHost) {
         localStorage.setItem('NOVEL_FACTORY_API_HOST', targetHost);
       }
@@ -234,9 +295,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (trimmedToken) {
         localStorage.setItem('NOVEL_FACTORY_API_TOKEN', trimmedToken);
       }
-
-      const directorModelToSave = directorModel.trim();
-      const writerModelToSave = separateModels ? writerModel.trim() : directorModelToSave;
 
       const directorPayload = {
         api_key: apiKey,
@@ -267,7 +325,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         writer: { ...writerPayload, agent_name: 'writer' },
       };
 
-      await saveSettings({ configs: agentsPayload, agents: agentsPayload });
+      const preferencesPayload = {
+        theme,
+        editor_font_size: fontSize,
+      };
+
+      await savePreferences(preferencesPayload);
+
+      // 僅在有設定 Base URL 或模型名稱時才寫入 Agent 設定，防止空值覆寫正在運行的配置
+      if (baseUrl.trim() || directorModelToSave) {
+        await saveSettings({
+          configs: agentsPayload,
+          agents: agentsPayload,
+          preferences: preferencesPayload,
+        });
+      }
 
       if (enableCloudSync || isWebDeploy || targetBucket || trimmedToken) {
         try {
@@ -284,10 +356,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         }
       }
 
-      setStatusMessage('設定已成功儲存！正在重新載入雲端資料...');
+      setStatusMessage('✅ 設定已成功儲存！');
       setTimeout(() => {
-        window.location.reload();
-      }, 800);
+        onClose();
+      }, 500);
     } catch (err: any) {
       setStatusMessage(`儲存失敗: ${err.message}`);
     } finally {
@@ -410,9 +482,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
-            <span className="text-xs text-muted" style={{ display: 'block', marginTop: '4px' }}>
-              用於 AI 文本生成之大語言模型 (LLM) 接口（如 OpenAI / DeepSeek / NVIDIA NIM）；雲端資料庫請於下方「資料庫儲存與雲端備份」設定。
-            </span>
+            <div className="text-xs text-muted" style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '6px', lineHeight: 1.4 }}>
+              <span>• <strong>本機使用 (http://127.0.0.1:8000)</strong>：支援本地端點（如 <code>http://127.0.0.1:8765/v1</code> 之 WebChat2Local）或各公網 API。</span>
+              <span>• <strong>雲端部署 (GitHub Pages / Hugging Face)</strong>：後端於雲端運行，必須填寫公網可訪問之 API（如 NVIDIA NIM、OpenAI、DeepSeek），無法直接存取您本機之 127.0.0.1。</span>
+            </div>
           </div>
 
           <div className="form-group">
@@ -420,7 +493,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <input
               type="password"
               className="form-input font-mono"
-              placeholder="sk-..."
+              placeholder="sk-... 或 nvapi-... (本地 WebChat2Local 可留空)"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
@@ -431,14 +504,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="settings-section">
           <div className="form-label-with-action">
             <h4 className="settings-section-title">模型配置 (支援導演架構師與執筆作家雙模型分離)</h4>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={handleFetchModels}
-              isLoading={isFetchingModels}
-            >
-              動態讀取伺服器可用模型
-            </Button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={handleTestLlm}
+                isLoading={isTestingLlm}
+                disabled={isTestingLlm || isFetchingModels}
+              >
+                測試 LLM 連線
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={handleFetchModels}
+                isLoading={isFetchingModels}
+                disabled={isTestingLlm || isFetchingModels}
+              >
+                動態讀取可用模型
+              </Button>
+            </div>
           </div>
 
           <div className="form-group">
@@ -615,16 +700,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* Local DB Path & Info */}
+          {/* Local / Server DB Path & Info */}
           <div className="local-db-info-box">
             <div className="sync-detail-item">
-              <span className="detail-label">本機資料庫路徑:</span>
-              <span className="detail-val font-mono">{syncStatus?.db_path || 'data/novel_factory.db'}</span>
+              <span className="detail-label">{isLocalRun ? '本機資料庫路徑:' : '伺服器資料庫路徑:'}</span>
+              <span className="detail-val font-mono">
+                {serverDbPath || syncStatus?.db_path || (syncLoading ? '正在獲取伺服器路徑...' : '無法取得後端資料庫路徑 (未連線)')}
+              </span>
             </div>
             <div className="sync-detail-item">
               <span className="detail-label">資料庫狀態:</span>
               <span className="detail-val">
-                {syncStatus?.db_exists ? `正常 (${syncStatus.db_size_mb} MB)` : '未初始化'}
+                {syncStatus ? (
+                  syncStatus.db_exists ? `正常 (${syncStatus.db_size_mb} MB)` : '資料庫檔案不存在或未初始化'
+                ) : (
+                  syncLoading ? '連線查詢中...' : '未連線'
+                )}
               </span>
             </div>
             {syncStatus?.last_backup_time && (
@@ -664,16 +755,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {(enableCloudSync || isWebDeploy) && (
             <div className="cloud-inputs-container" style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div className="form-group">
-                <label className="form-label">雲端儲存庫或 Space 位址 (HF Space 網址或 Storage Bucket)</label>
+                <label className="form-label">Hugging Face 儲存庫名稱 (Storage Bucket 或 Dataset Repo)</label>
                 <input
                   type="text"
                   className="form-input font-mono"
-                  placeholder="例如: https://botsz-writenovel.hf.space 或 botsz/writenovel-storage-bucket"
+                  placeholder="例如: botsz/writenovel-storage-bucket 或 username/storage-repo"
                   value={cloudBucket}
                   onChange={(e) => setCloudBucket(e.target.value)}
                 />
                 <span className="text-xs text-muted" style={{ display: 'block', marginTop: '4px' }}>
-                  支援輸入 Hugging Face Space 網址（如 https://botsz-writenovel.hf.space）或儲存庫名稱，系統將自動解析後端與資料庫連線。
+                  填寫您的 Hugging Face 儲存庫名稱（用於 SQLite 資料庫持久化與雲端同步備份，非 LLM 呼叫端點）。
                 </span>
               </div>
 

@@ -156,6 +156,12 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
         acc = StreamAccumulator(llm_stream)
         for chunk in acc:
             yield chunk
+        if acc.error:
+            error_message = f"世界觀核心架構生成失敗：{acc.error}"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         core_json_str = acc.content
     else:
         core_dict = {
@@ -176,6 +182,12 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
         acc = StreamAccumulator(llm_stream)
         for chunk in acc:
             yield chunk
+        if acc.error:
+            error_message = f"多幕式起伏結構生成失敗：{acc.error}"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         acts_json_str = acc.content
     else:
         acts_dict = {
@@ -193,6 +205,12 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
         acc = StreamAccumulator(llm_stream)
         for chunk in acc:
             yield chunk
+        if acc.error:
+            error_message = f"角色登場規劃生成失敗：{acc.error}"
+            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
         char_plan_json_str = acc.content
     else:
         char_plan_dict = {

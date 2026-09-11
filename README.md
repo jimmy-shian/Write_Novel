@@ -15,75 +15,106 @@ pinned: false
 
 ---
 
-<!-- 頁籤式導航列 (Tab Navigation Bar) -->
-| [專案總覽](#-1-專案總覽) | [快速開始](#-2-快速開始與環境配置) | [核心新特性 (v4.0.0)](#-3-v400-核心新特性) | [系統技術架構](#-4-系統技術架構) | [核心 API 端點](#-5-核心-api-端點) | [測試與開源授權](#-6-測試與開源授權界限) |
+<!-- 頁籤式導航列 -->
+| [專案總覽](#1-專案總覽) | [快速開始](#2-快速開始) | [使用指南](#3-使用指南) | [技術架構](#4-系統技術架構) | [API 端點](#5-核心-api-端點) | [測試與授權](#6-測試與授權) |
 | :---: | :---: | :---: | :---: | :---: | :---: |
 
 ---
 
 ## 1. 專案總覽
 
-AI 小說工廠是一個高度模組化、多代理協作的長篇小說自動創作與輔助寫作系統。系統透過 7 個核心創作階段（Stage）與智慧總監評估階段，由 AI 總監（AI Director Copilot）依序派發任務、審查品質、修補錯誤，並結合 **Graphiti 時序動態記憶圖譜**，實現百萬字級長篇小說的結構化生成與前後文連貫性保障。
+AI 小說工廠是一個多代理協作的長篇小說自動創作系統。透過 7 個核心創作階段與 AI 總監評估，結合 **Graphiti 時序動態記憶圖譜**，實現百萬字級長篇小說的結構化生成與前後文連貫性保障。
 
-### 核心創作階段一覽
+### 核心創作階段
 
-| 順序 | Stage 名稱 | 負責 Agent | 角色定位與核心職掌 |
+| 順序 | Stage | Agent | 職掌 |
 |:---:|:---|:---|:---|
-| 1 | `worldview` | **Story Architect** (故事結構架構師) | 構建核心世界觀、主線多幕結構、力量體系與角色登場策略 |
-| 2 | `characters` | **Character Designer** (角色設計大師) | 建立主要角色聖經（Bible）、性格標籤、背景故事與成長弧線 |
-| 3 | `foreshadowing`| **Foreshadowing Orchestrator** (伏筆編織師) | 全局伏筆種子埋設、觸發章節與關鍵高潮轉折點編排 |
-| 4 | `volumes` | **Volumes Planner** (篇卷結構規劃師) | 劃分全書 10~20 卷宏觀節奏與卷主線目標 |
-| 5 | `volume_skeleton`| **Volume Skeleton Planner** (骨架規劃師) | 規劃逐卷逐章細部骨架大綱（40~50 章/卷） |
-| 6 | `writer` | **Chapter Writer** (正文寫作作家) | 結合時序記憶與術語庫撰寫高品質小說正文（單章 1500~3000 字） |
-| 7 | `editor` | **Editor Agent** (精緻文風編輯) | 潤色行文修辭、產出審閱修改提案與文風昇華 |
-| — | `evaluate` | **AI Director Copilot** (總監評估調度) | 階段性產出品質審查、錯誤自癒與管線下一步決策 |
+| 1 | `worldview` | Story Architect | 世界觀、多幕結構、力量體系 |
+| 2 | `characters` | Character Designer | 角色聖經、性格、成長弧線 |
+| 3 | `foreshadowing` | Foreshadowing Orchestrator | 伏筆埋設與回收編排 |
+| 4 | `volumes` | Volumes Planner | 10~20 卷宏觀節奏 |
+| 5 | `volume_skeleton` | Skeleton Planner | 逐卷逐章細部骨架 |
+| 6 | `writer` | Chapter Writer | 正文撰寫（1500~3000 字/章） |
+| 7 | `editor` | Editor Agent | 潤色修辭、審閱提案 |
+| — | `evaluate` | AI Director Copilot | 品質審查、錯誤自癒 |
 
 ### 專案目錄結構
 
 ```
 Write_Novel/
-├── version.json                  # 全專案唯一版本來源 (Single Source of Truth, v4.0.0)
+├── version.json                  # 全專案唯一版本來源 (SSOT, v4.0.0)
 ├── THIRD_PARTY_NOTICES.md        # 第三方開源授權與 Clean-Room 淨室聲明
 ├── pytest.ini                    # Pytest 自動化測試配置
 ├── requirements.txt              # Python 後端依賴清單
+├── app.py                        # Hugging Face Spaces 入口 (Gradio + FastAPI)
+├── build_app.py                  # 本地一鍵打包腳本 (APK / Electron / EXE)
+├── electron_backend.py           # Electron 後端無頭入口
 ├── backend/                      # Python FastAPI 後端
 │   ├── app.py                    # FastAPI 核心應用、路由註冊與靜態發布包掛載
+│   ├── agents/                   # 7 大創作 Agent (architect, character, writer, editor...)
 │   ├── api/                      # RESTful 資源路由層
 │   │   ├── novels/               # 小說 CRUD、章節與大綱存取
 │   │   ├── temporal_graph/       # Graphiti 時序記憶圖譜與切片端點
-│   │   ├── terms/                # 故事專用術語庫 (Glossary) 端點
+│   │   ├── terms/                # 故事專用術語庫端點
 │   │   ├── proposals/            # 草稿修訂提案與 Diff 套用端點
 │   │   ├── settings/             # 系統設定與動態模型探索
 │   │   ├── autonomous/           # 全自動自主寫作管線控制
-│   │   └── export/               # 多格式導出 (TXT / Markdown / 便攜 HTML)
-│   ├── common/                   # 全域版本讀取 (version.py)、LLM 介面 (llm.py)
+│   │   ├── export/               # 多格式導出 (TXT / Markdown / HTML)
+│   │   ├── volumes/              # 篇卷結構 API
+│   │   ├── diagnostics/          # 系統診斷端點
+│   │   └── sync/                 # HF Storage Bucket 同步端點
+│   ├── common/                   # 全域版本讀取、LLM 介面、工具函數
 │   ├── generation/               # 生成路由引擎 (routing, orchestration, handlers)
+│   ├── models/                   # LLM 客戶端與輸出解析器
+│   ├── prompts/                  # Prompt 模板管理與約束注入
+│   ├── schemas/                  # JSON Schema 驗證與類型定義
 │   ├── persistence/              # SQLite 持久化層 (schema.py, repositories/)
-│   └── services/                 # Graphiti 引擎、上下文建構器、無人值守排程器
-├── frontend/                     # React 現代化單頁應用 (Vite + TS)
-│   ├── package.json              # 前端相依套件 (React 18, Lucide-like SVG, Vite)
-│   ├── vite.config.ts            # Vite 構建配置 (相對路徑 base: './', API Proxy)
+│   ├── services/                 # 核心服務引擎
+│   │   ├── graphiti/             # Graphiti 時序圖譜記憶引擎
+│   │   ├── context/              # WriterContextBuilder 動態上下文組裝
+│   │   ├── director/             # AI Director Copilot 總監服務
+│   │   ├── autonomous_pipeline.py# 無人值守自主寫作排程器
+│   │   ├── hf_sync.py            # Hugging Face Storage Bucket 同步
+│   │   └── ...                   # gold_rules, foreshadowing, incremental_patch 等
+│   └── data/                     # 後端內建資料 (gold_rules/)
+├── electron/                     # Electron 桌面殼 (Windows portable)
+├── frontend/                     # React 18 + TypeScript + Vite
+│   ├── package.json              # 前端相依套件
+│   ├── vite.config.ts            # Vite 配置 (base: './', API Proxy)
+│   ├── capacitor.config.ts       # Capacitor Android 封裝配置
 │   ├── src/
 │   │   ├── api/                  # 統一型別化 API 客戶端
-│   │   ├── components/           # OpenDesign 極簡元件 (layout, editor, graph, copilot, common)
-│   │   ├── config/               # 版本號引用 (version.ts)
-│   │   ├── hooks/                # 業務邏輯自訂 Hook (useNovel, useTemporalGraph, useProposals)
-│   │   ├── platform/             # 平台抽象層 (Web, Android APK, Desktop)
-│   │   ├── styles/               # OpenDesign CSS 框架 (opendesign.css，嚴格 0 inline styles)
-│   │   └── utils/                # LCS 行級 Diff 演算法、剪貼簿工具
-│   └── dist/                     # 前端生產環境打包產物 (FastAPI 自動服務)
-├── tests/                        # 自動化測試套件 (34 項單元與整合測試全數通過)
+│   │   ├── components/
+│   │   │   ├── common/           # Button, Badge, StatusDot, ModelChip, Icons (SVG)
+│   │   │   ├── layout/           # ActivityRail, ExplorerDrawer, BottomDock, MobileNav
+│   │   │   ├── editor/           # EditorPane, DiffViewer, ProposalInbox, TaskPicker
+│   │   │   ├── graph/            # TemporalGraphBoard
+│   │   │   ├── copilot/          # CopilotDrawer, StageSelector
+│   │   │   ├── novel/            # CreateNovelModal, DeleteNovelModal, ResetNovelModal
+│   │   │   └── settings/         # SettingsModal, TermsModal
+│   │   ├── hooks/                # useNovel, useTemporalGraph, useProposals, useExpansionSync
+│   │   ├── platform/             # 平台抽象層 (Web, Android, Desktop)
+│   │   ├── storage/              # 本地狀態管理
+│   │   ├── types/                # 全域 TypeScript 型別定義
+│   │   ├── styles/               # opendesign.css (嚴格 0 inline styles)
+│   │   └── utils/                # diff.ts (LCS 行級 Diff), clipboard.ts, time.ts
+│   └── dist/                     # 前端生產環境打包產物
+├── tests/                        # 自動化測試套件
+├── tools/                        # 診斷與清理工具腳本
+├── scripts/                      # 部署同步腳本
+├── dist-packages/                # 本地打包產物輸出目錄
 └── data/                         # 本地資料庫與快取 (novel_factory.db)
 ```
 
 ---
 
-## 2. 快速開始與環境配置
+## 2. 快速開始
 
 ### 系統需求
 - **作業系統**：Windows 10 / 11
 - **Python**：3.10+（推薦使用虛擬環境 `C:\Users\Administrator\venv\Scripts\python.exe`）
-- **Node.js**：18+（推薦 v20+ 或 v22+）
+- **Node.js**：18+（推薦 v20+）
+- **Electron**：33+（桌面版打包，選用）
 
 ### 啟動服務
 
@@ -108,42 +139,72 @@ FastAPI 會自動服務 `frontend/dist/` 所構建出的現代化 OpenDesign 工
 
 ---
 
-## 3. v4.0.0 核心新特性
+## 3. 使用指南
 
-### A. Graphiti 時序動態記憶圖譜（打破固定上下文窗口）
-- **時間切片查詢**：依據章節索引動態檢索 `valid_from_chapter <= N < invalid_from_chapter` 的有效事實，避免上下文被淘汰設定干擾。
-- **衝突與作廢追蹤（Invalidation Tracking）**：當情節發展導致既有事實改變（例如「林霄修為突破築基」、「玄火令被奪」），系統自動記錄作廢章節與取代資訊（Superseded by）。
-- **章節事實自動抽取**：點擊一鍵「本章事實自動提取」，AI 分析正文並自動向圖譜登錄新實體與關係命題。
+### 介面佈局
+工作台採用 4 欄 IDE 佈局：
 
-### B. 複合創作與審閱流（Composite Workflow）
-- **手動創作**：無干擾寫作畫布，即時字數/行數統計，1-Click 一鍵複製，`Ctrl + S` 快速儲存。
-- **草稿建議收件箱（Proposal Inbox）**：AI 總監與精修編輯產出的修改案自動存入提案表，保留審閱意見分類（節奏、語氣、漏洞、氛圍、語法）。
-- **行級差異對比器（Diff Viewer）**：基於 LCS 演算法自製的高效行級 Diff，高亮顯示 `+` 新增行與 `-` 刪除行，提供「一鍵套用」與「放棄建議」。
+```
+┌────┬──────────────┬────────────────────────────────┬──────────────┐
+│ 活 │   作品導航   │          中央創作主畫布         │  AI 導演總控 │
+│ 動 │   (目錄樹)   │       (正文 / Diff / 圖譜)     │    (Copilot) │
+│ 列 │              │                                │              │
+│ 48 │  · 作品切換  │  · 章節正文即時編輯            │  · 階段選擇  │
+│ px │  · 章節目錄  │  · 審閱修訂對比 (Diff)         │  · 自主寫作  │
+│    │  · 增減章節  │  · 時序記憶圖譜 (Graphiti)     │  · 推理串流  │
+├────┴──────────────┴────────────────────────────────┴──────────────┤
+│ 底部工作列：即時推理與生成日誌 / 自主寫作進度 (可收合)              │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-### C. 故事專用術語庫（Glossary Constraints）
-- 支援分類維護專用名詞（通用術語、修煉體系、地理名詞、功法法寶、宗門勢力）。
-- 術語定義與約束規範在後端生成時**自動作為強制約束注入 Prompt**，有效防止 AI 發生名詞漂移與設定矛盾。
+- **左側活動列 (48px)**：章節編輯器、審閱對比、時序圖譜、術語庫、系統設定。
+- **中央主畫布**：支援正文編輯、審閱對比、時序圖譜切換。
+- **右側導演 (320px)**：階段派發器、自主寫作、推理串流。
+- **行動端 (< 768px)**：底部 3 按鈕導航（目錄、正文、導演）。
 
-### D. OpenDesign 極簡主義無 Emoji 設計系統
-- **嚴格 0 Inline Style**：全專案 HTML、JSX、動態 DOM 檢驗結果均為 0 處 inline styles，所有視覺表現均由 [`opendesign.css`](file:///c:/Users/Administrator/Desktop/Write_Novel/frontend/src/styles/opendesign.css) 統一維護。
-- **去除裝飾性卡通 Emoji**：全面採用乾淨精準的向量 SVG 圖標與 6px 狀態指示圓點（`.status-dot`）。
-- **動態模型標籤（Model Chips）**：透過端點即時獲取可用模型清單，支援一鍵切換與設定儲存。
+### 三種創作模式
 
-### E. 響應式佈局 (RWD) 與 Android APK 支援
-- **桌面端**：4 欄 IDE 網格佈局（48px 活動列 + 260px 目錄抽屜 + 彈性主畫布 + 320px 導演抽屜 + 底部可收合日誌）。
-- **行動端 (< 768px)**：底欄 3 按鈕導航（目錄、正文、導演），左右抽屜平滑覆蓋，操作流暢。
-- **跨平台解耦**：前端 Vite 配置 `base: './'`，產出的發布包可直接封裝入 Capacitor 或 Cordova 作為 Android APK 離線運行。
+**A. 純手動寫作**
+1. 左側目錄選取章節 → 中央畫布即時載入。
+2. 輸入文字，按 `Ctrl + S` 儲存。
+3. 點擊「一鍵複製」將全章複製至剪貼簿。
 
-### F. 單一事實來源版本號（SSOT）
-- 專案版本號嚴格唯一定義於根目錄 [`version.json`](file:///c:/Users/Administrator/Desktop/Write_Novel/version.json)。
-- 後端與前端均動態引用此檔，杜絕跨檔案硬編碼與版本不一致問題。
+**B. 人機協同審閱**
+1. 右側導演面板選擇「審閱修訂」→ 輸入要求 → 點擊「執行階段生成」。
+2. AI 產出修改建議，存入「草稿建議收件箱」。
+3. 點擊「審閱對比 (Diff)」檢視差異（綠色新增 / 紅色刪除）。
+4. 點擊「一鍵套用」或「放棄建議」。
+
+**C. 全自動自主寫作**
+1. 點擊「自主寫作」啟動。
+2. 後端自動推進：世界觀 → 角色 → 大綱 → 逐章撰寫 → 時序記憶登錄。
+3. 可隨時關閉瀏覽器，後端持續運行；再次開啟自動輪詢進度。
+
+### Graphiti 時序記憶圖譜
+解決 AI 寫作遺忘前期設定的問題：
+- **時序切片**：僅展示當前章節有效的事實。
+- **事實作廢**：點擊「作廢」輸入原因，防止後續章節錯誤引用。
+- **自動提取**：撰寫完正文後，點擊「本章事實自動提取」自動提煉結構化事實。
+
+### 術語庫
+將專有名詞提升為 **Prompt 強制約束**：
+1. 點擊左側「故事專用術語庫」→「新增術語」。
+2. 填寫名稱、分類（通用/修煉體系/地理/功法/宗門）與定義約束。
+3. 後端自動將術語表注入 Agent 提示詞，確保名詞 100% 一致。
+
+### 系統設定
+點擊活動列底部齒輪：
+1. API Base URL：輸入 OpenAI 相容端點（NVIDIA NIM、OpenAI、Ollama）。
+2. API Key：輸入金鑰。
+3. 動態讀取可用模型：即時查詢並渲染為標籤選擇片。
+4. Temperature / Thinking Stream：調整生成參數。
+
+### 小說匯出
+- **TXT (`format=txt`)**：純文字，適合電子書閱讀器。
+- **Markdown (`format=markdown`)**：保留世界觀、角色、大綱與正文。
+- **HTML (`format=html`)**：內建夜間閱讀主題，單檔離線閱讀。
 
 ---
-
-
-### G. 一鍵本地打包與 GitHub Actions 遠端自動編譯
-- **本地一鍵封裝控制 (build_app.py)**：支援互動式選單或 CLI 參數 (--target apk|exe|all|web)，自動配置 Android SDK 與 JDK 環境變數，使用固定金鑰庫 (mykey.keystore) 簽名 Release APK，並支援 PyInstaller 獨立綠色版桌面程式 (.EXE) 打包。
-- **CI/CD 自動編譯工作流 (.github/workflows/build_and_release.yml)**：master 分支推送自動觸發全套自動化測試、網頁資源構建、Android APK 簽名封裝與 Windows EXE 打包，產物自動上傳至 GitHub Actions Artifacts。
 
 ## 4. 系統技術架構
 
@@ -201,39 +262,33 @@ graph TB
 | `POST` | `/api/novels/{id}/temporal-graph/extract-from-chapter` | **章節事實自動提取** | 呼叫 AI 解析正文並登錄實體與事實 |
 | `GET` | `/api/novels/{id}/terms` | 取得小說專用術語庫 | 可依 `?category=...` 篩選 |
 | `POST` | `/api/novels/{id}/terms` | 新增故事術語 | 術語定義自動作為 Prompt 約束注入 |
-| `GET` | `/api/novels/{id}/proposals` | 取得草稿修改提案清單 | 支援依章節與狀態 (`pending`) 篩選 |
+| `GET` | `/api/novels/{id}/proposals` | 取得草稿修改提案清單 | 支援依章節與狀態篩選 |
 | `POST` | `/api/novels/{id}/proposals/{pid}/apply` | **一鍵套用修改提案** | 將提案覆蓋章節正文並更新狀態 |
 | `POST` | `/api/pipeline/auto-run` | 啟動全自動自主寫作 | 後端背景多執行緒自驅推進 |
 | `GET` | `/api/pipeline/auto-status` | 查詢自主寫作即時狀態 | 輪詢當前章節、階段與進度 |
-| `POST` | `/api/settings/fetch-models` | 動態探索端點可用模型 | 支援 OpenAI / NVIDIA / Ollama `/models` |
+| `POST` | `/api/settings/fetch-models` | 動態探索端點可用模型 | 支援 OpenAI / NVIDIA / Ollama |
+| `GET` | `/api/diagnostics/health` | 系統健康診斷 | 資料庫與服務狀態 |
+| `POST` | `/api/sync/backup` | 手動觸發資料庫備份 | 同步至 HF Storage Bucket |
+| `GET` | `/api/sync/status` | 查詢同步狀態 | 備份時間與版本資訊 |
 
 ---
 
-## 6. 測試與開源授權界限
+## 6. 測試與授權
 
 ### 自動化測試套件
-專案具備完整的自動化測試，使用專用虛擬環境執行：
+使用專用虛擬環境執行全套測試：
 ```powershell
 C:\Users\Administrator\venv\Scripts\python.exe -m pytest
 ```
-- **測試涵蓋範圍**：
-  - `tests/test_frontend_build_integration.py`：驗證 FastAPI 靜態掛載 React 發布包與 SSOT 版本號。
-  - `tests/test_temporal_and_story_extensions.py`：驗證時序事實生命週期、作廢機制、術語庫約束與提案流程。
-  - `tests/unit/test_writer_context_builder.py`：驗證時序圖譜動態注入寫作上下文。
-  - `tests/unit/test_gold_rules_governance.py`、`test_tool_loop_fix.py`、`test_narrative_benchmark.py`。
-- **測試結果**：**34 passed, 0 failed**。
+- **測試涵蓋範圍**：前端構建整合、時序事實生命週期、術語庫約束、提案流程、WriterContextBuilder 動態注入、黃金規則治理、Agent 工具調用死循環防護、敘事基準測試等。
+- 詳見 `tests/` 目錄。
 
 ### 開源授權與 Clean-Room 聲明
-詳見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)：
-1. **`AI-Novel-Writer` (GPL-3.0)**：採嚴格淨室（Clean-Room）獨立開發原則，僅作介面交互與功能流程概念參考，本專案無任何複製、移植、翻譯或機械改寫之代碼。
-2. **`Monogatari-Assistant-FE` (Apache-2.0)**：設計排版理念參考，已於告示文件標註 Attribution。
-3. **`Graphiti` (Apache-2.0)**：時序動態知識圖譜概念參考，已於告示文件標註 Attribution。
+詳見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本專案嚴格遵循 Clean-Room 獨立開發原則，所有 React 元件、Hook、演算法（包括 LCS Line Diff）皆為獨立全新實作，無任何複製、移植或機械改寫。
 
 ---
 
-## 📚 相關文檔
+## 相關文檔
 
-- 📖 [使用者操作指南 (USER_GUIDE.md)](USER_GUIDE.md)
-- 💻 [開發者指南 (DEVELOPER_GUIDE.md)](DEVELOPER_GUIDE.md)
-- 🚀 [開發與雲端部署守則 (DEVELOPMENT_DEPLOYMENT_GUIDE.md)](DEVELOPMENT_DEPLOYMENT_GUIDE.md)
-- ⚖️ [第三方授權告示 (THIRD_PARTY_NOTICES.md)](THIRD_PARTY_NOTICES.md)
+- [開發者手冊 (DEVELOPER_GUIDE.md)](DEVELOPER_GUIDE.md)
+- [第三方授權告示 (THIRD_PARTY_NOTICES.md)](THIRD_PARTY_NOTICES.md)

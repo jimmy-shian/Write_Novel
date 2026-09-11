@@ -1,4 +1,4 @@
-import { CreationStage, ChatRecord, CopilotTab } from '../../types';
+﻿import { CreationStage, ChatRecord, CopilotTab } from '../../types';
 
 export type { CreationStage, ChatRecord, CopilotTab };
 
@@ -8,15 +8,34 @@ export interface StageDefinition {
   desc: string;
 }
 
-export const STAGE_DEFINITIONS: StageDefinition[] = [
-  { id: 'writer', label: '正文撰寫', desc: '結合時序知識圖譜生成章節正文' },
-  { id: 'editor', label: '審閱修訂', desc: '產出審閱建議與修改提案' },
-  { id: 'worldview', label: '世界觀構建', desc: '設定歷史、修煉體系與法則' },
-  { id: 'characters', label: '角色聖經', desc: '角色性格、慾望與關係網' },
-  { id: 'volumes', label: '分卷結構', desc: '全書宏觀分卷主線與高潮節奏' },
-  { id: 'volume_skeleton', label: '卷章細綱', desc: '針對選定卷生成逐章情節細綱' },
-  { id: 'evaluate', label: '深度評估', desc: '節奏、文筆與劇情衝突評分' },
+export interface StageGroup {
+  id: string;
+  title: string;
+  stages: StageDefinition[];
+}
+
+export const STAGE_GROUPS: StageGroup[] = [
+  {
+    id: 'outline',
+    title: '架構與大綱',
+    stages: [
+      { id: 'worldview', label: '世界觀構建', desc: '設定歷史、修煉體系與法則' },
+      { id: 'characters', label: '角色聖經', desc: '角色性格、慾望與關係網' },
+      { id: 'volumes', label: '分卷結構', desc: '全書宏觀分卷主線與高潮節奏' },
+      { id: 'volume_skeleton', label: '卷章細綱', desc: '針對選定卷生成逐章情節細綱' },
+    ],
+  },
+  {
+    id: 'writing',
+    title: '正文與審閱',
+    stages: [
+      { id: 'writer', label: '正文撰寫', desc: '結合時序知識圖譜生成章節正文' },
+      { id: 'editor', label: '審閱修訂', desc: '產出審閱建議與修改提案' },
+    ],
+  },
 ];
+
+export const STAGE_DEFINITIONS: StageDefinition[] = STAGE_GROUPS.flatMap((g) => g.stages);
 
 export type RecordFilterType = 'all' | 'director' | 'pipeline' | 'system';
 

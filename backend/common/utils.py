@@ -163,13 +163,14 @@ class StreamAccumulator:
         thinking_text = acc.thinking
     """
 
-    __slots__ = ("_gen", "_content", "_thinking", "_collect_thinking")
+    __slots__ = ("_gen", "_content", "_thinking", "_collect_thinking", "_error")
 
     def __init__(self, stream, collect_thinking=False):
         self._gen = iter(stream)
         self._content = []
         self._thinking = []
         self._collect_thinking = collect_thinking
+        self._error = None
 
     def __iter__(self):
         return self
@@ -183,6 +184,8 @@ class StreamAccumulator:
                     self._content.append(data.get("delta", ""))
                 elif self._collect_thinking and data.get("type") == "thinking":
                     self._thinking.append(data.get("delta", ""))
+                elif data.get("type") == "error":
+                    self._error = data.get("message") or "LLM API Error"
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
         return chunk
@@ -194,3 +197,7 @@ class StreamAccumulator:
     @property
     def thinking(self):
         return "".join(self._thinking)
+
+    @property
+    def error(self):
+        return self._error

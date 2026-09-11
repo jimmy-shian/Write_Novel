@@ -41,7 +41,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 # Load environment variables from .env file
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=True)
 
-DB_PATH = os.getenv("DB_PATH", os.path.join(PROJECT_ROOT, "data", "novel_factory.db"))
+DB_PATH = os.path.abspath(os.getenv("DB_PATH", os.path.join(PROJECT_ROOT, "data", "novel_factory.db")))
 
 # --- Agent Default Configurations from .env ---
 DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"

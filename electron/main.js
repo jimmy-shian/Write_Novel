@@ -35,7 +35,21 @@ function sidecarPath() {
   return path.join(__dirname, '..', 'dist-packages', 'AI_Novel_Factory_Backend', 'AI_Novel_Factory_Backend.exe');
 }
 
-function pickFreePort() {
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+async function pickFreePort() {
+  // 優先使用固定 Port 8000，確保瀏覽器 localStorage Origin 保持一致；若佔用則動態分配
+  if (await isPortAvailable(8000)) {
+    return 8000;
+  }
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.once('error', reject);
@@ -107,6 +121,7 @@ function createWindow(targetUrl) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      partition: 'persist:ai-novel-factory',
     },
   });
   mainWindow.loadURL(targetUrl);

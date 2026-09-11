@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import { Novel } from '../../types';
 import { StatusDot } from '../common/StatusDot';
 import { Button } from '../common/Button';
-import { CustomSelect } from '../common/CustomSelect';
 import { IconDownload } from '../common/Icons';
 import { downloadNovelExport } from '../../api/novels';
 import { ActiveView } from './ActivityRail';
+import { WorkspaceNavDropdown, WorldviewSubTab } from './WorkspaceNavDropdown';
 
 interface WorkspaceHeaderProps {
   activeNovel: Novel | null;
@@ -14,18 +14,13 @@ interface WorkspaceHeaderProps {
   isSaving: boolean;
   isLoading?: boolean;
   activeView: ActiveView;
+  worldviewTab?: WorldviewSubTab;
   onSave: () => void;
   onToggleExplorerMobile: () => void;
   onToggleCopilotMobile: () => void;
-  onSelectView: (view: ActiveView) => void;
+  onSelectView: (view: ActiveView, subTab?: WorldviewSubTab) => void;
+  onOpenTerms?: () => void;
 }
-
-const VIEW_OPTIONS: { value: string; label: string }[] = [
-  { value: 'editor', label: '章節編輯器' },
-  { value: 'diff', label: '審閱對比' },
-  { value: 'worldview', label: '全書架構大綱' },
-  { value: 'graph', label: '記憶圖譜' },
-];
 
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   activeNovel,
@@ -34,10 +29,12 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   isSaving,
   isLoading = false,
   activeView,
+  worldviewTab,
   onSave,
   onToggleExplorerMobile,
   onToggleCopilotMobile,
   onSelectView,
+  onOpenTerms,
 }) => {
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -59,6 +56,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     downloadNovelExport(activeNovel.id, format);
     setIsExportMenuOpen(false);
   };
+
   return (
     <header className="workspace-topbar">
       <div className="topbar-left">
@@ -100,16 +98,13 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       </div>
 
       <div className="topbar-right">
-        {/* Collapsible View Selector Dropdown */}
-        <div className="topbar-view-switcher-dropdown">
-          <CustomSelect
-            value={activeView}
-            options={VIEW_OPTIONS}
-            onChange={(val) => onSelectView(val as ActiveView)}
-            className="topbar-view-select"
-          />
-        </div>
-
+        {/* Hierarchical Grouped View Switcher Dropdown */}
+        <WorkspaceNavDropdown
+          activeView={activeView}
+          worldviewTab={worldviewTab}
+          onSelectView={onSelectView}
+          onOpenTerms={onOpenTerms}
+        />
 
         {/* Save button */}
         <Button

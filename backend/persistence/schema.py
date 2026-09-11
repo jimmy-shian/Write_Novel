@@ -558,6 +558,15 @@ def db_init():
         )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_proposals_novel_ch ON draft_proposals(novel_id, chapter_index)")
+        
+        # 10. App preferences table (for theme, editor font size, UI state persistence)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS app_preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create temporal_graph / story extension tables: {e}")

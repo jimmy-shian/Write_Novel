@@ -117,6 +117,121 @@ def fetch_available_models(base_url: str, api_key: Optional[str] = "") -> Dict[s
         raise ValueError(f"獲取模型清單失敗: {str(e)}")
 
 
+def test_llm_connection(base_url: str, api_key: Optional[str] = "", model: Optional[str] = "") -> Dict[str, Any]:
+    """
+    Performs a real chat completion ping to test if the LLM Base URL, API Key, and Model are fully functional.
+    """
+    import sys
+
+    if not base_url or not str(base_url).strip():
+        raise ValueError("請輸入有效的 API Base URL")
+
+    raw_url = str(base_url).strip().rstrip("/")
+    if not raw_url.endswith("/chat/completions"):
+        completions_url = f"{raw_url}/chat/completions"
+    else:
+        completions_url = raw_url
+
+    clean_key = str(api_key or "").strip()
+    clean_model = str(model or "").strip() or "gemini-web/pro"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if clean_key:
+        headers["Authorization"] = f"Bearer {clean_key}"
+
+    # Check if cloud container attempting to access localhost
+    if ("127.0.0.1" in completions_url or "localhost" in completions_url) and os.getenv("SPACE_ID"):
+        return {
+            "ok": False,
+            "status": "error",
+            "message": "⚠️ 檢測到端點為本機 127.0.0.1，但後端伺服器運行於雲端容器環境 (Hugging Face Space)。雲端伺服器無法連線至您個人電腦的本機服務。若要使用本機 WebChat2Local，請於本機電腦執行 start.bat 並使用本機頁面 (http://127.0.0.1:8000)。",
+        }
+
+    payload = {
+        "model": clean_model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 10,
+        "temperature": 0.1,
+        "stream": False,
+    }
+
+    try:
+        res = requests.post(completions_url, headers=headers, json=payload, timeout=25)
+        if res.status_code == 200:
+            data = res.json()
+            reply = ""
+            try:
+                reply = data["choices"][0]["message"]["content"]
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "status": "success",
+                "message": f"✅ 連線測試成功！LLM 模型 [{clean_model}] 回應正常。",
+                "reply": (reply or "")[:100],
+            }
+
+        # Diagnostics for common status codes
+        err_msg = res.text[:300]
+        try:
+            err_json = res.json()
+            if "error" in err_json:
+                err_msg = err_json["error"].get("message") or str(err_json["error"])
+            elif "detail" in err_json:
+                err_msg = str(err_json["detail"])
+        except Exception:
+            pass
+
+        if res.status_code == 401:
+            return {
+                "ok": False,
+                "status": "error",
+                "message": f"❌ 驗證失敗 (401 Unauthorized)：API Key 不正確或已過期。詳細資訊: {err_msg}",
+            }
+        elif res.status_code in (404, 410):
+            return {
+                "ok": False,
+                "status": "error",
+                "message": f"❌ 模型無效或端點不存在 (HTTP {res.status_code})：找不到模型 [{clean_model}] 或該模型已下線停用。詳細資訊: {err_msg}",
+            }
+        else:
+            return {
+                "ok": False,
+                "status": "error",
+                "message": f"❌ 請求失敗 (HTTP {res.status_code})：{err_msg}",
+            }
+
+    except requests.exceptions.ConnectionError as e:
+        is_local = "127.0.0.1" in completions_url or "localhost" in completions_url
+        if is_local:
+            return {
+                "ok": False,
+                "status": "error",
+                "message": f"❌ 連線被拒 (Connection Refused)：無法連線至 {completions_url}。請確認本地服務（如 WebChat2Local、Ollama 或 本地代理）已在該連接埠啟動執行。",
+            }
+        return {
+            "ok": False,
+            "status": "error",
+            "message": f"❌ 無法連線至伺服器 ({completions_url}): {str(e)}",
+        }
+    except requests.exceptions.Timeout:
+        return {
+            "ok": False,
+            "status": "error",
+            "message": "❌ 連線逾時 (Timeout)：請求超過 25 秒未回應，請檢查網路連線或端點可用性。",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "status": "error",
+            "message": f"❌ 測試連線發生未預期錯誤: {str(e)}",
+        }
+
+
+
 def _get_plot_review_batch_size() -> int:
     try:
         value = int(os.getenv("PLOT_REVIEW_BATCH_SIZE", "3"))
@@ -232,6 +347,14 @@ def build_settings_snapshot() -> Dict[str, Any]:
     except Exception:
         models_config = {}
     snapshot["_modelsConfig"] = models_config
+
+    try:
+        from backend.persistence import get_all_app_preferences, DB_PATH
+        snapshot["_preferences"] = get_all_app_preferences()
+        snapshot["_dbPath"] = os.path.abspath(DB_PATH)
+    except Exception:
+        pass
+
     return snapshot
 
 
@@ -324,6 +447,14 @@ def apply_settings_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
             result = save_settings_patch(agent_name, agent_patch)
             results.append(result)
             warnings.extend(result.get("warnings", []))
+
+        if "preferences" in payload and isinstance(payload["preferences"], Mapping):
+            try:
+                from backend.persistence import set_app_preferences
+                set_app_preferences(dict(payload["preferences"]))
+            except Exception as e:
+                warnings.append(f"Failed to save preferences: {e}")
+
         return {
             "status": "success",
             "updated_agents": results,

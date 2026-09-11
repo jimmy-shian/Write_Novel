@@ -128,31 +128,23 @@ export function getPlatformAdapter() {
 }
 
 /**
- * 智慧解析使用者輸入的雲端端點字串（支援 URL、Space 名稱或 Storage Bucket 名稱）
+ * 智慧解析使用者輸入的雲端端點字串（支援 API Host URL 與 Hugging Face 儲存庫名稱）
+ * 注意：Hugging Face 儲存庫 (Dataset / Storage Bucket) 僅作為資料庫持久化同步使用，不應作為 API 呼叫伺服器
  */
 export function parseCloudEndpoint(input: string): { host: string; bucket: string } {
   const trimmed = input.trim();
   if (!trimmed) {
     return { host: '', bucket: '' };
   }
-  // 1. 完整 URL 格式 (http:// 或 https://)
+  // 1. 完整 URL 格式 (http:// 或 https://) -> 明確指定的後端 API 伺服器
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return { host: trimmed.replace(/\/+$/, ''), bucket: 'botsz/writenovel-storage-bucket' };
+    return { host: trimmed.replace(/\/+$/, ''), bucket: '' };
   }
-  // 2. 域名格式 (如 botsz-writenovel.hf.space)
+  // 2. 域名格式 (如 xxx.hf.space) -> 明確指定的後端 Space API 伺服器
   if (trimmed.includes('.hf.space')) {
-    return { host: `https://${trimmed.replace(/\/+$/, '')}`, bucket: 'botsz/writenovel-storage-bucket' };
+    return { host: `https://${trimmed.replace(/\/+$/, '')}`, bucket: '' };
   }
-  // 3. 儲存庫命名格式 (如 username/repo-name)
-  if (trimmed.includes('/')) {
-    const [user, repo] = trimmed.split('/');
-    if (repo.toLowerCase().includes('bucket') || repo.toLowerCase().includes('storage')) {
-      return { host: 'https://botsz-writenovel.hf.space', bucket: trimmed };
-    } else {
-      const spaceHost = `https://${user.toLowerCase()}-${repo.toLowerCase().replace(/_/g, '-')}.hf.space`;
-      return { host: spaceHost, bucket: `${user}/writenovel-storage-bucket` };
-    }
-  }
+  // 3. 儲存庫命名格式 (如 username/repo-name 或 bucket-name) -> 純資料庫儲存庫，不更動 API Host
   return { host: '', bucket: trimmed };
 }
 

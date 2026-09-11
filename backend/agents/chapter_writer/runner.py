@@ -337,11 +337,17 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         f"開始寫作第 {chapter_index} 章。風格: {custom_style}。指示: {user_prompt or '無額外指示'}",
         message_type="pipeline"
     )
-    
+
     stream = call_llm_stream("writer", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
+    if acc.error:
+        error_message = f"第 {chapter_index} 章正文寫作失敗：{acc.error}"
+        db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
     full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "正文寫作作家", full_text):

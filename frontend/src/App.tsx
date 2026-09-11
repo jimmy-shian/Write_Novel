@@ -24,6 +24,15 @@ import {
 import { CreationStage, DraftProposal } from './types';
 import { ToastContainer, showToast } from './components/common/Toast';
 import { useExpansionSync } from './hooks/useExpansionSync';
+import {
+  ThemeMode,
+  getCachedPreferences,
+  applyAllPreferences,
+  savePreferences,
+  syncPreferencesFromServer,
+  subscribePreferences,
+} from './services/preferences';
+
 
 export const App: React.FC = () => {
   const expansionSync = useExpansionSync();
@@ -79,32 +88,37 @@ export const App: React.FC = () => {
     refreshProposals,
   } = useProposals(activeNovelId, activeChapterIndex);
 
-  // Theme state
-  const [theme, setTheme] = useState<'light' | 'neutral' | 'dark'>(() => {
-    const saved = localStorage.getItem('ai_novel_theme');
-    return (saved === 'dark' || saved === 'neutral' || saved === 'light') ? saved : 'dark';
-  });
+  // Preferences (Theme & Editor Font Size) - Modular SSOT
+  const [theme, setTheme] = useState<ThemeMode>(() => getCachedPreferences().theme);
+  const [editorFontSize, setEditorFontSize] = useState<number>(() => getCachedPreferences().editor_font_size);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('ai_novel_theme', theme);
-  }, [theme]);
+    // 1. 套用當前快取設定至 DOM
+    applyAllPreferences({ theme, editor_font_size: editorFontSize });
 
-  // Middle Editor Font Size state & instant reactive synchronization
-  const [editorFontSize, setEditorFontSize] = useState<number>(() => {
-    const saved = localStorage.getItem('editor_font_size');
-    return saved ? parseInt(saved, 10) || 16 : 16;
-  });
+    // 2. 背景從後端 SQLite 同步持久化設定
+    syncPreferencesFromServer().then((synced) => {
+      setTheme(synced.theme);
+      setEditorFontSize(synced.editor_font_size);
+    });
 
-  const handleFontSizeChange = useCallback((size: number) => {
-    setEditorFontSize(size);
-    document.documentElement.style.setProperty('--editor-font-size', `${size}px`);
-    localStorage.setItem('editor_font_size', String(size));
+    // 3. 監聽跨組件變更通知
+    const unsubscribe = subscribePreferences((latest) => {
+      setTheme(latest.theme);
+      setEditorFontSize(latest.editor_font_size);
+    });
+    return unsubscribe;
   }, []);
 
-  useEffect(() => {
-    document.documentElement.style.setProperty('--editor-font-size', `${editorFontSize}px`);
-  }, [editorFontSize]);
+  const handleThemeChange = useCallback((newTheme: ThemeMode) => {
+    setTheme(newTheme);
+    savePreferences({ theme: newTheme });
+  }, []);
+
+  const handleFontSizeChange = useCallback((newSize: number) => {
+    setEditorFontSize(newSize);
+    savePreferences({ editor_font_size: newSize });
+  }, []);
 
   // Layout and view state
   const [activeView, setActiveView] = useState<ActiveView>(() => {
@@ -155,6 +169,18 @@ export const App: React.FC = () => {
     } else if (stage === 'volumes' || stage === 'volume_skeleton') {
       setActiveView('worldview');
       setWorldviewTab('plot');
+    }
+  }, []);
+
+  // Hierarchical view navigation handler supporting worldview sub-tabs
+  const handleSelectWorkspaceView = useCallback((view: ActiveView, subTab?: 'worldview' | 'characters' | 'plot') => {
+    if (view === 'terms') {
+      setIsTermsOpen(true);
+      return;
+    }
+    setActiveView(view);
+    if (subTab) {
+      setWorldviewTab(subTab);
     }
   }, []);
 
@@ -302,7 +328,7 @@ export const App: React.FC = () => {
             if (status.logs.length > lastSeenLogCountRef.current) {
               const newEntries = status.logs.slice(lastSeenLogCountRef.current);
               newEntries.forEach((entry) => {
-                addLog(`[雲端] ${entry.msg}`);
+                addLog(`[自主寫作] ${entry.msg}`);
                 if (
                   entry.msg.includes('✅') ||
                   entry.msg.includes('完成') ||
@@ -494,7 +520,7 @@ export const App: React.FC = () => {
     } else {
       try {
         setIsBottomDockOpen(true);
-        addLog(`[發送請求] 正在向伺服器發送啟動《${activeNovel?.title || ''}》雲端自主寫作任務...`);
+        addLog(`[發送請求] 正在向伺服器發送啟動《${activeNovel?.title || ''}》自主寫作任務...`);
         lastSeenLogCountRef.current = 0;
         const res = await startAutoPipeline(activeNovelId, activeNovel?.pipeline_prompt || '', 5);
         if (res.status === 'success' || res.status === 'started' || res.status === 'already_running' || res.success) {
@@ -512,7 +538,7 @@ export const App: React.FC = () => {
               );
             }
             if (status.logs && Array.isArray(status.logs)) {
-              status.logs.forEach((entry) => addLog(`[雲端] ${entry.msg}`));
+              status.logs.forEach((entry) => addLog(`[自主寫作] ${entry.msg}`));
               lastSeenLogCountRef.current = status.logs.length;
             }
           } catch {}
@@ -633,10 +659,12 @@ export const App: React.FC = () => {
           isSaving={isSaving}
           isLoading={isNovelLoading}
           activeView={activeView}
+          worldviewTab={worldviewTab}
           onSave={saveActiveChapter}
           onToggleExplorerMobile={() => setIsExplorerOpenMobile(!isExplorerOpenMobile)}
           onToggleCopilotMobile={() => setIsCopilotOpenMobile(!isCopilotOpenMobile)}
-          onSelectView={setActiveView}
+          onSelectView={handleSelectWorkspaceView}
+          onOpenTerms={() => setIsTermsOpen(true)}
         />
 
         <div
@@ -798,7 +826,7 @@ export const App: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         theme={theme}
-        onThemeChange={setTheme}
+        onThemeChange={handleThemeChange}
         editorFontSize={editorFontSize}
         onFontSizeChange={handleFontSizeChange}
       />

@@ -150,18 +150,36 @@ class AutonomousPipelineManager:
 
     def start_pipeline(self, novel_id: str, prompt: str = "", max_chapters: int = 5) -> Dict[str, Any]:
         with self._lock:
-            if novel_id in self.tasks and self.tasks[novel_id].is_running:
-                return {
-                    "status": "already_running",
-                    "success": True,
-                    "novel_id": novel_id,
-                    "novel_title": self.tasks[novel_id].novel_title,
-                    "message": f"小說《{self.tasks[novel_id].novel_title}》已有自主生成任務在背景運行中",
-                }
+            # 檢查先前任務是否真正在執行
+            if novel_id in self.tasks:
+                existing_task = self.tasks[novel_id]
+                if existing_task.is_running:
+                    # 檢查背景執行緒是否仍存活，若已終止則自我修復重設狀態
+                    if existing_task.worker_thread and not existing_task.worker_thread.is_alive():
+                        print(f"[AutoPipeline] Task for {novel_id} was marked running but thread is dead. Resetting...")
+                        existing_task.is_running = False
+                        try:
+                            db.release_pipeline_lock(novel_id)
+                        except Exception:
+                            pass
+                    else:
+                        return {
+                            "status": "already_running",
+                            "success": True,
+                            "novel_id": novel_id,
+                            "novel_title": existing_task.novel_title,
+                            "message": f"小說《{existing_task.novel_title}》已有自主生成任務在背景運行中",
+                        }
 
             novel = db.get_novel(novel_id)
             if not novel:
                 return {"status": "error", "success": False, "message": f"找不到小說 (ID: {novel_id})"}
+
+            # 啟動前清理可能殘留的 SQLite 鎖定
+            try:
+                db.release_pipeline_lock(novel_id)
+            except Exception:
+                pass
 
             effective_prompt = prompt.strip() if (prompt and prompt.strip()) else (novel.get("pipeline_prompt") or "").strip()
 
@@ -195,13 +213,19 @@ class AutonomousPipelineManager:
     def stop_pipeline(self, novel_id: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
             if novel_id:
+                # 無論記憶體是否有活躍任務，皆主動清理該小說的 SQLite 鎖定
+                try:
+                    db.release_pipeline_lock(novel_id)
+                except Exception:
+                    pass
+
                 if novel_id not in self.tasks or not self.tasks[novel_id].is_running:
                     return {"status": "not_running", "success": False, "message": "該小說目前沒有正在運行的任務"}
                 task = self.tasks[novel_id]
                 task.stop_requested = True
                 task.status_message = "🛑 正在等待當前步驟完成後中止..."
                 task.log("使用者請求中止本小說的雲端自主生成任務", level="warn")
-                return {"status": "stopping", "success": True, "novel_id": novel_id, "message": f"已發送中止請求，小說《{task.novel_title}》將於當前章節完成後安全停止"}
+                return {"status": "stopping", "success": True, "novel_id": novel_id, "message": f"已發送中止請求，小說《{task.novel_title}》將於當前步驟完成後安全停止"}
             else:
                 running_tasks = [t for t in self.tasks.values() if t.is_running]
                 if not running_tasks:

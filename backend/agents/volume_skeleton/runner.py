@@ -434,6 +434,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
             yield "data: " + json.dumps({"type": "content", "delta": f"\n[整卷骨架] 第 {volume_index} 卷 (批次 {batch_num}/{total_batches})：生成第 {batch_start}-{batch_end} 章（第 {attempt} 次）\n"}, ensure_ascii=False) + "\n\n"
             accumulated = []
             saw_error = False
+            last_error_msg = ""
             try:
                 llm_stream = call_llm_stream("volume_skeleton", messages, stream=stream, force_json=force_json)
                 for chunk in llm_stream:
@@ -446,11 +447,13 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
                                 accumulated.append(data.get("delta", ""))
                             elif data.get("type") == "error":
                                 saw_error = True
+                                last_error_msg = data.get("message") or ""
                         except (json.JSONDecodeError, ValueError, TypeError):
                             pass
                     yield chunk
             except Exception as exc:
                 saw_error = True
+                last_error_msg = str(exc)
                 print(f"[VolumeSkeleton] 第 {volume_index} 卷批次 {batch_start}-{batch_end} (第 {attempt} 次) 呼叫異常: {exc}")
 
             batch_full_text = "".join(accumulated)
@@ -463,7 +466,8 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
 
             if not batch_full_text.strip() or saw_error:
                 if attempt >= VOLUME_SKELETON_BATCH_RETRIES:
-                    yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 生成失敗，未取得有效內容。"}, ensure_ascii=False) + "\n\n"
+                    err_hint = f"：{last_error_msg}" if last_error_msg else "，未取得有效內容。"
+                    yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 生成失敗{err_hint}"}, ensure_ascii=False) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                     return
                 time.sleep(min(15, 2 * attempt))

@@ -21,8 +21,7 @@ except ImportError:
     HAS_HF_HUB = False
 
 # 專案路徑與環境變數設定
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.getenv("DB_PATH", os.path.join(PROJECT_ROOT, "data", "novel_factory.db"))
+from backend.persistence.connection import DB_PATH, PROJECT_ROOT
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN", "")
 HF_STORAGE_BUCKET = os.getenv("HF_STORAGE_BUCKET", "botsz/writenovel-storage-bucket")
 HF_DATASET_REPO = os.getenv("HF_DATASET_REPO", "botsz/writenovel-storage")
@@ -65,15 +64,18 @@ def update_sync_config(
 def get_sync_status() -> Dict[str, Any]:
     """取得當前雲端同步狀態。"""
     token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") or HF_TOKEN
+    abs_db_path = os.path.abspath(DB_PATH)
+    exists = os.path.exists(abs_db_path)
+    size_mb = round(os.path.getsize(abs_db_path) / (1024 * 1024), 2) if exists else 0
     return {
         "available": is_hf_sync_available(),
         "has_token": bool(token),
         "token": token or "",
         "storage_bucket": HF_STORAGE_BUCKET,
         "dataset_repo": HF_DATASET_REPO,
-        "db_path": DB_PATH,
-        "db_exists": os.path.exists(DB_PATH),
-        "db_size_mb": round(os.path.getsize(DB_PATH) / (1024 * 1024), 2) if os.path.exists(DB_PATH) else 0,
+        "db_path": abs_db_path,
+        "db_exists": exists,
+        "db_size_mb": size_mb,
         "last_backup_time": datetime.fromtimestamp(_last_backup_time).strftime("%Y-%m-%d %H:%M:%S") if _last_backup_time else None,
         "last_backup_status": _last_backup_status,
         "last_restore_time": datetime.fromtimestamp(_last_restore_time).strftime("%Y-%m-%d %H:%M:%S") if _last_restore_time else None,

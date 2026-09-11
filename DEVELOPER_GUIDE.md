@@ -1,10 +1,10 @@
-# 🛠️ AI Novel Factory - 開發者與工程師手冊 (v4.0.0)
+# AI Novel Factory - 開發者手冊 (v4.0.0)
 
-本手冊專為參與 **AI Novel Factory** 專案維護與開發之工程師編寫，涵蓋環境建置、版本控制原則、開源授權邊界、SQLite 資料庫架構、Graphiti 時序動態記憶引擎、React + Vite 前端架構、OpenDesign 規範與自動化測試套件。
+本手冊涵蓋環境建置、版本控制、開源授權邊界、SQLite 資料庫架構、Graphiti 時序動態記憶引擎、React + Vite 前端架構、OpenDesign 規範與自動化測試。
 
 ---
 
-## 🚀 1. 開發環境配置與服務啟動
+## 1. 開發環境配置與服務啟動
 
 ### 核心環境規範
 - **作業系統**：Windows 10 / 11
@@ -42,7 +42,7 @@ C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host
 
 ---
 
-## ⚖️ 2. 開源授權邊界與 Clean-Room 實作原則
+## 2. 開源授權邊界與 Clean-Room 實作原則
 
 本專案在整併與參考開源專案時，嚴格恪守開源授權界限（詳見 [THIRD_PARTY_NOTICES.md](file:///c:/Users/Administrator/Desktop/Write_Novel/THIRD_PARTY_NOTICES.md)）：
 
@@ -56,7 +56,7 @@ C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host
 
 ---
 
-## 🔢 3. 單一事實來源版本號管理 (SSOT)
+## 3. 單一事實來源版本號管理 (SSOT)
 
 本專案版本號遵循 **Single Source of Truth** 原則：
 - **唯一維護位置**：專案根目錄 [`version.json`](file:///c:/Users/Administrator/Desktop/Write_Novel/version.json)
@@ -75,7 +75,7 @@ C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host
 
 ---
 
-## 📊 4. SQLite 資料庫完整架構 (`novel_factory.db`)
+## 4. SQLite 資料庫完整架構 (`novel_factory.db`)
 
 資料庫由 [`backend/persistence/schema.py`](file:///c:/Users/Administrator/Desktop/Write_Novel/backend/persistence/schema.py) 進行集中建表與升級維護，包含 14 個主要資料表：
 
@@ -112,40 +112,38 @@ C:\Users\Administrator\venv\Scripts\python.exe -m uvicorn backend.app:app --host
 
 ---
 
-## 🎨 5. 前端架構與 OpenDesign 規範
+## 5. 前端架構與 OpenDesign 規範
 
 前端採用 **React 18 + TypeScript + Vite**，位於 `frontend/` 目錄：
 
 ```
 frontend/src/
-├── api/                  # 封裝型別化的後端端點請求 (client, novels, temporal, terms, proposals, generation, settings)
+├── api/                  # 封裝型別化的後端端點請求
 ├── components/
-│   ├── common/           # Button, Badge, StatusDot (6px), CopyCard, ModelChip, Modal, Icons (向量 SVG)
-│   ├── layout/           # ActivityRail (48px), ExplorerDrawer (260px), WorkspaceHeader, BottomDock, MobileNav
-│   ├── editor/           # EditorPane (正文畫布), DiffViewer (行級差異對比), ProposalInbox (提案收件箱)
+│   ├── common/           # Button, Badge, StatusDot, CopyCard, ModelChip, Modal, Icons (SVG)
+│   ├── layout/           # ActivityRail, ExplorerDrawer, WorkspaceHeader, BottomDock, MobileNav
+│   ├── editor/           # EditorPane, DiffViewer, ProposalInbox, TaskPicker, WorldviewPane
 │   ├── graph/            # TemporalGraphBoard (時序切片與事實作廢面板)
-│   ├── copilot/          # CopilotDrawer (AI 導演總控與串流推理歷程)
-│   └── settings/         # SettingsModal (API 參數與動態模型選單), TermsModal (術語庫維護)
+│   ├── copilot/          # CopilotDrawer, StageSelector, DirectorRecordsStream
+│   ├── novel/            # CreateNovelModal, DeleteNovelModal, ResetNovelModal
+│   └── settings/         # SettingsModal (API 參數與動態模型), TermsModal (術語庫維護)
 ├── config/               # 引用 version.json
-├── hooks/                # useNovel, useTemporalGraph, useProposals 狀態機與 Dirty Check
-├── platform/             # 平台抽象層 (Web / Android APK / Desktop)，解耦 API Base URL 與硬體能力
+├── hooks/                # useNovel, useTemporalGraph, useProposals, useExpansionSync
+├── platform/             # 平台抽象層 (Web / Android APK / Desktop)
+├── storage/              # 本地狀態管理
+├── types/                # 全域 TypeScript 型別定義
 ├── styles/               # opendesign.css (Zinc/Obsidian 暗黑設計系統)
-└── utils/                # diff.ts (LCS 行級對比演算法), clipboard.ts (零 Inline Style 剪貼簿工具)
+└── utils/                # diff.ts (LCS 行級對比), clipboard.ts, time.ts
 ```
 
 ### 關鍵技術規範
-1. **嚴格零 Inline Style**：
-   - 全專案無任何 `style="..."` 或 JSX `style={{...}}`。
-   - 所有元素樣式皆由 `opendesign.css` 中具備語意之 CSS Class 控制。
-2. **極簡無 Emoji 政策**：
-   - 統一使用輕量向量 SVG（`components/common/Icons.tsx`）與 6px 狀態圓點（`.status-dot.success`, `.status-dot.danger` 等）。
-3. **平台解耦與 APK 打包相容**：
-   - 前端所有資源引用均使用相對路徑（`base: './'`）。
-   - `platform/index.ts` 抽象平台能力，在 Android 環境（Capacitor/Cordova）可透過 LocalStorage 指定後端 API 伺服器，或在同一設備上運行。
+1. **嚴格零 Inline Style**：全專案無任何 `style="..."` 或 JSX `style={{...}}`，所有元素樣式由 `opendesign.css` 統一管理。
+2. **極簡無 Emoji 政策**：統一向量 SVG（`components/common/Icons.tsx`）與 6px 狀態圓點（`.status-dot.success`, `.status-dot.danger`）。
+3. **平台解耦與打包相容**：前端所有資源引用均使用相對路徑（`base: './'`），`platform/index.ts` 抽象平台能力，相容 Web / Android APK (Capacitor) / Windows Desktop (Electron)。
 
 ---
 
-## 🧪 6. 自動化測試規範
+## 6. 自動化測試規範
 
 專案採用 **Pytest** 作為後端與整合測試驅動器，配置於 [`pytest.ini`](file:///c:/Users/Administrator/Desktop/Write_Novel/pytest.ini)。
 
@@ -155,34 +153,59 @@ C:\Users\Administrator\venv\Scripts\python.exe -m pytest
 ```
 
 ### 測試模組一覽
-- **`tests/test_frontend_build_integration.py`**：驗證 FastAPI 靜態掛載優先級與 SSOT 版本號讀取。
-- **`tests/test_temporal_and_story_extensions.py`**：驗證時序事實生命週期、作廢機制、術語庫約束與提案流程。
-- **`tests/unit/test_writer_context_builder.py`**：驗證 Graphiti 時序記憶在正文生成時之動態注入。
-- **`tests/unit/test_gold_rules_governance.py`**：驗證黃金規則治理邏輯。
-- **`tests/unit/test_tool_loop_fix.py`**：驗證 Agent 工具調用死循環自癒防護。
+- **`tests/test_frontend_build_integration.py`**：FastAPI 靜態掛載優先級與 SSOT 版本號讀取。
+- **`tests/test_temporal_and_story_extensions.py`**：時序事實生命週期、作廢機制、術語庫約束與提案流程。
+- **`tests/test_volume_outline_persistence.py`**：篇卷大綱持久化驗證。
+- **`tests/unit/test_writer_context_builder.py`**：Graphiti 時序記憶動態注入。
+- **`tests/unit/test_gold_rules_governance.py`**：黃金規則治理邏輯。
+- **`tests/unit/test_tool_loop_fix.py`**：Agent 工具調用死循環防護。
+- **`tests/unit/test_autonomous_pipeline_safeguards.py`**：自主管線安全機制。
+- **`tests/unit/test_character_worldview_increment.py`**：角色與世界觀增量更新。
+- **`tests/unit/test_chat_memory_modularization.py`**：對話記憶模組化。
+- **`tests/unit/test_context_architecture_safeguards.py`**：上下文架構安全。
+- **`tests/unit/test_parsers_salvage.py`**：LLM 輸出解析容錯。
+- **`tests/unit/test_prompt_and_proposals.py`**：Prompt 與提案流程。
+- **`tests/unit/test_sql_performance_and_safeguards.py`**：SQL 性能與安全。
 - **`tests/narrative_regression/test_narrative_benchmark.py`**：敘事長篇基準測試。
 
-> 當前測試狀態：**34 passed (100% 通過，0 failed)**。
 
+## 7. 本地打包與 GitHub Actions 遠端 CI/CD
 
-## 📦 7. 本地打包與 GitHub Actions 遠端 CI/CD
+### A. 本地一鍵打包腳本 (build_app.py)
+```powershell
+python build_app.py --target apk       # Android APK (mykey 簽名)
+python build_app.py --target electron   # Windows Electron Portable
+python build_app.py --target installer  # Windows NSIS 安裝包
+python build_app.py --target all        # 全平台
+python build_app.py --target web        # 僅前端構建
+```
+編譯成品輸出至 `dist-packages/`。
 
-### A. 本地一鍵打包腳本 (uild_app.py)
-專案提供統一的封裝控制器，支援多種打包目標：
-`powershell
-# 1. 互動式選單
-python build_app.py
+### B. GitHub Actions CI/CD (.github/workflows/build_and_release.yml)
+推送至 `master` 或建立 `v*` 標籤時觸發：
+1. **test-and-build-web**：Python 3.11 + Node.js 22，Pytest + 前端構建 + GitHub Pages 部署。
+2. **build-android-apk**：JDK 21 + Android SDK，Gradle 簽名封裝 APK。
+3. **build-windows-electron**：PyInstaller + Electron-builder 打包 portable .exe。
 
-# 2. 指定非互動參數
-python build_app.py --target apk   # 打包 Android Release APK (使用 mykey 簽名)
-python build_app.py --target exe   # 打包 Windows 獨立綠色版桌面程式 (.EXE)
-python build_app.py --target all   # 同步編譯 APK 與 EXE
-python build_app.py --target web   # 僅構建前端發布包
-`
-編譯成品將統一輸出至專案根目錄 dist-packages/。
+---
 
-### B. 遠端自動編譯工作流 (.github/workflows/build_and_release.yml)
-在推送至 master 分支或建立發布標籤 (*) 時自動觸發：
-1. **test-and-build-web**：Python 3.11 環境執行 Pytest 測試套件，Node.js 20 構建前端。
-2. **build-android-apk**：配置 JDK 21 與 Android SDK，使用 Gradle assembleRelease 自動生成已簽名之 AI_Novel_Factory_signed.apk 並上傳為 Artifact。
-3. **build-windows-exe**：Windows Runner 上以 PyInstaller 打包完整應用並壓縮為 AI_Novel_Factory_Windows_x64.zip 上傳為 Artifact。
+## 8. 部署架構
+
+### 分支與發布目標
+
+| 部署目標 | 核心內容 |
+| :--- | :--- |
+| **`master`** | FastAPI 後端 + React 前端 + SQLite + 自主寫作管線 |
+| **GitHub Pages** | CI 自動從 `frontend/dist/` 發布，連接 HF Space 後端 |
+| **Android APK** | Capacitor 封裝，支援遠端伺服器對接 |
+| **Windows Electron** | Electron 封裝，portable 可攜版 |
+
+### 雲端無人值守自主寫作 (Autonomous Pipeline)
+1. **後端自主推進**：前端不涉入創作決策。後端收到啟動指令後，AI 總監自動檢查進度並逐階段推進：世界觀 → 角色 → 伏筆 → 分卷 → 細綱 → 逐章撰寫與精修。
+2. **斷線續寫**：進度即時寫入 SQLite，同步至 HF Storage Bucket。前端每 3 秒輪詢 `/api/pipeline/auto-status`。
+3. **多小說並行**：`AutonomousPipelineManager` 支援多執行緒同時背景創作。
+
+### Hugging Face Spaces 整合
+- 入口檔 `app.py`（Gradio SDK + ZeroGPU 相容）。
+- 雲端啟動時自動從 HF Storage Bucket 還原資料庫。
+- 前端由 GitHub Pages 獨立託管，後端運行於 HF Space。

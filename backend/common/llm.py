@@ -266,13 +266,17 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
 
     config = get_config_for_agent(agent_name)
     
+    is_local_url = any(h in config.get("base_url", "") for h in ("127.0.0.1", "localhost", "0.0.0.0"))
     if not config["api_key"]:
-        yield "data: " + json.dumps({
-            "type": "error", 
-            "message": f"API Key for agent '{agent_name}' (or Global) is not set. Please set it in Settings."
-        }, ensure_ascii=False) + "\n\n"
-        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
-        return
+        if is_local_url:
+            config["api_key"] = "local-key"
+        else:
+            yield "data: " + json.dumps({
+                "type": "error", 
+                "message": f"API Key for agent '{agent_name}' (or Global) is not set. Please set it in Settings."
+            }, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+            return
         
     headers = {
         "Authorization": f"Bearer {config['api_key']}",
@@ -398,7 +402,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 yield "data: " + json.dumps({"type": "content", "delta": content}, ensure_ascii=False) + "\n\n"
             
             # --- Validations (before yielding done) ---
-            if agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+            if force_json and agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
                 parsed_json = extract_json_block(content)
                 if not parsed_json or len(parsed_json) == 0:
                     raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
@@ -523,7 +527,21 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
         
     except Exception as e:
         print(f"[AGENT ERROR] Agent '{agent_name}' failed: {e}")
-        yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {str(e)}"}, ensure_ascii=False) + "\n\n"
+        err_str = str(e)
+        base_url = config.get("base_url", "")
+        if ("127.0.0.1" in base_url or "localhost" in base_url) and os.getenv("SPACE_ID"):
+            diag = " (⚠️ 注意：當前伺服器在雲端容器環境運行，無法直接連線至您個人電腦的本機 127.0.0.1。若欲使用本機 WebChat2Local，請於本機執行 start.bat 並使用本機頁面 http://127.0.0.1:8000)"
+        elif "401" in err_str or "Unauthorized" in err_str:
+            diag = " (⚠️ HTTP 401 Unauthorized：API Key 無效或未授權，請至系統設定檢查 API Key)"
+        elif "410" in err_str or "Gone" in err_str:
+            diag = f" (⚠️ HTTP 410 Gone：模型 [{config.get('model')}] 已下線過期停用，請至系統設定重新選取可用模型)"
+        elif "404" in err_str:
+            diag = f" (⚠️ HTTP 404 Not Found：找不到模型 [{config.get('model')}] 或 Base URL 路徑錯誤)"
+        elif "Connection refused" in err_str or "NewConnectionError" in err_str:
+            diag = f" (⚠️ 連線被拒：無法連線至 {base_url}，請確認該連接埠之服務已啟動)"
+        else:
+            diag = ""
+        yield "data: " + json.dumps({"type": "error", "message": f"API 呼叫失敗。錯誤訊息: {err_str}{diag}"}, ensure_ascii=False) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
 

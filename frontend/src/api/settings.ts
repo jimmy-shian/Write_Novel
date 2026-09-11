@@ -24,6 +24,32 @@ export async function fetchAvailableModels(baseUrl: string, apiKey: string): Pro
   });
 }
 
+export async function testLlmConnection(baseUrl: string, apiKey: string, model: string): Promise<{ ok: boolean; status: string; message: string; reply?: string }> {
+  return request('/api/settings/test-llm', {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model }),
+  });
+}
+
+export interface AppPreferences {
+  theme: 'light' | 'neutral' | 'dark';
+  editor_font_size: number;
+  [key: string]: any;
+}
+
+export async function getPreferences(): Promise<{ status: string; preferences: AppPreferences }> {
+  return request<{ status: string; preferences: AppPreferences }>('/api/settings/preferences');
+}
+
+export async function savePreferencesApi(preferences: Partial<AppPreferences>): Promise<{ status: string; preferences: AppPreferences }> {
+  return request('/api/settings/preferences', {
+    method: 'POST',
+    body: JSON.stringify({ preferences }),
+  });
+}
+
+
+
 export interface CloudSyncStatus {
   available: boolean;
   has_token: boolean;

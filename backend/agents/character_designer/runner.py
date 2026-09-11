@@ -209,6 +209,12 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     acc = StreamAccumulator(stream)
     for chunk in acc:
         yield chunk
+    if acc.error:
+        error_message = f"角色設計生成失敗：{acc.error}"
+        db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
     full_text = acc.content
     if full_text.strip():
         if _handle_director_context_request(novel_id, "角色設計師", full_text):
