@@ -16,8 +16,13 @@ def test_static_index_serves_react():
     assert "<div id=\"root\"></div>" in response.text
 
 def test_api_version_endpoint_matches_ssot():
-    """Verify backend API version matches version.json."""
+    """Verify backend API version matches version.json (SSOT)."""
+    import json, os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "version.json"), encoding="utf-8") as f:
+        ssot = json.load(f)
     from backend.common.version import get_version, get_app_info
     info = get_app_info()
-    assert info["version"] == "4.0.0"
-    assert app.version == "4.0.0"
+    assert info["version"] == ssot["version"]
+    assert app.version == ssot["version"]
+    assert get_version() == ssot["version"]

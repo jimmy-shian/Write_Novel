@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from fastapi import APIRouter, HTTPException, Query, Body
 from typing import Optional, Dict, Any, List
 from backend import persistence as db
@@ -52,6 +52,10 @@ def update_proposal_status_endpoint(novel_id: str, proposal_id: str, payload: Di
     success = db.update_proposal_status(proposal_id, status)
     if not success:
         raise HTTPException(status_code=404, detail="Proposal not found")
+    if status == "rejected":
+        prop = db.get_proposal(proposal_id)
+        if prop and prop.get("original_text") and prop.get("chapter_index"):
+            db.save_chapter(novel_id, prop["chapter_index"], prop["original_text"])
     return {"status": "success", "proposal_id": proposal_id, "new_status": status}
 
 @router.post("/novels/{novel_id}/proposals/{proposal_id}/apply")

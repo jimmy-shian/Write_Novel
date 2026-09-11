@@ -72,6 +72,23 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       </div>
 
       <div className="diff-container">
+        {diff.addedCount === 0 && diff.removedCount === 0 && !proposalId && (
+          <div
+            className="diff-empty-banner"
+            style={{
+              padding: '12px 16px',
+              backgroundColor: 'var(--color-surface-hover, rgba(255,255,255,0.03))',
+              borderBottom: '1px solid var(--color-border)',
+              fontSize: '13px',
+              color: 'var(--color-text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <span>💡 目前此章節尚無待審閱的 AI 修訂案。您可在右側總控室切換至【AI 審閱精修】，點擊「送出」後將在此自動呈現行級對比與一鍵套用。</span>
+          </div>
+        )}
         {diff.lines.length === 0 ? (
           <div className="diff-empty-state">無任何文字差異</div>
         ) : (

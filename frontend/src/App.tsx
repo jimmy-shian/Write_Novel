@@ -34,6 +34,7 @@ export const App: React.FC = () => {
     novelDetail,
     activeChapterIndex,
     editorContent,
+    originalContent,
     setContent,
     isDirty,
     isSaving,
@@ -221,6 +222,18 @@ export const App: React.FC = () => {
     setWorldviewTarget({ type: 'volume', id: volIndex });
   }, []);
 
+  const currentVolumeIndex = React.useMemo(() => {
+    if (worldviewTarget?.type === 'volume') return Number(worldviewTarget.id);
+    const vols = novelDetail?.volumes || [];
+    for (const v of vols) {
+      const outline = Array.isArray(v.chapters_outline) ? v.chapters_outline : [];
+      if (outline.some((c: any) => c.chapter_index === activeChapterIndex)) {
+        return Number(v.volume_index);
+      }
+    }
+    return 1;
+  }, [worldviewTarget, novelDetail, activeChapterIndex]);
+
   const activeNovel = novelDetail?.novel || novels.find((n) => n.id === activeNovelId) || null;
   const autoPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSeenLogCountRef = useRef<number>(0);
@@ -383,13 +396,25 @@ export const App: React.FC = () => {
     let accumulatedContent = '';
 
     try {
+      const trimmedPrompt = prompt.trim();
       await streamGenerationTask(
         {
           novel_id: activeNovelId,
           stage,
           task_type: stage === 'writer' ? 'generate' : stage === 'editor' ? 'refine' : 'generate',
-          target: { chapter_index: activeChapterIndex },
-          prompt,
+          target: {
+            chapter_index: activeChapterIndex,
+            volume_index: currentVolumeIndex,
+            ...(worldviewTarget?.type === 'character' ? { character_name: String(worldviewTarget.id) } : {}),
+          },
+          prompt: trimmedPrompt || undefined,
+          user_prompt: trimmedPrompt || undefined,
+          instruction: trimmedPrompt || undefined,
+          frontend_state: {
+            activeView,
+            worldviewTab,
+            worldviewTarget,
+          },
           options: { stream: true },
         },
         {
@@ -426,11 +451,16 @@ export const App: React.FC = () => {
               setContent(accumulatedContent);
             }
 
-            // Refresh novel and graph
+            // Refresh novel, graph and proposals
             await refreshActiveNovel();
             await refreshGraph();
             await refreshProposals();
             await refreshChatMemory();
+
+            // When editor completes, auto-switch to diff view so user can review changes immediately
+            if (stage === 'editor' || stage === 'evaluate') {
+              setActiveView('diff');
+            }
           },
         }
       );
@@ -521,12 +551,13 @@ export const App: React.FC = () => {
     }
   };
 
-  // Reset novel generated content
-  const handleResetNovel = async (id: string) => {
+  // Reset novel generated content (selective scopes)
+  const handleResetNovel = async (id: string, scopes?: string[]) => {
     try {
-      await handleResetNovelContent(id);
-      showToast('小說生成內容已成功清空，回到初始設定狀態！', 'success');
-      addLog(`[清空生成] 小說生成內容已清空並重置回初始狀態`);
+      await handleResetNovelContent(id, scopes);
+      const count = scopes?.length ?? 0;
+      showToast(count > 0 ? `已清空所選 ${count} 項生成內容！` : '小說生成內容已成功清空，回到初始設定狀態！', 'success');
+      addLog(`[清空生成] 小說生成內容已清空${count > 0 ? `（${count} 項）` : ''}並重置回初始狀態`);
     } catch (err: any) {
       showToast(`清空內容失敗: ${err.message || '未知錯誤'}`, 'danger');
       addLog(`[清空失敗] ${err.message || '未知錯誤'}`);
@@ -628,7 +659,7 @@ export const App: React.FC = () => {
 
           {activeView === 'diff' && (
             <DiffViewer
-              originalText={selectedProposal?.original_text || editorContent}
+              originalText={selectedProposal?.original_text || (isDirty ? originalContent : editorContent)}
               proposedText={selectedProposal?.proposed_text || editorContent}
               proposalId={selectedProposal?.id}
               onApply={
@@ -710,6 +741,9 @@ export const App: React.FC = () => {
         currentStage={currentStage}
         chatMemory={novelDetail?.chat_memory || []}
         activeNovelId={activeNovelId}
+        activeChapterIndex={activeChapterIndex}
+        activeVolumeIndex={currentVolumeIndex}
+        activeView={activeView}
         onSelectStage={handleSelectStage}
         onCloseMobile={() => setIsCopilotOpenMobile(false)}
         onTriggerStage={handleTriggerStage}

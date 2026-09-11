@@ -341,8 +341,9 @@ class WriterContextBuilder:
 
         # (F) 使用者額外提示詞
         if user_prompt and str(user_prompt).strip():
-            lines.append("### ✍️【使用者特定創作指示】")
-            lines.append(str(user_prompt).strip())
+            lines.append("### ✍️【使用者特定創作指示（最高優先級要求）】")
+            lines.append(f"> 導演/作者特別指示：{str(user_prompt).strip()}")
+            lines.append("*(請作家在落實本章情節、對白與人物行動時，務必具體遵循上述要求)*")
             lines.append("")
 
         # (G) Gold Rules

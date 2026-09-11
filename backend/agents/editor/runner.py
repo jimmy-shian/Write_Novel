@@ -100,5 +100,23 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             source_version=saved_version,
             outline=outline,
         )
+
+        # 建立草案建議記錄 (Draft Proposal)，供前端「審閱對比 (Diff)」與「一鍵套用/放棄」進行行級差異對比
+        if original_prose and original_prose.strip() != final_prose.strip():
+            try:
+                db.create_proposal(
+                    novel_id=novel_id,
+                    chapter_index=chapter_index,
+                    proposed_text=final_prose,
+                    original_text=original_prose,
+                    review_comments=[{
+                        "type": "editor_refine",
+                        "instruction": edit_instructions or "依文學標準潤色精修",
+                        "summary": f"第 {chapter_index} 章文字潤色與修辭精修"
+                    }]
+                )
+            except Exception as prop_err:
+                print(f"[EditorAgent] create_proposal error: {prop_err}")
+
         db.save_last_agent_run(novel_id, "editor", json.dumps(messages, ensure_ascii=False, indent=2), final_prose)
         db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文已成功潤色精修完畢！", message_type="pipeline")

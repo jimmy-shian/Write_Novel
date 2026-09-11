@@ -64,8 +64,12 @@ class GoldRulesManager:
         self._cache_mtime: Dict[str, float] = {}
 
     def get_storage_directory(self) -> str:
-        """傳回 gold rules 的儲存目錄。"""
-        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "gold_rules")
+        """傳回 gold rules 的儲存目錄。
+
+        包裝版 (Electron portable) 可透過 GOLD_RULES_DIR 環境變數指向使用者目錄；
+        未設定時維持原預設 (backend/data/gold_rules)，dev / HF 行為不變。
+        """
+        d = os.getenv("GOLD_RULES_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "gold_rules")
         os.makedirs(d, exist_ok=True)
         return d
 

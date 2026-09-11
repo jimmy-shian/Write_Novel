@@ -13,7 +13,8 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
   { id: 'editor', label: '審閱修訂', desc: '產出審閱建議與修改提案' },
   { id: 'worldview', label: '世界觀構建', desc: '設定歷史、修煉體系與法則' },
   { id: 'characters', label: '角色聖經', desc: '角色性格、慾望與關係網' },
-  { id: 'volumes', label: '分卷骨架', desc: '大綱主線與伏筆鋪設' },
+  { id: 'volumes', label: '分卷結構', desc: '全書宏觀分卷主線與高潮節奏' },
+  { id: 'volume_skeleton', label: '卷章細綱', desc: '針對選定卷生成逐章情節細綱' },
   { id: 'evaluate', label: '深度評估', desc: '節奏、文筆與劇情衝突評分' },
 ];
 
@@ -52,12 +53,15 @@ export interface CopilotDrawerProps {
   currentStage?: CreationStage;
   chatMemory?: ChatRecord[];
   activeNovelId?: string | null;
+  activeChapterIndex?: number;
+  activeVolumeIndex?: number;
+  activeView?: string;
   onSelectStage?: (stage: CreationStage) => void;
   onCloseMobile: () => void;
   onTriggerStage: (stage: CreationStage, prompt: string) => void;
   onToggleAuto: () => void;
   onClearStreaming: () => void;
   onRefreshChatMemory?: () => void;
-  onDeleteChatMessage?: (messageId: number) => Promise<void> | void;
-  onClearChatMemory?: (messageType?: string) => Promise<void> | void;
+  onDeleteChatMessage?: (id: number) => void;
+  onClearChatMemory?: (filter?: RecordFilterType) => void;
 }

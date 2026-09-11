@@ -58,25 +58,55 @@ def delete_novel(novel_id):
     cursor.execute("DELETE FROM novels WHERE id = ?", (novel_id,))
     conn.commit()
 
-def reset_novel_content(novel_id):
+RESET_CONTENT_SCOPES = ("worldbuilding", "characters", "plot", "chapters", "chat")
+
+def reset_novel_content(novel_id, scopes=None):
     """
-    清空小說的所有已生成內容（世界觀、角色、伏筆、章節大綱、正文、對話記憶、篇卷），
-    將小說重置回剛創建時的狀態（保留 id, title, genre, style, pipeline_prompt）。
+    清空小說的已生成內容（預設全部，保留 id, title, genre, style, pipeline_prompt）。
+
+    scopes: 可選的清除範圍子集，例如 ["worldbuilding", "characters", "plot", "chapters", "chat"]。
+      - None / 空 / 包含 "all" 視為全部清除（相容舊行為）。
+      - worldbuilding: worldbuilding 表 + novels.worldview_patches
+      - characters: characters 表
+      - plot: volumes 表 + plot_chapters 表
+      - chapters: chapters 表
+      - chat: chat_memory 表 + pipeline_locks 表
+    回傳實際執行的 scopes 清單。
     """
+    if scopes is None or (isinstance(scopes, (list, tuple, set)) and len(scopes) == 0):
+        effective = list(RESET_CONTENT_SCOPES)
+    else:
+        if isinstance(scopes, str):
+            scopes = [scopes]
+        effective = [s for s in scopes if s != "all"]
+        if len(effective) == 0:
+            effective = list(RESET_CONTENT_SCOPES)
+        invalid = [s for s in effective if s not in RESET_CONTENT_SCOPES]
+        if invalid:
+            raise ValueError(f"不支援的清除範圍: {invalid}，允許值: {list(RESET_CONTENT_SCOPES)}")
+        # 去重並保持定義順序
+        effective = [s for s in RESET_CONTENT_SCOPES if s in effective]
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM worldbuilding WHERE novel_id = ?", (novel_id,))
-    cursor.execute("DELETE FROM characters WHERE novel_id = ?", (novel_id,))
-    cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
-    cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
-    cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
-    cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
-    try:
-        cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
-    except sqlite3.OperationalError:
-        pass
-    cursor.execute("UPDATE novels SET worldview_patches = '[]' WHERE id = ?", (novel_id,))
+    if "worldbuilding" in effective:
+        cursor.execute("DELETE FROM worldbuilding WHERE novel_id = ?", (novel_id,))
+        cursor.execute("UPDATE novels SET worldview_patches = '[]' WHERE id = ?", (novel_id,))
+    if "characters" in effective:
+        cursor.execute("DELETE FROM characters WHERE novel_id = ?", (novel_id,))
+    if "plot" in effective:
+        cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
+        cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
+    if "chapters" in effective:
+        cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+    if "chat" in effective:
+        cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
+        try:
+            cursor.execute("DELETE FROM pipeline_locks WHERE novel_id = ?", (novel_id,))
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
+    return effective
 
 # --- VOLUMES (篇卷) HELPERS ---
 

@@ -1,0 +1,23 @@
+# electron-builder 設定（僅包裝用）
+# 產物：免安裝 portable 單檔 EXE，雙擊即用，不寫登錄檔、不需管理員權限
+appId: com.novel.factory
+productName: AI Novel Factory
+asar: true
+directories:
+  # 所有最終產物統一輸出至 dist-packages/，與 APK、後端 sidecar 放一起
+  output: ../dist-packages
+files:
+  - main.js
+  - preload.js
+  - splash.html
+  - package.json
+extraResources:
+  - from: ../dist-packages/AI_Novel_Factory_Backend
+    to: backend
+win:
+  icon: ../electron/assets_icon.ico
+  target:
+    - portable
+  artifactName: AI_Novel_Factory_${version}_Electron_Portable.exe
+portable:
+  requestExecutionLevel: user

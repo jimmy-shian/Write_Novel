@@ -299,11 +299,11 @@ export function useNovel() {
     [activeNovelId, refreshNovels]
   );
 
-  // Reset novel generated content
+  // Reset novel generated content (selective scopes supported)
   const handleResetNovelContent = useCallback(
-    async (id: string) => {
+    async (id: string, scopes?: string[]) => {
       try {
-        await resetNovelContent(id);
+        await resetNovelContent(id, scopes);
         await refreshActiveNovel();
         await refreshNovels();
       } catch (err: any) {
@@ -547,6 +547,7 @@ export function useNovel() {
     novelDetail,
     activeChapterIndex,
     editorContent,
+    originalContent,
     setContent,
     isDirty,
     isSaving,

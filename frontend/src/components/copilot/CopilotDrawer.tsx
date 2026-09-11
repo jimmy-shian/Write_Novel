@@ -24,6 +24,9 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   currentStage = 'writer',
   chatMemory = [],
   activeNovelId,
+  activeChapterIndex,
+  activeVolumeIndex,
+  activeView,
   onSelectStage,
   onCloseMobile,
   onTriggerStage,
@@ -207,7 +210,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
 
             {!thinkingText && !streamingContent && !currentStatus && (
               <div className="copilot-empty-placeholder">
-                <p>請選擇上方階段，或在下方輸入導演引導提示詞，點擊「執行階段生成」開始。</p>
+                <p>請選擇上方階段，或在下方輸入導演引導提示詞，點擊「送出」開始。</p>
               </div>
             )}
           </div>
@@ -227,9 +230,21 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
         <textarea
           className="copilot-textarea"
           placeholder={
-            activeTab === 'stages'
-              ? `對【${currentStageDef.label}】提供引導提示（選填）...`
-              : '向總監或流水線發送引導指令與反饋...'
+            activeTab === 'records'
+              ? '向總監或流水線發送引導指令與反饋...'
+              : activeStage === 'writer'
+              ? `對【第 ${activeChapterIndex || 1} 章 正文撰寫】提供創作要求（如對白、情緒、節奏、風格）...`
+              : activeStage === 'editor'
+              ? `對【第 ${activeChapterIndex || 1} 章 審閱修訂】提供潤飾與修改指示...`
+              : activeStage === 'volume_skeleton'
+              ? `對【第 ${activeVolumeIndex || 1} 卷 卷章細綱】提供情節走向與細綱要求...`
+              : activeStage === 'volumes'
+              ? '對【分卷結構】提供主線脈絡、衝突高潮與卷數規劃提示...'
+              : activeStage === 'characters'
+              ? '對【角色聖經】提供新人物、性格特徵或動機設定指示...'
+              : activeStage === 'worldview'
+              ? '對【世界觀構建】提供力量體系、地理法則與背景設定指示...'
+              : `對【${currentStageDef.label}】提供引導提示（選填）...`
           }
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -241,13 +256,10 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
           onClick={handleRunStage}
           isLoading={isStreaming}
           disabled={isStreaming}
-          icon={activeTab === 'stages' ? <IconSparkles size={14} /> : <IconSend size={14} />}
+          icon={isStreaming ? undefined : <IconSend size={14} />}
+          title={isStreaming ? '正在生成中...' : `送出（當前階段：${currentStageDef.label}）`}
         >
-          {isStreaming
-            ? '執行中...'
-            : activeTab === 'stages'
-            ? '執行階段生成'
-            : '發送指令'}
+          {isStreaming ? '執行中...' : '送出'}
         </Button>
       </div>
     </aside>

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional, Any, List
 import uuid
 import json
 
@@ -44,6 +44,9 @@ class VolumeAdjustRequest(BaseModel):
 
 class PipelinePromptSave(BaseModel):
     pipeline_prompt: str
+
+class ResetContentRequest(BaseModel):
+    scopes: Optional[List[str]] = None
 
 # --- NOVELS ROUTES ---
 @router.get("/novels")
@@ -92,10 +95,17 @@ def api_delete_novel(novel_id: str):
     return {"status": "success"}
 
 @router.post("/novels/{novel_id}/reset-content")
-def api_reset_novel_content(novel_id: str):
+def api_reset_novel_content(novel_id: str, payload: Optional[ResetContentRequest] = None):
     novel = db.get_novel(novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
+
+    scopes = payload.scopes if payload and payload.scopes else None
+    if scopes is not None:
+        allowed = {"worldbuilding", "characters", "plot", "chapters", "chat", "all"}
+        invalid = [s for s in scopes if s not in allowed]
+        if invalid:
+            raise HTTPException(status_code=422, detail=f"不支援的清除範圍: {invalid}")
 
     try:
         from backend.services.autonomous_pipeline import autonomous_manager
@@ -103,12 +113,24 @@ def api_reset_novel_content(novel_id: str):
     except Exception:
         pass
 
-    db.reset_novel_content(novel_id)
+    try:
+        effective = db.reset_novel_content(novel_id, scopes=scopes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    scope_labels = {
+        "worldbuilding": "世界觀",
+        "characters": "角色聖經",
+        "plot": "分卷與章綱",
+        "chapters": "章節正文",
+        "chat": "對話記憶",
+    }
+    cleared_text = "、".join(scope_labels.get(s, s) for s in effective)
     return {
         "status": "success",
         "success": True,
         "novel_id": novel_id,
-        "message": f"小說《{novel.get('title', '')}》已成功清空所有生成內容，重置回初始設定狀態。"
+        "scopes": effective,
+        "message": f"小說《{novel.get('title', '')}》已清空所選內容（{cleared_text}）。"
     }
 
 class NovelCopyRequest(BaseModel):

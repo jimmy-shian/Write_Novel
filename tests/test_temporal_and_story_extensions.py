@@ -5,10 +5,14 @@ from backend import persistence as db
 from backend.services.graphiti import TemporalGraphService
 
 def test_version_single_source_of_truth():
+    import json, os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "version.json"), encoding="utf-8") as f:
+        ssot = json.load(f)
     app_info = get_app_info()
     assert "version" in app_info
-    assert app_info["version"] == "4.0.0"
-    assert get_version() == "4.0.0"
+    assert app_info["version"] == ssot["version"]
+    assert get_version() == ssot["version"]
 
 def test_temporal_graph_lifecycle():
     novel_id = "test_novel_graphiti"

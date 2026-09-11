@@ -1,0 +1,15 @@
+{
+  "name": "ai-novel-factory-desktop",
+  "version": "4.0.0",
+  "private": true,
+  "description": "AI Novel Factory - Electron desktop shell (packaging only)",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

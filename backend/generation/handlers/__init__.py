@@ -8,12 +8,12 @@ def resolve_handler_prompt(task, default_instruction: str = "") -> str:
     """
     from backend import persistence as db
 
-    user_prompt = (task.user_prompt or "").strip()
+    user_prompt = (task.user_prompt or getattr(task, "prompt", None) or "").strip()
     instruction = (task.instruction or "").strip()
     hint = (task.hint or "").strip()
 
-    # 若 user_prompt 為空，嘗試讀取小說的 pipeline_prompt (大綱靈感)
-    if not user_prompt and getattr(task, "novel_id", None):
+    # 只有當使用者完全未提供任何自訂提示詞或指示時，才嘗試讀取小說的 pipeline_prompt (大綱靈感)
+    if not user_prompt and not instruction and getattr(task, "novel_id", None):
         try:
             novel = db.get_novel(task.novel_id)
             if novel and novel.get("pipeline_prompt"):

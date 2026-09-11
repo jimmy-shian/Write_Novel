@@ -5287,6 +5287,112 @@ html, body {
   box-shadow: 0 0 12px var(--danger-subtle) !important;
 }
 
+/* Selectable reset scopes (checkbox list) */
+.reset-select-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.reset-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.reset-link-btn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.reset-link-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reset-link-sep {
+  color: var(--border);
+}
+
+.reset-select-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.reset-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reset-scope-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.reset-scope-item:hover:not(.is-disabled) {
+  border-color: var(--accent-border);
+}
+
+.reset-scope-item.is-checked {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.05);
+}
+
+.reset-scope-item.is-unchecked {
+  opacity: 0.62;
+}
+
+.reset-scope-item.is-disabled {
+  cursor: not-allowed;
+}
+
+.reset-scope-checkbox {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+.reset-scope-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.reset-scope-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.reset-scope-item.is-unchecked .reset-scope-title {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.reset-scope-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* Transition & Loading State Enhancements */
 .select-spinner {
   width: 12px;

@@ -44,6 +44,9 @@ export async function streamGenerationTask(
     scope?: string;
     target?: Record<string, any>;
     prompt?: string;
+    user_prompt?: string;
+    instruction?: string;
+    frontend_state?: Record<string, any>;
     options?: { stream?: boolean; batch?: boolean; overwrite?: boolean };
   },
   callbacks: StreamGenerationOptions = {}

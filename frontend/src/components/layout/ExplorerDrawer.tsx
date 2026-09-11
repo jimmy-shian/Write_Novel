@@ -3,7 +3,7 @@ import { Novel, Chapter } from '../../types';
 import { Button } from '../common/Button';
 import { CustomSelect } from '../common/CustomSelect';
 import { CreateNovelModal } from '../novel/CreateNovelModal';
-import { ConfirmModal } from '../common/ConfirmModal';
+import { DeleteNovelModal } from '../novel/DeleteNovelModal';
 import { ResetNovelModal } from '../novel/ResetNovelModal';
 import { ExpansionSyncState } from '../../hooks/useExpansionSync';
 import {
@@ -44,7 +44,7 @@ interface ExplorerDrawerProps {
   onSelectChapter: (chapterIndex: number) => void;
   onCreateNovel: (title: string, genre: string, style: string, synopsis?: string) => Promise<any> | any;
   onDeleteNovel: (id: string) => void;
-  onResetNovelContent?: (id: string) => Promise<void> | void;
+  onResetNovelContent?: (id: string, scopes?: string[]) => Promise<void> | void;
   onCreateChapter: () => void;
 }
 
@@ -207,12 +207,12 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
     }
   };
 
-  const handleConfirmReset = async () => {
+  const handleConfirmReset = async (scopes: string[]) => {
     if (!activeNovel) return;
     setIsResetting(true);
     try {
       if (onResetNovelContent) {
-        await onResetNovelContent(activeNovel.id);
+        await onResetNovelContent(activeNovel.id, scopes);
       }
       setIsResetModalOpen(false);
     } finally {
@@ -1117,18 +1117,14 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
         }}
       />
 
-      {/* Standard Confirm Modal Card for Deletion */}
+      {/* Delete Novel Double-Check Modal (same modular interface as Reset) */}
       {activeNovel && (
-        <ConfirmModal
+        <DeleteNovelModal
           isOpen={isDeleteModalOpen}
           onClose={() => setIsDeleteModalOpen(false)}
           onConfirm={handleDeleteConfirm}
+          novelTitle={activeNovel.title}
           isLoading={isDeleting}
-          title="刪除作品確認"
-          message={`確定要刪除作品《${activeNovel.title}》嗎？此動作將刪除該小說的所有章節、世界觀、角色與分卷資料，且無法復原。`}
-          confirmText="確認刪除"
-          cancelText="取消"
-          variant="danger"
         />
       )}
 

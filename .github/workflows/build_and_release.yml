@@ -21,6 +21,18 @@ jobs:
         with:
           lfs: true
 
+      - name: Verify Tag Matches version.json (SSOT)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SSOT_VERSION=$(python -c "import json; print(json.load(open('version.json'))['version'])")
+          echo "Tag version: ${TAG_VERSION} | version.json version: ${SSOT_VERSION}"
+          if [ "${TAG_VERSION}" != "${SSOT_VERSION}" ]; then
+            echo "::error::Tag v${TAG_VERSION} 與 version.json 的 ${SSOT_VERSION} 不一致，請先更新 version.json 再打 tag。"
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -51,7 +63,7 @@ jobs:
           python -m pytest tests/
 
       - name: Deploy React App to GitHub Pages (gh-pages)
-        if: github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -62,6 +74,7 @@ jobs:
   build-android-apk:
     name: Build Signed Android APK
     needs: test-and-build-web
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -113,9 +126,10 @@ jobs:
           path: dist-packages/AI_Novel_Factory_signed.apk
           if-no-files-found: error
 
-  build-windows-exe:
-    name: Build Windows Desktop EXE & NSIS Setup
+  build-windows-electron:
+    name: Build Electron Portable (Windows)
     needs: test-and-build-web
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
       - name: Checkout Code
@@ -136,46 +150,19 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install NSIS Compiler
-        run: |
-          choco install nsis -y --no-progress
-          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install pyinstaller uvicorn fastapi opencc pydantic pillow
 
-      - name: Build Frontend Dist
+      - name: Build Electron Portable (Frontend + Backend Sidecar + Shell)
         run: |
-          cd frontend
-          npm ci
-          npm run build
-          cd ..
+          python build_app.py --target electron
 
-      - name: Build Windows EXE with PyInstaller
-        run: |
-          python build_app.py --target exe
-
-      - name: Compile NSIS Setup Installer
-        run: |
-          python build_app.py --target installer
-
-      - name: Archive Portable EXE Folder
-        run: |
-          Compress-Archive -Path dist-packages\AI_Novel_Factory -DestinationPath dist-packages\AI_Novel_Factory_Portable_x64.zip -Force
-
-      - name: Upload Windows Setup Installer Artifact
+      - name: Upload Electron Portable Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AI_Novel_Factory_Setup_Installer
-          path: dist-packages/AI_Novel_Factory_v*_Setup.exe
-          if-no-files-found: error
-
-      - name: Upload Portable Windows ZIP Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AI_Novel_Factory_Portable_x64
-          path: dist-packages/AI_Novel_Factory_Portable_x64.zip
+          name: AI_Novel_Factory_Electron_Portable
+          path: dist-packages/AI_Novel_Factory_*_Electron_Portable.exe
           if-no-files-found: error

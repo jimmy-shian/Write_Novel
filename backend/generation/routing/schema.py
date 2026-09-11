@@ -63,6 +63,7 @@ class GenerationTaskRequest(BaseModel):
     frontend_state: GenerationTaskFrontendState = Field(default_factory=GenerationTaskFrontendState)
     instruction: Optional[str] = None
     user_prompt: Optional[str] = None
+    prompt: Optional[str] = None
     hint: Optional[str] = None
     task_id: Optional[str] = None
     conversation_context: Optional[str] = None
@@ -114,8 +115,16 @@ def coerce_generation_task_request(payload: Any) -> GenerationTaskRequest:
         else:
             raise TypeError(f"Unsupported generation task payload type: {type(payload)!r}")
 
-        if not data.get("instruction") and data.get("user_prompt"):
-            data["instruction"] = data.get("user_prompt")
+        raw_prompt = data.get("prompt") or data.get("user_prompt") or data.get("instruction")
+        if raw_prompt and str(raw_prompt).strip():
+            cleaned_prompt = str(raw_prompt).strip()
+            if not data.get("user_prompt"):
+                data["user_prompt"] = cleaned_prompt
+            if not data.get("instruction"):
+                data["instruction"] = cleaned_prompt
+            if not data.get("prompt"):
+                data["prompt"] = cleaned_prompt
+
         if not data.get("task_id"):
             data["task_id"] = str(uuid.uuid4())
 

@@ -128,9 +128,10 @@ export async function deleteChatMessage(novelId: string, messageId: number): Pro
   });
 }
 
-export async function resetNovelContent(novelId: string): Promise<{ status: string; success: boolean; message: string }> {
+export async function resetNovelContent(novelId: string, scopes?: string[]): Promise<{ status: string; success: boolean; message: string; scopes?: string[] }> {
   return request(`/api/novels/${novelId}/reset-content`, {
     method: 'POST',
+    body: JSON.stringify(scopes && scopes.length > 0 ? { scopes } : {}),
   });
 }
 

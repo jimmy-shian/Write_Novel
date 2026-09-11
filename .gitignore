@@ -22,7 +22,9 @@ data/
 _archive/tools/superpowers
 .gitmodules
 frontend/node_modules/
+electron/node_modules/
+electron/dist/
 dist-packages/
 build_work/
-AI_Novel_Factory.spec
+*.spec
 
