@@ -223,6 +223,107 @@ def get_all_facts(novel_id: str) -> List[Dict[str, Any]]:
         "superseded_by": r["superseded_by"]
     } for r in rows]
 
+def delete_chapter_slice(novel_id: str, chapter_index: int) -> Dict[str, int]:
+    """刪除指定章節衍生的時序圖譜物件（單章正文清除時的連動清理）。
+
+    - 刪除 valid_from_chapter == 該章的事實命題
+    - 刪除該章的 episodes（其餘掛載事實經由 FK CASCADE 一併清除）
+    - 刪除僅在該章出現過的實體（created_chapter == updated_chapter == 該章）
+    - 將「於該章被作廢」的事實回滾為有效（作廢依據已不存在）
+    回傳各項刪除/回滾筆數。
+    """
+    chapter_index = int(chapter_index)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM temporal_facts WHERE novel_id = ? AND valid_from_chapter = ?",
+        (novel_id, chapter_index),
+    )
+    facts_deleted = cursor.rowcount
+    cursor.execute(
+        "DELETE FROM temporal_episodes WHERE novel_id = ? AND chapter_index = ?",
+        (novel_id, chapter_index),
+    )
+    episodes_deleted = cursor.rowcount
+    cursor.execute(
+        "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter = ? AND updated_chapter = ?",
+        (novel_id, chapter_index, chapter_index),
+    )
+    entities_deleted = cursor.rowcount
+    cursor.execute("""
+        UPDATE temporal_facts
+        SET invalid_from_chapter = NULL, is_active = 1, superseded_by = NULL
+        WHERE novel_id = ? AND invalid_from_chapter = ?
+    """, (novel_id, chapter_index))
+    facts_reactivated = cursor.rowcount
+    conn.commit()
+    return {
+        "facts_deleted": facts_deleted,
+        "episodes_deleted": episodes_deleted,
+        "entities_deleted": entities_deleted,
+        "facts_reactivated": facts_reactivated,
+    }
+
+
+def clear_novel_graph(novel_id: str) -> Dict[str, int]:
+    """清空該小說全部時序圖譜（整批正文清除時使用）。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
+    facts_deleted = cursor.rowcount
+    cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
+    episodes_deleted = cursor.rowcount
+    cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+    entities_deleted = cursor.rowcount
+    conn.commit()
+    return {
+        "facts_deleted": facts_deleted,
+        "episodes_deleted": episodes_deleted,
+        "entities_deleted": entities_deleted,
+    }
+
+
+def shift_graph_chapters(novel_id: str, after_chapter: int, delta: int) -> Dict[str, int]:
+    """將指定章節之後的圖譜章節標記平移（用於刪章後的索引對齊）。"""
+    after_chapter = int(after_chapter)
+    delta = int(delta)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE temporal_facts SET valid_from_chapter = valid_from_chapter + ? WHERE novel_id = ? AND valid_from_chapter > ?",
+        (delta, novel_id, after_chapter),
+    )
+    valid_shifted = cursor.rowcount
+    cursor.execute(
+        "UPDATE temporal_facts SET invalid_from_chapter = invalid_from_chapter + ? WHERE novel_id = ? AND invalid_from_chapter IS NOT NULL AND invalid_from_chapter > ?",
+        (delta, novel_id, after_chapter),
+    )
+    invalid_shifted = cursor.rowcount
+    cursor.execute(
+        "UPDATE temporal_episodes SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+        (delta, novel_id, after_chapter),
+    )
+    episodes_shifted = cursor.rowcount
+    cursor.execute(
+        "UPDATE temporal_entities SET created_chapter = created_chapter + ? WHERE novel_id = ? AND created_chapter > ?",
+        (delta, novel_id, after_chapter),
+    )
+    created_shifted = cursor.rowcount
+    cursor.execute(
+        "UPDATE temporal_entities SET updated_chapter = updated_chapter + ? WHERE novel_id = ? AND updated_chapter > ?",
+        (delta, novel_id, after_chapter),
+    )
+    updated_shifted = cursor.rowcount
+    conn.commit()
+    return {
+        "facts_valid_shifted": valid_shifted,
+        "facts_invalid_shifted": invalid_shifted,
+        "episodes_shifted": episodes_shifted,
+        "entities_created_shifted": created_shifted,
+        "entities_updated_shifted": updated_shifted,
+    }
+
+
 def delete_entity(entity_id: str) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()

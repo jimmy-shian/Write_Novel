@@ -582,7 +582,9 @@ class AutonomousPipelineManager:
                             agent_name="copilot"
                         )
                         facts_added = graph_res.get("facts_added", 0)
-                        task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實)")
+                        terms_created = graph_res.get("terms_created", 0)
+                        terms_updated = graph_res.get("terms_updated", 0)
+                        task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實，術語庫新增 {terms_created}/更新 {terms_updated})")
                 except Exception as g_exc:
                     task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
 

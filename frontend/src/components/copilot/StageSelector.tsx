@@ -15,7 +15,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
 
   return (
     <div className="copilot-stage-selector">
-      {/* Selector Header with Collapsible Trigger */}
+      {/* Header */}
       <div
         className={`copilot-section-header clickable ${isCollapsed ? 'collapsed' : 'open'}`}
         onClick={onToggleCollapse}
@@ -35,13 +35,12 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
         </div>
       </div>
 
-      {/* Smoothly Collapsible Stage Buttons and Indicator */}
+      {/* Collapsible Stage Buttons and Indicator */}
       <div className={`stage-collapsible-wrapper ${isCollapsed ? 'collapsed' : 'open'}`}>
         <div className="stage-grouped-container">
           {STAGE_GROUPS.map((group) => (
             <div key={group.id} className="stage-group-block">
               <div className="stage-group-header">
-                <span className="stage-group-tag">{group.id === 'outline' ? '🏛️' : '✍️'}</span>
                 <span className="stage-group-title">{group.title}</span>
               </div>
               <div className={`stage-group-grid grid-${group.stages.length}`}>
@@ -53,7 +52,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
                     onClick={() => onSelectStage(st.id)}
                     title={st.desc}
                   >
-                    <span className="stage-pill-label">{st.label}</span>
+                    {st.label}
                   </button>
                 ))}
               </div>
@@ -61,7 +60,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
           ))}
         </div>
 
-        {/* Active Stage Details - Ultra Compact */}
+        {/* Active Stage Details */}
         <div className="stage-switch-indicator compact">
           <div className="stage-indicator-left">
             <span className="stage-indicator-badge">當前階段:</span>

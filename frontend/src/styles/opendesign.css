@@ -3537,257 +3537,42 @@ html, body {
   font-weight: 600;
 }
 
-/* ==========================================================================
-   Hierarchical Workspace Nav Dropdown (選單的選單 / 分組與展開)
-   ========================================================================== */
-.workspace-nav-dropdown-wrapper {
-  position: relative;
-  display: inline-block;
+.topbar-view-select {
+  width: 175px;
   flex-shrink: 0;
 }
 
-.workspace-nav-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.topbar-view-select .select-trigger {
   height: 32px;
   padding: 0 10px;
+  font-size: 13px;
+  font-weight: 500;
   background-color: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  color: var(--text-primary);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s ease;
   white-space: nowrap;
 }
 
-.workspace-nav-trigger:hover,
-.workspace-nav-trigger.active {
-  background-color: var(--surface-hover);
-  border-color: var(--accent);
-}
-
-.workspace-nav-trigger .trigger-left {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.workspace-nav-trigger .trigger-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-}
-
-.workspace-nav-trigger .trigger-group-badge {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-muted);
-  background-color: var(--surface);
-  border: 1px solid var(--border-subtle);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-}
-
-.workspace-nav-trigger .trigger-divider {
-  color: var(--text-tertiary, #64748b);
-  font-size: 11px;
-}
-
-.workspace-nav-trigger .trigger-label {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.workspace-nav-trigger .trigger-arrow {
-  display: inline-flex;
-  align-items: center;
-  color: var(--text-muted);
-  transition: transform 0.2s ease;
-}
-
-.workspace-nav-trigger .trigger-arrow.open {
-  transform: rotate(180deg);
-  color: var(--accent);
-}
-
-.workspace-nav-menu-panel {
-  position: absolute;
-  top: calc(100% + 6px);
+.topbar-view-options {
+  min-width: 175px;
   right: 0;
-  min-width: 250px;
-  width: max-content;
-  max-width: 320px;
+  left: auto;
+}
+
+.topbar-option-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar-group-title {
+  padding: 6px 12px 2px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   background-color: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  z-index: 1050;
-  padding: 8px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  animation: navDropdownFadeIn 0.15s ease-out;
-}
-
-@keyframes navDropdownFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.nav-group-section {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.nav-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-  margin-bottom: 2px;
-}
-
-.nav-group-header.collapsible {
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  transition: background-color 0.15s ease;
-}
-
-.nav-group-header.collapsible:hover {
-  background-color: var(--surface-hover);
-  color: var(--text-primary);
-}
-
-.nav-group-header-left {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.nav-group-emoji {
-  font-size: 11px;
-}
-
-.nav-group-name {
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.nav-group-expand-hint {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  color: var(--accent);
-}
-
-.expand-arrow {
-  display: inline-flex;
-  align-items: center;
-  transition: transform 0.2s ease;
-}
-
-.expand-arrow.open {
-  transform: rotate(180deg);
-}
-
-.nav-group-items {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.nav-group-items.sub-tree {
-  margin-left: 8px;
-  padding-left: 8px;
-  border-left: 2px solid var(--border-subtle);
-}
-
-.nav-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.nav-menu-item:hover {
-  background-color: var(--surface-hover);
-  border-color: var(--border-subtle);
-}
-
-.nav-menu-item.active {
-  background-color: var(--accent-subtle, rgba(59, 130, 246, 0.14));
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.nav-menu-item .item-icon-wrapper {
-  display: inline-flex;
-  align-items: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.nav-menu-item.active .item-icon-wrapper {
-  color: var(--accent);
-}
-
-.nav-menu-item .item-text-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.nav-menu-item .item-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.nav-menu-item.active .item-title {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.nav-menu-item .item-desc {
-  font-size: 10px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.nav-menu-item .item-check-badge {
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-  flex-shrink: 0;
+  user-select: none;
 }
 
 /* Modal Extensions */

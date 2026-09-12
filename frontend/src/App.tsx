@@ -664,7 +664,6 @@ export const App: React.FC = () => {
           onToggleExplorerMobile={() => setIsExplorerOpenMobile(!isExplorerOpenMobile)}
           onToggleCopilotMobile={() => setIsCopilotOpenMobile(!isCopilotOpenMobile)}
           onSelectView={handleSelectWorkspaceView}
-          onOpenTerms={() => setIsTermsOpen(true)}
         />
 
         <div

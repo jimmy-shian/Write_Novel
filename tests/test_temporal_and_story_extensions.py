@@ -107,6 +107,50 @@ def test_story_terms_lifecycle():
     assert not any(t["term"] == "大荒囚天指(半步天階)" for t in db.get_terms(novel_id))
     db.delete_novel(novel_id)
 
+def test_chapter_clear_cascade_and_term_sync():
+    from backend.services.graphiti.cascade import clear_chapter_cascade
+    novel_id = "test_novel_cascade"
+    db.delete_novel(novel_id)
+    db.create_novel(novel_id, "連動測試小說", "玄幻", "史詩")
+
+    db.save_chapter(novel_id, 3, "第三章正文")
+    e1 = db.upsert_entity(novel_id, "林夜", "character", "主角", {}, chapter_index=3)
+    e2 = db.upsert_entity(novel_id, "陳銳", "character", "配角", {}, chapter_index=2)
+    ep = db.save_episode(novel_id, 3, "ch3", "hash3")
+    db.add_fact(novel_id, "林夜測試測能儀", valid_from_chapter=3,
+                source_entity_id=e1["id"], episode_id=ep["id"])
+    f_old = db.add_fact(novel_id, "舊事實待回滾", valid_from_chapter=1)
+    db.invalidate_fact(f_old["id"], invalid_from_chapter=3, superseded_by="ch3")
+    db.upsert_term(novel_id, "角色", "林夜", "主角", "", source_chapter=3, updated_chapter=3)
+    db.create_term(novel_id, "功法", "大荒囚天指", "武學", "手動")
+
+    # 手動術語優先：自動同步不得覆寫
+    kept = db.upsert_term(novel_id, "角色", "大荒囚天指", "自動定義", "",
+                          source_chapter=3, updated_chapter=3)
+    assert kept["action"] == "kept_manual"
+
+    # 存空正文即連動清除
+    db.save_chapter(novel_id, 3, "   ")
+    stmts = [f["fact_statement"] for f in db.get_all_facts(novel_id)]
+    assert "林夜測試測能儀" not in stmts
+    assert "舊事實待回滾" in stmts  # 作廢被回滾
+    assert db.get_episodes(novel_id) == []
+    names = {e["name"] for e in db.get_entities(novel_id)}
+    assert "林夜" not in names and "陳銳" in names
+    terms = {t["term"] for t in db.get_terms(novel_id)}
+    assert "林夜" not in terms and "大荒囚天指" in terms
+
+    # cascade 服務＋reset chapters 範圍
+    db.save_chapter(novel_id, 5, "第五章")
+    db.upsert_entity(novel_id, "新實體", "item", "道具", {}, chapter_index=5)
+    db.upsert_term(novel_id, "道具", "新實體", "道具", "", source_chapter=5, updated_chapter=5)
+    s = clear_chapter_cascade(novel_id, 5)
+    assert s["facts_deleted"] == 0 and s["entities_deleted"] == 1 and s["auto_terms_deleted"] == 1
+    assert db.reset_novel_content(novel_id, scopes=["chapters"]) == ["chapters"]
+    assert db.get_all_facts(novel_id) == [] and db.get_entities(novel_id) == []
+    assert {t["term"] for t in db.get_terms(novel_id)} == {"大荒囚天指"}
+    db.delete_novel(novel_id)
+
 def test_draft_proposals_lifecycle():
     novel_id = "test_novel_proposals"
     db.delete_novel(novel_id)

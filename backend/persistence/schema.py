@@ -543,6 +543,18 @@ def db_init():
         )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_novel ON story_terms(novel_id, category)")
+        # Migration: track chapter provenance for auto-extracted terms so that
+        # clearing a chapter can cascade to the terms derived from it.
+        # Manual terms keep source_chapter NULL and survive chapter clears.
+        try:
+            cols = [r[1] for r in cursor.execute("PRAGMA table_info(story_terms)").fetchall()]
+            if "source_chapter" not in cols:
+                cursor.execute("ALTER TABLE story_terms ADD COLUMN source_chapter INTEGER")
+            if "updated_chapter" not in cols:
+                cursor.execute("ALTER TABLE story_terms ADD COLUMN updated_chapter INTEGER")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_terms_novel_source ON story_terms(novel_id, source_chapter)")
+        except Exception as e:
+            print(f"[WARN] Failed to migrate story_terms chapter columns: {e}")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS draft_proposals (

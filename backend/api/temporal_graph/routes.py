@@ -95,6 +95,15 @@ def delete_temporal_fact(novel_id: str, fact_id: str):
         raise HTTPException(status_code=404, detail="Fact not found")
     return {"status": "success", "deleted_id": fact_id}
 
+@router.delete("/novels/{novel_id}/temporal-graph/slice/{chapter_index}")
+def clear_temporal_slice_endpoint(novel_id: str, chapter_index: int):
+    """連動清除單章衍生的時序圖譜與自動術語（與正文清空同一條 cascade 路徑）。"""
+    if not db.get_novel(novel_id):
+        raise HTTPException(status_code=404, detail="Novel not found")
+    from backend.services.graphiti.cascade import clear_chapter_cascade
+    summary = clear_chapter_cascade(novel_id, int(chapter_index))
+    return {"status": "success", "novel_id": novel_id, "chapter_index": int(chapter_index), **summary}
+
 @router.post("/novels/{novel_id}/temporal-graph/extract-from-chapter")
 def extract_temporal_facts_endpoint(novel_id: str, payload: Dict[str, Any] = Body(...)):
     chapter_index = int(payload.get("chapter_index", 1))

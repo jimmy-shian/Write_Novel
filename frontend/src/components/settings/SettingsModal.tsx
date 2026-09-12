@@ -482,10 +482,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
             />
-            <div className="text-xs text-muted" style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '6px', lineHeight: 1.4 }}>
-              <span>• <strong>本機使用 (http://127.0.0.1:8000)</strong>：支援本地端點（如 <code>http://127.0.0.1:8765/v1</code> 之 WebChat2Local）或各公網 API。</span>
-              <span>• <strong>雲端部署 (GitHub Pages / Hugging Face)</strong>：後端於雲端運行，必須填寫公網可訪問之 API（如 NVIDIA NIM、OpenAI、DeepSeek），無法直接存取您本機之 127.0.0.1。</span>
-            </div>
           </div>
 
           <div className="form-group">

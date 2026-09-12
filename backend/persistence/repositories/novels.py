@@ -69,7 +69,7 @@ def reset_novel_content(novel_id, scopes=None):
       - worldbuilding: worldbuilding 表 + novels.worldview_patches
       - characters: characters 表
       - plot: volumes 表 + plot_chapters 表
-      - chapters: chapters 表
+      - chapters: chapters 表 + 連動清除全書時序圖譜與自動術語（手動術語保留）
       - chat: chat_memory 表 + pipeline_locks 表
     回傳實際執行的 scopes 清單。
     """
@@ -99,6 +99,18 @@ def reset_novel_content(novel_id, scopes=None):
         cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
     if "chapters" in effective:
         cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
+        # 模組化關聯：正文整批清除時連動清除衍生的時序圖譜與自動術語。
+        cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
+        cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
+        cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+        try:
+            cursor.execute(
+                "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
+                (novel_id,),
+            )
+        except sqlite3.OperationalError:
+            # 舊 DB 尚未遷移 source_chapter 欄位時跳過（手動術語不受影響）
+            pass
     if "chat" in effective:
         cursor.execute("DELETE FROM chat_memory WHERE novel_id = ?", (novel_id,))
         try:

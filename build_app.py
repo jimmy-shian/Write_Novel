@@ -136,6 +136,47 @@ def run_cmd(cmd, cwd=None, check=True):
         raise RuntimeError(f"Command failed with exit code {res.returncode}: {cmd}")
     return res.returncode
 
+def ensure_no_running_app(timeout_sec: int = 30):
+    """編譯前關閉正在執行的 App，避免輸出 EXE 被鎖定導致 NSIS/PyInstaller
+    出現 "Can't open output file" 而失敗。
+
+    只關閉自家行程 (Electron portable / unpacked / 後端 sidecar)，
+    不影響其他程式。非 Windows 平台直接略過。
+    """
+    if sys.platform != "win32":
+        return
+    list_cmd = (
+        "powershell -NoProfile -Command \""
+        "Get-Process | Where-Object { $_.ProcessName -like 'AI_Novel_Factory_*' "
+        "-or $_.ProcessName -eq 'AI Novel Factory' } | "
+        "Select-Object -ExpandProperty Id\""
+    )
+    try:
+        out = subprocess.run(list_cmd, shell=True, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        print(f"[!] 無法檢查執行中行程（略過）: {e}")
+        return
+    pids = [p.strip() for p in (out.stdout or "").split() if p.strip().isdigit()]
+    if not pids:
+        return
+    print(f"[*] 發現正在執行的 App 行程 {pids}，先關閉以釋放輸出檔案...")
+    kill_cmd = (
+        "powershell -NoProfile -Command \""
+        "Get-Process | Where-Object { $_.ProcessName -like 'AI_Novel_Factory_*' "
+        "-or $_.ProcessName -eq 'AI Novel Factory' } | Stop-Process -Force\""
+    )
+    subprocess.run(kill_cmd, shell=True, capture_output=True, timeout=30)
+    import time
+    for _ in range(timeout_sec * 2):
+        time.sleep(0.5)
+        out = subprocess.run(list_cmd, shell=True, capture_output=True, text=True, timeout=30)
+        if not [p for p in (out.stdout or "").split() if p.strip().isdigit()]:
+            print("[+] 已關閉舊 App，輸出檔案已釋放。")
+            return
+    raise RuntimeError(
+        "仍有關不掉的 App 行程，請手動關閉「AI Novel Factory」視窗後再重新編譯。"
+    )
+
 def build_web_dist():
     print("\n" + "="*50)
     print("  [Step] 構建前端 Web 發布包 (Vite + React SPA)")
@@ -210,6 +251,7 @@ def build_windows_backend_sidecar():
     print("\n" + "="*50)
     print("  [Step] 打包 Electron 無頭後端 sidecar (onedir)")
     print("="*50)
+    ensure_no_running_app()
     build_web_dist()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -264,6 +306,9 @@ def build_electron_portable(clean_after: bool = True):
     print("\n" + "="*50)
     print("  [Step] 打包 Electron 免安裝獨立視窗版 (portable)")
     print("="*50)
+
+    # 0. 先關閉正在跑的 App，否則 NSIS 無法覆寫輸出 EXE ("Can't open output file")
+    ensure_no_running_app()
 
     # 1. 確保後端 sidecar 已存在
     sidecar_exe = os.path.join(OUTPUT_DIR, "AI_Novel_Factory_Backend", "AI_Novel_Factory_Backend.exe")

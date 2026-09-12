@@ -136,6 +136,18 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                 # 刪除超出大綱範圍的已寫章節
                 cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index > ?", (novel_id, max_incoming))
                 cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index > ?", (novel_id, max_incoming))
+                # 模組化關聯：超範圍的圖譜切片與自動術語一併清除。
+                cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ? AND valid_from_chapter > ?", (novel_id, max_incoming))
+                cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ? AND chapter_index > ?", (novel_id, max_incoming))
+                cursor.execute(
+                    "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter > ? AND updated_chapter > ?",
+                    (novel_id, max_incoming, max_incoming))
+                try:
+                    cursor.execute(
+                        "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter > ?",
+                        (novel_id, max_incoming))
+                except Exception:
+                    pass
         return 1
 
     conn = get_db_connection()
@@ -146,6 +158,17 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
             cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
+            # 模組化關聯：整批正文抹除時連動清除衍生的時序圖譜與自動術語。
+            cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
+            cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
+            cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+            try:
+                cursor.execute(
+                    "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
+                    (novel_id,),
+                )
+            except Exception:
+                pass
         
         # The `plot_chapters` table is deprecated. We no longer save plot_json to the database directly.
         # We now strictly rely on `volumes` chapters_outline to persist the story structure.
@@ -330,7 +353,7 @@ get_chapters = get_all_chapters_latest
 get_all_chapters = get_all_chapters_latest
 get_chapter = get_latest_chapter
 
-def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None):
+def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None, is_dirty=False):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
@@ -339,12 +362,27 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None)
             (novel_id, chapter_index)
         ).fetchone()
         next_version = (row["max_v"] or 0) + 1
-        
+
         cursor.execute(
-            "INSERT INTO chapters (novel_id, chapter_index, content, synopsis, thinking, version, is_dirty) VALUES (?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO chapters (novel_id, chapter_index, content, synopsis, thinking, version, is_dirty) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (novel_id, chapter_index, _to_traditional(content), _to_traditional(synopsis) if synopsis else None,
-             _to_traditional(thinking) if thinking else None, next_version)
+             _to_traditional(thinking) if thinking else None, next_version, 1 if is_dirty else 0)
         )
+    # 模組化關聯：正文被清空（空字串/空白）時，連動清除該章衍生的時序圖譜
+    # 與自動術語。不論經由 UI 手動、API、提案套用或自動管線，只要走 save_chapter
+    # 都會觸發，呼叫方無需各自散寫 DELETE。
+    if content is None or not str(content).strip():
+        try:
+            from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+            from backend.persistence.repositories.story_terms import delete_terms_by_chapter
+            summary = delete_chapter_slice(novel_id, int(chapter_index))
+            try:
+                summary["auto_terms_deleted"] = delete_terms_by_chapter(novel_id, int(chapter_index))
+            except Exception:
+                pass
+            print(f"[Cascade] Chapter {chapter_index} prose cleared, derived data removed: {summary}")
+        except Exception as e:
+            print(f"[WARN] Failed to cascade-clear derived data for chapter {chapter_index}: {e}")
     return next_version
 
 # --- CHAT MEMORY (Modularized into backend.persistence.repositories.chat_memory) ---
@@ -444,7 +482,47 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
             (del_count, novel_id)
         )
         cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
-        
+
+        # 2.5. 模組化關聯：同範圍刪除時序圖譜切片並平移後續章節標記；
+        #      自動術語（source_chapter 有值）同規則處理，手動術語保留。
+        try:
+            from backend.persistence.repositories.temporal_graph import shift_graph_chapters
+            cursor.execute(
+                "DELETE FROM temporal_facts WHERE novel_id = ? AND valid_from_chapter >= ? AND valid_from_chapter <= ?",
+                (novel_id, start_del, end_del)
+            )
+            cursor.execute(
+                "DELETE FROM temporal_episodes WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?",
+                (novel_id, start_del, end_del)
+            )
+            cursor.execute(
+                "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter >= ? AND created_chapter <= ? AND updated_chapter >= ? AND updated_chapter <= ?",
+                (novel_id, start_del, end_del, start_del, end_del)
+            )
+            cursor.execute("""
+                UPDATE temporal_facts
+                SET invalid_from_chapter = NULL, is_active = 1, superseded_by = NULL
+                WHERE novel_id = ? AND invalid_from_chapter >= ? AND invalid_from_chapter <= ?
+            """, (novel_id, start_del, end_del))
+            try:
+                cursor.execute(
+                    "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter >= ? AND source_chapter <= ?",
+                    (novel_id, start_del, end_del)
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[WARN] Failed to delete graph slice [{start_del}, {end_del}]: {e}")
+        try:
+            shift_graph_chapters(novel_id, end_del, -del_count)
+        except Exception as e:
+            print(f"[WARN] Failed to shift graph chapters after {end_del}: {e}")
+        try:
+            from backend.persistence.repositories.story_terms import shift_term_chapters
+            shift_term_chapters(novel_id, end_del, -del_count)
+        except Exception as e:
+            print(f"[WARN] Failed to shift term chapters after {end_del}: {e}")
+
         # 3. 從 `plot_chapters` 主表中刪除範圍內大綱，並對後續大綱做向前平移
         plot_row = cursor.execute(
             "SELECT * FROM plot_chapters WHERE novel_id = ? ORDER BY version DESC LIMIT 1",

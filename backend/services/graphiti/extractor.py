@@ -5,9 +5,11 @@ Extracts dynamic entities and temporal facts from chapter text, detecting supers
 """
 import hashlib
 import json
+import traceback
 from typing import Dict, Any, List, Optional
 from backend import persistence as db
 from backend.common.llm import call_llm
+from backend.models.parsers import extract_json_block
 
 EXTRACTION_SYSTEM_PROMPT = """你是一位精通長篇小說故事設定與動態時序追蹤的架構分析師（Graphiti Temporal Knowledge Extractor）。
 你的任務是閱讀最新章節正文，提取出「新建立的時序事實」、「實體狀態變更」以及「被覆蓋或作廢的舊事實」。
@@ -32,9 +34,37 @@ EXTRACTION_SYSTEM_PROMPT = """你是一位精通長篇小說故事設定與動�
   ],
   "invalidated_fact_ids_or_statements": [
     "被本章劇情推翻、作廢或改變的舊事實敘述"
+  ],
+  "terms": [
+    {
+      "term": "專有名詞或術語 (例如: 滅世晨星、星輝門閥)",
+      "category": "術語分類 (例如: 功法、勢力、道具、地點、角色)",
+      "definition": "術語定義或設定簡述"
+    }
   ]
 }
+
+注意：「terms」為選填。若省略，系統會自動以實體清單整理術語庫。
 """
+
+ENTITY_TYPE_TO_CATEGORY = {
+    "character": "角色",
+    "item": "道具",
+    "location": "地點",
+    "faction": "勢力",
+    "concept": "概念",
+}
+
+
+def _attributes_to_notes(attributes) -> str:
+    """將實體 attributes 轉為術語 notes（手動術語不受影響，僅自動同步使用）。"""
+    if not attributes:
+        return ""
+    if isinstance(attributes, dict):
+        parts = [f"{k}: {v}" for k, v in attributes.items() if v not in (None, "")]
+        return "；".join(parts)[:500]
+    return str(attributes)[:500]
+
 
 class ChapterFactExtractor:
     """Extracts temporal facts and manages fact invalidation."""
@@ -74,16 +104,38 @@ class ChapterFactExtractor:
 
 請分析上述正文，提取新事實並指出被作廢的舊事實。"""
 
+        used_fallback = False
+        fallback_reason = ""
         try:
             raw_response = call_llm(
                 agent_name=agent_name,
                 system_prompt=EXTRACTION_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
-                response_format={"type": "json_object"}
+                force_json=True,
             )
-            data = json.loads(raw_response)
-        except Exception:
-            # Fallback for mock or failure
+            if not raw_response or not raw_response.strip():
+                raise ValueError("LLM returned empty response")
+            # 1) 先試原生 JSON（相容開啟 response_format 的模型）
+            try:
+                data = json.loads(raw_response)
+            except Exception:
+                # 2) 相容 ```json ... ``` / <think> / 前後贅字（gemini-web/pro 常見）
+                data = extract_json_block(raw_response)
+            if not isinstance(data, dict):
+                raise ValueError(f"Parsed JSON is not a dict: {type(data).__name__}")
+            if "entities" not in data and "new_facts" not in data:
+                raise ValueError(f"Parsed JSON missing keys: {list(data.keys())[:5]}")
+            data.setdefault("entities", [])
+            data.setdefault("new_facts", [])
+            data.setdefault("invalidated_fact_ids_or_statements", [])
+            data.setdefault("terms", [])
+        except Exception as e:
+            # Fallback for mock or failure（保留舊行為，但加上可觀測性）
+            print(f"[Graphiti Extractor] Chapter {chapter_index} LLM parse failed, using fallback. Reason: {e}")
+            print(f"[Graphiti Extractor] raw head: {(locals().get('raw_response') or '')[:500]!r}")
+            traceback.print_exc()
+            used_fallback = True
+            fallback_reason = str(e)[:500]
             data = {
                 "entities": [],
                 "new_facts": [{
@@ -143,9 +195,71 @@ class ChapterFactExtractor:
                     db.invalidate_fact(fact_id=f_id, invalid_from_chapter=chapter_index)
                     break
 
+        # 4. Sync Story Terms together with the temporal graph (same pass).
+        #    LLM-provided terms first, then entities auto-organized into the
+        #    glossary so the two stay linked (terms carry source_chapter and
+        #    are removed automatically when the chapter is cleared).
+        terms_created = 0
+        terms_updated = 0
+        terms_kept_manual = 0
+        synced_term_names = set()
+        if not used_fallback:
+            for t in data.get("terms", []) or []:
+                name = (t.get("term") or "").strip()
+                if not name or name in synced_term_names:
+                    continue
+                try:
+                    res = db.upsert_term(
+                        novel_id=novel_id,
+                        category=(t.get("category") or "通用術語").strip(),
+                        term=name,
+                        definition=(t.get("definition") or "").strip(),
+                        notes=(t.get("notes") or "").strip(),
+                        source_chapter=chapter_index,
+                        updated_chapter=chapter_index,
+                    )
+                    synced_term_names.add(name)
+                    if res.get("action") == "created":
+                        terms_created += 1
+                    elif res.get("action") == "updated":
+                        terms_updated += 1
+                    else:
+                        terms_kept_manual += 1
+                except Exception as te:
+                    print(f"[Graphiti Extractor] Chapter {chapter_index} term sync skipped for {name!r}: {te}")
+            for ent in data.get("entities", []) or []:
+                name = (ent.get("name") or "").strip()
+                if not name or name in synced_term_names:
+                    continue
+                try:
+                    res = db.upsert_term(
+                        novel_id=novel_id,
+                        category=ENTITY_TYPE_TO_CATEGORY.get(
+                            (ent.get("entity_type") or "character").strip(), "通用術語"),
+                        term=name,
+                        definition=(ent.get("summary") or "").strip(),
+                        notes=_attributes_to_notes(ent.get("attributes")),
+                        source_chapter=chapter_index,
+                        updated_chapter=chapter_index,
+                    )
+                    synced_term_names.add(name)
+                    if res.get("action") == "created":
+                        terms_created += 1
+                    elif res.get("action") == "updated":
+                        terms_updated += 1
+                    else:
+                        terms_kept_manual += 1
+                except Exception as te:
+                    print(f"[Graphiti Extractor] Chapter {chapter_index} entity-term sync skipped for {name!r}: {te}")
+
         return {
             "episode_id": episode["id"],
             "entities_updated": len(entity_id_map),
             "facts_added": len(added_facts),
-            "status": "success"
+            "terms_created": terms_created,
+            "terms_updated": terms_updated,
+            "terms_kept_manual": terms_kept_manual,
+            "status": "fallback" if used_fallback else "success",
+            "used_fallback": used_fallback,
+            "fallback_reason": fallback_reason,
         }

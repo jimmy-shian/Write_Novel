@@ -48,6 +48,17 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
                 cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ?", (novel_id,))
                 cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
                 cursor.execute("DELETE FROM foreshadowing_blueprints WHERE novel_id = ?", (novel_id,))
+                # 模組化關聯：整批正文抹除時連動清除衍生的時序圖譜與自動術語。
+                cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+                try:
+                    cursor.execute(
+                        "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
+                        (novel_id,),
+                    )
+                except Exception:
+                    pass
         for idx, vol in enumerate(volumes_list):
             volume_index = vol.get("volume_index", idx + 1)
             title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
@@ -452,6 +463,51 @@ def delete_volume(novel_id, volume_index):
         # 5.1 同步刪除並平移敘事記憶庫與 Arc 摘要，防止章節記憶索引脫鉤錯位
         cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?", (novel_id, start_ch, end_ch))
         cursor.execute("UPDATE chapter_memory SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?", (ch_count, novel_id, end_ch))
+        # 5.2 模組化關聯：同範圍刪除時序圖譜切片與自動術語，並平移後續標記。
+        try:
+            cursor.execute(
+                "DELETE FROM temporal_facts WHERE novel_id = ? AND valid_from_chapter >= ? AND valid_from_chapter <= ?",
+                (novel_id, start_ch, end_ch))
+            cursor.execute(
+                "DELETE FROM temporal_episodes WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?",
+                (novel_id, start_ch, end_ch))
+            cursor.execute(
+                "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter >= ? AND created_chapter <= ? AND updated_chapter >= ? AND updated_chapter <= ?",
+                (novel_id, start_ch, end_ch, start_ch, end_ch))
+            cursor.execute("""
+                UPDATE temporal_facts
+                SET invalid_from_chapter = NULL, is_active = 1, superseded_by = NULL
+                WHERE novel_id = ? AND invalid_from_chapter >= ? AND invalid_from_chapter <= ?
+            """, (novel_id, start_ch, end_ch))
+            cursor.execute(
+                "UPDATE temporal_facts SET valid_from_chapter = valid_from_chapter - ? WHERE novel_id = ? AND valid_from_chapter > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
+                "UPDATE temporal_facts SET invalid_from_chapter = invalid_from_chapter - ? WHERE novel_id = ? AND invalid_from_chapter IS NOT NULL AND invalid_from_chapter > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
+                "UPDATE temporal_episodes SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
+                "UPDATE temporal_entities SET created_chapter = created_chapter - ? WHERE novel_id = ? AND created_chapter > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
+                "UPDATE temporal_entities SET updated_chapter = updated_chapter - ? WHERE novel_id = ? AND updated_chapter > ?",
+                (ch_count, novel_id, end_ch))
+            try:
+                cursor.execute(
+                    "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter >= ? AND source_chapter <= ?",
+                    (novel_id, start_ch, end_ch))
+                cursor.execute(
+                    "UPDATE story_terms SET source_chapter = source_chapter - ? WHERE novel_id = ? AND source_chapter > ?",
+                    (ch_count, novel_id, end_ch))
+                cursor.execute(
+                    "UPDATE story_terms SET updated_chapter = updated_chapter - ? WHERE novel_id = ? AND updated_chapter > ?",
+                    (ch_count, novel_id, end_ch))
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[WARN] Failed to cascade volume chapter range [{start_ch}, {end_ch}] to graph/terms: {e}")
         cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
         cursor.execute("UPDATE arc_summaries SET arc_start = arc_start - ?, arc_end = arc_end - ? WHERE novel_id = ? AND arc_start > ?", (ch_count, ch_count, novel_id, end_ch))
         

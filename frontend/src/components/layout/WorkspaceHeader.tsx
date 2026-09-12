@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Novel } from '../../types';
 import { StatusDot } from '../common/StatusDot';
 import { Button } from '../common/Button';
@@ -19,7 +19,6 @@ interface WorkspaceHeaderProps {
   onToggleExplorerMobile: () => void;
   onToggleCopilotMobile: () => void;
   onSelectView: (view: ActiveView, subTab?: WorldviewSubTab) => void;
-  onOpenTerms?: () => void;
 }
 
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
@@ -34,7 +33,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onToggleExplorerMobile,
   onToggleCopilotMobile,
   onSelectView,
-  onOpenTerms,
 }) => {
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -98,12 +96,11 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       </div>
 
       <div className="topbar-right">
-        {/* Hierarchical Grouped View Switcher Dropdown */}
+        {/* View Switcher Dropdown: 世界觀 / 卷 / 章 / 正文 / 比對 */}
         <WorkspaceNavDropdown
           activeView={activeView}
           worldviewTab={worldviewTab}
           onSelectView={onSelectView}
-          onOpenTerms={onOpenTerms}
         />
 
         {/* Save button */}
