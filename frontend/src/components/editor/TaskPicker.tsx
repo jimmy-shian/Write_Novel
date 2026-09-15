@@ -35,24 +35,25 @@ export function resolveTaskItem(
     rawStr = String(raw);
   } else if (typeof raw === 'string') {
     rawStr = raw.trim();
-    const m = rawStr.match(/^(?:TP|FS)?0*(\d+)$/i);
-    if (m && (rawStr.toUpperCase().startsWith('TP') || rawStr.toUpperCase().startsWith('FS') || /^\d+$/.test(rawStr))) {
+    const m = rawStr.match(/^(?:TP|FS|Seed|Turn)?-?0*(\d+)$/i);
+    if (m && (rawStr.toUpperCase().startsWith('TP') || rawStr.toUpperCase().startsWith('FS') || rawStr.toUpperCase().startsWith('SEED') || rawStr.toUpperCase().startsWith('TURN') || /^\d+$/.test(rawStr))) {
       num = parseInt(m[1], 10);
     }
   } else if (typeof raw === 'object') {
-    const rawId = raw.id ?? raw.code;
+    const rawId = raw.id ?? raw.code ?? raw.seed_id ?? raw.turn_id;
     if (typeof rawId === 'number') {
       num = rawId;
     } else if (typeof rawId === 'string') {
-      const m = rawId.trim().match(/^(?:TP|FS)?0*(\d+)$/i);
-      if (m && (rawId.toUpperCase().startsWith('TP') || rawId.toUpperCase().startsWith('FS') || /^\d+$/.test(rawId))) {
+      const m = rawId.trim().match(/^(?:TP|FS|Seed|Turn)?-?0*(\d+)$/i);
+      if (m && (rawId.toUpperCase().startsWith('TP') || rawId.toUpperCase().startsWith('FS') || rawId.toUpperCase().startsWith('SEED') || rawId.toUpperCase().startsWith('TURN') || /^\d+$/.test(rawId))) {
         num = parseInt(m[1], 10);
       } else {
         rawStr = rawId.trim();
       }
     }
     if (!rawStr) {
-      rawStr = raw.turning_point_name || raw.name || '';
+      const textCandidate = raw.turning_point_name || raw.name || raw.seed || raw.turn || raw.title || raw.description || '';
+      rawStr = typeof textCandidate === 'string' ? textCandidate : JSON.stringify(textCandidate);
     }
   }
 
@@ -75,7 +76,7 @@ export function resolveTaskItem(
       match = item;
       break;
     }
-    const itemName = (item.turning_point_name || item.name || '').trim();
+    const itemName = String(item.turning_point_name || item.name || item.seed || item.turn || '').trim();
     if (rawStr && (itemName === rawStr || String(itemId) === rawStr)) {
       match = item;
       break;
@@ -85,8 +86,8 @@ export function resolveTaskItem(
   let name = '';
   let desc = '';
   if (match) {
-    name = match.turning_point_name || match.name || '';
-    desc = match.description || match.trigger_condition || match.setup_hint || match.payoff_hint || '';
+    name = String(match.turning_point_name || match.name || match.seed || match.turn || '');
+    desc = String(match.description || match.trigger_condition || match.setup_hint || match.payoff_hint || match.instruction || '');
     if (num === null && match.id !== undefined && match.id !== null) {
       const n = parseInt(String(match.id).replace(/\D/g, ''), 10);
       if (!isNaN(n)) {
@@ -94,7 +95,7 @@ export function resolveTaskItem(
         codeStr = `${prefix}${String(num).padStart(3, '0')}`;
       }
     }
-  } else if (rawStr && !/^(?:TP|FS)?\d+$/i.test(rawStr)) {
+  } else if (rawStr && !/^(?:TP|FS|Seed|Turn)?-?\d+$/i.test(rawStr)) {
     name = rawStr;
   }
 
@@ -107,11 +108,11 @@ export function resolveTaskItem(
   const key = codeStr || rawStr || name;
 
   return {
-    key,
-    code: codeStr,
+    key: String(key),
+    code: String(codeStr),
     num,
-    name,
-    desc,
+    name: String(name),
+    desc: String(desc),
     raw: match || raw,
   };
 }

@@ -93,6 +93,23 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
     if target_char_index is None and task.target.chapter_index is not None:
         target_char_index = task.target.chapter_index
 
+    # 從 task 中解析 [BATCH: xxx] 標籤
+    batch_target = None
+    texts_to_check = [
+        getattr(task, "agent_prompt", None) or "",
+        task.instruction or "",
+        task.hint or "",
+        task.user_prompt or "",
+    ]
+    for text in texts_to_check:
+        if not text:
+            continue
+        import re
+        m = re.search(r'\[BATCH:\s*([^\]]+)\]', text, re.IGNORECASE)
+        if m:
+            batch_target = m.group(1).strip()
+            break
+
     return run_character_designer(
         task.novel_id,
         user_prompt=prompt or None,
@@ -101,4 +118,5 @@ def run_characters_task(task: GenerationTaskRequest, context=None):
         target_char_index=target_char_index,
         stream=task.options.stream,
         force_json=True,
+        batch_target=batch_target,
     )

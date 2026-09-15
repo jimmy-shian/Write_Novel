@@ -62,7 +62,7 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None, target_field=None, novel_id=None, batch_size=15, existing_items=None, start_id=1):
+def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None, target_field=None, novel_id=None, batch_size=15, existing_items=None, start_id=1, established_seeds=None):
     """伏筆與轉折編織師提示詞拼接 (支援 15 條/批 自動分批累加)"""
     from backend.schemas.agent_json import FORESHADOWING_OUTPUT_SCHEMA
     import json
@@ -85,10 +85,10 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
             f"【本次批次生成 foreshadowing_seeds】\n"
             f"1. 最外層 JSON 只能有一個頂層鍵：`foreshadowing_seeds`（陣列）。\n"
             f"2. 本次請生成高品質、深刻且具體可落地的 {batch_size} 個全新伏筆種子。\n"
-            f"3. 每個項目只能使用：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。\n"
+            f"3. 每個項目欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`, `expected_payoff_window`, `payoff_deadline_chapter`, `integration_group`。\n"
             f"4. `id` 必須是整數，從 {start_id} 開始連續編號。\n"
             f"5. 禁止輸出 key_turning_points 或任何其他頂層鍵。\n"
-            f"6. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；不得用同義改寫湊數。\n"
+            f"6. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；設定清晰的 `payoff_deadline_chapter`（每20-30章具備回收點），並支援以 `integration_group` 將關聯懸念合流歸納；不得用同義改寫湊數。\n"
             + existing_section
         )
     elif target_field == "key_turning_points":
@@ -105,6 +105,25 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
                 + ("\n..." if len(existing_names) > 30 else "")
                 + "\n"
             )
+
+        seeds_summary_section = ""
+        if established_seeds and isinstance(established_seeds, list):
+            seed_lines = []
+            for s in established_seeds[:30]:
+                if isinstance(s, dict):
+                    s_id = s.get("id") or ""
+                    s_name = s.get("name") or ""
+                    s_payoff = s.get("payoff_hint") or s.get("description") or ""
+                    s_chars = ", ".join(s.get("related_characters") or [])
+                    seed_lines.append(f"- [伏筆 #{s_id}] {s_name}（關聯角色: {s_chars}）：{s_payoff[:75]}")
+            if seed_lines:
+                seeds_summary_section = (
+                    f"\n【已確立之全書核心伏筆種子網絡（供本次轉折點呼應、觸發或引爆）】：\n"
+                    + "\n".join(seed_lines)
+                    + ("\n..." if len(established_seeds) > 30 else "")
+                    + "\n"
+                )
+
         target_instruction = (
             f"【本次批次生成 key_turning_points】\n"
             f"1. 最外層 JSON 只能有一個頂層鍵：`key_turning_points`（陣列）。\n"
@@ -113,7 +132,9 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
             f"4. `id` 必須是整數，從 {start_id} 開始連續編號。\n"
             f"5. 禁止輸出 foreshadowing_seeds 或任何其他頂層鍵。\n"
             f"6. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。\n"
+            f"7. ⚠️ 伏筆與轉折組合聯動要求：關鍵轉折點請主動與上述【已確立之全書核心伏筆種子】產生呼應聯動，在 description、trigger_condition 或 structural_impact 中指明觸發、引爆或收束了哪一條伏筆懸念，形成嚴密的伏筆-轉折因果鏈條！\n"
             + existing_section
+            + seeds_summary_section
         )
     else:
         schema = FORESHADOWING_OUTPUT_SCHEMA
@@ -121,10 +142,10 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
             f"【本次批次生成全書伏筆與關鍵轉折藍圖】\n"
             f"1. 最外層 JSON 必須只有一個物件，且只能包含兩個頂層鍵：`foreshadowing_seeds` 與 `key_turning_points`。\n"
             f"2. 本批生成：`foreshadowing_seeds` 陣列（{batch_size} 個）與 `key_turning_points` 陣列（{batch_size} 個）。\n"
-            f"3. 每個 `foreshadowing_seeds` 項目欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`。\n"
+            f"3. 每個 `foreshadowing_seeds` 項目欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`, `expected_payoff_window`, `payoff_deadline_chapter`, `integration_group`。\n"
             f"4. 每個 `key_turning_points` 項目欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
             f"5. `id` 必須是 JSON number，從 1 開始連續編號。\n"
-            f"6. 禁止輸出卷別鍵、章節正文或解釋文字；種子與轉折必須深刻、具體且不重複。"
+            f"6. 禁止輸出卷別鍵、章節正文或解釋文字；種子與轉折必須深刻、具體且不重複，合理分配回收截止章節與懸念合流組。"
         )
 
     schema_snippet = (

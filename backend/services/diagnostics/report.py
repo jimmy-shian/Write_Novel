@@ -97,9 +97,20 @@ def _append_active_chapter_task_report(report_lines, novel_id, active_chapter_in
 
 def diagnose_worldview(worldview_text):
     """
-    對世界觀內容進行剛性診斷。
+    對世界觀內容進行剛性診斷（支援直接傳入世界觀內容或 novel_id）。
     """
-    if not worldview_text or not worldview_text.strip() or worldview_text in ("尚無世界觀設定", "（空）", "（尚無世界觀設定）"):
+    if not worldview_text:
+        return "世界觀為空"
+    if isinstance(worldview_text, str) and not worldview_text.strip().startswith(("{", "[")):
+        from backend import persistence as db
+        try:
+            wb = db.get_latest_worldbuilding(worldview_text)
+            if wb and wb.get("content"):
+                worldview_text = wb["content"]
+        except Exception:
+            pass
+
+    if not worldview_text or not str(worldview_text).strip() or worldview_text in ("尚無世界觀設定", "（空）", "（尚無世界觀設定）"):
         return "世界觀為空"
     
     try:
@@ -131,9 +142,20 @@ def diagnose_worldview(worldview_text):
 
 def diagnose_characters(characters_data):
     """
-    對角色聖經進行剛性診斷。
+    對角色聖經進行剛性診斷（支援直接傳入角色 JSON 或 novel_id）。
     """
-    if not characters_data or not characters_data.strip() or characters_data in ("尚無角色設定", "（空）"):
+    if not characters_data:
+        return "角色聖經為空"
+    if isinstance(characters_data, str) and not characters_data.strip().startswith(("{", "[")):
+        from backend import persistence as db
+        try:
+            char_data = db.get_latest_characters(characters_data)
+            if char_data and char_data.get("json_data"):
+                characters_data = char_data["json_data"]
+        except Exception:
+            pass
+
+    if not characters_data or not str(characters_data).strip() or characters_data in ("尚無角色設定", "（空）"):
         return "角色聖經為空"
 
     try:
@@ -148,6 +170,10 @@ def diagnose_characters(characters_data):
     if not chars_list:
         return "角色有0個，欄位不完整"
 
+    if len(chars_list) < 2:
+        char_name = chars_list[0].get("name", "未命名") if isinstance(chars_list[0], dict) else "未命名"
+        return f"角色僅有{len(chars_list)}個（{char_name}），數量嚴重不足（最少需包含主角、反派/宿敵與關鍵配角群像）；嚴禁放行，必須擴充角色"
+
     protagonist_missing = []
     for idx, c in enumerate(chars_list):
         if not isinstance(c, dict):
@@ -158,9 +184,19 @@ def diagnose_characters(characters_data):
         if missing_fields:
             protagonist_missing.append(f"{c.get('name', '未命名')} 缺少 {', '.join(missing_fields)}")
 
+    # 檢查是否有反派或對立角色 / 盟友配角
+    roles = [str(c.get("role", "")).lower() for c in chars_list if isinstance(c, dict)]
+    has_antagonist = any(any(k in r for k in ("反派", "宿敵", "敵對", "對立", "對抗", "反面", "boss", "antagonist", "villain", "rival")) for r in roles)
+
+    status_suffix = ""
+    if len(chars_list) < 3:
+        status_suffix = "；角色數量偏少（建議 3 位以上群像）"
+    if not has_antagonist:
+        status_suffix += "；未明確標註反派/宿敵角色"
+
     if protagonist_missing:
-        return f"角色有{len(chars_list)}個；主角欄位可補：{'; '.join(protagonist_missing)}；配角欄位缺失不列為阻斷"
-    return f"角色有{len(chars_list)}個；主角核心欄位足夠，配角欄位缺失不列為阻斷"
+        return f"角色有{len(chars_list)}個；主角欄位可補：{'; '.join(protagonist_missing)}；配角欄位缺失不列為阻斷{status_suffix}"
+    return f"角色有{len(chars_list)}個；主角核心欄位足夠，配角欄位缺失不列為阻斷{status_suffix}"
 
 
 def diagnose_volumes_and_skeletons(volumes):
@@ -381,7 +417,7 @@ def detect_current_stage(novel_id):
         
     # 剛性檢查角色聖經完整性
     characters_diag = diagnose_characters(char["json_data"])
-    if "角色聖經為空" in characters_diag or "角色有0個" in characters_diag:
+    if any(k in characters_diag for k in ("角色聖經為空", "角色有0個", "數量嚴重不足", "嚴禁放行")):
         return "characters"
 
     # 偵測是否已生成伏筆與轉折

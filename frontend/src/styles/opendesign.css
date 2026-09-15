@@ -3168,11 +3168,42 @@ html, body {
   gap: 4px;
 }
 
+.quick-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
 .quick-card-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 2px;
+}
+
+.quick-card-title.clickable-title {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.quick-card-title.clickable-title:hover {
+  color: var(--accent);
+}
+
+.edit-meta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+
+.edit-meta-btn:hover {
+  color: var(--accent);
+  background-color: var(--surface-hover);
 }
 
 .quick-card-meta-line {
@@ -4318,7 +4349,7 @@ html, body {
 }
 
 .card-inline-label {
-  font-size: 12px;
+  font-size: clamp(12px, calc(var(--editor-font-size, 16px) - 3px), 15px);
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -4328,14 +4359,24 @@ html, body {
   background: var(--surface-elevated);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  font-size: 13px;
-  padding: 6px 10px;
+  font-size: var(--editor-font-size, 15px);
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
   font-family: inherit;
   outline: none;
   transition: border-color 0.15s ease;
   width: 100%;
   box-sizing: border-box;
+}
+
+.card-inline-textarea {
+  line-height: 1.6;
+}
+
+.card-inline-input::placeholder,
+.card-inline-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
 .card-inline-input:focus,

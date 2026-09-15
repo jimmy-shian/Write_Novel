@@ -202,8 +202,14 @@ def build_director_decision_messages(
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（角色設計師）。
-2. 角色關係網是否邏輯連貫。
-3. 確認角色的心理深度、成長弧線是否完整。
+2. ⚠️【角色數量與群像結構硬性門檻 (絕對紅線)】：
+   - 角色總數必須至少達到 2~3 位以上（包含：主角、主要反派/宿敵、以及關鍵配角或盟友）。
+   - **絕對嚴禁只有 1 位角色（單一主角）就放行 CONTINUE！** 只有 1 個角色的單口相聲無法展開世界觀衝突、對白交鋒與多幕張力。
+   - 若角色庫中只有 1 位角色或缺乏主要反派/對立角色，**嚴禁輸出 CONTINUE 進入下一階段**！
+   - 決策必須輸出指令要求角色設計師進行擴充：將 `target` 設為 `"character_designer"`，並在 `agent_prompt` 明確指示需要擴增哪些關鍵反派與配角群像。
+3. 角色關係網是否邏輯連貫，各角色利益與立場衝突是否清晰。
+4. 檢查角色的心理深度 (Want/Need/Fatal Flaw)、語言人格 (speech_profile) 與成長弧線 (Arc) 是否完整。
+5. 反派必須有創傷原點 (wound_origin) 與合理生存動機，配角需有獨立成長線與場外追求，禁止工具人。
 """
         user_content = f"""{default_user_prompt_section}
 
@@ -243,12 +249,13 @@ def build_director_decision_messages(
 1. 當前階段是「current_stage = {current_stage}」（篇卷骨架規劃師）。
 2. 檢查骨架是否和該卷標題、概要、時間線、序列上下文與適用規則一致。
 3. 檢查各章是否依「Python 預計算本卷伏筆/轉折分配表」自然埋設、回收或承載 turning point；沒有分配任務的章節不可要求硬塞伏筆。
-4. 通過標準：劇情能完整根據該卷伏筆/轉折分配自然鋪陳與回收，章節之間沒有內容跳痛，角色行為與卷設定不衝突，即可放行。
+4. 通過標準：劇情能完整根據該卷伏筆/轉折分配自然鋪陳與回收，章節之間沒有內容跳痛，角色行為與卷設定不衝突，且無嚴重模板重複，即可放行。
 5. 骨架階段只需輕量脈絡，不負責正文細節。若每章已點出承接/推進、時間、地點、活躍角色/勢力與 allocated_tasks 落點，不得因細節量少或場景未展開而退回；正文展開交給 writer。
 6. 合理的非線性時間敘事可以接受，例如穿越、回憶、夢境、異界時間差或其他劇情設定明確支持的時間跳躍；不要只因時間不是線性遞進就退回。
 7. 若需要繼續生成缺失卷，必須輸出 `CONTINUE` + `target: "volume_skeleton"` + 明確 `volume_index`，且 `agent_prompt` 必須要求一次生成該卷完整「輕量」章節骨架；不得輸出 SEGMENT_GENERATE、SEGMENT_COMPLETE 或要求分段生成。
 8. 若骨架使用了角色 Bible 中不存在的命名角色，優先輸出 `INCREMENTAL_APPEND_CHARACTER` 補角色卡；補卡完成後再回到該卷骨架或原章節，不得跳到下一卷。
 9. 勢力/組織設定以世界觀 factions 為準；若骨架中的勢力立場、制度、目標與世界觀不一致，指出具體不一致並要求修正，不要讓下游臨時改寫勢力設定。
+10. **防重複與節奏審查 (Anti-Repetition)**：檢查本卷內是否存在重複公式化之交鋒模板（如反派挑釁/裝傻脫身/流水帳審訊超過 2 次）；檢查是否存在連續 3 章皆為過場而無實質主線推進或伏筆推進；若發現公式化嚴重，退回 volume_skeleton 要求更換衝突原型。
  
 """
         user_content = f"""{default_user_prompt_section}
@@ -272,9 +279,10 @@ def build_director_decision_messages(
 2. 檢查角色台詞、語氣、動作是否100%符合角色聖經。
 3. 確認伏筆是否自然融入，轉折點是否有足夠鋪陳。
 4. ⚠️【伏筆與鋪墊審查】：請檢查當前章節大綱/任務中分配之伏筆與轉折點是否已在本章正文中有合理的前置鋪墊與自然埋入。
-5. 角色聖經的配角欄位缺失不是 writer 階段阻斷理由；除非主角資料缺失已明顯造成正文無法寫作，否則不得改派角色修補，應繼續 writer/editor 流程。
+5. 角色聖經的普通配角欄位缺失一般不是 writer 階段阻斷理由；但若為核心常駐配角（如室友、技術核心、主要反派、體制動搖者），若完全缺失動態心理或知情邊界導致正文角色嚴重扁平化或行為突兀，應觸發 `INCREMENTAL_MODIFY_CHARACTER` 補齊角色深度。
 6. 但若正文或章節大綱使用了角色 Bible 中不存在的命名角色，必須先 `INCREMENTAL_APPEND_CHARACTER` 追加角色卡，再回到本章 writer；不得讓 writer 硬寫無角色卡人物。
 7. 勢力/組織描寫必須以世界觀 factions 與當前卷 factions 為準；若正文把勢力立場、制度、敵友關係寫錯，應退回 writer 修正或回 worldview 修正源資料。
+8. **Show/Tell 比例與去贅**：檢查審訊與例行公務會議是否採用概括敘事在 300 字內乾淨收束；檢查是否有連續 3 個感官形容詞堆疊或嚴重 AI 模板詞，若有應要求 editor 進行針對性濃縮精簡。
 
 """
         user_content = f"""{default_user_prompt_section}
@@ -292,6 +300,7 @@ def build_director_decision_messages(
 {written_chapters_text}
 """
     
+
     elif current_stage == "editor":
         # 編輯階段：該章的完整潤色內容
         system_prompt = f"""{director_contract}
@@ -300,9 +309,10 @@ def build_director_decision_messages(
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（編輯姬）。
-2. 檢查潤色後是否比原版有明顯提升。
+2. 檢查潤色後是否比原版有明顯提升（重點檢查：拖沓公務會議是否已定向濃縮 40%~50%、是否已清除 AI 套路詞與三連感官形容詞堆疊、對話是否更具潛台詞）。
 3. 確認角色人設、大綱走向、伏筆完整性是否保持。
 4. 角色聖經的配角欄位缺失不是 editor 階段阻斷理由；若本章正文與大綱可正常審核，應放行到下一章 writer。
+5. **ARC REVIEW 巡檢原則**：每 5 章或篇卷完成時，綜合檢驗主線推進度、核心角色心理變化與未回收伏筆數量；若主線停滯或伏筆堆積過載，應要求下批章節全力收斂。
  
 """
         extra_guideline = ""

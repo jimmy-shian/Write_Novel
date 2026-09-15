@@ -162,7 +162,7 @@ def _volume_for_chapter(novel_id, chapter_index):
     return 1 if vols else None
 
 
-def _director_decision_needs_recovery(parsed):
+def _director_decision_needs_recovery(parsed, current_stage=None, novel_id=None):
     if not isinstance(parsed, dict):
         return True
     action = str(parsed.get("action") or "").upper().strip()
@@ -179,6 +179,18 @@ def _director_decision_needs_recovery(parsed):
     text = json.dumps(parsed, ensure_ascii=False)
     if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
         return True
+    # 剛性防禦：characters 階段若只有 1 位角色，嚴禁放行進入下一階段（foreshadowing/volumes 等）
+    if current_stage == "characters" and action == "CONTINUE" and target not in {"characters", "character_designer"}:
+        if novel_id:
+            char_data = db.get_latest_characters(novel_id)
+            if char_data and char_data.get("json_data"):
+                try:
+                    c_json = json.loads(char_data["json_data"])
+                    c_list = c_json.get("characters", []) if isinstance(c_json, dict) else (c_json if isinstance(c_json, list) else [])
+                    if len(c_list) < 2:
+                        return True
+                except Exception:
+                    pass
     return False
 
 
@@ -209,7 +221,7 @@ def _save_director_decision_message(novel_id, current_stage, decision_text, full
     )
 
 
-def _get_director_decision_error_message(parsed, raw_text):
+def _get_director_decision_error_message(parsed, raw_text, current_stage=None, novel_id=None):
     if not isinstance(parsed, dict):
         return (
             f"輸出格式非 JSON 物件。請只輸出單一合規 JSON 物件，不要使用 markdown code fence、前後說明或多個 JSON。"
@@ -242,6 +254,13 @@ def _get_director_decision_error_message(parsed, raw_text):
             "當前往 foreshadowing 階段時，必須在 'hint' 或 'agent_prompt' 中指定分批生成標籤：\n"
             "- 若要生成伏筆種子，請在 prompt 中加入 [BATCH: foreshadowing_seeds]\n"
             "- 若要生成關鍵轉折，請在 prompt 中加入 [BATCH: key_turning_points]"
+        )
+    if current_stage == "characters" and action == "CONTINUE" and target not in {"characters", "character_designer"}:
+        return (
+            "【角色階段放行阻斷】當前角色庫僅有 1 位角色（只有主角），缺少主要反派/宿敵與關鍵配角！\n"
+            "小說無法在單一人格的真空環境下展開衝突。請將 action 改為調用或要求角色設計師補充反派與配角：\n"
+            "- 必須至少包含 1 位主角 + 1 位主要對立反派/宿敵 + 關鍵配角\n"
+            "- 請調用 character_designer 或指定 target 為 characters 進行角色擴充，嚴禁直接放行至後續階段！"
         )
     return "JSON 格式不符合總監決策合約，請確認頂層欄位與命名規範。"
 
@@ -534,8 +553,8 @@ def run_director_decision(
     if model_error:
         decision_text = decision_text or json.dumps(parsed, ensure_ascii=False)
 
-    if _director_decision_needs_recovery(parsed):
-        err_msg = _get_director_decision_error_message(parsed, decision_text)
+    if _director_decision_needs_recovery(parsed, current_stage=current_stage, novel_id=novel_id):
+        err_msg = _get_director_decision_error_message(parsed, decision_text, current_stage=current_stage, novel_id=novel_id)
         if loop_count < 30:
             yield "data: " + json.dumps({
                 "type": "status",

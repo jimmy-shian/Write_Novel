@@ -15,6 +15,8 @@ from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
 from backend.generation.routing.router import execute_generation_task
 from backend.services.graphiti.extractor import ChapterFactExtractor
+from backend.common.config import VOLUME_SKELETON_BATCH_SIZE
+from backend.schemas.validation import split_consecutive_batches
 
 
 class NovelPipelineTask:
@@ -318,64 +320,64 @@ class AutonomousPipelineManager:
             else:
                 task.log("世界觀設定已就緒，跳過生成。")
 
-            # 2. 檢查並生成主要角色設定
+            # 2. 檢查並生成主要角色設定（陣營梯隊導向群像：各陣營 5-10 人，全書至少 15+ 位）
             if task.stop_requested: return
-            if not _are_characters_ready(novel_id):
+            if not _are_characters_ready(novel_id, min_count=15):
                 task.current_stage = "characters"
                 task.progress_percent = 15
-                task.status_message = "正在設計核心主角群與配角人設檔案..."
-                task.log("開始生成角色設定...")
+                task.status_message = "正在分段設計各陣營高層核心與中堅骨幹群像檔案（各陣營 5-10 位）..."
+                task.log("開始分段生成各陣營角色設定（梯隊分段累加，全書目標 15-30+ 位）...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="characters",
                     task_type="generate",
-                    instruction="請設計立體豐富的主角、主要配角與反派角色設定",
-                    user_prompt=initial_prompt or "請根據世界觀塑造核心角色",
-                    verify_fn=lambda: _are_characters_ready(novel_id),
+                    instruction="請根據世界觀各陣營架構，分段梯隊設計豐富立體的主角、主要配角、反派與各大陣營代表角色（每陣營 5-10 位）",
+                    user_prompt=initial_prompt or "請根據世界觀塑造各陣營核心角色與勢力群像",
+                    verify_fn=lambda: _are_characters_ready(novel_id, min_count=15),
                 )
-                task.log("✅ 角色設定已完成並持久化！")
-                db.save_chat_message(novel_id, "assistant", "👥 **【總監通報】** 核心主角群與配角人設檔案已設計完成！", message_type="chat")
+                task.log("✅ 各陣營角色設定已分段完成並持久化！")
+                db.save_chat_message(novel_id, "assistant", "👥 **【總監通報】** 各陣營高層領袖與中堅骨幹人設檔案已分段梯隊設計完成！", message_type="chat")
             else:
-                task.log("角色設定已就緒，跳過生成。")
+                task.log("各陣營角色設定已就緒，跳過生成。")
 
-            # 3. 檢查並編織全局伏筆與關鍵轉折
+            # 3. 檢查並編織全局伏筆與關鍵轉折 (目標各 50+ 條)
             if task.stop_requested: return
-            if not _are_seeds_ready(novel_id, min_count=10):
+            if not _are_seeds_ready(novel_id, min_count=50):
                 task.current_stage = "foreshadowing_seeds"
                 task.progress_percent = 22
-                task.status_message = "正在編織全局懸念與長線伏筆網絡..."
-                task.log("開始編織全書伏筆網絡...")
+                task.status_message = "正在分段編織全局懸念與長線伏筆網絡（目標 50+ 條）..."
+                task.log("開始編織全書伏筆網絡（分批累加生成至 50+ 條）...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="foreshadowing",
                     task_type="generate",
-                    instruction="[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆",
+                    instruction="[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆（目標累加至 50+ 條）",
                     user_prompt="設計核心主線伏筆",
-                    verify_fn=lambda: _are_seeds_ready(novel_id, min_count=5),
+                    verify_fn=lambda: _are_seeds_ready(novel_id, min_count=50),
                 )
-                task.log("✅ 伏筆網絡已編織完成！")
-                db.save_chat_message(novel_id, "assistant", "🕸️ **【總監通報】** 全局懸念與長線伏筆網絡已編織完成！", message_type="chat")
+                task.log("✅ 伏筆網絡已編織完成（50+ 條）！")
+                db.save_chat_message(novel_id, "assistant", "🕸️ **【總監通報】** 全局懸念與長線伏筆網絡已編織完成（50+ 條）！", message_type="chat")
             else:
-                task.log("全書伏筆網絡已就緒，跳過生成。")
+                task.log("全書伏筆網絡已就緒（>= 50 條），跳過生成。")
 
             if task.stop_requested: return
-            if not _are_turning_points_ready(novel_id, min_count=10):
+            if not _are_turning_points_ready(novel_id, min_count=50):
                 task.current_stage = "foreshadowing_turns"
                 task.progress_percent = 28
-                task.status_message = "正在規劃全書核心關鍵轉折點與高潮逆轉事件..."
-                task.log("開始規劃全書核心關鍵轉折點...")
+                task.status_message = "正在規劃核心關鍵轉折點（與已確立之伏筆網絡聯動，目標 50+ 條）..."
+                task.log("開始規劃全書核心關鍵轉折點（與 50+ 條伏筆網絡深度聯動）...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="foreshadowing",
                     task_type="generate",
-                    instruction="[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件",
+                    instruction="[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件，呼應並引爆伏筆網絡（目標累加至 50+ 條）",
                     user_prompt="設計核心關鍵轉折點",
-                    verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=5),
+                    verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=50),
                 )
-                task.log("✅ 關鍵轉折點已規劃完成！")
-                db.save_chat_message(novel_id, "assistant", "🎭 **【總監通報】** 全書核心關鍵轉折點已規劃就緒！", message_type="chat")
+                task.log("✅ 關鍵轉折點已規劃完成（50+ 條）！")
+                db.save_chat_message(novel_id, "assistant", "🎭 **【總監通報】** 全書核心關鍵轉折點已分段組合規劃就緒（50+ 條，與伏筆閉環聯動）！", message_type="pipeline")
             else:
-                task.log("全書關鍵轉折點已就緒，跳過生成。")
+                task.log("全書關鍵轉折點已就緒（>= 50 條），跳過生成。")
 
             # 4. 檢查並規劃分卷結構
             if task.stop_requested: return
@@ -410,20 +412,37 @@ class AutonomousPipelineManager:
                 vol_title = vol.get("title", f"第 {vol_idx} 卷")
                 missing_chapters = db.volume_missing_chapter_indexes(vols, vol_idx)
                 if missing_chapters:
+                    batches = split_consecutive_batches(missing_chapters, batch_size=VOLUME_SKELETON_BATCH_SIZE)
+                    total_batches = len(batches)
                     task.current_stage = f"volume_skeleton_vol{vol_idx}"
-                    task.progress_percent = 40 + int((v_idx / len(vols)) * 10)
-                    task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】的逐章詳細情節骨架 (缺失 {len(missing_chapters)} 章)..."
-                    task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱 (目標缺失章節: {missing_chapters})...")
-                    self._execute_stage_with_retry(
-                        task=task,
-                        stage="volume_skeleton",
-                        task_type="generate",
-                        target={"volume_index": vol_idx},
-                        instruction=f"請詳細規劃第 {vol_idx} 卷（{vol_title}）各章的情節要點、視角人物、場景與伏筆回收點",
-                        user_prompt=f"生成第 {vol_idx} 卷詳細細綱",
-                        verify_fn=lambda v=vol_idx: _has_volume_skeleton(novel_id, v),
-                    )
-                    task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】章節細綱骨架規劃完成！")
+                    task.log(f"開始規劃第 {vol_idx} 卷【{vol_title}】章節骨架細綱（缺失 {len(missing_chapters)} 章，後端自主拆分為 {total_batches} 批次生成）...")
+
+                    for b_idx, batch_chs in enumerate(batches, start=1):
+                        if task.stop_requested: return
+                        b_start, b_end = min(batch_chs), max(batch_chs)
+                        b_count = len(batch_chs)
+                        batch_progress = 40 + int(((v_idx - 1 + (b_idx / total_batches)) / len(vols)) * 10)
+                        task.progress_percent = min(50, batch_progress)
+                        task.status_message = f"正在生成第 {vol_idx}/{len(vols)} 卷【{vol_title}】第 {b_start}-{b_end} 章骨架細綱 (批次 {b_idx}/{total_batches})..."
+                        task.log(f"開始生成第 {vol_idx} 卷【{vol_title}】章節骨架細綱 (批次 {b_idx}/{total_batches}: 第 {b_start}-{b_end} 章，共 {b_count} 章)...")
+
+                        self._execute_stage_with_retry(
+                            task=task,
+                            stage="volume_skeleton",
+                            task_type="generate",
+                            target={
+                                "volume_index": vol_idx,
+                                "batch_indexes": batch_chs,
+                                "start_chapter": b_start,
+                                "end_chapter": b_end,
+                            },
+                            instruction=f"請規劃第 {vol_idx} 卷（{vol_title}）第 {b_start} 至第 {b_end} 章的情節骨架細綱（批次 {b_idx}/{total_batches}），緊密承接前文既有章節",
+                            user_prompt=f"生成第 {vol_idx} 卷第 {b_start}-{b_end} 章詳細骨架",
+                            verify_fn=lambda v=vol_idx, chs=batch_chs: _are_batch_chapters_ready(novel_id, v, chs),
+                        )
+                        task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】第 {b_start}-{b_end} 章骨架細綱已完成！")
+
+                    task.log(f"🎉 第 {vol_idx} 卷【{vol_title}】全卷章節細綱骨架規劃完成！")
                     vols = db.get_volumes(novel_id)
             
             db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
@@ -645,7 +664,7 @@ def _is_worldview_ready(novel_id: str) -> bool:
         return False
 
 
-def _are_characters_ready(novel_id: str) -> bool:
+def _are_characters_ready(novel_id: str, min_count: int = 2) -> bool:
     char_data = db.get_latest_characters(novel_id)
     if not char_data:
         return False
@@ -677,7 +696,7 @@ def _are_characters_ready(novel_id: str) -> bool:
                 and (c.get("name") or "").strip()
                 and not any(pn in (c.get("name") or "").lower() for pn in placeholder_names)
             ]
-            if len(valid_chars) > 0:
+            if len(valid_chars) >= min_count:
                 return True
     return False
 
@@ -706,6 +725,25 @@ def _has_volume_skeleton(novel_id: str, volume_index: int) -> bool:
         return False
     missing = db.volume_missing_chapter_indexes(vols, volume_index)
     return len(missing) == 0
+
+
+def _are_batch_chapters_ready(novel_id: str, volume_index: int, batch_indexes: List[int]) -> bool:
+    vols = db.get_volumes(novel_id)
+    if not vols:
+        return False
+    target_vol = next((v for v in vols if int(v.get("volume_index") or 0) == int(volume_index)), None)
+    if not target_vol:
+        return False
+    chapters = target_vol.get("chapters_outline") or []
+    if isinstance(chapters, str):
+        try:
+            chapters = json.loads(chapters)
+        except Exception:
+            chapters = []
+    if not isinstance(chapters, list):
+        return False
+    existing_indexes = {int(c.get("chapter_index", 0)) for c in chapters if isinstance(c, dict) and c.get("chapter_index")}
+    return set(batch_indexes).issubset(existing_indexes)
 
 
 

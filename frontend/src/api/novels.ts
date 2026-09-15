@@ -42,6 +42,21 @@ export async function getNovel(novelId: string): Promise<NovelDetailResponse> {
   return request<NovelDetailResponse>(`/api/novels/${novelId}`);
 }
 
+export async function updateNovel(
+  novelId: string,
+  data: {
+    title?: string;
+    genre?: string;
+    style?: string;
+    pipeline_prompt?: string;
+  }
+): Promise<{ status: string; novel: Novel }> {
+  return request(`/api/novels/${novelId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deleteNovel(novelId: string): Promise<{ status: string }> {
   return request(`/api/novels/${novelId}`, {
     method: 'DELETE',

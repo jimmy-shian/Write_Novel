@@ -54,6 +54,7 @@ export const App: React.FC = () => {
     handleCreateNovel,
     handleDeleteNovel,
     handleResetNovelContent,
+    handleUpdateNovel,
     refreshActiveNovel,
     refreshChatMemory,
     handleDeleteChatMessage,
@@ -734,6 +735,7 @@ export const App: React.FC = () => {
               onTabChange={setWorldviewTab}
               onRefresh={refreshActiveNovel}
               onLog={addLog}
+              onUpdateNovel={handleUpdateNovel}
               onDeleteTurningPoint={deleteTurningPoint}
               onDeleteForeshadowingSeed={deleteForeshadowingSeed}
               onDeleteCharacter={deleteCharacter}

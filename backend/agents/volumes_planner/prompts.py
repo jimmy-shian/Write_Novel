@@ -88,6 +88,10 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 
 請為本作品生成符合結構的篇卷 JSON 清單。
 各卷之核心矛盾、主線推進與高潮事件必須緊扣作品核心基石（如主角的能力與原案主線），嚴禁偏離設定。
+硬性要求：
+1. 篇卷衝突原型輪換 (Conflict Archetype Rotation)：每卷需明確指定其主導衝突原型（如暗流隱忍與底層求生、規則漏洞與智鬥周旋、守護同伴與被迫亮劍、體制破局與主動反撲、信仰崩塌與暗面聯盟），相鄰兩卷嚴禁同型。
+2. 反套路宣告 (anti_template)：每卷概要必須明確宣告本卷禁用之特定老套路手法（例如：本卷嚴禁林夜使用裝傻甩鍋脫身、本卷治安廳過場審訊不得超過 1 次）。
+3. 卷末鉤子多樣性輪替（真相揭露、盟友危機、外敵降臨、主動宣戰）。
 """
     else:  # patch/add specific idx
         v_idx = target_vol_idx or 1

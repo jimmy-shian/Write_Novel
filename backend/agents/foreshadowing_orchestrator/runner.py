@@ -131,12 +131,12 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
     from backend.models.parsers import extract_json_block
 
     # =========================================================================
-    # 模式 A: 伏筆種子分批累加生成 (Target: 50 條，每批 15 條)
+    # 模式 A: 伏筆種子分批累加生成 (Target: 50+ 條，每批 15 條)
     # =========================================================================
     if target_field == "foreshadowing_seeds":
-        target_count = 50
+        target_count = max(MIN_FORESHADOWING_SEEDS, 50)
         batch_size = 15
-        max_batches = 4
+        max_batches = 6
 
         current_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
         batch_idx = 0
@@ -208,14 +208,15 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         return
 
     # =========================================================================
-    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50 條，每批 15 條)
+    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50+ 條，每批 15 條，聯動伏筆種子)
     # =========================================================================
     elif target_field == "key_turning_points":
-        target_count = 50
+        target_count = max(MIN_KEY_TURNING_POINTS, 50)
         batch_size = 15
-        max_batches = 4
+        max_batches = 6
 
         current_turns = [t for t in (wb_dict.get("key_turning_points") or []) if isinstance(t, dict)]
+        existing_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
         batch_idx = 0
 
         while len(current_turns) < target_count and batch_idx < max_batches:
@@ -230,7 +231,8 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             messages = build_foreshadowing_messages(
                 worldview_text, characters_json, user_prompt,
                 target_field="key_turning_points", novel_id=novel_id,
-                batch_size=needed, existing_items=current_turns, start_id=start_id
+                batch_size=needed, existing_items=current_turns, start_id=start_id,
+                established_seeds=existing_seeds,
             )
 
             llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
@@ -291,46 +293,30 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         return
 
     # =========================================================================
-    # 模式 C: 全量模式（target_field=None）：依序執行 seeds 與 turns 批次
+    # 模式 C: 全量模式（target_field=None）：依序執行 seeds 與 turns 兩大批次階段 (各 50+ 條)
     # =========================================================================
-    messages = build_foreshadowing_messages(worldview_text, characters_json, user_prompt, target_field=None, novel_id=novel_id, batch_size=15)
-    llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
-    acc = StreamAccumulator(llm_stream)
-    for chunk in acc:
+    yield "data: " + json.dumps({
+        "type": "status",
+        "message": "開始全書伏筆與轉折分段組合生成：第一階段【編織伏筆種子網絡（目標 50+ 條）】..."
+    }, ensure_ascii=False) + "\n\n"
+
+    for chunk in run_foreshadowing_orchestrator(
+        novel_id, user_prompt=user_prompt, target_field="foreshadowing_seeds", stream=stream, force_json=force_json
+    ):
+        if '"type": "done"' in chunk:
+            continue
         yield chunk
-    full_text = acc.content
-    if full_text.strip():
-        if _handle_director_context_request(novel_id, "伏筆與轉折編織師", full_text):
-            yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-        parsed_foreshadowing = extract_json_block(full_text)
-        normalized_foreshadowing = _normalize_foreshadowing_output(parsed_foreshadowing)
-        seeds = normalized_foreshadowing.get("foreshadowing_seeds", [])
-        turns = normalized_foreshadowing.get("key_turning_points", [])
 
-        if not seeds and not turns:
-            error_message = "伏筆與轉折生成失敗：未取得任何有效的 seeds 或 turning_points。"
-            db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
-            yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
+    yield "data: " + json.dumps({
+        "type": "status",
+        "message": "伏筆種子網絡建立就緒！進入第二階段【規劃核心關鍵轉折點（與伏筆網絡聯動，目標 50+ 條）】..."
+    }, ensure_ascii=False) + "\n\n"
 
-        if seeds:
-            wb_dict["foreshadowing_seeds"] = seeds
-        if turns:
-            wb_dict["key_turning_points"] = turns
-
-        updated_content = json.dumps(wb_dict, ensure_ascii=False, indent=2)
-        db.save_worldbuilding(novel_id, updated_content, validate=False)
-        db.save_last_agent_run(novel_id, "foreshadowing", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
-        try:
-            if db.get_volumes(novel_id):
-                db.precompute_global_foreshadowing(novel_id)
-        except Exception as e:
-            print(f"[WARN] Failed to precompute global foreshadowing: {e}")
-        db.save_chat_message(novel_id, "assistant", "全書伏筆與關鍵轉折藍圖已成功寫入世界觀設定中。", message_type="pipeline")
-        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+    for chunk in run_foreshadowing_orchestrator(
+        novel_id, user_prompt=user_prompt, target_field="key_turning_points", stream=stream, force_json=force_json
+    ):
+        yield chunk
+    return
 
 
 # =============================================================================

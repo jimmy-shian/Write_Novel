@@ -60,6 +60,8 @@ FORESHADOWING_OUTPUT_SCHEMA = {
             "setup_hint": "適合埋設時機或敘事載體（文字）",
             "subtlety": "high | medium | low",
             "expected_payoff_window": "預期回收篇卷或章節範圍（文字）",
+            "payoff_deadline_chapter": 0,
+            "integration_group": "懸念合流歸納分組標籤（如：外域氏族幕後資助拜星教）",
             "payoff_hint": "未來回收方式與反轉效果（文字）",
             "related_characters": ["角色名"],
             "thematic_link": "與主題或核心衝突的連結（文字）"
@@ -206,6 +208,11 @@ CHARACTER_SCHEMA = {
     "fatal_flaw": "",
     "want_need_conflict": "", # want 與 need 的內心衝突與靈魂拉扯
     "secret": "", # 角色的不可告人秘密 (用來做為伏筆)
+    "wound_origin": "", # 創傷原點（反派或核心轉變角色必填）
+    "false_belief": "", # 核心認知偏見或執念
+    "belief_collapse_3beats": [], # 三階動態信念崩塌節奏（認知初裂 -> 體制反噬 -> 致命真相）
+    "independent_arc": {}, # 配角三階段獨立成長線（phase_1, phase_2, phase_3）
+    "off_screen_goal": "", # 配角場外個人追求（如開店、考取資格、保護家族）
     "motivation": "",
     "arc": "",
     "speech_style": "", # 兼容舊版：說話風格概述
@@ -250,6 +257,11 @@ CHARACTER_BASIC_FIELDS = [
     "fatal_flaw",
     "want_need_conflict",
     "secret",
+    "wound_origin",
+    "false_belief",
+    "belief_collapse_3beats",
+    "independent_arc",
+    "off_screen_goal",
     "speech_style",
     "speech_profile",
     "initial_knowledge_scope",
@@ -501,6 +513,14 @@ EDITOR_REVIEW_REPORT_SCHEMA = {
     "repetition_flags": [
         # {"snippet": "AI模板詞/重複句式", "issue": "過度使用顫抖/凝固/命運重量等套路詞"}
     ],
+    "template_repetition_flag": {
+        "is_repetitive": False,
+        "issue": ""
+    },
+    "info_density_score": 8.5,
+    "scene_compression_candidates": [
+        # {"section": "片段描述", "issue": "拖沓或資訊稀釋", "suggested_compression_ratio": "40%-50%"}
+    ],
     "scene_goal_completed": True,
     "foreshadow_tasks_completed": [],
     "style_consistency_score": 8.5,
@@ -521,6 +541,9 @@ SKELETON_APPROVAL_CRITERIA = {
         "chapter_structure": {
             "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
             "description": "每章需具備輕量骨架結構，可包含 scene_goal, scene_conflict 與 scene_beats（或 events），供 writer 承接"
+        },
+        "anti_repetition_and_diversity": {
+            "description": "同卷內同類衝突/交鋒模式出現不得超過 2 次；嚴禁連續 3 章皆為過場；重大轉折章前 2 章需有動搖/懷疑前置拍點"
         },
         "time_setting": {
             "description": "每章需有清晰的時間設定與前章的時間跨度"

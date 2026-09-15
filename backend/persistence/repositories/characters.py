@@ -182,6 +182,17 @@ def clean_and_deduplicate_characters(characters_list):
                     existing["evolution"] = f"{e_evo}。{t_evo}" if e_evo else t_evo
                     
         merged["relationships"] = list(rel_by_target.values())
+
+        # Copy over all additional keys from c1 and c2 so rich schema attributes (faction, wound_origin, false_belief, etc.) are never lost
+        for k in set(list(c1.keys()) + list(c2.keys())):
+            if k not in merged:
+                v1 = c1.get(k)
+                v2 = c2.get(k)
+                if v1 is not None and v1 != "" and v1 != [] and v1 != {}:
+                    merged[k] = v1
+                elif v2 is not None and v2 != "" and v2 != [] and v2 != {}:
+                    merged[k] = v2
+
         return merged
 
     # 2. Group by core name and merge

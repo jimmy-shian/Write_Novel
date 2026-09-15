@@ -85,34 +85,43 @@ _extract_chapters_in_range = extract_chapters_in_range
 
 from backend.agents.shared.context_requests import _handle_director_context_request
 
-def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate", target_char_index=None, stream=False, force_json=False):
+def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate", target_char_index=None, stream=False, force_json=False, batch_target=None):
     """
     Character Stage:
-    - Mode 'generate': Generate characters based on worldview summary.
+    - Mode 'generate': Faction-driven progressive tiered generation (each faction 5-10 characters).
     - Mode 'expand': Character expansion using general prompt + director's critique hint.
     - Mode 'modify': Character modification requires hint + original character's full JSON.
     """
     wb = db.get_latest_worldbuilding(novel_id)
-    # 只傳入世界觀摘要，避免過長導致 API 失敗
     worldview_text = select_worldview_context(wb["content"], current_stage="characters") if wb else "尚無世界觀設定"
     
     existing_char_data = db.get_latest_characters(novel_id)
     existing_chars_json = existing_char_data["json_data"] if existing_char_data else '{"characters": []}'
     
-    # 💡 安全防護：如果角色聖經已存在，只做增量/修補，不允許全量重跑覆蓋
-    if mode == "generate" and existing_char_data:
+    # 讀取現有有效角色清單
+    existing_chars = []
+    if existing_char_data:
         try:
-            parsed_chars = json.loads(existing_chars_json)
-            if parsed_chars.get("characters") and len(parsed_chars["characters"]) > 0:
-                print(f"[CHARACTER DESIGNER] Characters already exist. Falling back to expand mode to prevent wipe.")
-                mode = "expand"
-                if not hint:
-                    hint = "請在現有角色基礎上進行補充或優化設定，不要刪除或重置既有角色。"
+            p = existing_char_data.get("parsed_data") or json.loads(existing_chars_json)
+            raw_c = p.get("characters", []) if isinstance(p, dict) else (p if isinstance(p, list) else [])
+            placeholder_names = {"新登場的次要角色", "待補充", "暫無", "placeholder", "新角色", "路人", "客棧老闆", "符合人設說話風格", "todo", "新登場次要角色"}
+            existing_chars = [
+                c for c in raw_c
+                if isinstance(c, dict) and c.get("name") and not any(pn in str(c.get("name")).lower() for pn in placeholder_names)
+            ]
         except Exception as e:
             print(f"[WARN] Failed to parse existing characters: {e}")
+            existing_chars = []
 
-    # 💡 自動增量掃描：偵測大綱中存在但角色 Bible 中缺失的命名角色，進行一對一補卡循環
-    if mode in ("expand", "generate") and existing_char_data:
+    # 💡 安全防護：若角色聖經已擁有超過 20 位成熟角色，避免全量重跑覆蓋，切換為 expand
+    if mode == "generate" and len(existing_chars) >= 20 and not batch_target:
+        print(f"[CHARACTER DESIGNER] Cast already massive ({len(existing_chars)} chars). Falling back to expand mode.")
+        mode = "expand"
+        if not hint:
+            hint = "請在現有豐富角色基礎上進行微調或追加特定角色，不要覆蓋既有角色。"
+
+    # 💡 自動增量掃描：在 expand 模式下，偵測大綱中存在但角色 Bible 中缺失的命名角色，進行一對一補卡循環
+    if mode == "expand" and existing_char_data:
         try:
             from backend.agents.chapter_writer.runner import _character_alias_set, _active_character_names_from_outline, _is_generic_active_character_name
             from backend.models.parsers import extract_json_block
@@ -181,9 +190,9 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
                                 new_chars_list = []
 
                             latest_parsed = json.loads(latest_chars_json)
-                            existing_chars = latest_parsed.get("characters", []) if isinstance(latest_parsed, dict) else (latest_parsed if isinstance(latest_parsed, list) else [])
+                            existing_chars_cur = latest_parsed.get("characters", []) if isinstance(latest_parsed, dict) else (latest_parsed if isinstance(latest_parsed, list) else [])
 
-                            merged_chars = existing_chars + new_chars_list
+                            merged_chars = existing_chars_cur + new_chars_list
                             merged_json = {"characters": merged_chars}
                             full_merged_text = json.dumps(merged_json, ensure_ascii=False, indent=2)
 
@@ -201,6 +210,178 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
             print(f"[WARN] Auto-expand missing characters scan/loop failed: {e}")
             traceback.print_exc()
 
+    # =========================================================================
+    # 模式 A: 陣營導向分段梯隊生成 (每個陣營至少 5-10 位角色)
+    # =========================================================================
+    if mode == "generate":
+        wb_dict = {}
+        if wb and wb.get("content"):
+            try:
+                from backend.models.parsers import extract_json_block
+                wb_dict = extract_json_block(wb["content"]) or {}
+            except Exception:
+                wb_dict = {}
+
+        raw_factions = wb_dict.get("factions", [])
+        factions_list = []
+        if isinstance(raw_factions, list) and len(raw_factions) > 0:
+            for f in raw_factions:
+                if isinstance(f, dict) and f.get("name"):
+                    factions_list.append(f)
+
+        # 若世界觀無足夠陣營設定，補齊四大標準衝突陣營
+        if len(factions_list) < 3:
+            existing_f_names = {f.get("name", "").strip() for f in factions_list}
+            fallback_candidates = [
+                {
+                    "name": "主角同盟與市井底層",
+                    "position": "被體制剝削的邊緣底層、反抗專利霸權與邪教威脅",
+                    "resources": "禁忌原始禁咒、市井隱秘網絡、非法工坊改造技術",
+                    "relationship_to_protagonist": "主角的立足起點與守護誓約"
+                },
+                {
+                    "name": "奧術專利局與執法審判司",
+                    "position": "壟斷高階法術產權、代表統治秩序與極致階級固化",
+                    "resources": "帝國法權、制式高階法術專利、重裝執法審判軍團",
+                    "relationship_to_protagonist": "正面體制宿敵與制度壓迫者"
+                },
+                {
+                    "name": "拜星教深淵教團",
+                    "position": "信奉外神降世、以生靈獻祭換取扭曲禁忌威能",
+                    "resources": "深淵侵蝕血印、狂信徒死士、高層潛伏政客",
+                    "relationship_to_protagonist": "暗線死敵與毀滅世界危機源頭"
+                },
+                {
+                    "name": "深井高階學院與灰區黑市商會",
+                    "position": "表面學術至高殿堂，暗中利益交換、灰色專利走私",
+                    "resources": "海量禁書孤本、稀有附魔素材、中立情報拍賣行",
+                    "relationship_to_protagonist": "重要資源與情報周旋地"
+                }
+            ]
+            for fc in fallback_candidates:
+                if fc["name"] not in existing_f_names:
+                    factions_list.append(fc)
+                    existing_f_names.add(fc["name"])
+
+        current_chars = list(existing_chars)
+        db.save_chat_message(
+            novel_id, "user",
+            f"啟動陣營導向分段角色生成（目標：共 {len(factions_list)} 大陣營，各陣營 5-10 位角色）。要求: {user_prompt or '依世界觀分段生成'}",
+            message_type="pipeline"
+        )
+
+        from backend.models.parsers import extract_json_block
+
+        for f_idx, faction in enumerate(factions_list, start=1):
+            f_name = faction.get("name", f"陣營 {f_idx}")
+
+            # 檢查目前該陣營已有的有效角色數量
+            f_existing = [
+                c for c in current_chars
+                if f_name.lower() in str(c.get("faction") or "").lower() or str(c.get("faction") or "").lower() in f_name.lower()
+            ]
+
+            tiers_to_run = []
+            if len(f_existing) < 3:
+                tiers_to_run = [1, 2]
+            elif len(f_existing) < 6:
+                tiers_to_run = [2]
+
+            if not tiers_to_run:
+                yield "data: " + json.dumps({
+                    "type": "status",
+                    "message": f"陣營【{f_name}】已有 {len(f_existing)} 位角色（達標），跳過生成。"
+                }, ensure_ascii=False) + "\n\n"
+                continue
+
+            for tier in tiers_to_run:
+                tier_label = "第一梯隊（高層領袖與核心宿敵/導師）" if tier == 1 else "第二梯隊（中堅骨幹、內部異見者與基層代表）"
+                yield "data: " + json.dumps({
+                    "type": "status",
+                    "message": f"正在為陣營【{f_name}】生成{tier_label}（目前全書已累積 {len(current_chars)} 位角色）..."
+                }, ensure_ascii=False) + "\n\n"
+
+                latest_chars_json = json.dumps({"characters": current_chars}, ensure_ascii=False, indent=2)
+                messages = build_character_designer_messages(
+                    worldview_text,
+                    latest_chars_json,
+                    user_prompt,
+                    hint,
+                    mode="generate",
+                    target_char_index=None,
+                    novel_id=novel_id,
+                    faction_info=faction,
+                    tier=tier,
+                    target_batch_count=4,
+                )
+
+                llm_stream = call_llm_stream("character", messages, stream=stream, force_json=force_json)
+                acc = StreamAccumulator(llm_stream)
+                for chunk in acc:
+                    yield chunk
+
+                if acc.error:
+                    error_message = f"陣營【{f_name}】{tier_label}生成失敗：{acc.error}"
+                    db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                    yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                    return
+
+                batch_text = acc.content
+                if not batch_text.strip():
+                    continue
+
+                if _handle_director_context_request(novel_id, f"角色設計師({f_name}-{tier_label})", batch_text):
+                    yield "data: " + json.dumps({"type": "error", "message": f"角色設計師需要總監補充上下文，本次不保存。"}, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                    return
+
+                new_parsed = extract_json_block(batch_text)
+                new_chars = []
+                if isinstance(new_parsed, dict) and "characters" in new_parsed:
+                    new_chars = new_parsed["characters"]
+                elif isinstance(new_parsed, list):
+                    new_chars = new_parsed
+                elif isinstance(new_parsed, dict):
+                    new_chars = [new_parsed]
+
+                if not isinstance(new_chars, list):
+                    new_chars = []
+
+                # 為本批角色補充 faction（若 LLM 漏填）
+                for c in new_chars:
+                    if isinstance(c, dict) and not c.get("faction"):
+                        c["faction"] = f_name
+
+                # 合併去重並寫入 DB
+                combined = current_chars + new_chars
+                cleaned = db.clean_and_deduplicate_characters(combined)
+                current_chars = cleaned
+
+                full_saved_text = json.dumps({"characters": current_chars}, ensure_ascii=False, indent=2)
+                db.save_characters(novel_id, full_saved_text)
+                db.save_last_agent_run(novel_id, "characters", json.dumps(messages, ensure_ascii=False, indent=2), batch_text)
+
+                yield "data: " + json.dumps({
+                    "type": "status",
+                    "message": f"陣營【{f_name}】{tier_label}完成！新增 {len(new_chars)} 位，全書角色庫已累積 {len(current_chars)} 位。"
+                }, ensure_ascii=False) + "\n\n"
+
+        db.save_chat_message(
+            novel_id, "assistant",
+            f"全書各陣營角色聖經分段梯隊生成完畢！共建立了 {len(current_chars)} 位深度角色，各大陣營均具備 5-10 位完整群像架構。",
+            message_type="pipeline"
+        )
+        yield "data: " + json.dumps({
+            "type": "status",
+            "message": f"全書陣營角色群像生成完成，共確立 {len(current_chars)} 位角色。"
+        }, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+
+    # =========================================================================
+    # 模式 B / C: expand 與 modify 模式（單次增量或局部修改）
+    # =========================================================================
     messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=novel_id)
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")

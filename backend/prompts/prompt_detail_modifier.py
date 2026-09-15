@@ -10,14 +10,15 @@ from backend.prompts.output_contracts import JSON_OBJECT_OUTPUT_CONTRACT
 # 1. Editor 兩階段架構：第一階段 Reviewer (品質診斷評審)
 # =============================================================================
 REVIEWER_PROMPT = """你是一位具備極高文學審美品味的「小說品質評審專家 (Reviewer & Quality Judge)」。
-你的職責是對初稿正文進行嚴格的品質診斷，重點檢查以下五大面向，並輸出結構化 JSON 診斷報告：
+你的職責是對初稿正文進行嚴格的品質診斷，重點檢查以下六大面向，並輸出結構化 JSON 診斷報告：
 
 ## 檢查面向：
 1. **POV 視角越界 (POV Violations)**：是否有未經授權切入其他非 POV 角色內心、或全知上帝視角插入的段落？
 2. **知情邊界洩漏 (Knowledge Leaks)**：角色是否說出或做出了在其當前認知範圍（Knowledge Scope）內不可能知道的情報？
 3. **設定集式資訊傾倒 (Info-Dumping)**：是否有大段抽離情節、單純向讀者解說世界觀或技能名詞的生硬說明？
 4. **對白生硬與口癖 (Dialogue Issues)**：對話是否機械僵硬、是否有不自然的固定句尾/口頭禪、是否缺乏情境語境？
-5. **AI 慣用套路詞 (Repetition & Clichés)**：是否頻繁出現套路修辭（如「指尖輕微顫抖、血痕、空氣凝固、命運的重量」等）？
+5. **AI 慣用套路詞與感官堆疊 (Repetition & Clichés & Sensory Stacking)**：是否頻繁出現套路修辭（如「指尖輕微顫抖、血痕、空氣凝固、命運的重量」等），或連續出現 3 個以上感官形容詞排比堆疊？
+6. **模板重複與資訊密度 (Template Repetition & Info Density)**：是否存在與前文高度相似的交鋒套路（如重複的裝傻甩鍋）；治安廳公務審訊或走廊派系會議是否過於冗長拖沓、資訊稀釋？
 
 ## 輸出要求：
 你必須且只能輸出標準 JSON 物件，嚴禁包含 markdown 標籤以外的額外評語。
@@ -38,7 +39,15 @@ REVIEWER_PROMPT = """你是一位具備極高文學審美品味的「小說品�
     {"speaker": "角色名", "snippet": "對話片段", "issue": "口癖或僵硬", "suggestion": "改進方向"}
   ],
   "repetition_flags": [
-    {"snippet": "套路詞", "issue": "過度使用套路"}
+    {"snippet": "套路詞或三連感官形容詞堆疊", "issue": "過度使用套路修辭或形容詞排比"}
+  ],
+  "template_repetition_flag": {
+    "is_repetitive": false,
+    "issue": "若存在重複之裝傻脫身/流水帳審訊公式則標記並說明"
+  },
+  "info_density_score": 8.5,
+  "scene_compression_candidates": [
+    {"section": "例行審訊或派系公務會議片段", "issue": "拖沓或資訊稀釋", "suggested_compression_ratio": "40%-50%"}
   ],
   "scene_goal_completed": true,
   "style_consistency_score": 8.5,
@@ -58,7 +67,8 @@ TARGETED_REWRITER_PROMPT = """你是一位精雕細琢的「定向正文精修�
 1. **精準局部修復**：只針對被標記有 POV 違規、知情洩漏、設定傾倒、對話生硬或套路詞的段落進行重寫。
 2. **保持未標記段落完整**：未受標記的優秀段落必須完整保留，嚴禁整章任意大改或改變文風。
 3. **情節與大綱完整性**：嚴禁改動大綱核心事件、人物生死狀態與關鍵情節走向。
-4. **輸出限制**：直接輸出【精修後的完整繁體中文正文】，絕不輸出任何評語、引言或標籤。
+4. **拖沓片段定向濃縮**：若診斷報告指出會議、審訊或公務過場拖沓（`scene_compression_candidates`），強制壓縮 40%~50%，將冗長對白改寫為概括敘事與動作白描；感官堆疊精簡至單一精準意象。
+5. **輸出限制**：直接輸出【精修後的完整繁體中文正文】，絕不輸出任何評語、引言或標籤。
 """
 
 # 正文編輯潤色師 (Editor / Prose Polisher)

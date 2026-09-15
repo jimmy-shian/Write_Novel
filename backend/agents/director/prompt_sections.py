@@ -126,9 +126,12 @@ If characters are missing, route to `characters` before continuing foreshadowing
 """,
     "characters": """
 ## Stage Review: characters
-Check character list, protagonist completeness, relationship logic, and fit with worldview.
-If characters are missing or unusable, route to `characters`.
-If complete, route to `foreshadowing` if foreshadowing is incomplete; otherwise route to `volumes`.
+Check character list, character count, protagonist completeness, relationship logic, and fit with worldview.
+CRITICAL HARD CONSTRAINT:
+- A novel must have a dynamic cast (minimum 2-3 characters: Protagonist, Antagonist/Rival, and key supporting allies).
+- ABSOLUTELY FORBIDDEN to approve `CONTINUE` to foreshadowing/volumes if there is only 1 character (single protagonist)!
+- If character count < 2 (or only 1 character exists, or antagonist is missing), you MUST reject and route to `character_designer` with `CONTINUE` target `character_designer` (or `INCREMENTAL_APPEND_CHARACTER`) requiring expansion of antagonist and supporting cast!
+- Only when cast has at least Protagonist + Antagonist/Allies and meets criteria, route to `foreshadowing` (if seeds/turns incomplete) or `volumes`.
 """,
     "volumes": """
 ## Stage Review: volumes

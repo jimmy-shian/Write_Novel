@@ -100,12 +100,24 @@ def run_volume_skeleton_task(task: GenerationTaskRequest, context=None):
             force_json=True,
         )
 
-    # --- 一般生成模式：一次只處理一卷，卷號由總監指定 ---
+    # --- 一般生成模式：一次只處理一卷，卷號由總監或 pipeline 指定 ---
     volume_index = _resolve_single_volume_index(task)
+    target_chapter_indexes = None
+    if task.target:
+        if getattr(task.target, "batch_indexes", None):
+            target_chapter_indexes = task.target.batch_indexes
+        elif getattr(task.target, "chapter_range", None):
+            cr = task.target.chapter_range
+            if isinstance(cr, (list, tuple)) and len(cr) == 2:
+                target_chapter_indexes = list(range(int(cr[0]), int(cr[1]) + 1))
+        elif getattr(task.target, "start_chapter", None) is not None and getattr(task.target, "end_chapter", None) is not None:
+            target_chapter_indexes = list(range(int(task.target.start_chapter), int(task.target.end_chapter) + 1))
+
     return run_volume_skeleton_planner(
         task.novel_id,
         volume_index=volume_index,
         user_prompt=prompt or None,
         stream=task.options.stream,
         force_json=True,
+        target_chapter_indexes=target_chapter_indexes,
     )

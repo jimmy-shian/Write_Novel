@@ -243,13 +243,10 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
 
 
 
-def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False):
+def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False, target_chapter_indexes=None):
     """
-    Volume Skeleton Stage — full-volume generation.
-
-    This definition intentionally overrides the historical batch implementation
-    above. A normal volume_skeleton generate/regenerate call now asks the LLM for
-    one complete volume in a single request; incremental patch remains separate.
+    Volume Skeleton Stage — batched generation (e.g. 1-8, 9-16).
+    Supports generating either all missing chapters or a specific batch of chapters.
     """
     from backend.models.parsers import extract_json_block
 
@@ -262,7 +259,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
             char_count = len(parsed_chars.get("characters", []))
         except Exception:
             char_count = 0
-    min_chars_for_skeleton = 3
+    min_chars_for_skeleton = 2
     if char_count < min_chars_for_skeleton:
         msg = f"第 {volume_index} 卷骨架生成前偵測到角色數量不足（目前 {char_count} 位，建議至少 {min_chars_for_skeleton} 位）。"
         yield "data: " + json.dumps({
@@ -288,43 +285,18 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
     start_ch, end_ch = db.get_volume_chapter_range(all_vols, volume_index)
     full_indexes = list(range(start_ch, end_ch + 1))
     missing_indexes = _volume_missing_chapter_indexes(all_vols, volume_index)
+    if target_chapter_indexes:
+        target_set = set(int(x) for x in target_chapter_indexes)
+        missing_indexes = [idx for idx in missing_indexes if idx in target_set]
+
     if not missing_indexes:
-        db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷骨架已完整，沒有需要補生成的章節。", message_type="pipeline")
-        yield "data: " + json.dumps({"type": "content", "delta": f"第 {volume_index} 卷骨架已完整，沒有需要補生成的章節。"}, ensure_ascii=False) + "\n\n"
+        db.save_chat_message(novel_id, "assistant", f"第 {volume_index} 卷目標章節骨架已完整，沒有需要補生成的章節。", message_type="pipeline")
+        yield "data: " + json.dumps({"type": "content", "delta": f"第 {volume_index} 卷目標章節骨架已完整，沒有需要補生成的章節。"}, ensure_ascii=False) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
         return
 
     pre_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index - 1), None)
     next_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index + 1), None)
-    surrounding_context = ""
-    if pre_vol:
-        surrounding_context += f"\n【前 1 卷 (卷 {volume_index - 1}) 大綱概要】\n{pre_vol.get('summary', '')}\n"
-    if next_vol:
-        surrounding_context += f"\n【後 1 卷 (卷 {volume_index + 1}) 大綱概要】\n{next_vol.get('summary', '')}\n"
-    surrounding_context += _build_nearby_skeleton_context(current_vol, full_indexes)
-    char_data_for_skeleton = db.get_latest_characters(novel_id)
-    existing_character_names = []
-    existing_character_briefs = {"characters": []}
-    if char_data_for_skeleton and char_data_for_skeleton.get("json_data"):
-        try:
-            existing_character_names = extract_character_names_list(char_data_for_skeleton["json_data"])
-            existing_character_briefs = extract_character_basic(char_data_for_skeleton.get("parsed_data") or char_data_for_skeleton["json_data"])
-        except Exception:
-            existing_character_names = []
-            existing_character_briefs = {"characters": []}
-    surrounding_context += (
-        "\n【既有角色名冊、基本角色卡與使用規則】\n"
-        + json.dumps({
-            "existing_character_names": existing_character_names,
-            "existing_character_briefs": existing_character_briefs,
-            "rule": (
-                "characters_active 優先使用此名冊中的既有命名角色。若本卷劇情確實需要新增命名角色，"
-                "可在章節骨架中使用具體姓名，但不得假裝已有角色卡；總監審核時必須先補角色卡再進入正文。"
-                "功能性群眾、守衛、路人可作為非命名角色使用。"
-            ),
-        }, ensure_ascii=False, indent=2)
-        + "\n"
-    )
 
     all_seeds = worldview_parsed.get("foreshadowing_seeds", [])
     all_turns = worldview_parsed.get("key_turning_points", [])
@@ -419,14 +391,111 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
         batch_start, batch_end = min(batch_indexes), max(batch_indexes)
         batch_count = len(batch_indexes)
 
-        batch_prompt = (
-            f"{user_prompt or '請生成本卷完整章節骨架。'}\n\n"
-            f"【本次後端骨架生成任務】只輸出第 {batch_start} 至第 {batch_end} 章的骨架，"
-            f"必須包含這些 chapter_index：{batch_indexes}。不得切段、不得只輸出缺失片段。"
+        # 1. 每次批次生成前，即時從資料庫載入最新全卷狀態與已生成章綱
+        all_vols = db.get_volumes(novel_id)
+        current_vol = next((v for v in all_vols if int(v.get("volume_index", 0)) == volume_index), current_vol)
+        existing_outline = current_vol.get("chapters_outline") or []
+        if isinstance(existing_outline, str):
+            try:
+                existing_outline = json.loads(existing_outline)
+            except Exception:
+                existing_outline = []
+        if not isinstance(existing_outline, list):
+            existing_outline = []
+
+        # 2. 構建前文已規劃章節進展（prior_chapters_context）
+        prior_chapters = [
+            c for c in existing_outline
+            if isinstance(c, dict) and chapter_index_or_none(c) is not None and chapter_index_or_none(c) < batch_start
+        ]
+        prior_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
+
+        prior_chapters_context = ""
+        if prior_chapters:
+            # 取最近的最多 8 章，精確告知前情提要與人物狀態
+            recent_priors = prior_chapters[-8:]
+            min_p = recent_priors[0].get("chapter_index")
+            max_p = recent_priors[-1].get("chapter_index")
+            lines = [f"【本卷前文已規劃章節骨架（已連續生成至第 {max_p} 章，本批次第 {batch_start} 章必須緊密承接）】"]
+            for ch in recent_priors:
+                c_idx = ch.get("chapter_index")
+                c_title = ch.get("chapter_title", "未命名")
+                c_sum = ch.get("chapter_summary", "")
+                c_cliff = ch.get("cliffhanger", "")
+                c_chars = ch.get("characters_active", [])
+                lines.append(f"- 第 {c_idx} 章《{c_title}》：{c_sum}（活躍人物：{c_chars}；收尾懸念/局勢：{c_cliff}）")
+            prior_chapters_context = "\n".join(lines) + "\n"
+        elif volume_index > 1 and pre_vol:
+            # 第一批且存在前一卷：附上前一卷末尾 3 章作為銜接點
+            pre_outline = pre_vol.get("chapters_outline") or []
+            if isinstance(pre_outline, str):
+                try:
+                    pre_outline = json.loads(pre_outline)
+                except Exception:
+                    pre_outline = []
+            if isinstance(pre_outline, list) and pre_outline:
+                pre_end = [c for c in pre_outline if isinstance(c, dict)][-3:]
+                if pre_end:
+                    lines = [f"【前 1 卷 (卷 {volume_index - 1}) 末尾章節收尾點（本卷第 {batch_start} 章由此承接展開）】"]
+                    for ch in pre_end:
+                        lines.append(f"- 第 {ch.get('chapter_index')} 章《{ch.get('chapter_title', '')}》：{ch.get('chapter_summary', '')}（收尾懸念：{ch.get('cliffhanger', '')}）")
+                    prior_chapters_context = "\n".join(lines) + "\n"
+
+        # 3. 鄰近前後卷與角色卡上下文
+        char_data_for_skeleton = db.get_latest_characters(novel_id)
+        existing_character_names = []
+        existing_character_briefs = {"characters": []}
+        if char_data_for_skeleton and char_data_for_skeleton.get("json_data"):
+            try:
+                existing_character_names = extract_character_names_list(char_data_for_skeleton["json_data"])
+                existing_character_briefs = extract_character_basic(char_data_for_skeleton.get("parsed_data") or char_data_for_skeleton["json_data"])
+            except Exception:
+                existing_character_names = []
+                existing_character_briefs = {"characters": []}
+
+        batch_surrounding = ""
+        if pre_vol:
+            batch_surrounding += f"\n【前 1 卷 (卷 {volume_index - 1}) 大綱概要】\n{pre_vol.get('summary', '')}\n"
+        if next_vol:
+            batch_surrounding += f"\n【後 1 卷 (卷 {volume_index + 1}) 大綱概要】\n{next_vol.get('summary', '')}\n"
+        batch_surrounding += (
+            "\n【既有角色名冊、基本角色卡與使用規則】\n"
+            + json.dumps({
+                "existing_character_names": existing_character_names,
+                "existing_character_briefs": existing_character_briefs,
+                "rule": (
+                    "characters_active 優先使用此名冊中的既有命名角色。若本批劇情確實需要新增命名角色，"
+                    "可在章節骨架中使用具體姓名，並在 new_characters 宣告；總監審核時自動合流角色庫。"
+                ),
+            }, ensure_ascii=False, indent=2)
+            + "\n"
         )
+
+        batch_prompt = (
+            f"【本次後端骨架分批生成任務】\n"
+            f"- 目標：生成第 {volume_index} 卷【{current_vol.get('title')}】之第 {batch_start} 至第 {batch_end} 章（共 {batch_count} 章，全卷第 {batch_num}/{total_batches} 批次）。\n"
+            f"- 必須包含且僅輸出這些 chapter_index：{batch_indexes}。\n"
+            f"- 必須緊密承接上方前文已規劃章節的情節與局勢，嚴禁情節斷層！\n"
+            f"- {user_prompt or '請為本批章節生成連貫、短句化的輕量章節骨架，落實伏筆與轉折。'}"
+        )
+
         messages = build_volume_skeleton_planner_messages(
-            worldview_text, volume_index, current_vol, batch_start, batch_end, batch_count,
-            surrounding_context, precalc_clues, batch_prompt, novel_id=novel_id
+            worldview_text=worldview_text,
+            volume_index=volume_index,
+            current_vol=current_vol,
+            start_ch=batch_start,
+            end_ch=batch_end,
+            vol_chapter_count=batch_count,
+            surrounding_context=batch_surrounding,
+            precalc_clues=precalc_clues,
+            user_prompt=batch_prompt,
+            novel_id=novel_id,
+            total_volume_chapters=len(full_indexes),
+            vol_start_ch=start_ch,
+            vol_end_ch=end_ch,
+            prior_chapters_context=prior_chapters_context,
+            batch_num=batch_num,
+            total_batches=total_batches,
         )
         last_messages = messages
 
@@ -634,6 +703,30 @@ def _build_segment_shared_context(novel_id, volume_index, batch_indexes):
         base_surrounding_context += f"\n【前 1 卷 (卷 {volume_index - 1}) 大綱概要】\n{pre_vol.get('summary', '')}\n"
     if next_vol:
         base_surrounding_context += f"\n【後 1 卷 (卷 {volume_index + 1}) 大綱概要】\n{next_vol.get('summary', '')}\n"
+
+    char_data_for_skeleton = db.get_latest_characters(novel_id)
+    existing_character_names = []
+    existing_character_briefs = {"characters": []}
+    if char_data_for_skeleton and char_data_for_skeleton.get("json_data"):
+        try:
+            existing_character_names = extract_character_names_list(char_data_for_skeleton["json_data"])
+            existing_character_briefs = extract_character_basic(char_data_for_skeleton.get("parsed_data") or char_data_for_skeleton["json_data"])
+        except Exception:
+            existing_character_names = []
+            existing_character_briefs = {"characters": []}
+
+    base_surrounding_context += (
+        "\n【既有角色名冊、基本角色卡與使用規則】\n"
+        + json.dumps({
+            "existing_character_names": existing_character_names,
+            "existing_character_briefs": existing_character_briefs,
+            "rule": (
+                "characters_active 優先使用此名冊中的既有命名角色。若本段劇情確實需要新增命名角色，"
+                "可在章節骨架中使用具體姓名，並在 new_characters 宣告；總監審核時自動合流角色庫。"
+            ),
+        }, ensure_ascii=False, indent=2)
+        + "\n"
+    )
 
     surrounding_context = base_surrounding_context + _build_nearby_skeleton_context(current_vol, batch_indexes)
 

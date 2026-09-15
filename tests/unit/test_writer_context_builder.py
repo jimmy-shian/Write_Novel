@@ -137,3 +137,59 @@ def test_format_writer_prompt_context_no_json_dump():
     assert "### 👥【出場角色即時狀態與語言傾向】" in context_str
     assert "線人代號為海燕" in context_str
     assert "加強碼頭雨夜的陰冷氣氛" in context_str
+
+
+def test_build_character_states_dynamic_psychology_and_worldview_headroom():
+    builder = WriterContextBuilder()
+    outline = {
+        "chapter_index": 5,
+        "characters_active": ["冷月", "嚴振東"],
+        "scene_goal": "走廊暗鬥",
+    }
+    bible = {
+        "characters": [
+            {
+                "name": "冷月",
+                "role": "調查官",
+                "want": "查清檔案",
+                "wound_origin": "家族曾遭體制誣陷除名",
+                "false_belief": "體制法治是唯一正義",
+                "off_screen_goal": "洗刷家族冤屈",
+                "initial_knowledge_scope": ["404號檔案存在"],
+            },
+            {
+                "name": "嚴振東",
+                "role": "最高長官",
+                "want": "維持表面秩序",
+                "wound_origin": "底層出身受盡氏族欺凌",
+                "false_belief": "只有融入壓迫才能掌握權力",
+                "initial_knowledge_scope": ["氏族私下魔晶交易"],
+            }
+        ]
+    }
+
+    states = builder.build_character_states(outline, bible, pov_character="冷月")
+    assert len(states) == 2
+    leng_state = next(s for s in states if s["name"] == "冷月")
+    assert "家族曾遭體制誣陷除名" in leng_state["private_motivation"]
+    assert "體制法治是唯一正義" in leng_state["private_motivation"]
+    assert "洗刷家族冤屈" in leng_state["private_motivation"]
+    assert leng_state["current_state_missing"] is False
+
+    # 測試世界觀 8000 字餘裕（不再被 2000 字生硬截斷）
+    long_worldview = "天網偵測法則：\n" + ("頻率共振300Hz\n" * 300) # 約 3000 字以上
+    context_str = builder.format_writer_prompt_context(
+        novel_id="test_novel_02",
+        worldview_text=long_worldview,
+        characters_bible=bible,
+        current_outline=outline,
+        surrounding_plot="",
+        vol_outline_context="",
+        clue_payoff_details="",
+        custom_style="",
+        chapter_index=5,
+    )
+    # 驗證 2500 字以後的內容依然完整保留在上下文中
+    assert len(long_worldview) > 3000
+    assert long_worldview[:3000] in context_str
+

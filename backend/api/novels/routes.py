@@ -17,6 +17,12 @@ class NovelCreate(BaseModel):
     style: Optional[str] = "Classic Modernism"
     pipeline_prompt: Optional[str] = None
 
+class NovelUpdate(BaseModel):
+    title: Optional[str] = None
+    genre: Optional[str] = None
+    style: Optional[str] = None
+    pipeline_prompt: Optional[str] = None
+
 class WorldbuildingSave(BaseModel):
     content: str
 
@@ -88,6 +94,22 @@ def api_get_novel(novel_id: str):
         "volumes": db.get_volumes(novel_id),
         "worldview_patches": db.get_worldview_patches(novel_id)
     }
+
+@router.put("/novels/{novel_id}")
+@router.patch("/novels/{novel_id}")
+def api_update_novel(novel_id: str, payload: NovelUpdate):
+    novel = db.get_novel(novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    db.update_novel_metadata(
+        novel_id,
+        title=payload.title,
+        genre=payload.genre,
+        style=payload.style,
+        pipeline_prompt=payload.pipeline_prompt
+    )
+    updated = db.get_novel(novel_id)
+    return {"status": "success", "novel": updated}
 
 @router.delete("/novels/{novel_id}")
 def api_delete_novel(novel_id: str):

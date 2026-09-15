@@ -40,6 +40,29 @@ def update_novel_pipeline_prompt(novel_id, pipeline_prompt):
     )
     conn.commit()
 
+def update_novel_metadata(novel_id: str, title: Optional[str] = None, genre: Optional[str] = None, style: Optional[str] = None, pipeline_prompt: Optional[str] = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    updates = []
+    params = []
+    if title is not None:
+        updates.append("title = ?")
+        params.append(_to_traditional(str(title).strip()))
+    if genre is not None:
+        updates.append("genre = ?")
+        params.append(str(genre).strip())
+    if style is not None:
+        updates.append("style = ?")
+        params.append(str(style).strip())
+    if pipeline_prompt is not None:
+        updates.append("pipeline_prompt = ?")
+        params.append(_to_traditional(str(pipeline_prompt).strip()))
+    if not updates:
+        return
+    params.append(novel_id)
+    cursor.execute(f"UPDATE novels SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+
 def get_novel(novel_id):
     conn = get_db_connection()
     cursor = conn.cursor()

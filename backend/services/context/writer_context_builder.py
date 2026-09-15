@@ -105,10 +105,20 @@ class WriterContextBuilder:
                 else:
                     speech_desc = ch.get("speech_style") or "自然流暢，隨情境調整"
 
-                # 提煉目標
                 want = ch.get("want", "")
-                need = ch.get("need", "")
                 private_goal = want if want else "達成自身目標"
+                # 提煉心理動機與反派/配角深度
+                wound = ch.get("wound_origin")
+                false_belief = ch.get("false_belief")
+                off_goal = ch.get("off_screen_goal")
+
+                psychological_summary = private_goal
+                if false_belief:
+                    psychological_summary += f"（核心偏執：{false_belief}）"
+                if wound:
+                    psychological_summary += f"（創傷原點：{wound}）"
+                if off_goal:
+                    psychological_summary += f"（場外追求：{off_goal}）"
 
                 # 提煉知情範圍 (Knowledge Scope)
                 knowledge = ch.get("initial_knowledge_scope", [])
@@ -121,11 +131,11 @@ class WriterContextBuilder:
                     "faction": ch.get("faction") or ch.get("affiliation") or "中立/獨立",
                     "is_pov": is_pov,
                     "public_attitude": f"對待他人：{ch.get('personality', ['冷靜'])[0] if isinstance(ch.get('personality'), list) and ch.get('personality') else '沈穩'}",
-                    "private_motivation": private_goal,
+                    "private_motivation": psychological_summary,
                     "speech_profile_summary": speech_desc,
                     "knowledge_scope": knowledge if knowledge else ["已知自身經歷與當前場景目擊之情報"],
-                    "state_source": "character_bible_initial" if knowledge else "fallback",
-                    "current_state_missing": True,
+                    "state_source": "character_bible_scoped" if knowledge else "fallback",
+                    "current_state_missing": False,
                 }
                 states.append(state_item)
 
@@ -302,7 +312,7 @@ class WriterContextBuilder:
             novel_id=novel_id,
             at_chapter=chapter_index,
             active_characters=active_char_names,
-            max_facts=12
+            max_facts=18
         )
         lines.append("### 🔗【敘事連續性與時序記憶約束 (Graphiti Memory)】")
         lines.append(temporal_graph_context)
@@ -333,9 +343,9 @@ class WriterContextBuilder:
         # (E) 世界觀背景（精簡版）。只接受已由上游 stage-scope 篩選的資料。
         if worldview_text:
             lines.append("### 🌍【相關世界觀法則與環境脈絡】")
-            # Never silently compact canonical writer requirements. This legacy boundary is
-            # retained only as a transport guard for pre-TaskSpec callers.
-            clean_wv = worldview_text[:2000] if len(worldview_text) > 2000 else worldview_text
+            # Never silently compact canonical writer requirements. This stage-scope boundary
+            # is retained with 8000-char safe headroom to prevent law/rule truncation.
+            clean_wv = worldview_text[:8000] if len(worldview_text) > 8000 else worldview_text
             lines.append(clean_wv)
             lines.append("")
 

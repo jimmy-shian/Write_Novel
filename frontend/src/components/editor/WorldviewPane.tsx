@@ -18,7 +18,8 @@ import {
   IconTrash,
 } from '../common/Icons';
 import { copyToClipboard } from '../../utils/clipboard';
-import { saveWorldbuilding, saveCharacters, savePlot, saveVolumes, savePipelinePrompt } from '../../api/novels';
+import { saveWorldbuilding, saveCharacters, savePlot, saveVolumes, savePipelinePrompt, updateNovel } from '../../api/novels';
+import { EditNovelModal } from '../novel/EditNovelModal';
 import { ExpansionSyncState } from '../../hooks/useExpansionSync';
 
 export type WorldviewTab = 'worldview' | 'characters' | 'plot';
@@ -53,6 +54,7 @@ interface WorldviewPaneProps {
   onTabChange?: (tab: WorldviewTab) => void;
   onRefresh?: () => void;
   onLog?: (msg: string) => void;
+  onUpdateNovel?: (novelId: string, title: string, genre: string, style: string, synopsis?: string) => Promise<any> | any;
   onDeleteTurningPoint?: (tpIndex: number) => Promise<any> | any;
   onDeleteForeshadowingSeed?: (seedIndex: number) => Promise<any> | any;
   onDeleteCharacter?: (charName: string) => Promise<any> | any;
@@ -108,7 +110,7 @@ export function reindexVolumesChapters(vols: ParsedVolume[]): ParsedVolume[] {
       return {
         ...v,
         volume_index: volNum,
-        chapter_count: v.chapter_count ?? 0,
+        chapter_count: typeof v.chapter_count === 'number' && v.chapter_count > 0 ? v.chapter_count : 50,
       };
     }
     const updatedOutlines = v.chapters_outline.map((ch: any) => {
@@ -138,6 +140,94 @@ export function reindexVolumesChapters(vols: ParsedVolume[]): ParsedVolume[] {
   });
 }
 
+export function normalizeVolume(v: any, idx: number): ParsedVolume {
+  if (!v || typeof v !== 'object') {
+    return {
+      volume_index: idx + 1,
+      title: `第 ${idx + 1} 卷`,
+      summary: '',
+      chapter_count: 50,
+      factions: [],
+      time_timeline: '',
+      turning_points: [],
+      chapters_outline: [],
+    };
+  }
+
+  // 1. factions normalization: guarantee string[]
+  let rawFactions: any[] = [];
+  if (Array.isArray(v.parsed_factions)) {
+    rawFactions = v.parsed_factions;
+  } else if (Array.isArray(v.factions)) {
+    rawFactions = v.factions;
+  } else if (typeof v.factions === 'string' && v.factions.trim()) {
+    try {
+      const parsed = JSON.parse(v.factions);
+      if (Array.isArray(parsed)) {
+        rawFactions = parsed;
+      } else {
+        rawFactions = v.factions.split(/[,，、]/).map((s: string) => s.trim()).filter(Boolean);
+      }
+    } catch {
+      rawFactions = v.factions.split(/[,，、]/).map((s: string) => s.trim()).filter(Boolean);
+    }
+  }
+
+  const factions: string[] = rawFactions
+    .map((item: any) => {
+      if (typeof item === 'string') return item.trim();
+      if (typeof item === 'number') return String(item);
+      if (item && typeof item === 'object') {
+        const name = item.name || item.title || item.faction_name || item.faction || '';
+        const alignment = item.alignment ? ` (${item.alignment})` : '';
+        return name ? `${name}${alignment}` : (item.summary ? String(item.summary) : JSON.stringify(item));
+      }
+      return '';
+    })
+    .filter(Boolean);
+
+  // 2. chapters_outline normalization: guarantee Array
+  let chaptersOutline: any[] = [];
+  let rawOutlines = v.chapters_outline;
+  if (typeof rawOutlines === 'string' && rawOutlines.trim()) {
+    try {
+      rawOutlines = JSON.parse(rawOutlines);
+    } catch {
+      rawOutlines = [];
+    }
+  }
+  if (Array.isArray(rawOutlines)) {
+    chaptersOutline = rawOutlines;
+  } else if (rawOutlines && typeof rawOutlines === 'object' && Array.isArray(rawOutlines.chapters)) {
+    chaptersOutline = rawOutlines.chapters;
+  }
+
+  // 3. turning_points normalization
+  let turningPoints: any[] = [];
+  if (Array.isArray(v.turning_points)) {
+    turningPoints = v.turning_points;
+  } else if (typeof v.turning_points === 'string' && v.turning_points.trim()) {
+    try {
+      const parsed = JSON.parse(v.turning_points);
+      if (Array.isArray(parsed)) turningPoints = parsed;
+    } catch {
+      turningPoints = [];
+    }
+  }
+
+  const volNum = v.volume_index ?? idx + 1;
+  return {
+    volume_index: volNum,
+    title: typeof v.title === 'string' && v.title.trim() ? v.title.trim() : (v.title ? String(v.title) : `第 ${volNum} 卷`),
+    summary: typeof v.summary === 'string' ? v.summary : (v.summary ? String(v.summary) : ''),
+    chapter_count: typeof v.chapter_count === 'number' && v.chapter_count > 0 ? v.chapter_count : (chaptersOutline.length || 50),
+    factions,
+    time_timeline: typeof v.time_timeline === 'string' ? v.time_timeline : (v.time_timeline ? String(v.time_timeline) : ''),
+    turning_points: turningPoints,
+    chapters_outline: chaptersOutline,
+  };
+}
+
 export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
   novel,
   worldbuilding,
@@ -162,6 +252,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
   onCleanEmptyTurningPoints,
   onCleanEmptySeeds,
   onCleanEmptyCharacters,
+  onUpdateNovel,
 }) => {
   const [internalTab, setInternalTab] = useState<WorldviewTab>(activeTabProp || defaultTab);
   const activeTab = activeTabProp !== undefined ? activeTabProp : internalTab;
@@ -226,6 +317,30 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [copiedContent, setCopiedContent] = useState(false);
+
+  // Novel Basic Settings Edit Modal State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  const handleUpdateNovel = async (newTitle: string, newGenre: string, newStyle: string, newSynopsis?: string) => {
+    if (!novel) return;
+    try {
+      if (onUpdateNovel) {
+        await onUpdateNovel(novel.id, newTitle, newGenre, newStyle, newSynopsis);
+      } else {
+        await updateNovel(novel.id, {
+          title: newTitle,
+          genre: newGenre,
+          style: newStyle,
+          pipeline_prompt: newSynopsis,
+        });
+      }
+      showToast('小說基本設定已成功更新！', 'success');
+      onRefresh?.();
+    } catch (err: any) {
+      showToast(err?.message || '更新失敗', 'danger');
+      throw err;
+    }
+  };
 
   // Card Inline Editing States - Tab 1 (Worldview)
   const [isEditingPipelinePrompt, setIsEditingPipelinePrompt] = useState(false);
@@ -342,44 +457,53 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
 
   // Parse Plot / Volumes JSON safely with fallback to volumes prop
   const parsedVolumes: ParsedVolume[] = useMemo(() => {
+    // 1. If user edited plotText in raw mode (different from initial plotRaw), parse and use that
+    if (plotText.trim() && plotText !== plotRaw) {
+      try {
+        const data = JSON.parse(plotText);
+        if (Array.isArray(data) && data.length > 0) {
+          return data.map((v: any, idx: number) => normalizeVolume(v, idx));
+        }
+        if (data && Array.isArray(data.volumes) && data.volumes.length > 0) {
+          return data.volumes.map((v: any, idx: number) => normalizeVolume(v, idx));
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    // 2. Authoritative: if volumes prop from DB exists and is non-empty, use it!
+    if (volumes && Array.isArray(volumes) && volumes.length > 0) {
+      return volumes.map((v: any, idx: number) => normalizeVolume(v, idx));
+    }
+
+    // 3. Fallback to parsing plotText
     if (plotText.trim()) {
       try {
         const data = JSON.parse(plotText);
-        if (Array.isArray(data) && data.length > 0) return data;
-        if (data && Array.isArray(data.volumes) && data.volumes.length > 0) return data.volumes;
-        if (data && Array.isArray(data.macro_outline_volumes) && data.macro_outline_volumes.length > 0)
-          return data.macro_outline_volumes;
+        if (Array.isArray(data) && data.length > 0) {
+          return data.map((v: any, idx: number) => normalizeVolume(v, idx));
+        }
+        if (data && Array.isArray(data.volumes) && data.volumes.length > 0) {
+          return data.volumes.map((v: any, idx: number) => normalizeVolume(v, idx));
+        }
+        if (data && Array.isArray(data.macro_outline_volumes) && data.macro_outline_volumes.length > 0) {
+          return data.macro_outline_volumes.map((v: any, idx: number) => normalizeVolume(v, idx));
+        }
         if (typeof data === 'object' && data !== null) {
           const list = Object.values(data).filter(
             (item: any) => item && typeof item === 'object' && (item.volume_index || item.title)
           );
-          if (list.length > 0) return list as ParsedVolume[];
+          if (list.length > 0) {
+            return list.map((v: any, idx: number) => normalizeVolume(v, idx));
+          }
         }
       } catch {
         // Not valid JSON
       }
     }
-    // Fallback to volumes prop from novelDetail.volumes
-    if (volumes && Array.isArray(volumes) && volumes.length > 0) {
-      return volumes.map((v: any, idx: number) => ({
-        volume_index: v.volume_index ?? idx + 1,
-        title: v.title,
-        summary: v.summary,
-        chapter_count: v.chapter_count,
-        factions: Array.isArray(v.parsed_factions)
-          ? v.parsed_factions
-          : typeof v.factions === 'string'
-          ? v.factions.split(/[,，、]/).map((s: string) => s.trim()).filter(Boolean)
-          : Array.isArray(v.factions)
-          ? v.factions
-          : [],
-        time_timeline: v.time_timeline,
-        turning_points: v.turning_points || [],
-        chapters_outline: v.chapters_outline,
-      }));
-    }
     return [];
-  }, [plotText, volumes]);
+  }, [plotText, plotRaw, volumes]);
 
   // IntersectionObserver for auto-expanding lists when scrolled to bottom
   useEffect(() => {
@@ -1574,7 +1698,26 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
       {/* Quick Summary Info Card */}
       <div className="worldview-quick-card">
         <div className="quick-card-left">
-          <div className="quick-card-title">{novel.title}</div>
+          <div className="quick-card-title-row" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              className="quick-card-title clickable-title"
+              onClick={() => setIsEditModalOpen(true)}
+              title="點擊編輯小說名稱、題材與文風"
+              style={{ cursor: 'pointer' }}
+            >
+              {novel.title}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs edit-meta-btn"
+              onClick={() => setIsEditModalOpen(true)}
+              title="重新編輯小說名稱、題材與文風設定"
+              style={{ padding: '2px 6px', fontSize: '11px', color: 'var(--text-muted)' }}
+            >
+              <IconEdit size={12} />
+              <span>編輯設定</span>
+            </button>
+          </div>
           <div className="quick-card-meta-line">
             <span className="meta-label">題材：</span>
             <span className="meta-val">{novel.genre ? `【${novel.genre}】` : '未設定'}</span>
@@ -1686,7 +1829,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                     </div>
                   ) : (
                     <div className="worldview-card-body">
-                      <p className="worldview-sub-desc" style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
+                      <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6', margin: 0 }}>
                         {novel?.pipeline_prompt?.trim() ||
                           '尚未填寫故事簡述或大綱靈感（建立小說時填寫的創作核心指引）。點擊右上角「編輯」即可隨時補充或修改，AI 導演管線在構建全書時將以此作為最高指導方針。'}
                       </p>
@@ -2487,7 +2630,11 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                               <h4 className="char-name">{char.name}</h4>
                               {char.role && <span className="char-role-badge">[{char.role}]</span>}
                               {char.faction && (
-                                <span className="char-faction-badge">{char.faction}</span>
+                                <span className="char-faction-badge">
+                                  {typeof (char.faction as any) === 'object' && char.faction !== null
+                                    ? ((char.faction as any).name || (char.faction as any).title || JSON.stringify(char.faction))
+                                    : String(char.faction)}
+                                </span>
                               )}
                             </div>
                             <div className="char-card-actions">
@@ -3019,7 +3166,14 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                     className="card-inline-input"
                                     value={
                                       Array.isArray(editVolForm.factions)
-                                        ? editVolForm.factions.join('、')
+                                        ? editVolForm.factions
+                                            .map((f: any) =>
+                                              typeof f === 'object' && f !== null
+                                                ? (f.name || f.title || JSON.stringify(f))
+                                                : String(f || '')
+                                            )
+                                            .filter(Boolean)
+                                            .join('、')
                                         : editVolForm.factions || ''
                                     }
                                     onChange={(e) =>
@@ -3077,11 +3231,21 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                 <div className="vol-factions-box">
                                   <span className="factions-label">核心活躍勢力:</span>
                                   <div className="faction-tags">
-                                    {vol.factions.map((f, fIdx) => (
-                                      <span key={fIdx} className="faction-pill">
-                                        {f}
-                                      </span>
-                                    ))}
+                                    {vol.factions.map((f: any, fIdx: number) => {
+                                      const fText = typeof f === 'object' && f !== null
+                                        ? `${f.name || f.title || f.faction || '勢力'}${f.alignment ? ` (${f.alignment})` : ''}`
+                                        : String(f ?? '');
+                                      if (!fText) return null;
+                                      return (
+                                        <span
+                                          key={fIdx}
+                                          className="faction-pill"
+                                          title={typeof f === 'object' && f !== null ? f.summary : undefined}
+                                        >
+                                          {fText}
+                                        </span>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               )}
@@ -3098,12 +3262,23 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                     本卷重大轉折點 ({vol.turning_points.length}):
                                   </span>
                                   <ul className="tp-list">
-                                    {vol.turning_points.map((tp: any, tpIdx: number) => (
-                                      <li key={tpIdx}>
-                                        <strong>{tp.turning_point_name || tp.name}:</strong>{' '}
-                                        {tp.description || tp.trigger_condition}
-                                      </li>
-                                    ))}
+                                    {vol.turning_points.map((tp: any, tpIdx: number) => {
+                                      if (typeof tp === 'string') {
+                                        return <li key={tpIdx}>{tp}</li>;
+                                      }
+                                      const tpTitle = tp && typeof tp === 'object'
+                                        ? (tp.turning_point_name || tp.name || tp.title || tp.turn || `轉折 #${tpIdx + 1}`)
+                                        : String(tp ?? `轉折 #${tpIdx + 1}`);
+                                      const tpDesc = tp && typeof tp === 'object'
+                                        ? (tp.description || tp.trigger_condition || tp.summary || '')
+                                        : '';
+                                      return (
+                                        <li key={tpIdx}>
+                                          <strong>{typeof tpTitle === 'object' ? JSON.stringify(tpTitle) : String(tpTitle)}:</strong>{' '}
+                                          {typeof tpDesc === 'object' ? JSON.stringify(tpDesc) : String(tpDesc)}
+                                        </li>
+                                      );
+                                    })}
                                   </ul>
                                 </div>
                               )}
@@ -3117,7 +3292,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                   tabIndex={0}
                                 >
                                   <span className="vol-ch-header-title">
-                                    本卷各章細目大綱與演算法任務分配 ({vol.chapters_outline?.length || 0} 章)
+                                    本卷各章細目大綱與演算法任務分配 ({Array.isArray(vol.chapters_outline) ? vol.chapters_outline.length : 0} 章)
                                   </span>
                                   <div className="vol-ch-item-actions" onClick={(e) => e.stopPropagation()}>
                                     <Button
@@ -3142,22 +3317,22 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                 <div className={`tree-accordion-collapsible ${expandedVolChapters.includes(volNum) ? 'open' : ''}`}>
                                   <div className="tree-accordion-inner">
                                     <div className="vol-ch-outline-list">
-                                    {(!vol.chapters_outline || vol.chapters_outline.length === 0) ? (
+                                    {(!Array.isArray(vol.chapters_outline) || vol.chapters_outline.length === 0) ? (
                                       <div className="p-3 text-center text-xs text-muted">
                                         本卷尚未規劃章節細目大綱。點擊上方【新增章綱】開始編排。
                                       </div>
                                     ) : (
                                       vol.chapters_outline.map((ch: any, chIdx: number) => {
                                         const cIdx = ch.chapter_index ?? chIdx + 1;
-                                        const title = ch.chapter_title || `第 ${cIdx} 章`;
+                                        const title = typeof ch.chapter_title === 'string' ? ch.chapter_title : (ch.chapter_title ? String(ch.chapter_title) : `第 ${cIdx} 章`);
                                         const isChEditing =
                                           editingChapterOutline?.volIndex === volNum &&
                                           editingChapterOutline?.chIndex === cIdx;
-                                        const summary = ch.chapter_summary || '';
+                                        const summary = typeof ch.chapter_summary === 'string' ? ch.chapter_summary : (ch.chapter_summary ? String(ch.chapter_summary) : '');
                                         const tasks = ch.allocated_tasks || {};
-                                        const tps = tasks.turning_points || [];
-                                        const plants = tasks.foreshadowing_plants || [];
-                                        const payoffs = tasks.foreshadowing_payoffs || [];
+                                        const tps = Array.isArray(tasks.turning_points) ? tasks.turning_points : [];
+                                        const plants = Array.isArray(tasks.foreshadowing_plants) ? tasks.foreshadowing_plants : [];
+                                        const payoffs = Array.isArray(tasks.foreshadowing_payoffs) ? tasks.foreshadowing_payoffs : [];
                                         const conflict = ch.scene_conflict;
                                         const cliff = ch.cliffhanger;
 
@@ -3182,7 +3357,15 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                       handleSaveChapterOutline(volNum, cIdx, editChapterOutlineForm);
                                                     } else {
                                                       setEditingChapterOutline({ volIndex: volNum, chIndex: cIdx });
-                                                      setEditChapterOutlineForm({ ...ch });
+                                                      setEditChapterOutlineForm({
+                                                        ...ch,
+                                                        scene_conflict: typeof ch.scene_conflict === 'object' && ch.scene_conflict !== null
+                                                          ? (ch.scene_conflict.description || ch.scene_conflict.content || JSON.stringify(ch.scene_conflict))
+                                                          : (ch.scene_conflict || ''),
+                                                        cliffhanger: typeof ch.cliffhanger === 'object' && ch.cliffhanger !== null
+                                                          ? (ch.cliffhanger.hook || ch.cliffhanger.description || JSON.stringify(ch.cliffhanger))
+                                                          : (ch.cliffhanger || ''),
+                                                      });
                                                     }
                                                   }}
                                                 >
@@ -3259,7 +3442,11 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <input
                                                       type="text"
                                                       className="card-inline-input"
-                                                      value={editChapterOutlineForm.scene_conflict || ''}
+                                                      value={
+                                                        typeof editChapterOutlineForm.scene_conflict === 'object' && editChapterOutlineForm.scene_conflict !== null
+                                                          ? (editChapterOutlineForm.scene_conflict.description || editChapterOutlineForm.scene_conflict.content || JSON.stringify(editChapterOutlineForm.scene_conflict))
+                                                          : (editChapterOutlineForm.scene_conflict || '')
+                                                      }
                                                       onChange={(e) =>
                                                         setEditChapterOutlineForm({
                                                           ...editChapterOutlineForm,
@@ -3274,7 +3461,11 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <input
                                                       type="text"
                                                       className="card-inline-input"
-                                                      value={editChapterOutlineForm.cliffhanger || ''}
+                                                      value={
+                                                        typeof editChapterOutlineForm.cliffhanger === 'object' && editChapterOutlineForm.cliffhanger !== null
+                                                          ? (editChapterOutlineForm.cliffhanger.hook || editChapterOutlineForm.cliffhanger.description || JSON.stringify(editChapterOutlineForm.cliffhanger))
+                                                          : (editChapterOutlineForm.cliffhanger || '')
+                                                      }
                                                       onChange={(e) =>
                                                         setEditChapterOutlineForm({
                                                           ...editChapterOutlineForm,
@@ -3436,14 +3627,20 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                                                     <div className="vol-task-group conflict-task">
                                                       <span className="vol-task-label">核心衝突:</span>
                                                       <span className="vol-ch-meta-text">
-                                                        {conflict}
+                                                        {typeof conflict === 'object' && conflict !== null
+                                                          ? (conflict.description || conflict.content || conflict.summary || JSON.stringify(conflict))
+                                                          : String(conflict)}
                                                       </span>
                                                     </div>
                                                   )}
                                                   {cliff && (
                                                     <div className="vol-task-group cliff-task">
                                                       <span className="vol-task-label">章末鉤子:</span>
-                                                      <span className="vol-ch-meta-text">{cliff}</span>
+                                                      <span className="vol-ch-meta-text">
+                                                        {typeof cliff === 'object' && cliff !== null
+                                                          ? (cliff.hook || cliff.description || cliff.content || JSON.stringify(cliff))
+                                                          : String(cliff)}
+                                                      </span>
                                                     </div>
                                                   )}
                                                 </div>
@@ -3528,6 +3725,15 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
           onClose={() => setDeleteConfirm(null)}
         />
       )}
+
+      {/* Edit Novel Metadata Modal */}
+      <EditNovelModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        novel={novel}
+        pipelinePrompt={novel?.pipeline_prompt || ''}
+        onSubmit={handleUpdateNovel}
+      />
     </div>
   );
 };

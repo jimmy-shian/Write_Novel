@@ -26,7 +26,7 @@ CO_PILOT_ORCHESTRATOR_PROMPT = """你是 AI 小說創作系統的最高決策創
 - `characters`：角色設計師。需要世界觀核心資料作為前置上下文。
 - `foreshadowing`：伏筆與轉折編織師。需要世界觀核心資料與角色 Bible；生成結果會合併進世界觀 JSON 的 `foreshadowing_seeds` 與 `key_turning_points`。
 - `volumes`：篇卷規劃師。需要世界觀與宏觀大綱。
-- `volume_skeleton`：卷章節骨架規劃師。一次處理完整單卷，需要明確 `volume_index`；不得要求切成一段章節生成。
+- `volume_skeleton`：卷章節骨架規劃師。需要明確 `volume_index`；後端會自主按連續批次（1-8, 9-16 等）分批生成並自動銜接前文與大綱，總監只需指定 `volume_index`。
 - `writer`：正文作家。需要明確 `chapter_index`，並依章節骨架與角色卡寫正文。
 - `editor`：正文編輯。只處理已存在正文的章節。
 
@@ -91,7 +91,7 @@ __DIRECTOR_TOOL_CALL_CONTRACT__
 - `characters` 依賴世界觀核心資料；世界觀為空時，回到 `worldview`，不要呼叫角色生成。
 - `foreshadowing` 依賴世界觀與角色 Bible；角色為空時，先回到 `characters`，不要硬派伏筆/轉折。
 - `volumes` 依賴世界觀與宏觀大綱。
-- `volume_skeleton` 依賴篇卷與伏筆/轉折分配；一次指定完整單卷，`volume_index` 不可缺。請在 `agent_prompt` 明確要求「一次生成該卷完整章節骨架」，不要輸出 SEGMENT_GENERATE、SEGMENT_COMPLETE 或任何分段任務。
+- `volume_skeleton` 依賴篇卷與伏筆/轉折分配；需要明確 `volume_index`。後端會自主拆分連續章節批次生成並緊密銜接前文，總監只需在 target 指定 `volume_index`，不要輸出 SEGMENT_GENERATE、SEGMENT_COMPLETE 或任何分段任務。
 - `writer` 依賴章節骨架、角色上下文、世界觀與分配任務；`chapter_index` 不可缺。
 - `editor` 依賴已存在正文；若指定章沒有正文，改派 `writer`。
 

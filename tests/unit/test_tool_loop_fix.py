@@ -27,6 +27,14 @@ def test_tool_loop_and_prompts():
             'goal': '變強',
             'core_trait': '堅定',
             'arc': '成長'
+        },
+        {
+            'name': '宿敵',
+            'role': 'antagonist',
+            'archetype': '冷酷反派',
+            'goal': '毀滅世界',
+            'core_trait': '殘忍',
+            'arc': '墮落'
         }
     ]
     db.save_characters(novel_id, chars_data)

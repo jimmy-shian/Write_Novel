@@ -63,32 +63,158 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=None):
-    """角色設計師提示詞拼接"""
+def _format_existing_chars_summary(existing_chars_json) -> str:
+    """提取既有已確立角色清單摘要，供後續陣營/梯隊生成時建立人物關係張力"""
+    if not existing_chars_json:
+        return "（尚無已確立角色）"
+    try:
+        parsed = json.loads(existing_chars_json) if isinstance(existing_chars_json, str) else existing_chars_json
+        chars = parsed.get("characters", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        if not chars:
+            return "（尚無已確立角色）"
+        lines = []
+        for c in chars:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name", "未命名")
+            role = c.get("role", "未知定位")
+            faction = c.get("faction") or c.get("affiliation") or "未定"
+            want = c.get("want") or c.get("motivation") or ""
+            pers = c.get("personality", [])
+            pers_str = ", ".join(pers) if isinstance(pers, list) else str(pers)
+            lines.append(f"- 【{name}】（陣營: {faction}，定位: {role}，性格: {pers_str}，核心欲求: {want[:50]}）")
+        return "\n".join(lines[:35]) + ("\n...(其餘角色略)" if len(lines) > 35 else "")
+    except Exception:
+        return "（已確立角色資料解析中）"
+
+
+def _format_factions_summary(worldview_text: str) -> str:
+    """提取世界觀中的陣營設定"""
+    if not worldview_text:
+        return "（世界觀尚未設定具體陣營）"
+    try:
+        parsed = json.loads(worldview_text) if isinstance(worldview_text, str) and worldview_text.strip().startswith("{") else {}
+        if not parsed:
+            from backend.models.parsers import extract_json_block
+            parsed = extract_json_block(worldview_text) or {}
+        factions = parsed.get("factions", [])
+        if not factions or not isinstance(factions, list):
+            return "（依世界觀正文設定之主要陣營）"
+        lines = []
+        for f in factions:
+            if isinstance(f, dict):
+                name = f.get("name", "")
+                pos = f.get("position", "")
+                res = f.get("resources", "")
+                lines.append(f"- 陣營【{name}】：立場利益: {pos}；掌握資源/制度權力: {res}")
+        return "\n".join(lines) if lines else "（依世界觀正文設定之主要陣營）"
+    except Exception:
+        return "（依世界觀正文設定之主要陣營）"
+
+
+def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=None, faction_info=None, tier=1, target_batch_count=4, wave=None):
+    """角色設計師提示詞拼接（支援世界觀陣營梯隊分段生成：每陣營 5-10 人）"""
     schema_snippet = get_json_schema_prompt_snippet("character")
     system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Designer / 角色設計師",
-        "- 經後端挑選的世界觀背景與作品核心基石，必須包含或摘要呈現 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：通常只有世界觀，沒有現有角色；這是建立角色聖經與關係網的第一次定稿。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
-        "根據作品核心基石與可見世界觀設計或修補角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者原案需求；不得用空世界觀硬編角色。",
-        "輸出完整合法的 characters JSON。generate 必須建立核心角色表、勢力歸屬、角色之間的關聯與可供卷/骨架/writer 使用的生成設定；expand/modify 應保留既有角色並補充或修正，避免刪除無關角色。"
+        "- 經後端挑選的世界觀背景與作品核心基石，必須包含 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：支援以陣營梯隊（Faction-Driven）分段生成，每個陣營保證生成 5-10 位具備完整深度的角色 Bible。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
+        "根據作品核心基石與可見世界觀設計立體深刻的群像角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者原案需求；不得用空世界觀硬編角色。",
+        "輸出完整合法的 characters JSON 物件（{'characters': [...]}）。分段生成時每次只輸出當前批次指定陣營梯隊的角色；expand/modify 應保留既有角色並補充或修正，避免刪除無關角色。"
     )
     
     core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
+    existing_summary = _format_existing_chars_summary(existing_chars_json)
+    factions_summary = _format_factions_summary(worldview_text)
+
     if mode == "generate":
-        user_content = f"""{core_context}【世界觀背景】
+        # =========================================================================
+        # 模式 A: 陣營梯隊導向分段生成 (Faction-Driven Tiered Generation)
+        # =========================================================================
+        if faction_info and isinstance(faction_info, dict):
+            f_name = faction_info.get("name", "主要勢力")
+            f_pos = faction_info.get("position", "")
+            f_res = faction_info.get("resources", "")
+            f_rel = faction_info.get("relationship_to_protagonist", "")
+
+            if tier == 1:
+                tier_label = "第一梯隊：高層核心巨頭、領袖代表與首席宿敵/導師"
+                tier_req = f"""請為陣營【{f_name}】設計 {target_batch_count} 位最核心高層角色：
+1. 角色規劃（{target_batch_count} 位高層）：
+   - 角色 1：該陣營的最高掌權者 / 裁決者 / 精神領袖（若本陣營為主角所在底層陣營，則必須為故事第一核心主角，嚴格落實核心基石能力與反差偽裝）。
+   - 角色 2 至 {target_batch_count}：陣營首席執法官、審判司長、核心宿敵、頂尖守護者或引路 Mentor。
+2. 反派與敵對高層必填：
+   - `wound_origin`: 創傷原點（其極端冷血、專制或追求力量背後的慘痛創傷）
+   - `false_belief`: 核心認知偏見（堅信的扭曲真理）
+   - `belief_collapse_3beats`: 三階動態信念崩塌節奏（陣列 3 項：認知初裂 -> 體制反噬 -> 致命真相）
+3. 必填心理與行動欄位：
+   - `name`: 具體姓名（嚴禁代號）
+   - `role`: 陣營領袖 / 首席執行官 / 核心宿敵 / 王牌強者 / 導師
+   - `faction`: 必須填寫【{f_name}】
+   - `want`, `need`, `fatal_flaw`, `want_need_conflict`, `secret`, `speech_profile`, `motivation`, `arc`, `appearance`, `background`, `relationships`
+4. ⚠️ 跨角色與跨陣營關係約束：
+   - 必須在 `relationships` 中，與【前續已確立角色】（特別是主角及對立勢力代表）建立具體的衝突、同盟、牽制或利益往來！"""
+            else:
+                tier_label = "第二梯隊：中堅骨幹、內部異見者、雙面間諜與基層代表"
+                tier_req = f"""請為陣營【{f_name}】設計 {target_batch_count} 位鮮活的中堅與基層群像角色（使該陣營總角色數充實至 6-10 人）：
+1. 角色規劃（{target_batch_count} 位中堅與基層）：
+   - 執行隊長、專利審查官、審判隊員、技術專員或情報線人。
+   - 內部異見者 / 改革派 / 叛逆者（對高層意志產生質疑與動搖者）。
+   - 雙面間諜 / 跨陣營暗線聯絡人 / 灰色交易者。
+   - 基層行動人員 / 市井幫手。
+2. 配角獨立生命力必填欄位：
+   - `independent_arc`: 配角三階段獨立成長線（物件：{{"phase_1": "...", "phase_2": "...", "phase_3": "..."}}），不得淪為傳聲筒！
+   - `off_screen_goal`: 場外個人追求（在主線劇情之外的真實生活目標）
+3. 必填心理與行動欄位：
+   - `name`: 具體姓名
+   - `role`: 中堅隊長 / 審查官 / 異見者 / 潛伏間諜 / 技術專家 / 基層幹員
+   - `faction`: 必須填寫【{f_name}】
+   - `want`, `need`, `fatal_flaw`, `want_need_conflict`, `secret`, `speech_profile`, `motivation`, `arc`, `appearance`, `background`, `relationships`
+4. ⚠️ 複雜關係網織造：
+   - 必須在 `relationships` 欄位中，與該陣營第一梯隊高層及其他陣營角色建立緊密的暗線關聯（監視、背叛、救命恩情、雙面情報等）。"""
+
+            user_content = f"""{core_context}【世界觀核心背景】
 {worldview_text}
 
+【世界觀各大陣營格局】
+{factions_summary}
+
+【前續批次已確立之角色 Bible（請與這些角色產生緊密的關係交織）】
+{existing_summary}
+
+【本次分段生成任務：陣營【{f_name}】— {tier_label}】
+- 陣營名稱：{f_name}
+- 陣營立場與利益：{f_pos}
+- 掌握資源/制度權力：{f_res}
+- 與主角/核心衝突之關係：{f_rel}
+
+{tier_req}
+
+【輸出格式】
+最外層必須是合法的單一 JSON 物件 `{{"characters": [...]}}`，列表中「僅」包含本次設計的 {target_batch_count} 位角色。
+"""
+        else:
+            # 兼容模式：無特定陣營傳入時的全量引導
+            user_content = f"""{core_context}【世界觀背景】
+{worldview_text}
+
+【世界觀各大陣營格局】
+{factions_summary}
+
+【前續已確立之角色 Bible】
+{existing_summary}
+
 【使用者要求】
-{user_prompt or "請根據作品核心基石與世界觀，為我們設計核心角色與配角群像。"}
+{user_prompt or "請根據作品核心基石與世界觀，為各陣營設計豐富立體的角色與配角群像。"}
 
 請為本作品生成符合結構的角色 Bible JSON 設定。
 硬性要求：
 1. 核心主角群的人設、動機、特殊能力與弱點必須嚴格契合【作品核心基石】（例如主角的專屬能力與原創設定），嚴禁脫離原案瞎編其他設定。
-2. 必須讀取並落實世界觀中的 `factions` / 勢力設定，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
+2. 必須讀取並落實世界觀中的 `factions` / 勢力設定，每個陣營至少規劃 5-10 人，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
 3. 必須讀取並落實 `progressive_character_plan` / 角色登場策略，讓角色功能、首次登場階段與群像節奏對齊。
 4. 必須建立可供後續 volumes、volume_skeleton、writer 使用的角色關係資料，例如 relationships / relationship_matrix / role / faction / entry_phase 等 schema 允許欄位。
 5. 不要只列人物簡介；每位核心角色都要有可寫作的動機、弱點、成長弧線、聲音/行為特徵與關係張力。
+6. 反派與敵對人物必須定義 `wound_origin`（創傷原點）與 `false_belief`（偏見執念），拒絕純臉譜化；立場動搖/轉變角色必填 `belief_collapse_3beats`（三階信仰崩塌節奏）；重要配角必填 `independent_arc` 與 `off_screen_goal`。
 """
     elif mode == "expand":
         user_content = f"""{core_context}【世界觀背景】
@@ -98,7 +224,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 {existing_chars_json}
 
 【總監批判與擴增提示 (Hint)】
-{hint or "請擴增有深度的新角色。"}
+{hint or "請擴增有深度的新角色，補足各陣營中堅與基層人物。"}
 
 【一般提示詞 (Prompt)】
 {user_prompt or "請在現有角色基礎上進行增量擴展，追加新角色。"}

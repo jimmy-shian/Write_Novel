@@ -13,6 +13,7 @@ import {
   getChatMemory,
   clearChatMemory,
   deleteChatMessage,
+  updateNovel,
   NovelDetailResponse,
 } from '../api/novels';
 
@@ -540,6 +541,30 @@ export function useNovel() {
     return removed;
   }, [saveCharactersData]);
 
+  const handleUpdateNovel = useCallback(async (
+    novelId: string,
+    title: string,
+    genre: string,
+    style: string,
+    synopsis?: string
+  ) => {
+    const res = await updateNovel(novelId, {
+      title,
+      genre,
+      style,
+      pipeline_prompt: synopsis,
+    });
+    if (res.novel) {
+      setNovels((prev) =>
+        prev.map((n) => (n.id === novelId ? { ...n, ...res.novel } : n))
+      );
+      setNovelDetail((prev) =>
+        prev ? { ...prev, novel: { ...prev.novel, ...res.novel } } : prev
+      );
+    }
+    return res;
+  }, []);
+
   return {
     novels,
     activeNovelId,
@@ -560,6 +585,7 @@ export function useNovel() {
     handleCreateNovel,
     handleDeleteNovel,
     handleResetNovelContent,
+    handleUpdateNovel,
     refreshActiveNovel,
     refreshChatMemory,
     refreshNovels,
@@ -577,4 +603,4 @@ export function useNovel() {
     cleanEmptySeeds,
     cleanEmptyCharacters,
   };
-}
+};

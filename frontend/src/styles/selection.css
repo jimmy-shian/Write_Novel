@@ -1,0 +1,349 @@
+/* ==========================================================================
+   Selection Policy Module (selection.css)
+   用途：集中管理畫面文字可選取性，保持拖曳 / 點擊操作流暢。
+   原則：
+   - 本檔為唯一允許定義 user-select 的模組，禁止在 tsx 使用 inline style
+     (style={{ userSelect: ... }}) 來控制選取。
+   - chrome UI（導航 / 按鈕 / 標籤 / 狀態 / 選單 / 空態 / 計數）一律 none。
+   - 內容區（正文 / AI 回覆 / diff / 日誌 / 可複製文字 / 錯誤訊息）一律 text。
+   - input / textarea 永遠保持可選，不可被 none 覆蓋。
+   - 載入順序：main.tsx 先 import opendesign.css，再 import 本檔，本檔優先。
+   ========================================================================== */
+
+/* ---- 0. 通用工具類（手動 opt-in / opt-out，不需 inline style） ---- */
+.select-none {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.select-text {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+/* ---- 1. 全域按鈕與導航：一律不可選（含內部 span / svg） ---- */
+button,
+button *,
+[role="button"],
+[role="combobox"],
+[role="option"],
+.btn,
+.btn *,
+.model-chip,
+.model-chip *,
+.stage-pill-btn,
+.filter-pill-btn,
+.pill-btn,
+.topbar-pill-btn,
+.preset-tag-btn,
+.category-pill-btn,
+.copilot-tab-btn,
+.copilot-tab-btn *,
+.dock-tab-btn,
+.dock-tab-btn *,
+.task-picker-toggle-btn,
+.chip-remove-btn,
+.tree-action-btn,
+.tree-expand-toggle,
+.stepper-btn {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 2. 頂部框架 / 左欄 / 底欄 / 行動導航 ---- */
+.activity-rail,
+.activity-rail *,
+.mobile-nav,
+.mobile-nav *,
+.workspace-topbar,
+.workspace-topbar .topbar-left,
+.workspace-topbar .topbar-right,
+.mobile-menu-btn,
+.mobile-copilot-btn,
+.novel-title-text,
+.topbar-separator,
+.chapter-title-text,
+.save-status-indicator,
+.save-status-label,
+.topbar-view-select,
+.topbar-view-select *,
+.topbar-group-title,
+.topbar-option-group,
+.view-switcher-menu,
+.view-switcher-item,
+.explorer-drawer .explorer-header,
+.explorer-tag-badge,
+.explorer-title,
+.explorer-actions,
+.explorer-loading-indicator,
+.explorer-section-title,
+.bottom-dock .dock-resizer,
+.bottom-dock .dock-header,
+.bottom-dock .dock-header *,
+.dock-title,
+.dock-tabs,
+.dock-toggle-label,
+.dock-empty-hint {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 3. 左側目錄樹（點擊導航用，不需選字） ---- */
+.tree-item,
+.tree-item *,
+.tree-sub-item,
+.tree-sub-header,
+.tree-sub-header *,
+.tree-item-title,
+.tree-item-badge,
+.tree-item-meta,
+.unwritten-badge,
+.tree-arrow,
+.tree-arrow-side,
+.tree-context-menu,
+.tree-context-item,
+.empty-tree-hint,
+.explorer-footer,
+.delete-novel-btn {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 4. 下拉選單 / Modal 殼 ---- */
+.custom-select,
+.custom-select *,
+.select-trigger,
+.select-trigger-text,
+.select-main-label,
+.select-sub-label,
+.select-placeholder,
+.select-options,
+.option,
+.option-label,
+.option-sub-label,
+.empty-option,
+.modal-header,
+.modal-title,
+.modal-close-btn,
+.modal-footer,
+.modal-footer-actions,
+.modal-footer-buttons,
+.settings-version-tag {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 5. 編輯器 / Diff / 提案箱 chrome ---- */
+.editor-toolbar,
+.editor-toolbar *,
+.editor-chapter-tag,
+.font-size-stepper,
+.stepper-val,
+.stat-separator,
+.stat-item,
+.stat-dirty-badge,
+.editor-loading-mask,
+.diff-header-bar,
+.diff-header-bar *,
+.diff-title,
+.diff-stat-badges,
+.diff-empty-banner,
+.diff-empty-state,
+.proposal-inbox-header,
+.proposal-inbox-header *,
+.inbox-title-wrapper,
+.inbox-title,
+.inbox-filter-group,
+.proposal-card-header,
+.proposal-card-title,
+.proposal-date,
+.comment-type-tag,
+.proposal-card-actions,
+.inbox-empty-hint,
+.inbox-sub-hint {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 6. TaskPicker / Worldview 表單籤與卡頭 ---- */
+.task-picker-wrapper .card-inline-label,
+.task-picker-placeholder,
+.task-picker-chip,
+.chip-text,
+.task-picker-item-code,
+.task-picker-item-name,
+.task-status-badge,
+.task-picker-search-bar,
+.task-picker-add-custom-btn,
+.task-picker-empty-hint,
+.task-picker-create-link,
+.card-inline-label,
+.worldview-header,
+.worldview-header *,
+.worldview-tabs,
+.worldview-tab-btn,
+.worldview-actions,
+.btn-divider,
+.quick-card-title-row,
+.quick-card-title,
+.edit-meta-btn,
+.meta-label,
+.copy-content-btn,
+.worldview-card-title,
+.worldview-card-title *,
+.vol-badge,
+.vol-title,
+.vol-chapters-range,
+.vol-ch-header,
+.vol-ch-header *,
+.vol-ch-num,
+.vol-ch-title,
+.char-trait-pill,
+.faction-pill,
+.vol-task-badge,
+.vol-task-label,
+.lazy-load-action-bar,
+.worldview-empty-state,
+.empty-blueprint-guide,
+.badge {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 7. Copilot / 紀錄流 chrome ---- */
+.copilot-panel .copilot-header,
+.copilot-panel .copilot-header *,
+.copilot-title,
+.copilot-header-actions,
+.copilot-tab-switch-bar,
+.copilot-tab-count,
+.copilot-stage-selector .copilot-section-header,
+.copilot-section-label,
+.stage-collapsed-badge,
+.toggle-text,
+.stage-group-title,
+.stage-switch-indicator,
+.stage-indicator-badge,
+.stage-indicator-title,
+.stage-indicator-desc,
+.copilot-auto-card,
+.auto-card-title,
+.auto-card-desc,
+.copilot-status-box,
+.copilot-status-text,
+.thinking-box-header,
+.output-box-header,
+.output-box-header *,
+.copilot-empty-placeholder,
+.copilot-records-toolbar,
+.copilot-records-toolbar *,
+.copilot-records-filters,
+.copilot-records-actions,
+.copilot-records-empty,
+.empty-subtext,
+.message-card-header,
+.message-card-header *,
+.message-card-meta,
+.message-card-time,
+.message-card-actions,
+.thinking-toggle-trigger,
+.thinking-toggle-trigger *,
+.thinking-trigger-left,
+.thinking-arrow,
+.terms-action-bar,
+.terms-action-bar *,
+.terms-explainer-banner,
+.terms-empty-hint,
+.term-card-header,
+.term-header-actions,
+.settings-section-title,
+.theme-option-card,
+.theme-option-card *,
+.theme-name,
+.theme-desc,
+.form-label,
+.checkbox-label,
+.checkbox-label *,
+.model-target-indicator,
+.model-suggestions-header,
+.graph-board-header,
+.graph-board-header *,
+.graph-board-title,
+.graph-board-subtitle,
+.graph-board-actions,
+.pane-sub-header,
+.pane-sub-title,
+.fact-status-meta,
+.fact-valid-range,
+.fact-actions,
+.facts-empty-hint,
+.entities-empty-hint,
+.add-fact-inline-form .form-label,
+.inline-card-buttons,
+.form-hint,
+.reset-alert-tag,
+.reset-alert-title,
+.reset-breakdown-header,
+.reset-select-actions,
+.reset-link-btn,
+.reset-link-sep,
+.reset-select-count,
+.reset-scope-title,
+.reset-scope-desc,
+.reset-breakdown-note,
+.reset-verify-label,
+.reset-target-copy-hint,
+.copy-card-key,
+.copy-card-hint,
+.copy-card-action,
+.toast-icon,
+.toast-close-btn {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 8. 必須保持可選（內容 / 日誌 / 錯誤 / 可複製文字） ----
+   明確宣告 text，防止被上方 chrome 規則或 worldview board 的繼承影響。 */
+.editor-textarea,
+.worldview-textarea,
+.diff-content,
+.proposal-snippet,
+.comment-text,
+.message-card-content,
+.thinking-inner-text,
+.thinking-box-content,
+.output-box-content,
+.copilot-textarea,
+.fact-statement-text,
+.fact-superseded-hint,
+.entity-name,
+.entity-summary,
+.entity-footer-meta,
+.dock-body,
+.dock-log-line,
+.dock-status-pre,
+.toast-message,
+.form-feedback-banner,
+.reset-feedback-row,
+.copy-card-val,
+.term-name,
+.term-definition,
+.term-notes,
+.detail-val,
+.cloud-alert-banner,
+.reset-alert-desc,
+.confirm-modal-text,
+.meta-val {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ---- 9. 輸入元件永遠可選（最高優先，不可被覆蓋） ---- */
+input,
+textarea,
+input *,
+textarea *,
+[contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
