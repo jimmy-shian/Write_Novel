@@ -63,8 +63,12 @@ if not "%~1"=="" (
     goto port_check
 )
 echo.
-echo [?] 5 秒後自動使用 port 8000 啟動，要自訂請直接輸入數字後按 Enter。
-for /f "delims=" %%P in ('powershell -noprofile -command "$r=[Console]::In.ReadLineAsync(); if($r.Wait(5000)){$v=$r.Result; if($v){$v.Trim()}else{'8000'}}else{'8000'}"') do set "PORT=%%P"
+echo [?] 5 秒後自動使用 port 8000 啟動，要自訂請按數字鍵。
+del "%TEMP%\AI_Novel_port.txt" 2>nul
+"%PYTHON%" "scripts\prompt_port.py" > "%TEMP%\AI_Novel_port.txt"
+if exist "%TEMP%\AI_Novel_port.txt" ( set /p PORT=<"%TEMP%\AI_Novel_port.txt" ) else ( set "PORT=8000" )
+del "%TEMP%\AI_Novel_port.txt" 2>nul
+echo.
 if "%PORT%"=="" set "PORT=8000"
 echo [*] 使用 port %PORT% 啟動。
 
