@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#141210" />
+    <title>AI Novel Factory</title>
+    <script>
+      (function() {
+        try {
+          var t = localStorage.getItem('ai_novel_theme') || 'dark';
+          document.documentElement.setAttribute('data-theme', t);
+          var s = localStorage.getItem('editor_font_size');
+          if (s) document.documentElement.style.setProperty('--editor-font-size', s + 'px');
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script type="module" crossorigin src="./assets/index-J5k1_ppL.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BRmu_Glx.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
