@@ -76,6 +76,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
             type="button"
             className={`filter-pill-btn ${filter === 'all' ? 'active' : ''}`}
             onClick={() => setFilter('all')}
+            data-tooltip="顯示全部對話與工作紀錄"
+            data-tooltip-pos="bottom"
           >
             全部 ({counts.all})
           </button>
@@ -83,6 +85,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
             type="button"
             className={`filter-pill-btn ${filter === 'director' ? 'active' : ''}`}
             onClick={() => setFilter('director')}
+            data-tooltip="只顯示總監評斷"
+            data-tooltip-pos="bottom"
           >
             總監評斷 ({counts.director})
           </button>
@@ -90,6 +94,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
             type="button"
             className={`filter-pill-btn ${filter === 'pipeline' ? 'active' : ''}`}
             onClick={() => setFilter('pipeline')}
+            data-tooltip="只顯示流水線創作指令"
+            data-tooltip-pos="bottom"
           >
             創作指令 ({counts.pipeline})
           </button>
@@ -98,6 +104,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
               type="button"
               className={`filter-pill-btn ${filter === 'system' ? 'active' : ''}`}
               onClick={() => setFilter('system')}
+              data-tooltip="只顯示系統通知"
+              data-tooltip-pos="bottom"
             >
               系統 ({counts.system})
             </button>
@@ -111,7 +119,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
             onClick={onRefresh}
             isLoading={isLoading}
             icon={<IconRefresh size={12} />}
-            title="從資料庫重新整理最新紀錄"
+            data-tooltip="從資料庫重新整理最新紀錄"
+            data-tooltip-pos="bottom"
           >
             重新整理
           </Button>
@@ -120,7 +129,8 @@ export const DirectorRecordsStream: React.FC<DirectorRecordsStreamProps> = ({
             size="xs"
             onClick={() => onClear(filter)}
             icon={<IconTrash size={12} />}
-            title={filter === 'all' ? '清空全部對話紀錄' : '清空當前分類紀錄'}
+            data-tooltip={filter === 'all' ? '清空全部對話紀錄' : '清空當前分類紀錄'}
+            data-tooltip-pos="bottom"
           >
             {filter === 'all' ? '清空全部' : '清空當前'}
           </Button>

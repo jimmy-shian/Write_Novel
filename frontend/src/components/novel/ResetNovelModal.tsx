@@ -10,10 +10,10 @@ export interface ResetScopeOption {
 }
 
 export const RESET_SCOPE_OPTIONS: ResetScopeOption[] = [
-  { key: 'worldbuilding', title: '世界觀設定與力量體系', desc: '世界觀、轉折點、伏筆種子' },
+  { key: 'worldbuilding', title: '世界觀設定與力量體系', desc: '世界觀、轉折點、伏筆種子（含伏筆藍圖）' },
   { key: 'characters', title: '角色聖經與人物設定', desc: '全部人物卡' },
-  { key: 'plot', title: '分卷規劃與章節骨架細綱', desc: '分卷 + 章綱' },
-  { key: 'chapters', title: '所有章節正文初稿與精修', desc: '已生成的正文內容（含連動清除時序圖譜與自動術語，手動術語保留）' },
+  { key: 'plot', title: '分卷規劃與章節骨架細綱', desc: '分卷 + 章綱（含連動清除幾何拓撲樹）' },
+  { key: 'chapters', title: '所有章節正文初稿與精修', desc: '已生成的正文內容（含連動清除時序圖譜、幾何拓撲、草稿提案、自動術語與敘事引擎簽名/審計，手動術語保留）' },
   { key: 'chat', title: '對話記憶與流水線狀態', desc: '對話紀錄、導演指令、上下文記憶' },
 ];
 

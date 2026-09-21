@@ -6,9 +6,15 @@ export interface SelectOption {
   subLabel?: string;
 }
 
+export interface SelectOptionGroup {
+  title: string;
+  options: SelectOption[];
+}
+
 interface CustomSelectProps {
   value: string;
-  options: SelectOption[];
+  options?: SelectOption[];
+  groups?: SelectOptionGroup[];
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
@@ -19,7 +25,8 @@ interface CustomSelectProps {
 
 export const CustomSelect: React.FC<CustomSelectProps> = ({
   value,
-  options,
+  options = [],
+  groups,
   onChange,
   placeholder = '請選擇...',
   className = '',
@@ -30,7 +37,12 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const selectedOption = options.find((opt) => opt.value === value);
+  // 扁平選項與分組選項共用同一套動畫樣式（下拉式選單動畫.txt：scaleY + opacity + 箭頭旋轉）
+  // 有 groups 時以分組渲染（例如頂欄視圖切換），否則走扁平 options（敘事引擎各 Tab）。
+  const flatOptions: SelectOption[] = groups
+    ? groups.flatMap((g) => g.options)
+    : options;
+  const selectedOption = flatOptions.find((opt) => opt.value === value);
 
   const handleToggle = useCallback(() => {
     if (!disabled) {
@@ -81,10 +93,10 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
       if (!isOpen) {
         setIsOpen(true);
       } else {
-        const currentIndex = options.findIndex((opt) => opt.value === value);
-        const nextIndex = (currentIndex + 1) % options.length;
-        if (options[nextIndex]) {
-          onChange(options[nextIndex].value);
+        const currentIndex = flatOptions.findIndex((opt) => opt.value === value);
+        const nextIndex = (currentIndex + 1) % flatOptions.length;
+        if (flatOptions[nextIndex]) {
+          onChange(flatOptions[nextIndex].value);
         }
       }
     } else if (e.key === 'ArrowUp') {
@@ -92,13 +104,33 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
       if (!isOpen) {
         setIsOpen(true);
       } else {
-        const currentIndex = options.findIndex((opt) => opt.value === value);
-        const prevIndex = (currentIndex - 1 + options.length) % options.length;
-        if (options[prevIndex]) {
-          onChange(options[prevIndex].value);
+        const currentIndex = flatOptions.findIndex((opt) => opt.value === value);
+        const prevIndex = (currentIndex - 1 + flatOptions.length) % flatOptions.length;
+        if (flatOptions[prevIndex]) {
+          onChange(flatOptions[prevIndex].value);
         }
       }
     }
+  };
+
+  const renderOption = (opt: SelectOption) => {
+    const isSelected = opt.value === value;
+    const fullTitle = `${opt.label}${opt.subLabel ? ` (${opt.subLabel})` : ''}`;
+    return (
+      <div
+        key={opt.value}
+        className={`option ${isSelected ? 'selected' : ''}`}
+        onClick={() => handleSelect(opt.value)}
+        role="option"
+        aria-selected={isSelected}
+        title={fullTitle}
+      >
+        <span className="option-label marquee-on-hover">{opt.label}</span>
+        {opt.subLabel && (
+          <span className="option-sub-label">({opt.subLabel})</span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -137,28 +169,17 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
       </div>
 
       <div className="select-options" role="listbox">
-        {options.length === 0 ? (
+        {flatOptions.length === 0 ? (
           <div className="option empty-option">(無可用選項)</div>
+        ) : groups && groups.length > 0 ? (
+          groups.map((group) => (
+            <div key={group.title} className="topbar-option-group select-option-group">
+              <div className="topbar-group-title">{group.title}</div>
+              {group.options.map((opt) => renderOption(opt))}
+            </div>
+          ))
         ) : (
-          options.map((opt) => {
-            const isSelected = opt.value === value;
-            const fullTitle = `${opt.label}${opt.subLabel ? ` (${opt.subLabel})` : ''}`;
-            return (
-              <div
-                key={opt.value}
-                className={`option ${isSelected ? 'selected' : ''}`}
-                onClick={() => handleSelect(opt.value)}
-                role="option"
-                aria-selected={isSelected}
-                title={fullTitle}
-              >
-                <span className="option-label marquee-on-hover">{opt.label}</span>
-                {opt.subLabel && (
-                  <span className="option-sub-label">({opt.subLabel})</span>
-                )}
-              </div>
-            );
-          })
+          options.map((opt) => renderOption(opt))
         )}
       </div>
     </div>

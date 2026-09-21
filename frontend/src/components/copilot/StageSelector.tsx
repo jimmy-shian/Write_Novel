@@ -10,6 +10,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
   onSelectStage,
   onToggleCollapse,
   onToggleAuto,
+  onOpenGuide,
 }) => {
   const currentStageDef = STAGE_DEFINITIONS.find((s) => s.id === activeStage) || STAGE_DEFINITIONS[0];
 
@@ -26,6 +27,19 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
           {isCollapsed && (
             <span className="stage-collapsed-badge">{currentStageDef.label}</span>
           )}
+          {onOpenGuide && (
+            <button
+              type="button"
+              className="stage-guide-entry-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenGuide();
+              }}
+              title="查看階段導覽（幾何與語義 4 顆按鈕的用法）"
+            >
+              ⓘ 導覽
+            </button>
+          )}
         </div>
         <div className="accordion-toggle-indicator">
           <span className="toggle-text">{isCollapsed ? '展開' : '收合'}</span>
@@ -39,7 +53,11 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
       <div className={`stage-collapsible-wrapper ${isCollapsed ? 'collapsed' : 'open'}`}>
         <div className="stage-grouped-container">
           {STAGE_GROUPS.map((group) => (
-            <div key={group.id} className="stage-group-block">
+            <div
+              key={group.id}
+              className="stage-group-block"
+              data-tour={group.id === 'geometry_semantic' ? 'stage-group-geometry' : undefined}
+            >
               <div className="stage-group-header">
                 <span className="stage-group-title">{group.title}</span>
               </div>
@@ -51,6 +69,7 @@ export const StageSelector: React.FC<StageSelectorProps> = ({
                     className={`stage-pill-btn ${activeStage === st.id ? 'active' : ''}`}
                     onClick={() => onSelectStage(st.id)}
                     title={st.desc}
+                    data-stage={st.id}
                   >
                     {st.label}
                   </button>

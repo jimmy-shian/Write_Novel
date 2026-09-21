@@ -10,10 +10,11 @@ import { MobileNav } from './components/layout/MobileNav';
 import { EditorPane } from './components/editor/EditorPane';
 import { DiffViewer } from './components/editor/DiffViewer';
 import { ProposalInbox } from './components/editor/ProposalInbox';
-import { TemporalGraphBoard } from './components/graph/TemporalGraphBoard';
 import { WorldviewPane } from './components/editor/WorldviewPane';
+import { StoryHubBoard, StoryHubSubTab } from './components/architecture';
 import { CopilotDrawer } from './components/copilot/CopilotDrawer';
 import { SettingsModal } from './components/settings/SettingsModal';
+import { GlobalTooltip } from './components/ui/GlobalTooltip';
 import { TermsModal } from './components/settings/TermsModal';
 import {
   streamGenerationTask,
@@ -22,8 +23,10 @@ import {
   stopAutoPipeline,
 } from './api/generation';
 import { CreationStage, DraftProposal } from './types';
+import { getChapterTitle } from './utils/chapters';
 import { ToastContainer, showToast } from './components/common/Toast';
 import { useExpansionSync } from './hooks/useExpansionSync';
+import { emitChapterContentUpdated } from './utils/narrativeRefresh';
 import {
   ThemeMode,
   getCachedPreferences,
@@ -124,11 +127,15 @@ export const App: React.FC = () => {
   // Layout and view state
   const [activeView, setActiveView] = useState<ActiveView>(() => {
     const saved = localStorage.getItem('writenovel_last_view');
-    return (saved === 'editor' || saved === 'graph' || saved === 'inbox' || saved === 'worldview' || saved === 'diff') ? (saved as ActiveView) : 'editor';
+    return (saved === 'editor' || saved === 'graph' || saved === 'inbox' || saved === 'worldview' || saved === 'diff' || saved === 'narrative' || saved === 'geometry' || saved === 'structure') ? (saved as ActiveView) : 'editor';
   });
   const [worldviewTab, setWorldviewTab] = useState<'worldview' | 'characters' | 'plot'>(() => {
     const saved = localStorage.getItem('writenovel_last_worldview_tab');
     return (saved === 'worldview' || saved === 'characters' || saved === 'plot') ? saved : 'worldview';
+  });
+  const [structureSubTab, setStructureSubTab] = useState<StoryHubSubTab>(() => {
+    const saved = localStorage.getItem('writenovel_last_structure_tab');
+    return (saved === 'geometry' || saved === 'graph' || saved === 'narrative') ? (saved as StoryHubSubTab) : 'geometry';
   });
 
   useEffect(() => {
@@ -138,10 +145,36 @@ export const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('writenovel_last_worldview_tab', worldviewTab);
   }, [worldviewTab]);
+
+  useEffect(() => {
+    localStorage.setItem('writenovel_last_structure_tab', structureSubTab);
+  }, [structureSubTab]);
+
   const [isExplorerOpenMobile, setIsExplorerOpenMobile] = useState(false);
   const [isCopilotOpenMobile, setIsCopilotOpenMobile] = useState(false);
+  // 桌面端兩側欄折疊狀態（進入架構/幾何拓撲中樞時預設雙收合，釋放 260px + 320px 畫布；
+  // 切回編輯/世界觀時自動回歸展開）
+  const isStructureFamily = (v: string) =>
+    v === 'structure' || v === 'geometry' || v === 'graph' || v === 'narrative';
+  const [isCopilotCollapsedDesktop, setIsCopilotCollapsedDesktop] = useState<boolean>(() => {
+    return isStructureFamily(activeView);
+  });
+  const [isExplorerCollapsedDesktop, setIsExplorerCollapsedDesktop] = useState<boolean>(() => {
+    return isStructureFamily(activeView);
+  });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
+
+  // 視圖切換時自動收合/回歸：進拓撲雙收合放大中間，離開即回歸，避免導演室卡死收合態
+  useEffect(() => {
+    if (isStructureFamily(activeView)) {
+      setIsCopilotCollapsedDesktop(true);
+      setIsExplorerCollapsedDesktop(true);
+    } else {
+      setIsCopilotCollapsedDesktop(false);
+      setIsExplorerCollapsedDesktop(false);
+    }
+  }, [activeView]);
 
   // Copilot and Generation state
   const [currentStage, setCurrentStage] = useState<CreationStage>('writer');
@@ -150,12 +183,15 @@ export const App: React.FC = () => {
   const [thinkingText, setThinkingText] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [currentStatus, setCurrentStatus] = useState('');
-  const [logs, setLogs] = useState<string[]>([]);
   const [autoStatusText, setAutoStatusText] = useState('');
   const [isBottomDockOpen, setIsBottomDockOpen] = useState(false);
 
   // Synchronize stage selection with workspace view
+  // suppressStageSyncRef：本次視圖切換來自右側階段按鈕，反向同步跳過一次，
+  // 避免 effect 把剛選的 macro_semantic / character_semantic / cross_relation 蓋成 geometry。
+  const suppressStageSyncRef = useRef(false);
   const handleSelectStage = useCallback((stage: CreationStage) => {
+    suppressStageSyncRef.current = true;
     setCurrentStage(stage);
     if (stage === 'writer') {
       setActiveView('editor');
@@ -170,13 +206,38 @@ export const App: React.FC = () => {
     } else if (stage === 'volumes' || stage === 'volume_skeleton') {
       setActiveView('worldview');
       setWorldviewTab('plot');
+    } else if (stage === 'geometry' || stage === 'macro_semantic' || stage === 'character_semantic' || stage === 'cross_relation') {
+      setActiveView('structure');
+      setStructureSubTab('geometry');
     }
   }, []);
 
-  // Hierarchical view navigation handler supporting worldview sub-tabs
-  const handleSelectWorkspaceView = useCallback((view: ActiveView, subTab?: 'worldview' | 'characters' | 'plot') => {
+  // Hierarchical view navigation handler supporting worldview & structure sub-tabs
+  const handleSelectWorkspaceView = useCallback((view: ActiveView, subTab?: any) => {
     if (view === 'terms') {
       setIsTermsOpen(true);
+      return;
+    }
+    if (view === 'geometry') {
+      setActiveView('structure');
+      setStructureSubTab('geometry');
+      return;
+    }
+    if (view === 'graph') {
+      setActiveView('structure');
+      setStructureSubTab('graph');
+      return;
+    }
+    if (view === 'narrative') {
+      setActiveView('structure');
+      setStructureSubTab('narrative');
+      return;
+    }
+    if (view === 'structure') {
+      setActiveView('structure');
+      if (subTab === 'geometry' || subTab === 'graph' || subTab === 'narrative') {
+        setStructureSubTab(subTab);
+      }
       return;
     }
     setActiveView(view);
@@ -185,8 +246,14 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Bi-directional synchronization: sync workspace view & worldviewTab back to currentStage
+  // Bi-directional synchronization: sync workspace view & sub-tabs back to currentStage.
+  // 反向跟隨：直接點中樞三頁籤（幾何 / 圖譜 / 推理）時，右側流水線高亮同步；
+  // 時序圖譜與推理引擎無對應流水線階段，保留目前階段不動。
   useEffect(() => {
+    if (suppressStageSyncRef.current) {
+      suppressStageSyncRef.current = false;
+      return;
+    }
     if (activeView === 'editor') {
       setCurrentStage('writer');
     } else if (activeView === 'diff' || activeView === 'proposals') {
@@ -199,8 +266,25 @@ export const App: React.FC = () => {
       } else if (worldviewTab === 'plot') {
         setCurrentStage('volumes');
       }
+    } else if (
+      activeView === 'structure' ||
+      activeView === 'geometry' ||
+      activeView === 'graph' ||
+      activeView === 'narrative'
+    ) {
+      const sub =
+        activeView === 'graph'
+          ? 'graph'
+          : activeView === 'narrative'
+            ? 'narrative'
+            : activeView === 'geometry'
+              ? 'geometry'
+              : structureSubTab;
+      if (sub === 'geometry') {
+        setCurrentStage('geometry');
+      }
     }
-  }, [activeView, worldviewTab]);
+  }, [activeView, worldviewTab, structureSubTab]);
 
   const [worldviewTarget, setWorldviewTarget] = useState<{
     type: 'character' | 'volume';
@@ -262,15 +346,75 @@ export const App: React.FC = () => {
   }, [worldviewTarget, novelDetail, activeChapterIndex]);
 
   const activeNovel = novelDetail?.novel || novels.find((n) => n.id === activeNovelId) || null;
+  const activeChapterTitle = React.useMemo(
+    () => getChapterTitle(novelDetail, activeChapterIndex),
+    [novelDetail, activeChapterIndex],
+  );
   const autoPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastSeenLogCountRef = useRef<number>(0);
+  // 每本小說各自追蹤已同步的後端日誌序號（seq 單調遞增，不受後端 logs[-100:] 截斷影響）
+  const lastSeenLogSeqRef = useRef<Record<string, number>>({});
   const prevAutoStageRef = useRef<string | null>(null);
   const hasMountedReconnectRef = useRef<boolean>(false);
 
-  const addLog = useCallback((message: string) => {
+  // 日誌按小說隔離：key 為 novelId；無活躍小說時的全域訊息歸入 '_global'
+  const [logsByNovel, setLogsByNovel] = useState<Record<string, string[]>>({});
+  const activeNovelIdRef = useRef<string | null>(activeNovelId);
+  useEffect(() => {
+    activeNovelIdRef.current = activeNovelId;
+  }, [activeNovelId]);
+
+  const pushLogTo = useCallback((novelKey: string, message: string) => {
     const timestamp = new Date().toLocaleTimeString();
-    setLogs((prev) => [...prev, `[${timestamp}] ${message}`]);
+    setLogsByNovel((prev) => ({
+      ...prev,
+      [novelKey]: [...(prev[novelKey] || []), `[${timestamp}] ${message}`].slice(-400),
+    }));
   }, []);
+
+  const addLog = useCallback((message: string) => {
+    pushLogTo(activeNovelIdRef.current || '_global', message);
+  }, [pushLogTo]);
+
+  // 以後端單調遞增 seq 做增量同步（舊後端無 seq 時退回以筆數比對），
+  // 回傳本次新同步的 entries 供呼叫端判斷階段是否完成
+  const ingestPipelineLogs = useCallback((novelId: string, entries: any[] | undefined | null, prefix: string): any[] => {
+    if (!novelId || !Array.isArray(entries) || entries.length === 0) return [];
+    const lastSeen = lastSeenLogSeqRef.current[novelId] || 0;
+    const seqOf = (e: any) => (typeof e?.seq === 'number' ? e.seq : 0);
+    let fresh: any[];
+    let newSeen: number;
+    if (entries.every((e: any) => typeof e?.seq !== 'number')) {
+      // 舊後端相容：logs 只追加時以筆數做增量
+      if (entries.length <= lastSeen) return [];
+      fresh = entries.slice(lastSeen);
+      newSeen = entries.length;
+    } else {
+      fresh = entries.filter((e: any) => seqOf(e) > lastSeen);
+      if (fresh.length === 0) return [];
+      newSeen = Math.max(lastSeen, ...entries.map(seqOf));
+    }
+    lastSeenLogSeqRef.current[novelId] = newSeen;
+    const lines = fresh.map((e: any) => `[${e.time || new Date().toLocaleTimeString()}] ${prefix}${e.msg}`);
+    setLogsByNovel((prev) => ({
+      ...prev,
+      [novelId]: [...(prev[novelId] || []), ...lines].slice(-400),
+    }));
+    return fresh;
+  }, []);
+
+  // 當前小說專屬日誌（與其他作品完全隔離）
+  const activeLogs = logsByNovel[activeNovelId || '_global'] || [];
+
+  // 切換作品時：重置階段追蹤與殘留的自主進度文字，避免跨小說污染顯示
+  const isFirstNovelSyncRef = useRef(true);
+  useEffect(() => {
+    prevAutoStageRef.current = null;
+    if (isFirstNovelSyncRef.current) {
+      isFirstNovelSyncRef.current = false;
+      return;
+    }
+    setAutoStatusText('');
+  }, [activeNovelId]);
 
   // Reconnect on mount if autonomous writing is actively running in background (one-time check)
   useEffect(() => {
@@ -284,11 +428,12 @@ export const App: React.FC = () => {
         if (running || activeTasks.length > 0) {
           setIsBottomDockOpen(true);
           const activeTask = running ? status : activeTasks[0];
+          const taskNovelId = activeTask.novel_id ? String(activeTask.novel_id) : null;
           // 僅在前端初次進入且尚未選擇任何作品時，才自動切換至運行中的那本
-          if (activeTask.novel_id && !activeNovelId) {
-            setActiveNovelId(activeTask.novel_id);
+          if (taskNovelId && !activeNovelId) {
+            setActiveNovelId(taskNovelId);
             setIsAutoRunning(true);
-          } else if (activeTask.novel_id && activeTask.novel_id === activeNovelId) {
+          } else if (taskNovelId && taskNovelId === activeNovelId) {
             setIsAutoRunning(true);
           }
           if (activeTask.status_message || activeTask.current_stage) {
@@ -296,10 +441,11 @@ export const App: React.FC = () => {
               `作品: ${activeTask.novel_title || '進行中'}\n當前章節: 第 ${activeTask.current_chapter || 0} 章\n階段: ${activeTask.status_message || activeTask.current_stage}\n進度: ${activeTask.progress_percent || 0}%`
             );
           }
-          if (activeTask.logs && Array.isArray(activeTask.logs)) {
-            lastSeenLogCountRef.current = activeTask.logs.length;
+          // 回放後端已累積的歷史日誌（不再丟失），並以 seq 記錄同步游標
+          if (taskNovelId) {
+            ingestPipelineLogs(taskNovelId, activeTask.logs, '[自主寫作] ');
+            pushLogTo(taskNovelId, `已連線至背景自主寫作流水線 (${activeTask.novel_title || '小說'} / ${activeTask.status_message || activeTask.current_stage})`);
           }
-          addLog(`已連線至背景自主寫作流水線 (${activeTask.novel_title || '小說'} / ${activeTask.status_message || activeTask.current_stage})`);
         }
       })
       .catch((err) => console.warn('檢查背景自主流水線狀態失敗:', err));
@@ -310,8 +456,12 @@ export const App: React.FC = () => {
     const pollFn = async () => {
       try {
         const status = await getAutoPipelineStatus(activeNovelId || undefined);
-        const isCurrentRunning = Boolean(status.is_running ?? status.running);
+        const rawRunning = Boolean(status.is_running ?? status.running);
+        const statusNovelId = status.novel_id ? String(status.novel_id) : null;
         const activeTasks = Array.isArray(status.active_tasks) ? status.active_tasks : [];
+        // 僅當回傳任務確實屬於當前活躍小說時才視為「當前運行中」，
+        // 避免未選小說時把背景任務誤判為當前任務
+        const isCurrentRunning = rawRunning && !!activeNovelId && statusNovelId === String(activeNovelId);
 
         // 更新當前檢視小說的運行狀態 (決定啟動/中止按鈕)
         setIsAutoRunning(isCurrentRunning);
@@ -325,23 +475,17 @@ export const App: React.FC = () => {
           }
 
           let stageCompleted = false;
-          if (status.logs && Array.isArray(status.logs)) {
-            if (status.logs.length > lastSeenLogCountRef.current) {
-              const newEntries = status.logs.slice(lastSeenLogCountRef.current);
-              newEntries.forEach((entry) => {
-                addLog(`[自主寫作] ${entry.msg}`);
-                if (
-                  entry.msg.includes('✅') ||
-                  entry.msg.includes('完成') ||
-                  entry.msg.includes('就緒') ||
-                  entry.msg.includes('持久化')
-                ) {
-                  stageCompleted = true;
-                }
-              });
-              lastSeenLogCountRef.current = status.logs.length;
+          const freshEntries = ingestPipelineLogs(String(activeNovelId), status.logs, '[自主寫作] ');
+          freshEntries.forEach((entry: any) => {
+            if (
+              entry.msg.includes('✅') ||
+              entry.msg.includes('完成') ||
+              entry.msg.includes('就緒') ||
+              entry.msg.includes('持久化')
+            ) {
+              stageCompleted = true;
             }
-          }
+          });
 
           const currStage = status.current_stage || null;
           if (currStage && currStage !== prevAutoStageRef.current) {
@@ -355,6 +499,14 @@ export const App: React.FC = () => {
             refreshActiveNovel();
             refreshGraph();
             refreshChatMemory();
+            // 每章內容生成後 Story Engine 2.0 自己刷新，和前端正文同步更新顯示
+            if (activeNovelId) {
+              emitChapterContentUpdated(
+                activeNovelId,
+                'auto-pipeline',
+                status.current_chapter || activeChapterIndex,
+              );
+            }
           }
         } else if (activeTasks.length > 0) {
           // 當前小說未在運行，但背景有其他小說正在自主寫作中
@@ -363,16 +515,14 @@ export const App: React.FC = () => {
             `【背景創作進行中】作品：《${bgTask.novel_title}》\n當前進度: 第 ${bgTask.current_chapter || 0}/${bgTask.total_chapters || 0} 章 (${bgTask.progress_percent || 0}%)\n當前階段: ${bgTask.status_message || bgTask.current_stage}\n\n(提示：您目前正在瀏覽其他小說，背景任務持續穩定運行中)`
           );
 
-          // 仍可同步背景任務的新日誌至 dock
-          if (bgTask.logs && Array.isArray(bgTask.logs)) {
-            if (bgTask.logs.length > lastSeenLogCountRef.current) {
-              const newEntries = bgTask.logs.slice(lastSeenLogCountRef.current);
-              newEntries.forEach((entry: any) => {
-                addLog(`[雲端·${bgTask.novel_title}] ${entry.msg}`);
-              });
-              lastSeenLogCountRef.current = bgTask.logs.length;
-            }
+          // 仍可同步背景任務的新日誌至 dock（以該背景小說自己的 seq 游標增量）
+          if (bgTask.novel_id) {
+            ingestPipelineLogs(String(bgTask.novel_id), bgTask.logs, `[雲端·${bgTask.novel_title}] `);
           }
+        } else {
+          // 當前小說與背景皆無運行中任務：清空殘留的自主進度文字，
+          // 避免任務完成/中止/切換作品後仍顯示上一本的章節與進度
+          setAutoStatusText('');
         }
 
         // 當前小說剛結束運行的提示與重新整理
@@ -392,6 +542,10 @@ export const App: React.FC = () => {
           refreshGraph();
           refreshProposals();
           refreshChatMemory();
+          // 自主寫作結束（完成/中止/異常）也同步刷新敘事推理引擎
+          if (activeNovelId) {
+            emitChapterContentUpdated(activeNovelId, 'auto-pipeline', activeChapterIndex);
+          }
         }
       } catch (err) {
         // 忽略偶發網路抖動
@@ -404,7 +558,7 @@ export const App: React.FC = () => {
         clearInterval(autoPollTimerRef.current);
       }
     };
-  }, [activeNovelId, addLog, refreshActiveNovel, refreshGraph, refreshProposals, refreshChatMemory]);
+  }, [activeNovelId, addLog, ingestPipelineLogs, refreshActiveNovel, refreshGraph, refreshProposals, refreshChatMemory]);
 
   // Handle stage execution
   const handleTriggerStage = async (stage: CreationStage, prompt: string) => {
@@ -418,6 +572,8 @@ export const App: React.FC = () => {
     setThinkingText('');
     setStreamingContent('');
     setCurrentStatus(`正在啟動【${stage}】階段...`);
+    // 手動單階段與自主任務狀態分離：清掉殘留的自主進度，避免「自主進度」頁籤顯示舊狀態
+    setAutoStatusText('');
     addLog(`開始執行【${stage}】階段生成...`);
 
     let accumulatedContent = '';
@@ -484,6 +640,15 @@ export const App: React.FC = () => {
             await refreshProposals();
             await refreshChatMemory();
 
+            // Story Engine 2.0 和正文同步更新：章節生成完成即通知敘事推理引擎刷新
+            if (activeNovelId) {
+              emitChapterContentUpdated(
+                activeNovelId,
+                stage === 'writer' ? 'writer-done' : 'editor-done',
+                activeChapterIndex,
+              );
+            }
+
             // When editor completes, auto-switch to diff view so user can review changes immediately
             if (stage === 'editor' || stage === 'evaluate') {
               setActiveView('diff');
@@ -522,12 +687,15 @@ export const App: React.FC = () => {
       try {
         setIsBottomDockOpen(true);
         addLog(`[發送請求] 正在向伺服器發送啟動《${activeNovel?.title || ''}》自主寫作任務...`);
-        lastSeenLogCountRef.current = 0;
         const res = await startAutoPipeline(activeNovelId, activeNovel?.pipeline_prompt || '', 5);
         if (res.status === 'success' || res.status === 'started' || res.status === 'already_running' || res.success) {
           setIsAutoRunning(true);
           addLog(`[啟動成功] ${res.message || '自主寫作管線已成功在背景啟動！'}`);
           showToast(res.message || '自主寫作任務已在背景啟動！', 'success');
+          // 全新啟動（非 already_running）：重置該小說的 seq 游標，從頭同步新任務日誌
+          if (res.status === 'started' || res.status === 'success') {
+            lastSeenLogSeqRef.current[String(activeNovelId)] = 0;
+          }
           // 立即主動查詢一次最新狀態，確保畫面即刻同步
           try {
             const status = await getAutoPipelineStatus(activeNovelId);
@@ -538,10 +706,8 @@ export const App: React.FC = () => {
                 `當前章節: 第 ${status.current_chapter || 0} 章\n階段: ${status.status_message || status.current_stage}\n進度: ${status.progress_percent || 0}%`
               );
             }
-            if (status.logs && Array.isArray(status.logs)) {
-              status.logs.forEach((entry) => addLog(`[自主寫作] ${entry.msg}`));
-              lastSeenLogCountRef.current = status.logs.length;
-            }
+            // 以 seq 增量同步（already_running 時不會重複灌入既有日誌）
+            ingestPipelineLogs(String(activeNovelId), status.logs, '[自主寫作] ');
           } catch {}
         } else {
           addLog(`[啟動失敗] ${res.message || '伺服器拒絕啟動'}`);
@@ -566,6 +732,9 @@ export const App: React.FC = () => {
     if (success) {
       addLog(`草稿修訂案 (${propId}) 已套用至第 ${activeChapterIndex} 章`);
       await refreshActiveNovel();
+      if (activeNovelId) {
+        emitChapterContentUpdated(activeNovelId, 'proposal-applied', activeChapterIndex);
+      }
       setActiveView('editor');
     }
   };
@@ -582,6 +751,25 @@ export const App: React.FC = () => {
   const handleResetNovel = async (id: string, scopes?: string[]) => {
     try {
       await handleResetNovelContent(id, scopes);
+      // 清空後各看板 SSOT 同步刷新：graphSlice / proposals / chat / 幾何快取皆為獨立 state，
+      // 不會隨 novelDetail 自動更新；若不主動刷新，時序圖譜與幾何樹會殘留舊顯示（本次回報 bug）。
+      try {
+        await refreshGraph();
+      } catch { /* 忽略偶發刷新失敗，底層看板仍可手動重整 */ }
+      try {
+        await refreshProposals();
+      } catch { /* 同上 */ }
+      try {
+        await refreshChatMemory();
+      } catch { /* 同上 */ }
+      // 章節游標歸 1（此時 isDirty 已被 refreshActiveNovel 清掉，不會誤存已刪章節），
+      // 並廣播 reset-content 事件：敘事引擎經事件自動刷新，幾何經事件自動重載樹。
+      try {
+        if (activeChapterIndex !== 1) {
+          selectChapter(1);
+        }
+      } catch { /* 忽略 */ }
+      emitChapterContentUpdated(id, 'reset-content', 1);
       const count = scopes?.length ?? 0;
       showToast(count > 0 ? `已清空所選 ${count} 項生成內容！` : '小說生成內容已成功清空，回到初始設定狀態！', 'success');
       addLog(`[清空生成] 小說生成內容已清空${count > 0 ? `（${count} 項）` : ''}並重置回初始狀態`);
@@ -592,7 +780,9 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <div
+      className={`app-container${isExplorerCollapsedDesktop ? ' explorer-collapsed' : ''}${isCopilotCollapsedDesktop ? ' copilot-collapsed' : ''}`}
+    >
       {/* 1. Activity Rail (48px) */}
       <ActivityRail
         activeView={activeView}
@@ -630,6 +820,8 @@ export const App: React.FC = () => {
         onWorldviewAction={handleWorldviewAction}
         isOpenMobile={isExplorerOpenMobile}
         onCloseMobile={() => setIsExplorerOpenMobile(false)}
+        isCollapsedDesktop={isExplorerCollapsedDesktop}
+        onToggleCollapseDesktop={() => setIsExplorerCollapsedDesktop((v) => !v)}
         onSelectNovel={(id) => {
           setActiveNovelId(id);
           setIsExplorerOpenMobile(false);
@@ -637,8 +829,13 @@ export const App: React.FC = () => {
         onSelectChapter={(idx) => {
           selectChapter(idx);
           setIsExplorerOpenMobile(false);
-          // Preserve 'graph' tab if user is currently inspecting temporal memory graph
-          if (activeView !== 'graph') {
+          // Preserve 'structure' / 'graph' tab if user is currently inspecting architecture
+          if (
+            activeView !== 'structure' &&
+            activeView !== 'graph' &&
+            activeView !== 'geometry' &&
+            activeView !== 'narrative'
+          ) {
             setActiveView('editor');
           }
         }}
@@ -656,11 +853,13 @@ export const App: React.FC = () => {
         <WorkspaceHeader
           activeNovel={activeNovel}
           activeChapterIndex={activeChapterIndex}
+          activeChapterTitle={activeChapterTitle}
           isDirty={isDirty}
           isSaving={isSaving}
           isLoading={isNovelLoading}
           activeView={activeView}
           worldviewTab={worldviewTab}
+          structureSubTab={structureSubTab}
           onSave={saveActiveChapter}
           onToggleExplorerMobile={() => setIsExplorerOpenMobile(!isExplorerOpenMobile)}
           onToggleCopilotMobile={() => setIsCopilotOpenMobile(!isCopilotOpenMobile)}
@@ -675,6 +874,7 @@ export const App: React.FC = () => {
             <EditorPane
               content={editorContent}
               chapterIndex={activeChapterIndex}
+              chapterTitle={activeChapterTitle}
               isDirty={isDirty}
               isSaving={isSaving}
               isLoading={isNovelLoading}
@@ -704,14 +904,26 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeView === 'graph' && (
-            <TemporalGraphBoard
-              graphSlice={graphSlice}
-              chapterIndex={activeChapterIndex}
+          {(activeView === 'structure' ||
+            activeView === 'geometry' ||
+            activeView === 'graph' ||
+            activeView === 'narrative') && (
+            <StoryHubBoard
+              novel={activeNovel}
+              novelId={activeNovelId || ''}
+              activeChapterIndex={activeChapterIndex}
               chapterContent={editorContent}
-              isLoading={isGraphLoading}
-              isExtracting={isGraphExtracting}
-              onRefresh={refreshGraph}
+              activeSubTab={structureSubTab}
+              onSelectSubTab={setStructureSubTab}
+              onNavigateToChapter={(ch) => {
+                selectChapter(ch);
+                setActiveView('editor');
+              }}
+              onLog={addLog}
+              graphSlice={graphSlice}
+              isGraphLoading={isGraphLoading}
+              isGraphExtracting={isGraphExtracting}
+              onRefreshGraph={refreshGraph}
               onAddFact={addFact}
               onInvalidateFact={invalidateFact}
               onDeleteFact={deleteFact}
@@ -759,9 +971,11 @@ export const App: React.FC = () => {
         </div>
       </main>
 
-      {/* 4. Copilot Drawer (320px / Mobile Drawer) */}
+      {/* 4. Copilot Drawer (320px / Desktop Collapsible / Mobile Drawer) */}
       <CopilotDrawer
         isOpenMobile={isCopilotOpenMobile}
+        isCollapsedDesktop={isCopilotCollapsedDesktop}
+        onToggleCollapseDesktop={() => setIsCopilotCollapsedDesktop((prev) => !prev)}
         isStreaming={isStreaming}
         isAutoRunning={isAutoRunning}
         thinkingText={thinkingText}
@@ -785,9 +999,11 @@ export const App: React.FC = () => {
 
       {/* 5. Collapsible Bottom Dock */}
       <BottomDock
-        logs={logs}
+        logs={activeLogs}
         autoStatusText={autoStatusText}
-        onClearLogs={() => setLogs([])}
+        onClearLogs={() =>
+          setLogsByNovel((prev) => ({ ...prev, [activeNovelId || '_global']: [] }))
+        }
         isOpen={isBottomDockOpen}
         onToggleOpen={() => setIsBottomDockOpen(!isBottomDockOpen)}
       />
@@ -841,6 +1057,9 @@ export const App: React.FC = () => {
 
       {/* Toast Notification Container */}
       <ToastContainer />
+
+      {/* Global Tooltip（portal 到 body，不受 overflow / 堆疊上下文遮擋） */}
+      <GlobalTooltip />
     </div>
   );
 };

@@ -15,6 +15,11 @@ import {
 import { APP_VERSION, APP_NAME } from '../../config/version';
 import { parseCloudEndpoint } from '../../platform';
 import { savePreferences } from '../../services/preferences';
+import {
+  getGuideEnabled,
+  setGuideEnabled,
+  resetGuideSeen,
+} from '../copilot/stageGuide';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -73,6 +78,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [isTestingLlm, setIsTestingLlm] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+
+  // 階段導覽開關（B 方案）：預設開、看過即 localStorage 記住
+  const [guideEnabled, setGuideEnabledState] = useState<boolean>(() => getGuideEnabled());
+  const [guideMessage, setGuideMessage] = useState<string | null>(null);
 
   const isWebDeploy = typeof window !== 'undefined' && (
     window.location.protocol === 'https:' ||
@@ -467,6 +476,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {size}px {size === 16 ? '(預設)' : size === 18 ? '(舒適)' : size === 20 ? '(大字)' : ''}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* 2.5 Stage Guide Tour（幾何與語義 4 階段導覽） */}
+        <div className="settings-section">
+          <h4 className="settings-section-title">階段導覽說明（右側導演面板）</h4>
+          <div className="form-group checkbox-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={guideEnabled}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setGuideEnabledState(next);
+                  setGuideEnabled(next);
+                  setGuideMessage(
+                    next
+                      ? '已開啟：下次開啟導演面板會自動播放一次導覽。'
+                      : '已關閉：不再自動播放，可隨時回來重新開啟。'
+                  );
+                }}
+              />
+              <span>自動播放「幾何與語義」4 顆按鈕的 Step 導覽（預設開，看過即記住）</span>
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => {
+                resetGuideSeen();
+                setGuideEnabledState(true);
+                setGuideEnabled(true);
+                setGuideMessage('已重設：下次開啟導演面板會自動播放；也可點階段區的「ⓘ 導覽」立即查看。');
+              }}
+            >
+              重新播放導覽
+            </Button>
+            {guideMessage && (
+              <span className="text-xs text-muted">{guideMessage}</span>
+            )}
           </div>
         </div>
 

@@ -1,146 +1,94 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { ActiveView } from './ActivityRail';
+import { CustomSelect } from '../common/CustomSelect';
 
 export type WorldviewSubTab = 'worldview' | 'characters' | 'plot';
+export type StructureSubTab = 'geometry' | 'graph' | 'narrative';
 
 interface WorkspaceNavDropdownProps {
   activeView: ActiveView;
   worldviewTab?: WorldviewSubTab;
-  onSelectView: (view: ActiveView, subTab?: WorldviewSubTab) => void;
+  structureSubTab?: StructureSubTab;
+  onSelectView: (view: ActiveView, subTab?: any) => void;
   className?: string;
 }
 
-interface NavItem {
-  id: string;
-  label: string;
-  view: ActiveView;
-  subTab?: WorldviewSubTab;
-}
-
-interface NavGroup {
-  id: string;
-  title: string;
-  items: NavItem[];
-}
-
+// 直接複用模組化 CustomSelect（下拉式選單動畫.txt 樣式：scaleY + 箭頭旋轉 + 外點關閉），
+// 不再各自重寫 open / outside-click / keyboard 邏輯。
 export const WorkspaceNavDropdown: React.FC<WorkspaceNavDropdownProps> = ({
   activeView,
   worldviewTab = 'worldview',
+  structureSubTab = 'geometry',
   onSelectView,
   className = '',
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // 選單文字與「AI 導演總控室」完全一致對齊：世界觀構建 / 分卷結構 / 卷章細綱 / 正文撰寫 / 審閱修訂
-  const navGroups: NavGroup[] = [
-    {
-      id: 'outline',
-      title: '架構與大綱',
-      items: [
-        { id: 'worldview', label: '世界觀構建', view: 'worldview', subTab: 'worldview' },
-        { id: 'volumes', label: '分卷結構', view: 'worldview', subTab: 'plot' },
-        { id: 'volume_skeleton', label: '卷章細綱', view: 'worldview', subTab: 'plot' },
-      ],
-    },
-    {
-      id: 'writing',
-      title: '正文與審閱',
-      items: [
-        { id: 'writer', label: '正文撰寫', view: 'editor' },
-        { id: 'editor', label: '審閱修訂', view: 'diff' },
-      ],
-    },
-  ];
-
-  const getCurrentLabel = () => {
-    if (activeView === 'editor') return '正文撰寫';
-    if (activeView === 'diff') return '審閱修訂';
+  const currentValue = useMemo(() => {
+    if (activeView === 'editor') return 'writer';
+    if (activeView === 'diff') return 'editor-review';
+    if (activeView === 'structure') {
+      if (structureSubTab === 'graph') return 'temporal_graph';
+      if (structureSubTab === 'narrative') return 'narrative_engine';
+      return 'geometry_graph';
+    }
+    if (activeView === 'narrative') return 'narrative_engine';
+    if (activeView === 'graph') return 'temporal_graph';
+    if (activeView === 'geometry') return 'geometry_graph';
     if (activeView === 'worldview') {
-      if (worldviewTab === 'plot') return '分卷結構 / 卷章細綱';
-      return '世界觀構建';
+      if (worldviewTab === 'characters') return 'characters';
+      if (worldviewTab === 'plot') return 'volumes';
+      return 'worldview';
     }
-    return '正文撰寫';
-  };
+    return 'writer';
+  }, [activeView, worldviewTab, structureSubTab]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
-    };
-  }, [isOpen]);
+  const groups = useMemo(
+    () => [
+      {
+        title: '架構',
+        options: [
+          { value: 'worldview', label: '世界觀構建' },
+          { value: 'characters', label: '角色聖經' },
+          { value: 'volumes', label: '分卷結構' },
+          { value: 'volume_skeleton', label: '卷章細綱' },
+        ],
+      },
+      {
+        title: '正文',
+        options: [
+          { value: 'writer', label: '正文撰寫' },
+          { value: 'editor-review', label: '審閱修訂' },
+        ],
+      },
+      {
+        title: '推理',
+        options: [
+          { value: 'temporal_graph', label: '時序記憶圖譜' },
+          { value: 'narrative_engine', label: '敘事推理引擎' },
+          { value: 'geometry_graph', label: '敘事幾何骨架圖' },
+        ],
+      },
+    ],
+    [],
+  );
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        setIsOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
-
-  const handleSelect = (item: NavItem) => {
-    onSelectView(item.view, item.subTab);
-    setIsOpen(false);
-  };
-
-  const isItemActive = (item: NavItem) => {
-    if (item.view !== activeView) return false;
-    if (item.view === 'worldview') {
-      return item.subTab === worldviewTab;
-    }
-    return true;
+  const handleChange = (val: string) => {
+    // 選單文字與「AI 導演總控室」完全一致對齊
+    if (val === 'writer') onSelectView('editor');
+    else if (val === 'editor-review') onSelectView('diff');
+    else if (val === 'narrative_engine') onSelectView('structure', 'narrative');
+    else if (val === 'temporal_graph') onSelectView('structure', 'graph');
+    else if (val === 'geometry_graph') onSelectView('structure', 'geometry');
+    else if (val === 'worldview') onSelectView('worldview', 'worldview');
+    else if (val === 'characters') onSelectView('worldview', 'characters');
+    else if (val === 'volumes' || val === 'volume_skeleton') onSelectView('worldview', 'plot');
   };
 
   return (
-    <div
-      ref={containerRef}
-      className={`custom-select topbar-view-select ${isOpen ? 'open' : ''} ${className}`}
-    >
-      <div
-        className="select-trigger"
-        onClick={() => setIsOpen((prev) => !prev)}
-        role="combobox"
-        aria-expanded={isOpen}
-        aria-haspopup="listbox"
-      >
-        <span className="select-trigger-text">
-          <span className="select-main-label">{getCurrentLabel()}</span>
-        </span>
-        <div className="arrow" aria-hidden="true" />
-      </div>
-
-      <div className="select-options topbar-view-options" role="listbox">
-        {navGroups.map((group) => (
-          <div key={group.id} className="topbar-option-group">
-            <div className="topbar-group-title">{group.title}</div>
-            {group.items.map((item) => {
-              const active = isItemActive(item);
-              return (
-                <div
-                  key={item.id}
-                  className={`option ${active ? 'selected' : ''}`}
-                  onClick={() => handleSelect(item)}
-                  role="option"
-                  aria-selected={active}
-                >
-                  <span className="option-label">{item.label}</span>
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </div>
+    <CustomSelect
+      value={currentValue}
+      groups={groups}
+      onChange={handleChange}
+      className={`topbar-view-select ${className}`}
+    />
   );
 };

@@ -5,3 +5,5 @@ export * from './terms';
 export * from './proposals';
 export * from './generation';
 export * from './settings';
+export * from './narrative';
+export * from './geometry';

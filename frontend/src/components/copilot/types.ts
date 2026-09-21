@@ -1,4 +1,4 @@
-﻿import { CreationStage, ChatRecord, CopilotTab } from '../../types';
+import { CreationStage, ChatRecord, CopilotTab } from '../../types';
 
 export type { CreationStage, ChatRecord, CopilotTab };
 
@@ -26,6 +26,16 @@ export const STAGE_GROUPS: StageGroup[] = [
     ],
   },
   {
+    id: 'geometry_semantic',
+    title: '幾何與語義',
+    stages: [
+      { id: 'geometry', label: '幾何拓撲', desc: '全書結構拓撲、Motif 與多線長距約束' },
+      { id: 'macro_semantic', label: '宏觀語義', desc: '卷級主旨與主線動態文學語義' },
+      { id: 'character_semantic', label: '角色語義', desc: '角色動態弧光與成長節點填充' },
+      { id: 'cross_relation', label: '跨線合流', desc: '多線交叉、衝突對比與長程伏筆回收' },
+    ],
+  },
+  {
     id: 'writing',
     title: '正文與審閱',
     stages: [
@@ -46,6 +56,7 @@ export interface StageSelectorProps {
   onSelectStage: (stage: CreationStage) => void;
   onToggleCollapse: () => void;
   onToggleAuto: () => void;
+  onOpenGuide?: () => void;
 }
 
 export interface DirectorMessageItemProps {
@@ -64,6 +75,8 @@ export interface DirectorRecordsStreamProps {
 
 export interface CopilotDrawerProps {
   isOpenMobile: boolean;
+  isCollapsedDesktop?: boolean;
+  onToggleCollapseDesktop?: () => void;
   isStreaming: boolean;
   isAutoRunning: boolean;
   thinkingText: string;

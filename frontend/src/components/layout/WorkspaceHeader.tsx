@@ -10,25 +10,29 @@ import { WorkspaceNavDropdown, WorldviewSubTab } from './WorkspaceNavDropdown';
 interface WorkspaceHeaderProps {
   activeNovel: Novel | null;
   activeChapterIndex: number;
+  activeChapterTitle?: string;
   isDirty: boolean;
   isSaving: boolean;
   isLoading?: boolean;
   activeView: ActiveView;
   worldviewTab?: WorldviewSubTab;
+  structureSubTab?: 'geometry' | 'graph' | 'narrative';
   onSave: () => void;
   onToggleExplorerMobile: () => void;
   onToggleCopilotMobile: () => void;
-  onSelectView: (view: ActiveView, subTab?: WorldviewSubTab) => void;
+  onSelectView: (view: ActiveView, subTab?: any) => void;
 }
 
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   activeNovel,
   activeChapterIndex,
+  activeChapterTitle = '',
   isDirty,
   isSaving,
   isLoading = false,
   activeView,
   worldviewTab,
+  structureSubTab = 'geometry',
   onSave,
   onToggleExplorerMobile,
   onToggleCopilotMobile,
@@ -55,6 +59,32 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     setIsExportMenuOpen(false);
   };
 
+  // 推理群組（故事架構中樞：幾何 / 時序圖譜 / 推理引擎）時，
+  // 上方「第 X 章」位置的 hover tips 改為顯示「故事架構與推演中樞」；
+  // 正文顯示的章名稱文字與左側樹狀圖細綱維持不變。
+  const isReasoningGroup =
+    activeView === 'structure' ||
+    activeView === 'geometry' ||
+    activeView === 'graph' ||
+    activeView === 'narrative';
+  const chapterTip = isReasoningGroup
+    ? '故事架構與推演中樞'
+    : activeChapterTitle
+      ? `第 ${activeChapterIndex} 章：${activeChapterTitle}`
+      : `第 ${activeChapterIndex} 章`;
+
+  const novelTitle = activeNovel ? activeNovel.title : '未選擇作品';
+  // 正文撰寫視窗下，故事名稱的 hover tips 顯示章節名稱（頂欄只露出章號，全名藏在這裡）；
+  // 其他視窗維持顯示故事名稱。
+  const novelTip =
+    activeView === 'editor'
+      ? (activeChapterTitle
+        ? `第 ${activeChapterIndex} 章：${activeChapterTitle}`
+        : `第 ${activeChapterIndex} 章`)
+      : novelTitle;
+  // 超過 5 個字才跑馬燈（中日韓文字以字元數計，含代理對安全算法）
+  const isLongNovelTitle = Array.from(novelTitle).length > 5;
+
   return (
     <header className="workspace-topbar">
       <div className="topbar-left">
@@ -68,18 +98,40 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           [目錄]
         </button>
 
+
         <span
-          className="novel-title-text marquee-on-hover"
-          data-tooltip={activeNovel ? activeNovel.title : '未選擇作品'}
+          className="tooltip-ellipsis-wrap tooltip-novel-wrap"
+          data-tooltip={novelTip}
           data-tooltip-pos="bottom"
         >
-          {activeNovel ? activeNovel.title : '未選擇作品'}
+          {isLongNovelTitle ? (
+            <span className="novel-title-text marquee-on-hover">
+              <span className="marquee-track">
+                <span className="marquee-seg">{novelTitle}</span>
+                <span className="marquee-seg" aria-hidden="true">{novelTitle}</span>
+              </span>
+            </span>
+          ) : (
+            <span className="novel-title-text">{novelTitle}</span>
+          )}
         </span>
         {isLoading && (
-          <span className="select-spinner" title="正在載入作品與章節資料..." style={{ width: 13, height: 13, borderWidth: 2 }} />
+          <span
+            className="select-spinner topbar-loading-spinner"
+            data-tooltip="正在載入作品與章節資料..."
+            data-tooltip-pos="bottom"
+          />
         )}
         <span className="topbar-separator">/</span>
-        <span className="chapter-title-text">第 {activeChapterIndex} 章</span>
+        <span
+          className="tooltip-ellipsis-wrap"
+          data-tooltip={chapterTip}
+          data-tooltip-pos="bottom"
+        >
+          <span className="chapter-title-text">
+            第 {activeChapterIndex} 章
+          </span>
+        </span>
 
         <span
           className="save-status-indicator"
@@ -100,6 +152,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         <WorkspaceNavDropdown
           activeView={activeView}
           worldviewTab={worldviewTab}
+          structureSubTab={structureSubTab}
           onSelectView={onSelectView}
         />
 
@@ -122,13 +175,14 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             className="topbar-export-btn"
             disabled={!activeNovel}
             onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
-            title="匯出作品檔案 (支援離線 HTML 便攜閱讀器與 TXT)"
+            data-tooltip="匯出作品檔案 (支援離線 HTML 便攜閱讀器與 TXT)"
+            data-tooltip-pos="bottom"
             icon={<IconDownload size={13} />}
           >
             匯出
           </Button>
           {isExportMenuOpen && (
-            <div className="view-switcher-menu" style={{ right: 0, left: 'auto', minWidth: '190px' }}>
+            <div className="view-switcher-menu topbar-export-menu">
               <button
                 type="button"
                 className="view-switcher-item"

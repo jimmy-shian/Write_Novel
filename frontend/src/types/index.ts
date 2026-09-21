@@ -10,7 +10,13 @@ export type CreationStage =
   | 'volume_skeleton'
   | 'writer'
   | 'editor'
-  | 'evaluate';
+  | 'evaluate'
+  | 'geometry'
+  | 'macro_semantic'
+  | 'character_semantic'
+  | 'cross_relation';
+
+export * from './geometry';
 
 export interface Novel {
   id: string;
@@ -95,6 +101,8 @@ export interface StoryTerm {
   term: string;
   definition: string;
   notes?: string;
+  source_chapter?: number | null;
+  updated_chapter?: number | null;
   created_at?: string;
 }
 
@@ -139,3 +147,4 @@ export interface ChatRecord {
   timestamp: string;
 }
 
+export * from './narrative';

@@ -1,0 +1,114 @@
+/* Stage Guide Tour (B 方案：遮罩式 Step Tour，零依賴) */
+
+.stage-guide-root {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: auto;
+}
+
+.stage-guide-catcher {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 16, 0.45);
+  pointer-events: auto;
+}
+
+.stage-guide-highlight {
+  position: fixed;
+  border: 2px solid var(--accent, #e8a33d);
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(20, 18, 16, 0.45), 0 0 0 2px rgba(232, 163, 61, 0.35), 0 4px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transition: all 0.25s ease;
+  z-index: 9998;
+}
+
+.stage-guide-popover {
+  position: fixed;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface, #1e1b18);
+  border: 1px solid var(--border, #322d28);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  z-index: 9999;
+}
+
+.stage-guide-popover.centered {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.stage-guide-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.stage-guide-skip {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.stage-guide-skip:hover {
+  color: var(--text-primary);
+}
+
+.stage-guide-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px 0;
+}
+
+.stage-guide-desc {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0 0 6px 0;
+}
+
+.stage-guide-tip {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--accent, #e8a33d);
+  background: rgba(232, 163, 61, 0.1);
+  border: 1px solid rgba(232, 163, 61, 0.25);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: 0 0 8px 0;
+}
+
+.stage-guide-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 階段按鈕加 data-stage 後的導覽入口 */
+.stage-guide-entry-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 1px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.stage-guide-entry-btn:hover {
+  color: var(--accent, #e8a33d);
+  border-color: var(--accent, #e8a33d);
+}

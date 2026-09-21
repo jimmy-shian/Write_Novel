@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CreationStage, CopilotTab, STAGE_DEFINITIONS, CopilotDrawerProps, RecordFilterType } from './types';
 import { StageSelector } from './StageSelector';
 import { DirectorRecordsStream } from './DirectorRecordsStream';
+import { StageGuideTour } from './StageGuideTour';
+import { shouldAutoShowGuide, markGuideSeen } from './stageGuide';
 import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import {
@@ -16,6 +18,8 @@ import { clearChatMemory, deleteChatMessage } from '../../api/novels';
 
 export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   isOpenMobile,
+  isCollapsedDesktop = false,
+  onToggleCollapseDesktop,
   isStreaming,
   isAutoRunning,
   thinkingText,
@@ -41,12 +45,27 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   const [activeStage, setActiveStage] = useState<CreationStage>(currentStage);
   const [isStageCollapsed, setIsStageCollapsed] = useState(false);
   const [isRefreshingMemory, setIsRefreshingMemory] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [guideStep, setGuideStep] = useState(0);
+  const autoGuideShownRef = useRef(false);
 
   useEffect(() => {
     if (currentStage) {
       setActiveStage(currentStage);
     }
   }, [currentStage]);
+
+  // 階段導覽自動播放：預設開、看過（完成/跳過）即記住不再打擾
+  useEffect(() => {
+    if (autoGuideShownRef.current || isCollapsedDesktop) return;
+    autoGuideShownRef.current = true;
+    if (shouldAutoShowGuide()) {
+      setActiveTab('stages');
+      setIsStageCollapsed(false);
+      setGuideStep(0);
+      setIsGuideOpen(true);
+    }
+  }, [isCollapsedDesktop]);
 
   const handleStageSelect = (stage: CreationStage) => {
     setActiveStage(stage);
@@ -55,6 +74,18 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
 
   const handleRunStage = () => {
     onTriggerStage(activeStage, prompt);
+  };
+
+  const handleOpenGuide = () => {
+    setActiveTab('stages');
+    setIsStageCollapsed(false);
+    setGuideStep(0);
+    setIsGuideOpen(true);
+  };
+
+  const handleCloseGuide = () => {
+    markGuideSeen();
+    setIsGuideOpen(false);
   };
 
   const handleRefreshRecords = async () => {
@@ -108,16 +139,48 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
 
   const currentStageDef = STAGE_DEFINITIONS.find((s) => s.id === activeStage) || STAGE_DEFINITIONS[0];
 
+  if (isCollapsedDesktop) {
+    return (
+      <aside className={`copilot-panel desktop-collapsed ${isOpenMobile ? 'mobile-open' : ''}`}>
+        <button
+          type="button"
+          className="copilot-expand-trigger-btn"
+          onClick={onToggleCollapseDesktop}
+          title="展開"
+          aria-label="展開"
+        >
+          <IconCpu size={15} className="text-accent" />
+          <span className="copilot-vertical-label">AI 導演</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className={`copilot-panel ${isOpenMobile ? 'mobile-open' : ''}`}>
-      {/* 1. Header with Title & Badges */}
+      {/* 1. Header with Title & Badges（標題本身可點收合） */}
       <div className="copilot-header">
-        <div className="copilot-title">
-          <IconCpu size={16} className="text-accent" />
-          <span>AI 導演總控室</span>
-          {isStreaming && <Badge variant="accent">生成中</Badge>}
-          {isAutoRunning && <Badge variant="success">自主運行中</Badge>}
-        </div>
+        {onToggleCollapseDesktop ? (
+          <button
+            type="button"
+            className="copilot-title copilot-title-toggle"
+            onClick={onToggleCollapseDesktop}
+            title="收合"
+            aria-label="收合"
+          >
+            <IconCpu size={16} className="text-accent" />
+            <span>AI 導演總控室</span>
+            {isStreaming && <Badge variant="accent">生成中</Badge>}
+            {isAutoRunning && <Badge variant="success">自主運行中</Badge>}
+          </button>
+        ) : (
+          <div className="copilot-title">
+            <IconCpu size={16} className="text-accent" />
+            <span>AI 導演總控室</span>
+            {isStreaming && <Badge variant="accent">生成中</Badge>}
+            {isAutoRunning && <Badge variant="success">自主運行中</Badge>}
+          </div>
+        )}
         <div className="copilot-header-actions">
           {isOpenMobile && (
             <button
@@ -138,6 +201,8 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
           type="button"
           className={`copilot-tab-btn ${activeTab === 'stages' ? 'active' : ''}`}
           onClick={() => setActiveTab('stages')}
+          data-tooltip="選擇創作流水線階段並送出導演指令"
+          data-tooltip-pos="bottom"
         >
           <IconLayers size={13} />
           <span>選擇流水線階段</span>
@@ -149,6 +214,8 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
             setActiveTab('records');
             onRefreshChatMemory?.();
           }}
+          data-tooltip="查看總監評斷與流水線工作紀錄"
+          data-tooltip-pos="bottom"
         >
           <IconMessageSquare size={13} />
           <span>總監評斷紀錄</span>
@@ -170,6 +237,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
               onSelectStage={handleStageSelect}
               onToggleCollapse={() => setIsStageCollapsed(!isStageCollapsed)}
               onToggleAuto={onToggleAuto}
+              onOpenGuide={handleOpenGuide}
             />
 
             {/* Live Status Indicator */}
@@ -229,6 +297,7 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
       <div className="copilot-input-area">
         <textarea
           className="copilot-textarea"
+          data-tour="copilot-input"
           placeholder={
             activeTab === 'records'
               ? '向總監或流水線發送引導指令與反饋...'
@@ -257,11 +326,19 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
           isLoading={isStreaming}
           disabled={isStreaming}
           icon={isStreaming ? undefined : <IconSend size={14} />}
-          title={isStreaming ? '正在生成中...' : `送出（當前階段：${currentStageDef.label}）`}
+          data-tooltip={isStreaming ? '正在生成中...' : `送出（當前階段：${currentStageDef.label}）`}
+          data-tooltip-pos="top"
+          data-tour="copilot-send"
         >
           {isStreaming ? '執行中...' : '送出'}
         </Button>
       </div>
+      <StageGuideTour
+        open={isGuideOpen}
+        step={guideStep}
+        onStepChange={setGuideStep}
+        onDone={handleCloseGuide}
+      />
     </aside>
   );
 };

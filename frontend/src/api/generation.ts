@@ -124,6 +124,8 @@ export async function streamGenerationTask(
 }
 
 export interface AutoPipelineLogEntry {
+  /** 單調遞增序號：即使後端 logs 截斷至最近 100 筆，前端仍可靠 seq 精準增量同步 */
+  seq?: number;
   time: string;
   msg: string;
   level?: string;
@@ -140,6 +142,8 @@ export interface AutoPipelineStatusResponse {
   progress_percent?: number;
   status_message?: string;
   logs?: AutoPipelineLogEntry[];
+  /** 該小說日誌的累計總序號（不受 logs[-100:] 截斷影響） */
+  log_seq?: number;
   error?: string | null;
   stop_requested?: boolean;
   start_time?: string;

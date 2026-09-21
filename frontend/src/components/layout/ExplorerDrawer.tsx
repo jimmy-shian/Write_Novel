@@ -39,6 +39,8 @@ interface ExplorerDrawerProps {
   }) => void;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
+  isCollapsedDesktop?: boolean;
+  onToggleCollapseDesktop?: () => void;
   isLoadingNovel?: boolean;
   onSelectNovel: (id: string) => void;
   onSelectChapter: (chapterIndex: number) => void;
@@ -67,6 +69,8 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
   onWorldviewAction,
   isOpenMobile,
   onCloseMobile,
+  isCollapsedDesktop = false,
+  onToggleCollapseDesktop,
   isLoadingNovel = false,
   onSelectNovel,
   onSelectChapter,
@@ -323,14 +327,44 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
     return Array.from(chapterMap.values()).sort((a, b) => a.chapter_index - b.chapter_index);
   }, [volumes, plot, chapters]);
 
+  // 桌面端收合態：只剩一條可點展開的窄條（與右側導演室對稱）
+  if (isCollapsedDesktop) {
+    return (
+      <aside className={`explorer-drawer desktop-collapsed ${isOpenMobile ? 'mobile-open' : ''}`}>
+        <button
+          type="button"
+          className="explorer-expand-trigger-btn"
+          onClick={onToggleCollapseDesktop}
+          title="展開"
+          aria-label="展開"
+        >
+          <span className="explorer-vertical-label">[作品] 導航目錄</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <>
       <aside className={`explorer-drawer ${isOpenMobile ? 'mobile-open' : ''}`}>
         <div className="explorer-header">
-          <div className="explorer-title-wrapper">
-            <span className="explorer-tag-badge">[作品]</span>
-            <span className="explorer-title">導航目錄</span>
-          </div>
+          {onToggleCollapseDesktop ? (
+            <button
+              type="button"
+              className="explorer-title-wrapper explorer-title-toggle"
+              onClick={onToggleCollapseDesktop}
+              title="收合"
+              aria-label="收合"
+            >
+              <span className="explorer-tag-badge">[作品]</span>
+              <span className="explorer-title">導航目錄</span>
+            </button>
+          ) : (
+            <div className="explorer-title-wrapper">
+              <span className="explorer-tag-badge">[作品]</span>
+              <span className="explorer-title">導航目錄</span>
+            </div>
+          )}
           <div className="explorer-actions">
             <Button
               size="xs"
@@ -1078,6 +1112,7 @@ export const ExplorerDrawer: React.FC<ExplorerDrawerProps> = ({
                 variant="ghost"
                 className="text-muted delete-novel-btn"
                 onClick={() => setIsDeleteModalOpen(true)}
+                data-tooltip="永久刪除整部作品（需二次確認）"
               >
                 刪除本作品
               </Button>

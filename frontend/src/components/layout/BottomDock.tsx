@@ -19,11 +19,17 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : internalIsOpen;
 
+  // 面板高度上限：永遠預留至少 280px 給上方工作區（頂欄 + 編輯區），
+  // 避免拖太高把主要內容擠到消失。
+  const getMaxDockHeight = () =>
+    Math.min(800, Math.max(300, window.innerHeight - 280));
+
   // Freely adjustable dock height (persisted in localStorage)
   const [dockHeight, setDockHeight] = useState<number>(() => {
     const saved = localStorage.getItem('bottom_dock_height');
     const parsed = saved ? parseInt(saved, 10) : 220;
-    return parsed >= 100 && parsed <= 800 ? parsed : 220;
+    if (isNaN(parsed) || parsed < 100) return 220;
+    return Math.min(parsed, getMaxDockHeight());
   });
   const [isDragging, setIsDragging] = useState(false);
 
@@ -35,8 +41,11 @@ export const BottomDock: React.FC<BottomDockProps> = ({
     document.documentElement.style.setProperty('--bottom-dock-height', `${dockHeight}px`);
   }, [dockHeight]);
 
-  const handleMouseDownResizer = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+  // 使用 Pointer Events + setPointerCapture：
+  // 按下後事件鎖定在手柄元素上，即使游標移出視窗或掠過其他元素也不會斷線，
+  // 徹底避免 mousemove 被攔截 / 離開視窗即失效等問題。
+  const handleResizerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -51,25 +60,39 @@ export const BottomDock: React.FC<BottomDockProps> = ({
     startYRef.current = e.clientY;
     startHeightRef.current = dockHeight;
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
+    const el = e.currentTarget;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* 某些環境不支援 capture，退回 window 事件仍可作用 */
+    }
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
       if (!isDraggingRef.current) return;
       const deltaY = startYRef.current - moveEvent.clientY;
-      const maxHeight = Math.min(800, Math.floor(window.innerHeight * 0.85));
+      const maxHeight = getMaxDockHeight();
       const newHeight = Math.max(100, Math.min(maxHeight, startHeightRef.current + deltaY));
       setDockHeight(newHeight);
       document.documentElement.style.setProperty('--bottom-dock-height', `${newHeight}px`);
       localStorage.setItem('bottom_dock_height', String(newHeight));
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = () => {
       isDraggingRef.current = false;
       setIsDragging(false);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        /* 已釋放或從未捕獲，忽略 */
+      }
+      el.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerup', onPointerUp);
+      el.removeEventListener('pointercancel', onPointerUp);
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+    el.addEventListener('pointercancel', onPointerUp);
   };
 
   const handleToggle = () => {
@@ -94,10 +117,12 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
+    // 高度變化不追底：縮放面板只改變可視範圍，不新增內容，無需捲動；
+    // 拖曳中一律不搶捲動，避免跟手勢打架造成亂跳。
+    if (isOpen && !isDraggingRef.current) {
       scrollToBottom();
     }
-  }, [logs, isOpen, activeTab, dockHeight]);
+  }, [logs, isOpen, activeTab]);
 
   return (
     <footer
@@ -107,8 +132,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       {/* Top Resizer Handle */}
       <div
         className="dock-resizer"
-        onMouseDown={handleMouseDownResizer}
-        title="拖曳以自由調整面板高度"
+        onPointerDown={handleResizerPointerDown}
+        data-dock-resizer="v3-pointer-capture"
+        data-tooltip="拖曳以自由調整面板高度"
+        data-tooltip-pos="bottom"
       >
         <div className="dock-resizer-line" />
       </div>
@@ -116,7 +143,11 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       <div className="dock-header" onClick={handleToggle}>
         <div className="dock-header-left">
           <IconTerminal size={14} className="text-muted" />
-          <span className="dock-title">
+          <span
+            className="dock-title"
+            data-tooltip={isOpen ? '點擊收起執行日誌面板' : '點擊展開執行日誌面板'}
+            data-tooltip-pos="bottom"
+          >
             執行日誌與狀態 {logs.length > 0 && `(${logs.length})`}
           </span>
           {isOpen && (
@@ -125,6 +156,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 type="button"
                 className={`dock-tab-btn ${activeTab === 'stream' ? 'active' : ''}`}
                 onClick={() => setActiveTab('stream')}
+                data-tooltip="即時串流日誌輸出"
+                data-tooltip-pos="bottom"
               >
                 串流日誌
               </button>
@@ -133,6 +166,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   type="button"
                   className={`dock-tab-btn ${activeTab === 'status' ? 'active' : ''}`}
                   onClick={() => setActiveTab('status')}
+                  data-tooltip="自主寫作進度狀態"
+                  data-tooltip-pos="bottom"
                 >
                   自主進度
                 </button>
@@ -147,7 +182,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               type="button"
               className="btn btn-ghost btn-xs text-muted"
               onClick={onClearLogs}
-              title="清除日誌"
+              data-tooltip="清除日誌"
+              data-tooltip-pos="bottom"
             >
               <IconTrash size={12} />
               <span>清除</span>
@@ -157,7 +193,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             type="button"
             className="btn btn-ghost btn-xs text-muted"
             onClick={handleToggle}
-            title={isOpen ? '收起面板' : '展開面板'}
+            data-tooltip={isOpen ? '收起面板' : '展開面板'}
+            data-tooltip-pos="bottom"
           >
             <span className="dock-toggle-label">{isOpen ? '收起' : '展開'}</span>
           </button>

@@ -4,7 +4,6 @@ import { StatusDot } from '../common/StatusDot';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import {
-  IconGitBranch,
   IconPlus,
   IconRefresh,
   IconClock,
@@ -58,17 +57,7 @@ export const TemporalGraphBoard: React.FC<TemporalGraphBoardProps> = ({
 
   return (
     <div className="temporal-graph-board">
-      <div className="graph-board-header">
-        <div className="graph-board-title-group">
-          <IconGitBranch size={18} className="text-accent" />
-          <div className="graph-title-texts">
-            <span className="graph-board-title">時序動態記憶圖譜 (Graphiti)</span>
-            <span className="graph-board-subtitle">
-              第 {chapterIndex} 章時間切片 — 動態追蹤實體狀態變更與事實失效歷程
-            </span>
-          </div>
-        </div>
-
+      <div className="graph-board-header compact" aria-label="時序圖譜操作列">
         <div className="graph-board-actions">
           <Button
             size="sm"

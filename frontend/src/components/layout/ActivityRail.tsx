@@ -4,12 +4,21 @@ import {
   IconFileText,
   IconGitBranch,
   IconBook,
-  IconCpu,
+  IconLayers,
   IconBookmark,
   IconSettings,
 } from '../common/Icons';
 
-export type ActiveView = 'editor' | 'diff' | 'graph' | 'worldview' | 'proposals' | 'terms';
+export type ActiveView =
+  | 'editor'
+  | 'diff'
+  | 'worldview'
+  | 'structure'
+  | 'graph'
+  | 'narrative'
+  | 'geometry'
+  | 'proposals'
+  | 'terms';
 
 interface ActivityRailProps {
   activeView: ActiveView;
@@ -22,6 +31,12 @@ export const ActivityRail: React.FC<ActivityRailProps> = ({
   onSelectView,
   onOpenSettings,
 }) => {
+  const isStructureActive =
+    activeView === 'structure' ||
+    activeView === 'geometry' ||
+    activeView === 'graph' ||
+    activeView === 'narrative';
+
   return (
     <nav className="activity-rail" aria-label="活動導航列">
       <div className="rail-group">
@@ -63,14 +78,14 @@ export const ActivityRail: React.FC<ActivityRailProps> = ({
 
         <button
           type="button"
-          className={`rail-btn ${activeView === 'graph' ? 'active' : ''}`}
-          onClick={() => onSelectView('graph')}
-          data-tooltip="時序記憶圖譜 (Graphiti)"
+          className={`rail-btn ${isStructureActive ? 'active' : ''}`}
+          onClick={() => onSelectView('structure')}
+          data-tooltip="故事架構與推演中樞 (幾何拓撲 / 時序圖譜 / 推理引擎)"
           data-tooltip-pos="right"
-          aria-label="時序記憶圖譜"
+          aria-label="故事架構與推演中樞"
         >
-          <IconCpu size={18} />
-          <span className="rail-btn-label">圖譜</span>
+          <IconLayers size={18} />
+          <span className="rail-btn-label">架構</span>
         </button>
 
         <button

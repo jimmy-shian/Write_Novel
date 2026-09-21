@@ -1,0 +1,45 @@
+/* ============================================================
+   Global Tooltip（portal 版）
+   由 <GlobalTooltip />（frontend/src/components/ui/GlobalTooltip.tsx）
+   以 createPortal 掛到 document.body + position: fixed 渲染，
+   因此不受任何祖先 overflow 裁切、不受堆疊上下文壓蓋，
+   行為對齊原生 title tooltip。
+
+   舊版 ::after 偽元素 tooltip 在此正式停用（content: none），
+   既有 data-tooltip / data-tooltip-pos 標記完全相容，無需改動。
+   ============================================================ */
+
+/* 停用舊的偽元素 tooltip，避免與全域 tooltip 重複顯示 */
+[data-tooltip]:not([data-tooltip=""])::after {
+  content: none !important;
+}
+
+/* 全域 tooltip 本體：fixed 定位由 JS 計算（含翻轉與視窗夾限） */
+.global-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483647; /* int32 最大值：永遠蓋在所有面板之上 */
+  background-color: var(--surface-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: pre-line; /* 支援 data-tooltip 內的 \n 換行 */
+  overflow-wrap: break-word;
+  word-break: break-word;
+  width: max-content;
+  max-width: 240px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+
+.global-tooltip-visible {
+  opacity: 1;
+}

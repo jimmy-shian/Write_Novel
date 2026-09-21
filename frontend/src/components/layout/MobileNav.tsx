@@ -24,6 +24,9 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         type="button"
         className={`mobile-nav-item ${isExplorerOpen ? 'active' : ''}`}
         onClick={onToggleExplorer}
+        data-tooltip="開啟作品目錄"
+        data-tooltip-pos="top"
+        aria-label="開啟作品目錄"
       >
         <IconBook size={18} />
         <span>目錄</span>
@@ -33,6 +36,9 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         type="button"
         className={`mobile-nav-item ${isEditorActive ? 'active' : ''}`}
         onClick={onFocusEditor}
+        data-tooltip="回到正文編輯"
+        data-tooltip-pos="top"
+        aria-label="回到正文編輯"
       >
         <IconFileText size={18} />
         <span>正文</span>
@@ -42,6 +48,9 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         type="button"
         className={`mobile-nav-item ${isCopilotOpen ? 'active' : ''}`}
         onClick={onToggleCopilot}
+        data-tooltip="開啟 AI 導演對話"
+        data-tooltip-pos="top"
+        aria-label="開啟 AI 導演對話"
       >
         <IconCpu size={18} />
         <span>導演</span>

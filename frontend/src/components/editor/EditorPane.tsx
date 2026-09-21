@@ -7,6 +7,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 interface EditorPaneProps {
   content: string;
   chapterIndex: number;
+  chapterTitle?: string;
   isDirty: boolean;
   isSaving: boolean;
   isLoading?: boolean;
@@ -19,6 +20,7 @@ interface EditorPaneProps {
 export const EditorPane: React.FC<EditorPaneProps> = ({
   content,
   chapterIndex,
+  chapterTitle = '',
   isDirty,
   isSaving,
   isLoading = false,
@@ -48,11 +50,28 @@ export const EditorPane: React.FC<EditorPaneProps> = ({
     }
   };
 
+  const fullChapterLabel = chapterTitle
+    ? `第 ${chapterIndex} 章正文：${chapterTitle}`
+    : `第 ${chapterIndex} 章正文`;
+
   return (
     <div className="editor-canvas-container">
       <div className="editor-toolbar">
         <div className="editor-toolbar-left">
-          <span className="editor-chapter-tag">第 {chapterIndex} 章正文</span>
+          <span
+            className="editor-chapter-tag"
+            title={fullChapterLabel}
+            style={{
+              maxWidth: '38vw',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: 'inline-block',
+              verticalAlign: 'middle',
+            }}
+          >
+            第 {chapterIndex} 章正文
+          </span>
           <Button
             size="xs"
             variant="ghost"
