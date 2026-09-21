@@ -142,8 +142,8 @@ def api_reset_novel_content(novel_id: str, payload: Optional[ResetContentRequest
     scope_labels = {
         "worldbuilding": "世界觀",
         "characters": "角色聖經",
-        "plot": "分卷與章綱",
-        "chapters": "章節正文（含連動清除的時序圖譜與自動術語）",
+        "plot": "分卷與章綱（含連動清除的幾何拓撲樹）",
+        "chapters": "章節正文（含連動清除的時序圖譜、幾何拓撲、草稿提案、自動術語與敘事引擎簽名/審計）",
         "chat": "對話記憶",
     }
     cleared_text = "、".join(scope_labels.get(s, s) for s in effective)
