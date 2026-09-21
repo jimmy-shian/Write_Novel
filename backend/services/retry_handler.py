@@ -130,7 +130,7 @@ def _inject_retry_feedback(messages: list, error: str, attempt: int, last_output
         "content": (
             f"【系統回報 - 第 {attempt} 次重試】\n"
             f"上次輸出格式不符要求：{error}\n"
-            f"請嚴格遵守 JSON 輸出格式，使用 ```json ... ``` 包裹。\n"
+            f"請只輸出純 JSON。\n"
             + (f"上次輸出 JSON 收合封包：{json.dumps(output_payload, ensure_ascii=False, indent=2)}" if output_payload else "")
         ),
     }

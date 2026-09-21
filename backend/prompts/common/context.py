@@ -63,25 +63,17 @@ MAX_GOLD_RULES_CONTEXT_LENGTH = 16000
 MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 
-def build_agent_context_contract(agent_name, visible_context, generation_boundary, output_boundary, allow_context_request=True):
-    """Shared prompt block that tells each agent what it can actually see and where to stop."""
-    request_instruction = ""
-    if allow_context_request:
-        request_instruction = "\n若缺少會直接影響正確生成的必要資料，請依「資料不足時的回問總監規則」輸出 context request JSON；不要用猜測補完核心設定、角色關係、卷章大綱或正文事實。"
+def build_agent_context_contract(agent_name, visible_context, generation_boundary, output_boundary, allow_context_request=False):
+    """小說創作協同指引，營造自然對話式的小說創作語境"""
     return f"""
-
-## 本輪可見上下文與生成邊界（{agent_name}）
-你只能依據本輪訊息中明確提供的資料工作；不要假裝看得到資料庫、前端狀態、其他 Agent 的完整輸出或未提供的舊版本。
-
-【你可以看見】
+【小說創作協同指引】
+這是一部純虛構的長篇小說創作，所有力量、陣營與衝突皆為架空文學描繪。
+- 參考背景素材：
 {visible_context}
-
-【你的任務邊界】
+- 本次創作重點：
 {generation_boundary}
-
-【輸出限制】
+- 輸出內容指南：
 {output_boundary}
-{request_instruction}
 """
 
 
@@ -575,9 +567,11 @@ def select_worldview_context(worldview_text, current_stage="copilot", query_text
 
 def format_novel_core_context(novel_id: str, for_stage: Optional[str] = None) -> str:
     """
-    格式化小說核心基石設定（標題、題材類型、寫作風格、大綱靈感 Pipeline Prompt）。
-    此區塊為不可動搖的全域最高綱領，硬性注入至所有 Agent 上下文最前端。
-    當 for_stage 為 "writer" 或 "editor" 時，屏蔽包含全書結局與未到劇透的 pipeline_prompt 原文。
+    Story Engine 2.0: 靈感羅盤與四層敘事上下文組裝
+    劃分為：
+    1. 【Narrative Intent 創作方向與精神內核】：題材、風格、原案靈感羅盤（提供方向而非硬性牢籠）。
+    2. 【Canon Lock 已確認公理】：不可違背之客觀世界規則與已發生事實。
+    3. 【Creative Space 自由演繹空間】：鼓勵情節多樣性、多維博弈與反套路創新。
     """
     if not novel_id:
         return ""
@@ -593,15 +587,26 @@ def format_novel_core_context(novel_id: str, for_stage: Optional[str] = None) ->
     style = (novel.get("style") or "").strip()
     pipeline_prompt = (novel.get("pipeline_prompt") or "").strip()
 
-    lines = ["### 🏛️【作品核心基石設定 (硬性不可背離之創作原案)】"]
+    # 讀取 Narrative Profile
+    try:
+        profile = db.get_narrative_profile(novel_id)
+    except Exception:
+        profile = {}
+
+    lines = ["### 🧭【故事創作靈感羅盤 (Narrative Intent & Creative Compass)】"]
     if title:
         lines.append(f"- **作品名稱**：《{title}》")
     if genre:
         lines.append(f"- **題材類型**：{genre}")
     if style:
         lines.append(f"- **風格基調**：{style}")
+    if profile:
+        lines.append(f"- **商業定位與核心看點**：{profile.get('commercial_positioning', '長篇小說')} | {profile.get('dominant_appeal', '升級智鬥與爽感反轉')}")
+        lines.append(f"- **敘事推進偏好**：{profile.get('pacing_preference', '緊湊推進、有張有弛')} (複雜度：{profile.get('narrative_complexity', 'multi_faction')})")
+
     if pipeline_prompt and (for_stage or "").lower() not in ("writer", "editor"):
-        lines.append(f"- **故事簡述 / 大綱靈感 (Pipeline Prompt)**：\n  {pipeline_prompt}")
+        lines.append(f"- **故事原案靈感核心 (Inspirational Direction)**：\n  {pipeline_prompt}")
+        lines.append("  *(提示：上述原案為創作方向與精神內核種子，鼓勵在情節演進中進行多維度深化、反轉與意料之外的合理推演)*")
 
     return "\n".join(lines)
 

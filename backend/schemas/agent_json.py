@@ -30,14 +30,14 @@ WORLDVIEW_SCHEMA = {
     "timeline": [],
     "macro_outline": "",
     "multi_act_structure": [
-        {"title": "第一幕 (Setup)", "content": ""},
-        {"title": "第二幕 (Confrontation)", "content": ""},
-        {"title": "第三幕 (Resolution)", "content": ""}
+        {"title": "第一幕 破局啟程", "content": "本幕核心推動力、主要衝突與幕尾懸念"},
+        {"title": "第二幕 矛盾激化", "content": "危機升級、各方陣營博弈與人物代價"},
+        {"title": "第三幕 終局對決", "content": "終極高潮爆發與命運走向"}
     ],
     "progressive_character_plan": [
-        {"title": "第一波開篇 (Wave 1)", "content": ""},
-        {"title": "第二波發展 (Wave 2)", "content": ""},
-        {"title": "第三波高潮 (Wave 3)", "content": ""}
+        {"title": "第一波 核心主角與初期同盟", "content": "登場人物、功能定位與引導作用"},
+        {"title": "第二波 執法宿敵與多方勢力", "content": "矛盾升級後的對立陣營骨幹"},
+        {"title": "第三波 幕後黑手與終極反派", "content": "引爆終局危機的關鍵人物"}
     ]
 }
 
@@ -115,31 +115,31 @@ WORLDVIEW_APPROVAL_CRITERIA = {
     "criteria": {
         "structure": {
             "required_fields": ["theme", "main_conflict", "worldview", "macro_outline"],
-            "description": "建議確保所有必填欄位完整填寫，以便為小說奠定穩固的基礎"
+            "description": "必須完整包含 theme, main_conflict, worldview, macro_outline 四大核心欄位"
         },
         "theme": {
-            "description": "建議核心主題深入探討價值衝突與哲學命題，字數約在 50 至 500 字之間，能給予讀者更多餘韻"
+            "description": "深入剖析核心價值觀衝突與哲學命題，篇幅 50 至 500 字"
         },
         "main_conflict": {
-            "description": "核心衝突若能精準刻劃多方陣營的拉扯與張力，將會更加精彩（建議 100 至 800 字左右）"
+            "description": "精準刻劃多方陣營情節張力網與生死利益博弈，篇幅 100 至 800 字"
         },
         "worldview": {
-            "description": "世界觀設定如果能更詳盡地刻劃地理、力量體系與社會秩序，會更有沉浸感（建議在 300 字以上）"
+            "description": "詳盡確立地理舞台、超自然或技術力量法則與社會權力階層，篇幅 300 字以上"
         },
         "macro_outline": {
-            "description": "建議整體故事大綱能完整描述故事的開端、發展與高潮走向，為後續寫作指引清晰的方向"
+            "description": "明確勾勒全書開端、矛盾激化、全局逆轉與終局高潮之宏觀骨架"
         },
         "factions": {
-            "description": "勢力/組織設定需列出主要陣營、立場、利益、資源與彼此衝突，供角色 Bible、篇卷、骨架與正文維持一致"
+            "description": "勢力設定必須包含主要陣營、立場、利益訴求與敵友關係"
         },
         "multi_act_structure": {
-            "description": "【格式強硬要求：幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等不一致的編號標記】多幕結構建議規劃數十個幕，每幕均有清晰的起承轉合功能與精彩內容"
+            "description": "幕次標題採用中文數字依序編排並結合主旨命名，各幕起承轉合功能清晰，層層遞進"
         },
         "progressive_character_plan": {
-            "description": "【格式強硬要求：波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，不允許出現『1.』、『1-0XX』、『Wave 1』等不一致的編號】角色漸進規劃建議包含數十波以上，以體現群像角色的登場與階段性成長"
+            "description": "波次標題採用中文數字依序編排並概括角色定位，與多幕結構起伏緊密對齊"
         },
         "consistency": {
-            "description": "建議各欄位間保持完美的邏輯連貫性，讓主題、衝突與情節大綱互相呼應"
+            "description": "各欄位設定高度自洽互鎖，緊扣故事核心原案基石"
         }
     },
 }
@@ -150,22 +150,22 @@ WORLDVIEW_CORE_APPROVAL_CRITERIA = {
     "criteria": {
         "structure": {
             "required_fields": ["theme", "main_conflict", "worldview", "macro_outline"],
-            "description": "建議確保所有必填欄位完整填寫，以便為小說奠定穩固的基礎"
+            "description": "完整包含 theme, main_conflict, worldview, macro_outline 四大核心欄位"
         },
         "theme": {
-            "description": "建議核心主題深入探討價值衝突與哲學命題，字數約在 50 至 500 字之間，能給予讀者更多餘韻"
+            "description": "深入剖析核心價值觀衝突與哲學命題，篇幅 50 至 500 字"
         },
         "main_conflict": {
-            "description": "核心衝突若能精準刻劃多方陣營的拉扯與張力，將會更加精彩（建議 100 至 800 字左右）"
+            "description": "精準刻劃多方陣營情節張力網與利益博弈，篇幅 100 至 800 字"
         },
         "worldview": {
-            "description": "世界觀設定如果能更詳盡地刻劃地理、力量體系與社會秩序，會更有沉浸感（建議在 300 字以上）"
+            "description": "確立地理舞台、超自然或技術力量法則與社會階層，篇幅 300 字以上"
         },
         "macro_outline": {
-            "description": "建議整體故事大綱能完整描述故事的開端、發展與高潮走向，為後續寫作指引清晰的方向"
+            "description": "明確勾勒全書開端、矛盾激化、全局逆轉與終局高潮之宏觀骨架"
         },
         "consistency": {
-            "description": "建議各欄位間保持完美的邏輯連貫性，讓主題、衝突與情節大綱互相呼應"
+            "description": "各欄位設定高度自洽互鎖，緊扣故事核心原案基石"
         }
     },
 }
@@ -175,7 +175,7 @@ MULTI_ACT_STRUCTURE_APPROVAL_CRITERIA = {
     "display_name": "多幕式結構師",
     "criteria": {
         "multi_act_structure": {
-            "description": "【格式強硬要求：幕次 title 必須嚴格統一為『第一幕 (自擬階段名稱)』、『第二幕 (自擬階段名稱)』等格式，不允許使用『1.』、『1-01』、『Setup』、『Act 1』等不一致的編號標記】多幕結構建議規劃適當數量的幕次（依專案要求或大綱規劃），每幕均有清晰的起承轉合功能與精彩內容，不得有編號衝突。"
+            "description": "幕次標題採用中文數字依序編排並結合該幕主旨命名，起承轉合功能清晰，層層遞進"
         }
     },
 }
@@ -185,7 +185,7 @@ PROGRESSIVE_CHARACTER_PLAN_APPROVAL_CRITERIA = {
     "display_name": "角色登場策略規劃師",
     "criteria": {
         "progressive_character_plan": {
-            "description": "【格式強硬要求：波次 title 必須嚴格統一為『第一波 (自擬登場群體或主題)』、『第二波 (自擬登場群體或主題)』等格式，不允許出現『1.』、『1-0XX』、『Wave 1』等不一致的編號】角色漸進規劃建議包含適當數量的登場波次（對齊多幕結構起伏），以體現群像角色的登場與階段性成長。"
+            "description": "波次標題採用中文數字依序編排並概括角色功能，與各幕起伏對齊，展現群像登場與成長"
         }
     },
 }
@@ -213,6 +213,12 @@ CHARACTER_SCHEMA = {
     "belief_collapse_3beats": [], # 三階動態信念崩塌節奏（認知初裂 -> 體制反噬 -> 致命真相）
     "independent_arc": {}, # 配角三階段獨立成長線（phase_1, phase_2, phase_3）
     "off_screen_goal": "", # 配角場外個人追求（如開店、考取資格、保護家族）
+    "independent_goal": "", # Story Engine 2.0: 配角在主角之外獨立追求之具體目標
+    "current_problem": "", # Story Engine 2.0: 當前正面臨之具體問題/危機
+    "personal_stake": "", # Story Engine 2.0: 該角色自身的利害代價
+    "relationship_dependency": "", # Story Engine 2.0: 與主角/他人的情感或利益依賴
+    "capability_constraints": [], # Story Engine 2.0: 主角/強者的能力邊界、適用限制、暴露風險與不可逆代價
+    "decision_model": {}, # Story Engine 2.0: 反派決策模型 (goal, perceived_threat, resource, constraint, red_line, preferred_method)
     "motivation": "",
     "arc": "",
     "speech_style": "", # 兼容舊版：說話風格概述
@@ -262,6 +268,12 @@ CHARACTER_BASIC_FIELDS = [
     "belief_collapse_3beats",
     "independent_arc",
     "off_screen_goal",
+    "independent_goal",
+    "current_problem",
+    "personal_stake",
+    "relationship_dependency",
+    "capability_constraints",
+    "decision_model",
     "speech_style",
     "speech_profile",
     "initial_knowledge_scope",
@@ -283,7 +295,7 @@ CHARACTER_APPROVAL_CRITERIA = {
             "description": "每個角色必填欄位必須完整，不得為空或佔位符"
         },
         "name_validity": {
-            "description": "name 欄位必須是角色的具體姓名/代號，絕對禁止使用組織職位或社會身份作為姓名"
+            "description": "name 欄位為角色的具體姓名，身分與組織職位請填入 role 欄位"
         },
         "character_count": {
             "description": "需要主角、反派/宿敵、以及多個以上的角色"
@@ -387,10 +399,15 @@ CHAPTER_SKELETON_SCHEMA = {
     "chapter_index": 1,
     "chapter_title": "",
     "chapter_summary": "",
+    "scene_function": "setup | escalation | confrontation | discovery | decision | consequence | recovery | transition | payoff", # Story Engine 2.0 場景功能
     "time_setting": "",
     "scene_setting": "",
     "scene_goal": "", # 本章核心戲劇目標
     "scene_conflict": "", # 本章核心衝突阻礙
+    "story_state_before": "", # Story Engine 2.0: 本章開始前之故事狀態（資訊/資源/關係/風險）
+    "story_state_after": "", # Story Engine 2.0: 本章完成後之實質狀態位移
+    "setting_usage": [], # Story Engine 2.0: 本章涉及或運作之世界觀設定名稱
+    "conflict_signature_hint": {}, # Story Engine 2.0: 衝突模式特徵 (pressure_type, protagonist_strategy, outcome)
     "scene_beats": [ # 結構化推進拍點（建議 3-5 個）
         {
             "beat_index": 1,
@@ -536,14 +553,14 @@ SKELETON_APPROVAL_CRITERIA = {
     "display_name": "篇卷骨架規劃師",
     "criteria": {
         "chapter_completeness": {
-            "description": "必須確保【全書所有卷】的章節骨架都已生成完畢。請仔細檢查底層剛性校驗報告，若報告指出還有其他卷（如卷4, 5等）尚未完成骨架，則嚴禁放行進入 writer 階段，必須維持在 volume_skeleton 階段繼續生成缺失的骨架。"
+            "description": "確保規劃篇卷的章節骨架完整就緒，若尚有篇卷未完成骨架，請繼續進行骨架補充。"
         },
         "chapter_structure": {
             "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
             "description": "每章需具備輕量骨架結構，可包含 scene_goal, scene_conflict 與 scene_beats（或 events），供 writer 承接"
         },
         "anti_repetition_and_diversity": {
-            "description": "同卷內同類衝突/交鋒模式出現不得超過 2 次；嚴禁連續 3 章皆為過場；重大轉折章前 2 章需有動搖/懷疑前置拍點"
+            "description": "同卷內注重破局模式多樣化，避免連續過場空轉，重大轉折章前置具備動搖或懷疑拍點"
         },
         "time_setting": {
             "description": "每章需有清晰的時間設定與前章的時間跨度"
@@ -746,8 +763,7 @@ def format_criteria_for_prompt(stage_name):
         return ""
     
     lines = [
-        f"\n## 【{criteria['display_name']} 通過標準】",
-        f"### 必檢查項目：\n"
+        f"\n【{criteria['display_name']} 創作重點參考】",
     ]
     
     for key, value in criteria["criteria"].items():
@@ -755,10 +771,6 @@ def format_criteria_for_prompt(stage_name):
             lines.append(f"- **{key}**: {value.get('description', '')}")
         else:
             lines.append(f"- **{key}**: {value}")
-    
-    # if "auto_regenerate_hint" in criteria:
-    #     lines.append(f"\n### 重新生成提示：")
-    #     lines.append(f"{criteria['auto_regenerate_hint']}")
     
     return "\n".join(lines)
 
@@ -775,11 +787,9 @@ def format_output_schema_for_prompt(stage_name, *, label=None):
         return ""
     heading = label or stage_name
     return (
-        f"\n## 【{heading} 輸出 JSON 格式（來源：backend/schemas/agent_json.py）】\n"
-        "請嚴格依照下列 JSON key 與資料形狀輸出；value 可使用繁體中文，但 key 不可翻譯或改名。\n"
-        "```json\n"
+        f"\n【{heading} 資料結構範例】\n"
+        "請參考下列結構整理資料，以標準英文欄位名組織，內容則用生動流暢的繁體中文書寫，只輸出純 JSON：\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
-        "```\n"
     )
 
 
@@ -831,3 +841,81 @@ def create_skeleton_list(skeletons_list):
 def create_foreshadowing_allocations(allocations_list):
     """建立伏筆分配列表"""
     return allocations_list
+
+
+# =============================================================================
+# 8. Story Engine 2.0: Setting System & Narrative Reasoning Schemas
+# =============================================================================
+
+SETTING_SYSTEM_SCHEMA = {
+    "name": "設定系統名稱（如：專利魔網、靈氣潮汐律、宗門貢獻點體制）",
+    "type": "power_mechanism | political_institution | economic_rule | ecological_law | social_taboo",
+    "mechanism": "該設定如何具體運作，其底層因果規律是什麼",
+    "cost": "使用、獲取或維護該機制需要付出之代價（物質/壽元/社會代價）",
+    "boundary": "該設定絕對無法做到什麼，其作用範圍的物理或邏輯極限",
+    "failure_condition": "在何種極端情境下該系統會失效、崩潰或產生反噬",
+    "stakeholder": "主要受益者、維護者與受壓迫群體",
+    "social_effect": "該設定對凡人/底層大眾日常生活與心理習慣的具體塑造",
+    "theme_link": "該設定如何呼應作品的核心主題或哲學悖論",
+    "current_state": "active | stressed | compromised | collapsed"
+}
+
+CONFLICT_SIGNATURE_SCHEMA = {
+    "chapter_start": 1,
+    "chapter_end": 1,
+    "initiator": "發起衝突之人物或勢力",
+    "antagonist_goal": "對手具體想掠奪、壓迫或達成的目的",
+    "pressure_type": "economic_blockade | legal_trap | direct_violence | hostage_threat | technological_monopoly | psychological_deception | structural_purge",
+    "protagonist_strategy": "asymmetric_wit | rules_loophole | sacrifice_escape | direct_clash | undercover_infiltration | third_party_leverage",
+    "power_used": "主角動用之核心能力或道具",
+    "twist_mechanism": "反轉或破局的具體關鍵因果",
+    "outcome": "protagonist_flawless_win | costly_escape | partial_loss | strategic_stalemate | pyrrhic_victory",
+    "cost": "主角或陣營付出的代價（資源/傷勢/人際/秘密暴露）",
+    "emotional_effect": "對在場人物心理之實質改變",
+    "setting_used": "本衝突涉及運作之設定系統名稱"
+}
+
+NARRATIVE_PROFILE_SCHEMA = {
+    "commercial_positioning": "商業長篇小說",
+    "dominant_appeal": "升級智鬥與爽感反轉",
+    "tone": "熱血、微諷、懸疑沉浸",
+    "humor_level": "low | medium | high",
+    "power_fantasy_level": "grounded | medium | high | absolute",
+    "emotional_intensity": "light | medium | heavy",
+    "pacing_preference": "緊湊推進、有張有弛",
+    "narrative_complexity": "single_line | dual_track | multi_faction"
+}
+
+ANTAGONIST_DECISION_MODEL_SCHEMA = {
+    "goal": "反派具體之生存或利益訴求",
+    "perceived_threat": "反派眼中主角帶來的實際威脅評估",
+    "resource": "反派掌握之制度、武力或人脈資源",
+    "constraint": "反派行動受限之規章、法規或外部監視",
+    "red_line": "反派絕不退讓或不可觸碰之底線",
+    "preferred_method": "習慣採用之手段（行政陷阱、暗殺、經濟斷供等）"
+}
+
+CAPABILITY_CONSTRAINT_MODEL_SCHEMA = {
+    "power_name": "能力或金手指名稱",
+    "applicable_scope": "精確適用情境與對象",
+    "blind_spots": "此能力完全無法解決的問題類型（如人心、生物本能、複雜博弈）",
+    "exposure_risk": "過度使用時引來之官方追查或天敵窺伺風險",
+    "social_moral_cost": "使用該力量帶來的社會疑慮或道德壓力",
+    "irreversible_consequence": "是否會產生不可逆之後果或環境破壞"
+}
+
+SETTING_AUDIT_SCHEMA = {
+    "audit_type": "worldview_establishment | skeleton_usage | chapter_evolution",
+    "passed": True,
+    "setting_health_score": 85,
+    "operating_mechanisms_count": 5,
+    "issues_detected": [
+        {
+            "setting_name": "設定名稱",
+            "issue_type": "lacks_cost | lacks_boundary | cosmetic_only | contradiction | stale_unused",
+            "description": "具體問題說明",
+            "remediation_hint": "改善指引"
+        }
+    ],
+    "recommendations": []
+}

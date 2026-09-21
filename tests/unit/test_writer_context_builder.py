@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Unit tests for WriterContextBuilder
+WriterContextBuilder 單元測試：
+- 場景契約預設值
+- 角色即時狀態（語言傾向、知識範圍、私密動機）
+- 結構化推進拍點展開
+- 提示詞上下文格式（無 JSON 傾印、世界觀長文不截斷）
 """
-
-import pytest
 from backend.services.context.writer_context_builder import (
     WriterContextBuilder,
     build_writer_scene_context,

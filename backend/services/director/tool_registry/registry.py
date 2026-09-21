@@ -26,6 +26,10 @@ TOOL_REGISTRY = {
         "description": "分批/分頁展開查看世界觀 JSON 中被收合的列表內容，例如 multi_act_structure、progressive_character_plan、foreshadowing_seeds、key_turning_points；每次指定一小段 1-based 區間（如 1~10、11~20），避免一次讀取過多超出上下文",
         "parameters": ["stage_name", "field_name", "start_index", "end_index", "novel_id"],
     },
+    "repair_story_geometry": {
+        "description": "【敘事幾何修復工具】：僅限符合以下4大重大條件之一時調用：1.密度超載(>=3轉折或>=4伏筆或2場景跳躍+1人物轉折) 2.因果斷層(缺B必須INSERT橋接章) 3.收束撞車(同卷收>=2大線+卷末高潮，3節點不夠需EXPAND 3->5) 4.章數膨脹(volume.chapter_count需調整重排)。操作支援 SPLIT, EXPAND, INSERT, COMPRESS。未符合4條件一律不准加節點，改走舊 evaluate_output 打回重寫。",
+        "parameters": ["novel_id", "operation", "condition", "target_nodes", "reason", "detail", "gatekeeper_context"],
+    },
 }
 
 def export_tools() -> Dict[str, Any]:

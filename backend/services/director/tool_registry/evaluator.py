@@ -261,6 +261,7 @@ def evaluate_output(stage_name: str, output_content: str = "", novel_id: str = "
         return {"passed": True, "message": "無該階段標準，視為通過", "issues": []}
 
     issues = []
+    narrative_audit = None
     output_content = output_content or _latest_stage_output_for_evaluation(stage_name, novel_id)
     parsed = extract_json_block(output_content)
 
@@ -326,12 +327,53 @@ def evaluate_output(stage_name: str, output_content: str = "", novel_id: str = "
 
     elif stage_name in ("writer", "editor"):
         issues.extend(_validate_writer_like(parsed, output_content, stage_name))
+        if novel_id and not issues:
+            try:
+                from backend.services.narrative.narrative_auditor import NarrativeAuditor
+                content, data = _content_from_writer_like_output(parsed, output_content)
+                ch_idx = data.get("chapter_index") or 1
+                try:
+                    ch_idx = int(ch_idx)
+                except Exception:
+                    ch_idx = 1
+                outline = None
+                vols = db.get_volumes(novel_id)
+                for v in vols:
+                    ch_list = v.get("chapters_outline") or []
+                    if isinstance(ch_list, str):
+                        try:
+                            ch_list = json.loads(ch_list)
+                        except Exception:
+                            ch_list = []
+                    for c in ch_list:
+                        if isinstance(c, dict) and c.get("chapter_index") == ch_idx:
+                            outline = c
+                            break
+                    if outline:
+                        break
+                audit_res = NarrativeAuditor.audit_chapter_prose(
+                    novel_id=novel_id,
+                    chapter_index=ch_idx,
+                    prose_text=content,
+                    current_outline=outline,
+                    candidate_conflict_sig=outline.get("conflict_signature_hint") if outline else None,
+                )
+                narrative_audit = audit_res
+                if audit_res.get("overall_action") == "CRITICAL":
+                    for f in audit_res.get("findings", []):
+                        if f.get("severity") == "critical":
+                            issues.append(f"【敘事診斷紅線 ({f['dimension']})】{f['evidence']}：{f['recommendation']}")
+            except Exception:
+                pass
 
     criteria_prompt = format_criteria_for_prompt(stage_name)
 
-    return {
+    result = {
         "passed": len(issues) == 0,
         "message": "通過" if len(issues) == 0 else "; ".join(issues),
         "issues": issues,
         "criteria_reference": criteria_prompt,
     }
+    if narrative_audit:
+        result["narrative_audit"] = narrative_audit
+    return result

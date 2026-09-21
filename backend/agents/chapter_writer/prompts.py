@@ -38,19 +38,17 @@ def build_chapter_writer_messages(
     system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE + "\n\n" + CHAPTER_WRITER_GUIDELINES
     system_prompt += build_agent_context_contract(
         "Chapter Writer / 正文作家",
-        "- 指定章節之 Scene Contract（含 POV 視角人物、敘事距離、戲劇目標與知情邊界）。\n- 結構化 Scene Beats 推進拍點。\n- 只限本章出場角色的穩定人格/語言卡與 current state；不得把初始知情當成現時知情。\n- 前章承接、必要的時序/canon facts、當前卷方向與本章 allocated tasks。\n- 本章若是 payoff，僅使用已驗證的 plant provenance；未提供不得臆造。",
-        "只撰寫指定 chapter_index 的繁體中文正式正文，嚴格落實 POV 邊界、角色知情邊界與戲劇拍點。",
-        "正式正文前必須輸出 [START_OF_PROSE]；不要輸出 JSON、不要輸出設定解說。"
+        "- 指定章節之場景契約（包含 POV 視角人物、戲劇目標與知情邊界）。\n- 結構化推進拍點 (Scene Beats)。\n- 本章出場角色的人格特質與當前狀態。\n- 前章銜接背景與本章任務。",
+        "專注撰寫指定章節的繁體中文正式小說正文，細緻展現視角邊界與戲劇拍點。",
+        "請直接輸出小說正文（可在正文開頭標註 [正文開始]），不需輸出額外的 JSON 或設定解說。"
     )
 
     system_prompt += """
 
-## Writer Context Hard Boundary
-- 你沒有資料庫、工具或全書檢索權；只能使用本輪明確提供的 context。
-- 只執行本章 `chapter_plan` / `allocated_tasks`；不可提前執行後續章節的 payoff，也不可自行處理未分配 open threads。
-- 前章/後章與卷方向僅用於銜接與伏筆鋪墊，不得把後續事件寫成已發生的事實。
-- `initial_knowledge_scope` 是角色背景資料，不代表第 N-1 章的 current knowledge；若沒有 current state/knowledge，不得自行推定。
-- 若本章為 payoff 而沒有可靠的 plant anchor，停止正文生成並依 context request contract 回報資料不足。
+【本章正文創作指引】
+- 專注本章：請聚焦落實本章場景契約與推進拍點，使情節平穩自然地推進。
+- 知情邊界：人物言語與行動基於其當前已知情報與性格動機，呈現真實生動的情境互動。
+- 緊密銜接：承接前章留下的局勢與情緒餘波，將本章懸念自然留給下一章。
 """
 
     # 透過 WriterContextBuilder 生成解構後的乾淨情境文字

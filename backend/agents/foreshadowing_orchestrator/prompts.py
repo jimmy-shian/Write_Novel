@@ -62,10 +62,16 @@ MAX_CHARACTERS_SUMMARY_LENGTH = 26000
 
 from backend.prompts.common.context import *
 
-def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None, target_field=None, novel_id=None, batch_size=15, existing_items=None, start_id=1, established_seeds=None):
-    """伏筆與轉折編織師提示詞拼接 (支援 15 條/批 自動分批累加)"""
+def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=None, target_field=None, novel_id=None, batch_size=15, existing_items=None, start_id=1, established_seeds=None, volumes_structure=None):
+    """伏筆與轉折編織師提示詞拼接 (支援 15 條/批 自動分批累加，整合篇卷結構對齊)"""
     from backend.schemas.agent_json import FORESHADOWING_OUTPUT_SCHEMA
     import json
+
+    volumes_align_rule = ""
+    if volumes_structure:
+        volumes_align_rule = (
+            "7. 篇卷結構對齊要求：請參照下方提供的【全書篇卷架構與章節區間】，將伏筆的 `payoff_deadline_chapter` 與轉折點章節精準錨定在相應卷的發展或卷末高潮區間，使伏筆回收與篇卷節奏完美契合。\n"
+        )
 
     if target_field == "foreshadowing_seeds":
         schema = {"foreshadowing_seeds": FORESHADOWING_OUTPUT_SCHEMA["foreshadowing_seeds"]}
@@ -89,6 +95,7 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
             f"4. `id` 必須是整數，從 {start_id} 開始連續編號。\n"
             f"5. 禁止輸出 key_turning_points 或任何其他頂層鍵。\n"
             f"6. 每個 seed 必須具備可埋設的具體載體、表層偽裝與未來回收方向；設定清晰的 `payoff_deadline_chapter`（每20-30章具備回收點），並支援以 `integration_group` 將關聯懸念合流歸納；不得用同義改寫湊數。\n"
+            + volumes_align_rule
             + existing_section
         )
     elif target_field == "key_turning_points":
@@ -126,13 +133,13 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
 
         target_instruction = (
             f"【本次批次生成 key_turning_points】\n"
-            f"1. 最外層 JSON 只能有一個頂層鍵：`key_turning_points`（陣列）。\n"
-            f"2. 本次請生成高戲劇張力、重大局勢變更的 {batch_size} 個全新關鍵轉折點。\n"
-            f"3. 每個項目只能使用：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
-            f"4. `id` 必須是整數，從 {start_id} 開始連續編號。\n"
-            f"5. 禁止輸出 foreshadowing_seeds 或任何其他頂層鍵。\n"
-            f"6. 每個 turning point 必須能造成局勢、關係或角色弧線的實質改變；不得用普通事件湊數。\n"
-            f"7. ⚠️ 伏筆與轉折組合聯動要求：關鍵轉折點請主動與上述【已確立之全書核心伏筆種子】產生呼應聯動，在 description、trigger_condition 或 structural_impact 中指明觸發、引爆或收束了哪一條伏筆懸念，形成嚴密的伏筆-轉折因果鏈條！\n"
+            f"1. 請組織為包含 `key_turning_points` 陣列的 JSON 資料。\n"
+            f"2. 本次請規劃具備高戲劇張力、重大局勢變更的 {batch_size} 個全新關鍵轉折點。\n"
+            f"3. 每個項目欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
+            f"4. `id` 從 {start_id} 開始依序遞增編號。\n"
+            f"5. 每個轉折點著重為局勢、人際關係或角色弧線帶來實質位移。\n"
+            f"6. 伏筆與轉折組合聯動要求：關鍵轉折點主動與上述【已確立之全書核心伏筆種子】產生呼應，在情節推演中指明觸發、引爆或收束了哪一條伏筆懸念，形成環環相扣的因果鏈條。\n"
+            + volumes_align_rule
             + existing_section
             + seeds_summary_section
         )
@@ -140,33 +147,36 @@ def build_foreshadowing_messages(worldview_text, characters_json, user_prompt=No
         schema = FORESHADOWING_OUTPUT_SCHEMA
         target_instruction = (
             f"【本次批次生成全書伏筆與關鍵轉折藍圖】\n"
-            f"1. 最外層 JSON 必須只有一個物件，且只能包含兩個頂層鍵：`foreshadowing_seeds` 與 `key_turning_points`。\n"
+            f"1. 請組織為包含 `foreshadowing_seeds` 與 `key_turning_points` 的 JSON 資料。\n"
             f"2. 本批生成：`foreshadowing_seeds` 陣列（{batch_size} 個）與 `key_turning_points` 陣列（{batch_size} 個）。\n"
             f"3. 每個 `foreshadowing_seeds` 項目欄位：`id`, `name`, `description`, `setup_hint`, `payoff_hint`, `related_characters`, `thematic_link`, `expected_payoff_window`, `payoff_deadline_chapter`, `integration_group`。\n"
             f"4. 每個 `key_turning_points` 項目欄位：`id`, `turning_point_name`, `description`, `trigger_condition`, `structural_impact`, `emotional_stakes`, `related_characters`。\n"
-            f"5. `id` 必須是 JSON number，從 1 開始連續編號。\n"
-            f"6. 禁止輸出卷別鍵、章節正文或解釋文字；種子與轉折必須深刻、具體且不重複，合理分配回收截止章節與懸念合流組。"
+            f"5. `id` 從 1 開始依序連續編號。\n"
+            f"6. 種子與轉折注重深刻具體，合理分配回收章節與懸念合流組。\n"
+            + volumes_align_rule
         )
 
     schema_snippet = (
-        format_json_schema_prompt(schema, label="this foreshadowing schema from backend/schemas/agent_json.py")
+        format_json_schema_prompt(schema, label="foreshadowing")
         + "\n"
         + agent_json.format_criteria_for_prompt("foreshadowing")
     )
     system_prompt = f"{FORESHADOWING_ORCHESTRATOR_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{target_instruction}\n\n{FORESHADOWING_ORCHESTRATOR_GUIDELINES}\n"
     system_prompt += build_agent_context_contract(
         "Foreshadowing Orchestrator / 伏筆與轉折編織師",
-        "- 經後端挑選的世界觀背景與作品核心基石。\n- 角色 Bible 或角色摘要。\n- 總監可能透過 [BATCH: foreshadowing_seeds] 或 [BATCH: key_turning_points] 指定本批目標。",
-        "只設計全書伏筆種子與關鍵轉折藍圖，供後續篇卷和章節分配使用。伏筆與轉折必須嚴格服務於作品核心基石。",
-        "嚴格遵守本批 target_field 的頂層鍵；分批時不得混入另一類資料，不得輸出卷別鍵、章節正文或解釋文字。"
+        "- 經挑選的世界觀背景與作品核心基石。\n- 角色群像背景與登場策略。\n- 全書篇卷架構與各卷章節區間（若有，供精準對齊伏筆回收 deadline 與轉折爆發點）。\n- 本批生成目標與前續批次摘要。",
+        "設計全書伏筆種子與關鍵轉折藍圖，為後續篇卷和章節骨架提供情節推動力；若有篇卷架構，確保伏筆回收截止點（payoff_deadline_chapter）與關鍵轉折點精確錨定在各卷之章節區間與卷末高潮。",
+        "輸出對應批次的伏筆或轉折 JSON 資料。"
     )
 
     core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
     default_task = "請根據作品核心基石、世界設定與角色背景，設計豐富的伏筆種子與關鍵轉折點。"
+    volumes_block = f"【全書篇卷架構與章節區間（供精準對齊伏筆回收視窗與轉折章節）】\n{volumes_structure}\n\n" if volumes_structure else ""
     user_content = (
         core_context
         + "【世界觀背景】\n" + worldview_text + "\n\n"
         + "【角色 Bible 與人設】\n" + characters_json + "\n\n"
+        + volumes_block
         + "【額外設計指令】\n" + (user_prompt or default_task) + "\n\n"
     )
     return [

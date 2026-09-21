@@ -1,0 +1,81 @@
+# -*- coding: utf-8 -*-
+"""
+總監工具迴圈與提示詞建構單元測試：
+- expand_collapsed_json 支援字串型索引參數
+- 總監決策提示詞：foreshadowing 階段應指向 volumes、user 指令收尾格式
+- detect_current_stage 階段偵測
+"""
+import json
+import uuid
+
+from backend import persistence as db
+from backend.agents.director.prompts import build_director_decision_messages
+from backend.services.diagnostics import generate_validation_report, detect_current_stage
+from backend.services.director.tool_registry.inspect import expand_collapsed_json
+
+
+def test_tool_loop_and_prompts():
+    novel_id = f"test_tool_loop_{uuid.uuid4().hex[:10]}"
+    db.create_novel(novel_id, "測試小說", "奇幻", "熱血")
+    try:
+        wb_data = {
+            "theme": "測試主題",
+            "main_conflict": "測試核心衝突",
+            "worldview": "測試世界觀內容",
+            "macro_outline": "測試宏觀大綱",
+            "key_turning_points": [{"turning_point": f"轉折點{i}"} for i in range(1, 61)],
+        }
+        db.save_worldbuilding(novel_id, json.dumps(wb_data, ensure_ascii=False))
+
+        chars_data = [
+            {
+                "name": "主角",
+                "role": "protagonist",
+                "archetype": "少年英雄",
+                "goal": "變強",
+                "core_trait": "堅定",
+                "arc": "成長",
+            },
+            {
+                "name": "宿敵",
+                "role": "antagonist",
+                "archetype": "冷酷反派",
+                "goal": "毀滅世界",
+                "core_trait": "殘忍",
+                "arc": "墮落",
+            },
+        ]
+        db.save_characters(novel_id, chars_data)
+
+        stage = "foreshadowing"
+        wb = db.get_latest_worldbuilding(novel_id)
+        char_data = db.get_latest_characters(novel_id)
+        val_rep = generate_validation_report(novel_id, current_stage=stage)
+
+        # 1. expand_collapsed_json 支援字串型索引參數
+        res_str = expand_collapsed_json(
+            stage_name="foreshadowing", field_name="key_turning_points",
+            start_index="6", end_index="50", novel_id=novel_id,
+        )
+        assert res_str["success"] is True
+        assert res_str["returned_count"] == 45
+
+        # 2. 提示詞建構：foreshadowing 階段應指向 volumes，且 user 指令以工具說明收尾
+        msgs = build_director_decision_messages(
+            novel_id=novel_id,
+            current_stage=stage,
+            worldview_text=wb["content"],
+            characters_text=char_data["json_data"],
+            plot_text="伏筆與轉折編織審查階段",
+            written_chapters_text="",
+            user_prompt="請根據現有設定繼續創作",
+            validation_report=val_rep,
+        )
+        assert 'target: "volumes"' in msgs[0]["content"]
+        assert msgs[1]["content"].strip().endswith("`reason`、`hint`、`agent_prompt` 或 `agent_context`。")
+
+        # 3. detect_current_stage 應回傳合法階段
+        det = detect_current_stage(novel_id)
+        assert det in ("foreshadowing", "volumes", "volume_skeleton", "writer", "editor")
+    finally:
+        db.delete_novel(novel_id)

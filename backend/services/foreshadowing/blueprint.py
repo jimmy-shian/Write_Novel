@@ -66,14 +66,14 @@ def build_canonical_foreshadowing_task_map(novel_id):
     from backend import persistence as db
 
     volumes = db.get_volumes(novel_id)
-    if not volumes:
+    if not volumes and not db.has_geometry(novel_id):
         return {}
     wb = db.get_latest_worldbuilding(novel_id)
     worldview = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
     seeds = worldview.get("foreshadowing_seeds", []) or []
     turns = worldview.get("key_turning_points", []) or []
     blueprint = get_global_foreshadowing_blueprint(novel_id)
-    total_chapters = coerce_int(blueprint.get("T"), get_total_chapter_count(volumes))
+    total_chapters = coerce_int(blueprint.get("T"), get_total_chapter_count(volumes) if volumes else 800)
 
     task_map = {}
 
@@ -284,9 +284,104 @@ def precompute_global_foreshadowing(novel_id):
     return blueprint
 
 
+def build_blueprint_from_geometry(novel_id):
+    """從 Geometry Graph 的 SETS_UP / PAYS_OFF 與 CONVERGE/PAYOFF 節點提取確定性伏筆與轉折分配。"""
+    from backend import persistence as db
+
+    graph = db.load_geometry_graph(novel_id)
+    if not graph or not graph.nodes:
+        return None
+
+    wb = db.get_latest_worldbuilding(novel_id)
+    worldview = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+    all_seeds = worldview.get("foreshadowing_seeds", []) or []
+    all_turns = worldview.get("key_turning_points", []) or []
+
+    total_chapters = graph.params.target_chapters if hasattr(graph, "params") and graph.params else 800
+
+    # 1. 提取所有 SETS_UP 和 PAYS_OFF 關聯邊
+    payoff_edges = [e for e in graph.edges if getattr(e.edge_type, "value", e.edge_type) == "PAYS_OFF"]
+    sets_up_edges = [e for e in graph.edges if getattr(e.edge_type, "value", e.edge_type) == "SETS_UP"]
+
+    allocations = []
+    # 優先由 PAYS_OFF 邊決定 plant -> payoff
+    for e in payoff_edges:
+        src = graph.get_node(e.source)
+        tgt = graph.get_node(e.target)
+        if src and tgt:
+            p_ch = src.chapter_window[0]
+            r_ch = tgt.chapter_window[1]
+            pair = normalize_allocation_pair((p_ch, r_ch), total_chapters)
+            if pair:
+                allocations.append(pair)
+
+    # 若不足，補入 SETS_UP 邊
+    if len(allocations) < len(all_seeds):
+        for e in sets_up_edges:
+            src = graph.get_node(e.source)
+            tgt = graph.get_node(e.target)
+            if src and tgt:
+                p_ch = src.chapter_window[0]
+                r_ch = tgt.chapter_window[1]
+                pair = normalize_allocation_pair((p_ch, r_ch), total_chapters)
+                if pair and pair not in allocations:
+                    allocations.append(pair)
+
+    # 若仍然不足，從節點時間軸順序均勻分配
+    all_nodes_sorted = sorted(graph.nodes.values(), key=lambda n: n.chapter_window[0])
+    while len(allocations) < len(all_seeds) and len(all_nodes_sorted) >= 2:
+        idx_p = len(allocations) % (len(all_nodes_sorted) // 2)
+        idx_r = min(len(all_nodes_sorted) - 1, idx_p + len(all_nodes_sorted) // 2)
+        pair = normalize_allocation_pair(
+            (all_nodes_sorted[idx_p].chapter_window[0], all_nodes_sorted[idx_r].chapter_window[1]),
+            total_chapters
+        )
+        if pair:
+            allocations.append(pair)
+        else:
+            break
+
+    # 2. 提取 turning points：以 CONVERGE, PAYOFF, CHARACTER_SHIFT, ESCALATE 節點為優先
+    turning_nodes = [
+        n for n in all_nodes_sorted
+        if getattr(n.structural_role, "value", n.structural_role) in ("CONVERGE", "PAYOFF", "CHARACTER_SHIFT", "ESCALATE")
+    ]
+    if not turning_nodes:
+        turning_nodes = all_nodes_sorted
+
+    turns_alloc = []
+    step = max(1, len(turning_nodes) // max(1, len(all_turns)))
+    for i in range(len(all_turns)):
+        node_idx = min(len(turning_nodes) - 1, i * step)
+        turns_alloc.append(turning_nodes[node_idx].chapter_window[0])
+
+    blueprint = {
+        "T": total_chapters,
+        "foreshadowing_allocations": allocations[:len(all_seeds)],
+        "turning_allocations": turns_alloc[:len(all_turns)],
+    }
+
+    conn = db.get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO foreshadowing_blueprints (novel_id, blueprint_json) VALUES (?, ?)",
+            (novel_id, json.dumps(blueprint, ensure_ascii=False)),
+        )
+
+    print(f"[DB] Geometry-derived foreshadowing blueprint built successfully for novel {novel_id} (T={total_chapters})")
+    return blueprint
+
+
 def get_global_foreshadowing_blueprint(novel_id):
     """Fetch the persisted blueprint, recomputing when stale or missing."""
     from backend import persistence as db
+
+    # 若作品已具有幾何圖譜，優先由幾何圖譜導出藍圖
+    if db.has_geometry(novel_id):
+        geom_blueprint = build_blueprint_from_geometry(novel_id)
+        if geom_blueprint:
+            return geom_blueprint
 
     wb = db.get_latest_worldbuilding(novel_id)
     worldview = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}

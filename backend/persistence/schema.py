@@ -144,6 +144,12 @@ def db_init():
         cursor.execute("ALTER TABLE novels ADD COLUMN worldview_patches TEXT DEFAULT '[]'")
     except sqlite3.OperationalError:
         pass
+
+    # Ensure narrative_profile column exists
+    try:
+        cursor.execute("ALTER TABLE novels ADD COLUMN narrative_profile TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     
     # 2. Worldbuilding table (versioned)
     cursor.execute("""
@@ -579,6 +585,166 @@ def db_init():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+
+        # 11. Story Engine 2.0: Setting Systems table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS setting_systems (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            mechanism TEXT NOT NULL,
+            cost TEXT,
+            boundary TEXT,
+            failure_condition TEXT,
+            stakeholder TEXT,
+            social_effect TEXT,
+            theme_link TEXT,
+            current_state TEXT DEFAULT 'active',
+            usage_count INTEGER DEFAULT 0,
+            last_used_chapter INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_setting_systems_novel ON setting_systems(novel_id, name)")
+
+        # 12. Story Engine 2.0: Conflict Signatures table (Long-range Anti-Repetition)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conflict_signatures (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            chapter_start INTEGER NOT NULL,
+            chapter_end INTEGER NOT NULL,
+            initiator TEXT,
+            antagonist_goal TEXT,
+            pressure_type TEXT NOT NULL,
+            protagonist_strategy TEXT NOT NULL,
+            power_used TEXT,
+            twist_mechanism TEXT,
+            outcome TEXT NOT NULL,
+            cost TEXT,
+            emotional_effect TEXT,
+            setting_used TEXT,
+            signature_hash TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_conflict_sig_novel ON conflict_signatures(novel_id, chapter_start)")
+
+        # 13. Story Engine 2.0: Narrative Audits table (Director 2.0)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS narrative_audits (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            chapter_index INTEGER DEFAULT 0,
+            dimension TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            evidence TEXT,
+            recommendation TEXT,
+            action_required INTEGER DEFAULT 0,
+            resolved INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_narrative_audits_novel ON narrative_audits(novel_id, chapter_index, severity)")
+
+        # 14. Geometry Graph
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_nodes (
+            node_id TEXT NOT NULL,
+            novel_id TEXT NOT NULL,
+            volume_index INTEGER,
+            arc_index INTEGER,
+            sequence_index INTEGER,
+            chapter_start INTEGER,
+            chapter_end INTEGER,
+            structural_role TEXT NOT NULL,
+            primary_thread TEXT,
+            importance REAL DEFAULT 0.5,
+            semantic_json TEXT,
+            metadata_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (novel_id, node_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_nodes_novel ON geometry_nodes(novel_id, volume_index)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_nodes_chapter ON geometry_nodes(novel_id, chapter_start, chapter_end)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_edges (
+            edge_id TEXT NOT NULL,
+            novel_id TEXT NOT NULL,
+            source_node TEXT NOT NULL,
+            target_node TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            distance INTEGER,
+            semantic_json TEXT,
+            metadata_json TEXT,
+            PRIMARY KEY (novel_id, edge_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_edges_novel ON geometry_edges(novel_id, source_node)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_edges_target ON geometry_edges(novel_id, target_node)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_threads (
+            thread_id TEXT NOT NULL,
+            novel_id TEXT NOT NULL,
+            thread_type TEXT NOT NULL,
+            node_sequence_json TEXT,
+            structural_skeleton_json TEXT,
+            semantic_json TEXT,
+            metadata_json TEXT,
+            PRIMARY KEY (novel_id, thread_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_threads_novel ON geometry_threads(novel_id, thread_type)")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_volumes (
+            volume_id TEXT NOT NULL,
+            novel_id TEXT NOT NULL,
+            volume_index INTEGER NOT NULL,
+            chapter_start INTEGER,
+            chapter_end INTEGER,
+            arc_ids_json TEXT,
+            semantic_json TEXT,
+            PRIMARY KEY (novel_id, volume_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_arcs (
+            arc_id TEXT NOT NULL,
+            novel_id TEXT NOT NULL,
+            volume_index INTEGER,
+            arc_index INTEGER,
+            chapter_start INTEGER,
+            chapter_end INTEGER,
+            thread_ids_json TEXT,
+            semantic_json TEXT,
+            PRIMARY KEY (novel_id, arc_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS geometry_metadata (
+            novel_id TEXT PRIMARY KEY,
+            params_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create temporal_graph / story extension tables: {e}")

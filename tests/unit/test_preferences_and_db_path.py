@@ -1,4 +1,10 @@
 ﻿# -*- coding: utf-8 -*-
+"""
+應用偏好設定與 DB 路徑單元測試：
+- 偏好鍵值存取
+- 偏好設定 API 端點
+- sync status 回傳絕對 DB 路徑
+"""
 import os
 from fastapi.testclient import TestClient
 from backend.app import app

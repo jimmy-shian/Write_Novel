@@ -17,10 +17,13 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from backend import persistence as db
+from backend.persistence import get_terms
 from backend.prompts.common.context import format_novel_core_context
 from backend.services.gold_rules.gold_rules_manager import load_scoped_gold_rules
 from backend.services.graphiti.temporal_graph import TemporalGraphService
+from backend.services.narrative.conflict_ledger import ConflictLedger
+from backend.services.narrative.setting_registry import SettingRegistry
+from backend.services.director.context_compiler import GeometryContextCompiler
 
 
 class WriterContextBuilder:
@@ -47,12 +50,14 @@ class WriterContextBuilder:
                     pov_char = ch.get("name", "主角")
                     break
 
-        # 擷取戲劇目標與衝突
+        # 擷取戲劇目標、功能定位與狀態位移
         summary = current_outline.get("chapter_summary", "") if isinstance(current_outline, dict) else ""
         goal = current_outline.get("scene_goal") or summary or "推進本章關鍵事件"
         conflict = current_outline.get("scene_conflict") or "遭遇現實阻礙或人際對抗"
         turn = current_outline.get("scene_turn") or "局勢或角色認知發生改變"
         outcome = current_outline.get("scene_outcome") or "達成部分目標或付出相應代價"
+        scene_func = current_outline.get("scene_function") or "推進 (progression)"
+        state_after = current_outline.get("story_state_after") or outcome
 
         return {
             "chapter_index": chapter_index,
@@ -60,10 +65,12 @@ class WriterContextBuilder:
             "narrative_mode": "third_person_limited",
             "narrative_distance": "close",
             "thought_mode": "free_indirect",
+            "scene_function": scene_func,
             "scene_goal": goal,
             "conflict": conflict,
             "turn": turn,
             "outcome": outcome,
+            "state_after": state_after,
         }
 
     def build_character_states(
@@ -266,15 +273,55 @@ class WriterContextBuilder:
             lines.append(core_context)
             lines.append("")
 
-        # (A) 場景契約
+        # (A) 場景契約與狀態位移
         lines.append(f"### 🎬【場景契約 (Scene Contract) - 第 {chapter_index} 章】")
+        lines.append(f"- **場景功能定位 (Scene Function)**：{contract.get('scene_function', '推進 (progression)')}")
         lines.append(f"- **POV 視角人物**：{contract['pov_character']}（攝影機固定於此角色，以其感知、經驗與推論為限）")
         lines.append(f"- **敘事距離與模式**：{contract['narrative_mode']}（{contract['narrative_distance']} distance），支援自由間接引語 (Free Indirect Discourse)")
         lines.append(f"- **場景戲劇目標 (Goal)**：{contract['scene_goal']}")
         lines.append(f"- **核心阻礙衝突 (Conflict)**：{contract['conflict']}")
         lines.append(f"- **轉折點 (Turn)**：{contract['turn']}")
-        lines.append(f"- **結果與狀態改變 (Outcome)**：{contract['outcome']}")
+        lines.append(f"- **實質狀態位移 (Meaningful State Change)**：{contract.get('state_after', contract['outcome'])}")
         lines.append("")
+
+        # (A2) 長程衝突因果防重複指引 (Conflict Novelty Guard)
+        conflict_guard = ConflictLedger.build_anti_repetition_prompt_snippet(novel_id, chapter_index)
+        if conflict_guard:
+            lines.append(conflict_guard)
+            lines.append("")
+
+        # (A3) 未處置敘事診斷約束 (Unresolved Narrative Audits) —— 審計閉環：
+        # 前文診斷若無人 resolve，自動餵給下一章 Writer，避免「有診斷、寫作照舊」。
+        try:
+            from backend import persistence as _db
+            _audits = _db.get_narrative_audits(novel_id, unresolved_only=True, limit=5) or []
+        except Exception:
+            _audits = []
+        if _audits:
+            lines.append("### 🩺【前文敘事診斷待辦 (必須在本章規避或修補)】")
+            for _a in _audits[:5]:
+                _ch = _a.get("chapter_index", "?")
+                _dim = _a.get("dimension", "")
+                _rec = str(_a.get("recommendation") or "").strip()[:200]
+                lines.append(f"  * 第 {_ch} 章 [{_dim}]：{_rec}")
+            lines.append("*(以上為總監 2.0 對前文的正式診斷，請在本章落筆時主動規避同類問題；已改善的診斷請於敘事引擎頁標記處置)*")
+            lines.append("")
+
+        # (A4) 幾何結構角色、義務與跨距關聯 (Geometry-First Overlay & Cross Context)
+        try:
+            target_node_id = current_outline.get("geometry_node_id") if isinstance(current_outline, dict) else None
+            geom_pkg = GeometryContextCompiler.compile(novel_id, chapter_index, target_node_id)
+            if geom_pkg.has_geometry:
+                overlay_block = geom_pkg.format_geometry_overlay()
+                if overlay_block:
+                    lines.append(overlay_block)
+                    lines.append("")
+                cross_block = geom_pkg.format_cross_context()
+                if cross_block:
+                    lines.append(cross_block)
+                    lines.append("")
+        except Exception as _geom_exc:
+            pass
 
         # (B) 戲劇拍點推進
         lines.append("### ⚡【本章結構化推進拍點 (Scene Beats)】")
@@ -284,6 +331,13 @@ class WriterContextBuilder:
         else:
             lines.append("- 依大綱推進情節發展")
         lines.append("")
+
+        # (B2) 世界觀設定運作機制與絕對邊界約束 (Setting Boundaries)
+        setting_names = current_outline.get("setting_usage", []) if isinstance(current_outline, dict) else []
+        setting_block = SettingRegistry.get_scoped_context_for_writer(novel_id, setting_names)
+        if setting_block:
+            lines.append(setting_block)
+            lines.append("")
 
         # (C) 出場角色狀態與知情邊界
         lines.append("### 👥【出場角色即時狀態與語言傾向】")
@@ -324,11 +378,11 @@ class WriterContextBuilder:
             lines.append("")
             lines.append("【本章伏筆與轉折任務】")
             lines.append(clue_payoff_details.strip())
-            lines.append("*(請以自然情節、角色行動、對話或環境細節無痕融入，嚴禁抽離故事刻意說明)*")
+            lines.append("*(請以自然情節、角色行動、對話或環境細節無痕融入，展現沉浸式文學質感)*")
         lines.append("")
 
         # (D2) 術語庫名詞邊界約束 (Glossary)
-        terms = db.get_terms(novel_id)
+        terms = get_terms(novel_id)
         if terms:
             context_haystack = json.dumps(current_outline, ensure_ascii=False) + " " + " ".join(active_char_names) + " " + contract.get("scene_goal", "")
             matched_terms = [t for t in terms if t.get("term") and t["term"] in context_haystack]

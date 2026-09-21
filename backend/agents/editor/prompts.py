@@ -30,9 +30,9 @@ def build_reviewer_agent_messages(
     system_prompt = REVIEWER_PROMPT + "\n" + CONTEXT_REQUEST_RULE
     system_prompt += build_agent_context_contract(
         "Reviewer / 小說品質評審",
-        "- 待評審章節的原始正文。\n- 當前章節 Scene Contract、大綱與角色知情邊界。\n- 伏筆任務與連續性記憶。",
-        "嚴格診斷正文中的 POV 越界、知情洩漏、設定傾倒、對白生硬與 AI 套路詞，輸出標準診斷 JSON 報告。",
-        "必須且只能輸出合法 JSON 物件，嚴禁包含額外對話或散文。"
+        "- 待評審章節的原始正文。\n- 當前章節 Scene Contract、大綱與角色知情邊界。\n- 伏筆任務、時序動態事實與連續性記憶。",
+        "診斷正文中的視角、知情、時序事實一致性、設定邊界與語言表現，輸出結構化診斷 JSON 報告。",
+        "直接輸出診斷 JSON 報告。"
     )
 
     contract_text = ""
@@ -64,7 +64,7 @@ def build_targeted_rewriter_messages(
     system_prompt = TARGETED_REWRITER_PROMPT
     system_prompt += build_agent_context_contract(
         "Targeted Rewriter / 定向正文精修",
-        "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 連續性約束與編輯指令。",
+        "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 時序動態事實、設定邊界約束與編輯指令。",
         "針對被標記之段落進行局部重寫修正，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
         "直接輸出精修後正文，不要輸出評語、引言、註解或 JSON。",
         allow_context_request=False,
@@ -97,8 +97,8 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
     system_prompt = EDITOR_PROMPT
     system_prompt += build_agent_context_contract(
         "Editor / 正文編輯",
-        "- 指定章節的原始正文。\n- 精修指示或總監修改重點。\n- 本章場景目標、術語表與不可破壞的連續性約束。",
-        "只潤色、修補與提升指定章節正文文學美感；保留原章節核心事件、人物意圖與既有事實。",
+        "- 指定章節的原始正文。\n- 精修指示或總監修改重點。\n- 本章場景目標、術語表、時序動態事實、衝突防重複與設定運作邊界。",
+        "只潤色、修補與提升指定章節正文文學美感；嚴格維持動態世界線事實、設定代價邊界與情節推進因果。",
         "直接輸出精修後完整繁體中文正文；不要輸出評語、引言、註解、JSON、世界觀修改或角色設定修改。",
         allow_context_request=False,
     )

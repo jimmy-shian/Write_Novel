@@ -117,6 +117,29 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
     char_data = db.get_latest_characters(novel_id)
     characters_json = json.dumps(extract_character_basic(char_data["parsed_data"]), ensure_ascii=False) if char_data else "{'characters': []}"
 
+    # 提取已確立篇卷架構與章節區間（供伏筆回收視窗與轉折點對齊）
+    volumes_structure = ""
+    try:
+        existing_vols = db.get_volumes(novel_id) or []
+        if existing_vols:
+            vol_lines = []
+            accum_ch = 1
+            for v in existing_vols:
+                if isinstance(v, dict) and v.get("title"):
+                    idx = v.get("volume_index", len(vol_lines) + 1)
+                    title = v.get("title", "")
+                    cnt = int(v.get("chapter_count") or 40)
+                    start_c = accum_ch
+                    end_c = accum_ch + cnt - 1
+                    accum_ch = end_c + 1
+                    arch = v.get("conflict_archetype") or ""
+                    vol_lines.append(f"- 第 {idx} 卷《{title}》（第 {start_c}-{end_c} 章，{cnt} 章，衝突原型: {arch}）：{str(v.get('summary', ''))[:60]}")
+            if vol_lines:
+                volumes_structure = "\n".join(vol_lines)
+    except Exception as e:
+        print(f"[WARN] Failed to extract volumes structure in foreshadowing: {e}")
+        volumes_structure = ""
+
     field_label = {"foreshadowing_seeds": "伏筆種子", "key_turning_points": "關鍵轉折點"}.get(target_field or "", "伏筆與轉折")
     db.save_chat_message(novel_id, "user", f"執行{field_label}生成（自動分批累加至 50 條）。要求: {user_prompt}", message_type="pipeline")
 
@@ -131,12 +154,12 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
     from backend.models.parsers import extract_json_block
 
     # =========================================================================
-    # 模式 A: 伏筆種子分批累加生成 (Target: 50+ 條，每批 15 條)
+    # 模式 A: 伏筆種子分批累加生成 (Target: 50+ 條，小 Batch 每批 10 條細緻推演)
     # =========================================================================
     if target_field == "foreshadowing_seeds":
         target_count = max(MIN_FORESHADOWING_SEEDS, 50)
-        batch_size = 15
-        max_batches = 6
+        batch_size = 10
+        max_batches = 8
 
         current_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
         batch_idx = 0
@@ -153,7 +176,8 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             messages = build_foreshadowing_messages(
                 worldview_text, characters_json, user_prompt,
                 target_field="foreshadowing_seeds", novel_id=novel_id,
-                batch_size=needed, existing_items=current_seeds, start_id=start_id
+                batch_size=needed, existing_items=current_seeds, start_id=start_id,
+                volumes_structure=volumes_structure,
             )
 
             llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
@@ -179,6 +203,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
+
+            # 單批次 Schema 合規校驗（確認欄位齊全、無佔位符）
+            batch_schema_err = _foreshadowing_schema_error(new_seeds, [])
+            if batch_schema_err:
+                print(f"[WARN] Foreshadowing seeds batch {batch_idx} schema notice: {batch_schema_err}")
 
             existing_names = set(
                 str(s.get("name") or "").strip().lower() for s in current_seeds
@@ -208,12 +237,12 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         return
 
     # =========================================================================
-    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50+ 條，每批 15 條，聯動伏筆種子)
+    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50+ 條，小 Batch 每批 10 條，深度聯動伏筆)
     # =========================================================================
     elif target_field == "key_turning_points":
         target_count = max(MIN_KEY_TURNING_POINTS, 50)
-        batch_size = 15
-        max_batches = 6
+        batch_size = 10
+        max_batches = 8
 
         current_turns = [t for t in (wb_dict.get("key_turning_points") or []) if isinstance(t, dict)]
         existing_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
@@ -233,6 +262,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 target_field="key_turning_points", novel_id=novel_id,
                 batch_size=needed, existing_items=current_turns, start_id=start_id,
                 established_seeds=existing_seeds,
+                volumes_structure=volumes_structure,
             )
 
             llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
@@ -258,6 +288,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
+
+            # 單批次 Schema 合規校驗
+            batch_schema_err = _foreshadowing_schema_error([], new_turns)
+            if batch_schema_err:
+                print(f"[WARN] Key turning points batch {batch_idx} schema notice: {batch_schema_err}")
 
             existing_names = set(
                 str(t.get("turning_point_name") or t.get("name") or "").strip().lower() for t in current_turns

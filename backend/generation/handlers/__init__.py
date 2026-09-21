@@ -39,6 +39,10 @@ def resolve_handler_prompt(task, default_instruction: str = "") -> str:
     return "\n\n".join(parts).strip()
 
 
+from .geometry_handler import run_geometry_task
+from .macro_semantic_handler import run_macro_semantic_task
+from .character_semantic_handler import run_character_semantic_task
+from .cross_relation_handler import run_cross_relation_task
 from .characters_handler import run_characters_task
 from .director_handler import run_director_task
 from .editor_handler import run_editor_task
@@ -52,6 +56,10 @@ HANDLER_REGISTRY = {
     "worldview": run_worldview_task,
     "characters": run_characters_task,
     "foreshadowing": run_foreshadowing_task,
+    "geometry": run_geometry_task,
+    "macro_semantic": run_macro_semantic_task,
+    "character_semantic": run_character_semantic_task,
+    "cross_relation": run_cross_relation_task,
     "volumes": run_volumes_task,
     "volume_skeleton": run_volume_skeleton_task,
     "writer": run_writer_task,

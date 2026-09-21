@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
+"""
+陣營梯隊角色與伏筆分段生成單元測試：
+- 生成 key_turning_points 時注入已確立之伏筆種子網絡
+- 角色設計師的陣營梯隊分段提示詞
+- 去重合併時保留豐富欄位
+- 自主流水線規模門檻（角色 15+、伏筆/轉折 50+）
+"""
 import json
-import uuid
-import pytest
 
 from backend import persistence as db
 from backend.agents.foreshadowing_orchestrator.prompts import build_foreshadowing_messages
@@ -14,7 +19,7 @@ from backend.services.autonomous_pipeline import (
 
 
 def test_foreshadowing_established_seeds_injection():
-    """驗證在生成 key_turning_points 時，系統主動注入已確立之伏筆種子網絡並要求因果聯動"""
+    """生成 key_turning_points 時，系統應主動注入已確立之伏筆種子網絡並要求因果聯動。"""
     seeds = [
         {
             "id": 1,
@@ -29,7 +34,7 @@ def test_foreshadowing_established_seeds_injection():
             "related_characters": ["蘇雪", "教團狂信徒"],
             "payoff_hint": "名單上的血印在月圓之夜會發出共鳴警報",
             "description": "羊皮紙夾層中的密文",
-        }
+        },
     ]
 
     messages = build_foreshadowing_messages(
@@ -44,7 +49,6 @@ def test_foreshadowing_established_seeds_injection():
     )
 
     system_content = messages[0]["content"]
-    # 驗證 prompt 中包含伏筆聯動要求與種子網絡內容
     assert "伏筆與轉折組合聯動要求" in system_content
     assert "專利局隱秘印記" in system_content
     assert "拜星教暗殺名單" in system_content
@@ -52,7 +56,7 @@ def test_foreshadowing_established_seeds_injection():
 
 
 def test_faction_tiered_character_prompts():
-    """驗證角色設計師的陣營梯隊分段提示詞生成"""
+    """角色設計師的陣營梯隊分段提示詞生成。"""
     faction = {
         "name": "奧術專利局與執法司",
         "position": "壟斷高階法術產權，壓制平民與底層法師",
@@ -107,7 +111,7 @@ def test_faction_tiered_character_prompts():
 
 
 def test_merge_two_characters_backend_preserves_rich_attributes():
-    """驗證去重合併時完整保留 faction, wound_origin, false_belief 等所有豐富欄位"""
+    """去重合併時應完整保留 faction、wound_origin、false_belief 等所有豐富欄位。"""
     c1 = {
         "name": "雷蒙 (奧術專利局)",
         "role": "首席審判使",
@@ -140,60 +144,55 @@ def test_merge_two_characters_backend_preserves_rich_attributes():
     assert merged["speech_profile"]["default_register"] == "冷靜正式"
 
 
-def test_pipeline_scale_thresholds():
-    """驗證自主流水線對伏筆/轉折 (50+) 與角色規模 (15+) 的檢驗能力"""
-    novel_id = f"test_scale_{uuid.uuid4()}"
-    db.create_novel(novel_id, "規模檢驗小說", "奇幻", "史詩")
-    try:
-        # 1. 角色規模檢驗
-        # 只有 3 位角色時，min_count=15 應判定為尚未就緒
-        three_chars = {
-            "characters": [
-                {"name": "林夜", "role": "主角", "faction": "市井同盟"},
-                {"name": "蘇雪", "role": "女主角", "faction": "市井同盟"},
-                {"name": "老黑", "role": "工坊掌櫃", "faction": "市井同盟"},
-            ]
-        }
-        db.save_characters(novel_id, json.dumps(three_chars, ensure_ascii=False))
-        assert _are_characters_ready(novel_id, min_count=15) is False
-        # 默認 min_count=2 保持向後相容通過
-        assert _are_characters_ready(novel_id) is True
+def test_pipeline_scale_thresholds(novel_factory):
+    """自主流水線對伏筆/轉折（50+）與角色規模（15+）的檢驗能力。"""
+    novel_id = novel_factory(title="規模檢驗小說", genre="奇幻", style="史詩")
 
-        # 寫入 16 位角色時，min_count=15 應判定為就緒
-        distinct_names = [
-            "林夜", "蘇雪", "老黑", "雷蒙審查官", "奧古斯都局長", "卡特隊長",
-            "幽冥祭司", "赤血狂徒", "黑袍長老", "艾爾登副院長", "薇薇安首席",
-            "莫里亞掌櫃", "灰狐掮客", "毒蠍刺客", "銀翼信使", "鐵壁守衛"
+    # 1. 角色規模檢驗：只有 3 位角色時，min_count=15 應判定為尚未就緒
+    three_chars = {
+        "characters": [
+            {"name": "林夜", "role": "主角", "faction": "市井同盟"},
+            {"name": "蘇雪", "role": "女主角", "faction": "市井同盟"},
+            {"name": "老黑", "role": "工坊掌櫃", "faction": "市井同盟"},
         ]
-        sixteen_chars = {
-            "characters": [
-                {"name": name, "role": "配角", "faction": f"陣營_{i % 4}"}
-                for i, name in enumerate(distinct_names)
-            ]
-        }
-        db.save_characters(novel_id, json.dumps(sixteen_chars, ensure_ascii=False))
-        assert _are_characters_ready(novel_id, min_count=15) is True
+    }
+    db.save_characters(novel_id, json.dumps(three_chars, ensure_ascii=False))
+    assert _are_characters_ready(novel_id, min_count=15) is False
+    # 默認 min_count=2 保持向後相容通過
+    assert _are_characters_ready(novel_id) is True
 
-        # 2. 伏筆種子檢驗 (目標 50+)
-        wb_dict = {
-            "theme": "測試主題",
-            "main_conflict": "核心矛盾",
-            "worldview": "世界觀",
-            "macro_outline": "大綱",
-            "foreshadowing_seeds": [{"id": i, "name": f"種子_{i}"} for i in range(1, 20)],
-            "key_turning_points": [{"id": i, "name": f"轉折_{i}"} for i in range(1, 20)],
-        }
-        db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False))
-        # 僅 19 條時，min_count=50 應判定為 False
-        assert _are_seeds_ready(novel_id, min_count=50) is False
-        assert _are_turning_points_ready(novel_id, min_count=50) is False
+    # 寫入 16 位角色時，min_count=15 應判定為就緒
+    distinct_names = [
+        "林夜", "蘇雪", "老黑", "雷蒙審查官", "奧古斯都局長", "卡特隊長",
+        "幽冥祭司", "赤血狂徒", "黑袍長老", "艾爾登副院長", "薇薇安首席",
+        "莫里亞掌櫃", "灰狐掮客", "毒蠍刺客", "銀翼信使", "鐵壁守衛",
+    ]
+    sixteen_chars = {
+        "characters": [
+            {"name": name, "role": "配角", "faction": f"陣營_{i % 4}"}
+            for i, name in enumerate(distinct_names)
+        ]
+    }
+    db.save_characters(novel_id, json.dumps(sixteen_chars, ensure_ascii=False))
+    assert _are_characters_ready(novel_id, min_count=15) is True
 
-        # 擴充至 52 條時，min_count=50 判定為 True
-        wb_dict["foreshadowing_seeds"] = [{"id": i, "name": f"種子_{i}"} for i in range(1, 53)]
-        wb_dict["key_turning_points"] = [{"id": i, "name": f"轉折_{i}"} for i in range(1, 53)]
-        db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False))
-        assert _are_seeds_ready(novel_id, min_count=50) is True
-        assert _are_turning_points_ready(novel_id, min_count=50) is True
+    # 2. 伏筆種子檢驗（目標 50+）
+    wb_dict = {
+        "theme": "測試主題",
+        "main_conflict": "核心矛盾",
+        "worldview": "世界觀",
+        "macro_outline": "大綱",
+        "foreshadowing_seeds": [{"id": i, "name": f"種子_{i}"} for i in range(1, 20)],
+        "key_turning_points": [{"id": i, "name": f"轉折_{i}"} for i in range(1, 20)],
+    }
+    db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False))
+    # 僅 19 條時，min_count=50 應判定為 False
+    assert _are_seeds_ready(novel_id, min_count=50) is False
+    assert _are_turning_points_ready(novel_id, min_count=50) is False
 
-    finally:
-        db.delete_novel(novel_id)
+    # 擴充至 52 條時，min_count=50 判定為 True
+    wb_dict["foreshadowing_seeds"] = [{"id": i, "name": f"種子_{i}"} for i in range(1, 53)]
+    wb_dict["key_turning_points"] = [{"id": i, "name": f"轉折_{i}"} for i in range(1, 53)]
+    db.save_worldbuilding(novel_id, json.dumps(wb_dict, ensure_ascii=False))
+    assert _are_seeds_ready(novel_id, min_count=50) is True
+    assert _are_turning_points_ready(novel_id, min_count=50) is True

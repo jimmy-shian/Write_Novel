@@ -293,12 +293,46 @@ def build_editor_context_packet(novel_id: str, chapter_index: int, original_pros
     except Exception:
         terms_list = []
 
+    # Graphiti Temporal Graph Facts (動態世界線事實，避免潤色穿幫)
+    temporal_facts = ""
+    try:
+        from backend.services.graphiti.temporal_graph import TemporalGraphService
+        active_names = scene_goals.get("characters_active") or []
+        temporal_facts = TemporalGraphService.build_narrative_context(
+            novel_id=novel_id,
+            at_chapter=chapter_index,
+            active_characters=active_names,
+            max_facts=12,
+        )
+    except Exception:
+        temporal_facts = ""
+
+    # Conflict Novelty Guard (長程衝突因果防重複指引)
+    conflict_guard = ""
+    try:
+        from backend.services.narrative.conflict_ledger import ConflictLedger
+        conflict_guard = ConflictLedger.build_anti_repetition_prompt_snippet(novel_id, chapter_index)
+    except Exception:
+        conflict_guard = ""
+
+    # Setting Boundaries & Mechanism (設定運作機制與代價邊界約束)
+    setting_block = ""
+    try:
+        from backend.services.narrative.setting_registry import SettingRegistry
+        setting_names = outline.get("setting_usage", []) if isinstance(outline, dict) else []
+        setting_block = SettingRegistry.get_scoped_context_for_writer(novel_id, setting_names)
+    except Exception:
+        setting_block = ""
+
     return {
         "chapter_index": chapter_index,
         "scene_goals": scene_goals,
         "previous_chapter_tail": previous_tail,
         "story_terms": [{"term": t.get("term"), "definition": t.get("definition")} for t in terms_list],
         "editor_policy": "潤色方針：以修辭優化、節奏微調、對白生動與文學美感提升為主；嚴格保留本章既有情節走向、人物生死與客觀事實，不隨意刪除核心事件。",
+        "temporal_graph_facts": temporal_facts,
+        "conflict_novelty_guard": conflict_guard,
+        "setting_boundaries": setting_block,
     }
 
 

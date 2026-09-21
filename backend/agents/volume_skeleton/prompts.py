@@ -136,60 +136,55 @@ def build_volume_skeleton_planner_messages(
 
 👉 **當前生成目標**：
 - 你現在正在規劃第 {volume_index} 卷【{vol_title}】的 **第 {start_ch} 章 至 第 {end_ch} 章**（共 {vol_chapter_count} 章，全卷進度批次：{batch_num}/{total_batches}）。
-- 請務必一次輸出包含這些 chapter_index 的完整連續輕量章節骨架：{list(range(start_ch, end_ch + 1))}。
-- 必須緊扣上方【第 {volume_index} 卷宏觀全卷大綱】，使本批次情節精準推動該卷的核心主線與高潮！
-- 必須嚴密承接前文已規劃之情節進展與人物狀態，嚴禁劇情斷層或吃書！
-- 輸出完整性優先於細節量：每章請短句聚焦戲劇推進拍點 (Scene Beats)，不要展開長篇對白或散文正文。
+- 請輸出包含這些 chapter_index 的完整連續輕量章節骨架：{list(range(start_ch, end_ch + 1))}。
+- 緊扣上方【第 {volume_index} 卷宏觀全卷大綱】，使本批次情節精準推動該卷的核心主線與高潮。
+- 承接前文已規劃之情節進展與人物狀態，確保故事前後連貫。
+- 每章短句聚焦戲劇推進拍點 (Scene Beats)，專注於骨架結構。
 {prior_section}
 {surrounding_context}
 {precalc_clues}
 
-【allocated_tasks 硬性填寫規則】
-- 你不得自行挑選、推測、複製或新增任何伏筆 Seed / turning point 到未指定章節。
-- 每一章都必須依「本卷逐章伏筆/轉折硬性操作表」填寫 allocated_tasks。
-- 表中空陣列的章節必須輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
-- 若同一 Seed 看似同時需要埋設與回收，視為錯誤；請以章節清單中的單一操作為準。
-- 若某章有 plant/payoff/turning point，該任務不能只放在 allocated_tasks；chapter_summary 或 events[0].content 必須用短句點出其劇情落點。
+【allocated_tasks 填寫說明】
+- 每一章請依據「本卷逐章伏筆/轉折操作表」填寫 allocated_tasks。
+- 表中無任務的章節請輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
+- 若某章安排了 plant/payoff/turning point，請在 chapter_summary 或 events[0].content 中以簡潔語句標註其劇情落點。
 
-【每章輕量輸出格式限制】
-- 不要寫正文、對白、心理描寫、詳細動作、感官描述、完整場景調度。
-- 每章只需要點出：本章承接/推進、任務落點、時間、地點、活躍角色、相關勢力。
-- events 僅 1 個核心事件物件；content 用「行動 -> 結果」短句，35 字內。
-- chapter_summary 35-70 字；cliffhanger 30 字內；scene_setting/time_setting 都用短語。
-- characters_active 只列本章真正活躍角色，通常 1-4 名。
-- 若某章牽涉勢力，請放在 scene_setting、events.content 或 chapter_summary 的短句中；不要另寫長篇勢力說明。
+【每章輕量骨架指引】
+- 每章點明：本章承接/推進、任務落點、時間、地點、活躍角色、相關勢力。
+- events 包含核心事件物件；content 用「行動 -> 結果」短句精煉描述。
+- chapter_summary 35-70 字；cliffhanger 30 字內；scene_setting 與 time_setting 使用精煉短語。
+- characters_active 列出本章真正活躍角色（通常 1-4 名）。
 
-【反公式化與章節多樣性硬性約束 (Anti-Repetition & Scene Function)】
-- 嚴禁同卷套路重複：同卷內若出現超過 2 次相同模式的交鋒（如反派上門挑釁/裝傻脫身/例行審訊），必須更換為不同形式（主動出擊、同伴危機、技術專利博弈、體制暗流合作）。
-- 嚴禁連續過場空轉：嚴禁連續 3 章皆為過場或無實質進展之重複調查，每 3 章內必須有主線推進、角色抉擇或伏筆實質進展。
-- 重大轉折前置鋪墊：若某章有角色立場轉變或重大轉折（turning point），其前 2 章骨架必須明確包含動搖或質疑的過渡鋪墊拍點。
+【章節多樣性與反公式化指引】
+- 同卷破局多樣化：交鋒模式注重變化，靈活結合正面博弈、同伴支援、資源周旋與制度借力等多種形式。
+- 保持劇情緊湊推進：每 3 章內安排實質的主線推進、角色抉擇或伏筆實質進展。
+- 重大轉折前置鋪墊：若某章安排角色立場轉變或重大轉折（turning point），前置章節宜具備動搖或懷疑的過渡鋪墊拍點。
 
-【單章輸出長度範例（只示意格式，不可照抄內容）】
+【單章輸出格式示意】
 {{
   "chapter_index": {start_ch},
   "chapter_title": "月台異訊",
-  "chapter_summary": "主角追查末班車異常，首次接觸乘客手冊線索，將危機推向車廂深處。",
+  "chapter_summary": "主角追查異常線索，首次接觸隱秘記錄，將危機推向深處。",
   "time_setting": "深夜末班前",
   "scene_setting": "舊站月台",
-  "events": [{{"scene_index": 1, "location": "舊站月台", "characters": ["主角"], "content": "追查異訊 -> 取得手冊線索"}}],
+  "events": [{{"scene_index": 1, "location": "舊站月台", "characters": ["主角"], "content": "追查異訊 -> 取得關鍵線索"}}],
   "characters_active": ["主角"],
   "emotional_tone": "懸疑",
   "cliffhanger": "車門在無人處自行開啟。",
   "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
 }}
 
-【勢力與角色一致性及增量規則 (必填)】
-- 勢力/組織的定義、立場、利益、制度背景以【世界觀背景】中的 factions / 世界觀設定為準；本卷 factions 只是本卷活躍勢力子集，不得重新發明或改寫現有設定。
-- 若章節需要使用既有命名角色，characters_active 必須使用既有角色名冊中的名稱。
-- 💡【嚴禁正文角色性格腦補】：若本批章節劇情確實需要引入新命名角色（例如新反派、商會盟友、特殊勢力頭目），絕不能只在 characters_active 留下一句人名讓正文作家盲猜（避免反派變正派或立場翻轉）！
-- 凡本批章節新登場的命名角色，必須在回傳的頂層 JSON 中包含 "new_characters" 列表，明確指定：
+【勢力與角色一致性及增量指引】
+- 勢力/組織的定義、立場與背景以世界觀中的設定為準。
+- 若章節使用既有角色，characters_active 請使用既有名冊中的名稱。
+- 【新登場人物設定】：若本批章節劇情需要引入新命名角色，請於 new_characters 中說明其陣營、性格與動機，協助正文作家準確掌握人物：
   - name: 角色全名
-  - role: 劇中定位（正派盟友 / 主要反派 / 導師 / 灰色中立 / 競爭者 / 地方頭目）
-  - faction: 所屬勢力或門派
-  - personality: 核心性格特徵與說話習慣（短句，務必鮮明立體）
-  - motivation: 核心動機與利益訴求
+  - role: 劇中定位（正派盟友 / 主要反派 / 導師 / 灰色中立 / 競爭者 / 地方幹員）
+  - faction: 所屬勢力
+  - personality: 核心性格特徵與說話風格
+  - motivation: 核心動機與訴求
   - first_appearance_chapter: 首次登場章節號
-- 若本批章節解鎖了新地域、專屬法則（如禁忌法規、商會特權法、概念反噬規律）或新勢力，請一併在頂層 "new_world_rules" 與 "new_factions" 中回傳；若無新增則給予空陣列 []。
+- 若本批章節解鎖了新地域、專屬法則或新勢力，請一併在頂層 "new_world_rules" 與 "new_factions" 中回傳；若無新增則給予空陣列 []。
 
 【完整輸出 JSON 根結構範例】
 {{
@@ -268,8 +263,7 @@ def build_volume_skeleton_completion_messages(
 {prior_segment_json}
 
 【補全輸出要求】
-1. 請輸出包含本次補全範圍（第 {start_ch} 至第 {end_ch} 章）的完整 JSON 物件，格式如下：
-```json
+1. 請只輸出純 JSON，包含本次補全範圍（第 {start_ch} 至第 {end_ch} 章）的完整 JSON 物件，格式如下：
 {{
   "volume_index": {volume_index},
   "chapters_skeleton": [
@@ -303,10 +297,9 @@ def build_volume_skeleton_completion_messages(
   "new_world_rules": [],
   "new_factions": []
 }}
-```
 2. 輸出章數必須等於 {batch_count}，chapter_index 必須從 {start_ch} 到 {end_ch} 連續且不可缺漏。
-3. 嚴格延續前段章節的標題風格與劇情因果。
-4. 凡本段登場之新命名人物，務必於 new_characters 中明確其陣營、性格與動機，嚴禁在正文中產生角色性格幻覺。
+3. 延續前段章節的標題風格與情節因果。
+4. 凡本段登場之新命名人物，請於 new_characters 中明確其陣營、性格與動機，協助正文寫作維持角色一致性。
 
 【使用者額外提示詞 (Prompt)】
 {user_prompt or "請接續前段內容，為本卷剩餘章節補全骨架大綱，並申明新角色。"}

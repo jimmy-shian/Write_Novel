@@ -254,34 +254,58 @@ def foreshadowing_schema_error(seeds, turns) -> str:
 # Volume Plan Validation (篇卷規劃校驗)
 # =============================================================================
 
-def volume_plan_validation_error(volumes, mode: str = "generate") -> str:
+def volume_batch_validation_error(volumes) -> str:
     """
-    校驗篇卷規劃結果的卷數與每卷章節數是否符合限制規範。
-    回傳非空字串表示有錯誤，空字串表示通過。
+    校驗單批次篇卷規劃結果的內部結構（章節數與必填欄位）。
+    用於小 Batch 生成時的單批校驗，不卡全書總卷數下限。
     """
     if not isinstance(volumes, list) or not volumes:
         return "未輸出 volumes 陣列"
-    if mode != "patch" and not (MIN_VOLUME_COUNT <= len(volumes) <= MAX_VOLUME_COUNT):
-        return f"篇卷數量不合規：需要 {MIN_VOLUME_COUNT}-{MAX_VOLUME_COUNT} 卷，實際 {len(volumes)} 卷"
     bad_counts = []
+    missing_fields = []
     for i, vol in enumerate(volumes):
+        if not isinstance(vol, dict):
+            return f"篇卷資料格式錯誤：第 {i + 1} 個篇卷必須為物件"
+        vol_idx = vol.get("volume_index", i + 1)
+        if not (vol.get("title") and str(vol.get("title")).strip()):
+            missing_fields.append(f"第 {vol_idx} 卷缺少標題 (title)")
+        if not (vol.get("summary") and str(vol.get("summary")).strip()):
+            missing_fields.append(f"第 {vol_idx} 卷缺少概要 (summary)")
         try:
             ch_count = int(vol.get("chapter_count", 0))
         except Exception:
             ch_count = 0
         if ch_count < MIN_CHAPTERS_PER_VOLUME or ch_count > MAX_CHAPTERS_PER_VOLUME:
-            bad_counts.append(f"第 {vol.get('volume_index', i + 1)} 卷 chapter_count={ch_count}")
+            bad_counts.append(f"第 {vol_idx} 卷 chapter_count={ch_count}")
+
+    problems = []
+    if missing_fields:
+        problems.append("篇卷必填欄位缺失：" + "；".join(missing_fields))
     if bad_counts:
-        return (
-            f"每卷章節數不合規：每卷必須 {MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME} 章；"
-            + json.dumps({
-                "director_payload_view": "collapsed_json",
-                "payload_kind": "bad_volume_chapter_counts",
-                "total_count": len(bad_counts),
-                "items": bad_counts,
-            }, ensure_ascii=False)
-        )
-    return ""
+        problems.append(f"每卷章節數不合規：每卷必須 {MIN_CHAPTERS_PER_VOLUME}-{MAX_CHAPTERS_PER_VOLUME} 章；" + "，".join(bad_counts))
+
+    return "；".join(problems)
+
+
+def volume_plan_validation_error(volumes, mode: str = "generate", is_batch: bool = False) -> str:
+    """
+    校驗篇卷規劃結果的卷數與每卷章節數是否符合限制規範。
+    - 當 is_batch=True 或 mode in ("patch", "batch", "append") 時，僅校驗當批各卷的內部結構與章節數，不卡全書總量。
+    - 當 is_batch=False 且 mode == "generate" 時，進行全書總量校驗（總卷數必須介於 MIN_VOLUME_COUNT 與 MAX_VOLUME_COUNT 之間）。
+    回傳非空字串表示有錯誤，空字串表示通過。
+    """
+    if not isinstance(volumes, list) or not volumes:
+        return "未輸出 volumes 陣列"
+
+    # 若為單批次校驗，不卡全書總卷數
+    if is_batch or mode in ("patch", "batch", "append"):
+        return volume_batch_validation_error(volumes)
+
+    # 全書總量校驗
+    if not (MIN_VOLUME_COUNT <= len(volumes) <= MAX_VOLUME_COUNT):
+        return f"篇卷數量不合規：需要 {MIN_VOLUME_COUNT}-{MAX_VOLUME_COUNT} 卷，實際 {len(volumes)} 卷"
+
+    return volume_batch_validation_error(volumes)
 
 
 # =============================================================================

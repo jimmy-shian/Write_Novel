@@ -94,6 +94,51 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     """
     wb = db.get_latest_worldbuilding(novel_id)
     worldview_text = select_worldview_context(wb["content"], current_stage="characters") if wb else "尚無世界觀設定"
+
+    # 提取已確立伏筆需求摘要（供角色承載秘密與命運伏筆）
+    foreshadowing_reqs = ""
+    try:
+        wb_dict_seeds = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+        seeds = wb_dict_seeds.get("foreshadowing_seeds", [])
+        turns = wb_dict_seeds.get("key_turning_points", [])
+        fs_lines = []
+        if seeds and isinstance(seeds, list):
+            for s in seeds[:20]:
+                if isinstance(s, dict):
+                    sid = s.get("id") or s.get("tag", "伏筆")
+                    content = s.get("content") or s.get("clue_content") or ""
+                    chars = s.get("related_characters") or []
+                    chars_str = ", ".join(chars) if isinstance(chars, list) else str(chars)
+                    fs_lines.append(f"- 【{sid}】{content}（關聯角色需求: {chars_str or '待分配'}）")
+        if turns and isinstance(turns, list):
+            for t in turns[:15]:
+                if isinstance(t, dict):
+                    tid = t.get("id") or "轉折"
+                    evt = t.get("event") or t.get("turning_point") or ""
+                    trigger = t.get("trigger_flaw") or t.get("cost") or ""
+                    fs_lines.append(f"- 【{tid}】轉折事件: {evt}（所需觸發性格缺陷/代價: {trigger}）")
+        if fs_lines:
+            foreshadowing_reqs = "\n".join(fs_lines)
+    except Exception as e:
+        print(f"[WARN] Failed to load foreshadowing in character_designer: {e}")
+        foreshadowing_reqs = ""
+
+    # 提取已確立篇卷大綱概覽（供角色登場時期 entry_phase 與弧線對齊）
+    volumes_overview = ""
+    try:
+        existing_vols = db.get_volumes(novel_id) or []
+        vol_lines = []
+        for v in existing_vols[:12]:
+            if isinstance(v, dict) and v.get("title"):
+                idx = v.get("volume_index", len(vol_lines) + 1)
+                title = v.get("title", "")
+                summary = str(v.get("summary", ""))[:60]
+                vol_lines.append(f"- 第 {idx} 卷《{title}》：{summary}")
+        if vol_lines:
+            volumes_overview = "\n".join(vol_lines)
+    except Exception as e:
+        print(f"[WARN] Failed to load volumes in character_designer: {e}")
+        volumes_overview = ""
     
     existing_char_data = db.get_latest_characters(novel_id)
     existing_chars_json = existing_char_data["json_data"] if existing_char_data else '{"characters": []}'
@@ -229,33 +274,33 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
                 if isinstance(f, dict) and f.get("name"):
                     factions_list.append(f)
 
-        # 若世界觀無足夠陣營設定，補齊四大標準衝突陣營
+        # 若世界觀無足夠陣營設定，補齊四大通用戲劇衝突陣營
         if len(factions_list) < 3:
             existing_f_names = {f.get("name", "").strip() for f in factions_list}
             fallback_candidates = [
                 {
-                    "name": "主角同盟與市井底層",
-                    "position": "被體制剝削的邊緣底層、反抗專利霸權與邪教威脅",
-                    "resources": "禁忌原始禁咒、市井隱秘網絡、非法工坊改造技術",
-                    "relationship_to_protagonist": "主角的立足起點與守護誓約"
+                    "name": "主角核心同盟陣營",
+                    "position": "追求變革、反抗壓迫與守護弱小的信念聚合體",
+                    "resources": "隱秘情報網絡、民間技術骨幹、生死與共的夥伴牽絆",
+                    "relationship_to_protagonist": "主角的立足基石與命運同盟"
                 },
                 {
-                    "name": "奧術專利局與執法審判司",
-                    "position": "壟斷高階法術產權、代表統治秩序與極致階級固化",
-                    "resources": "帝國法權、制式高階法術專利、重裝執法審判軍團",
-                    "relationship_to_protagonist": "正面體制宿敵與制度壓迫者"
+                    "name": "統治秩序與執法權力陣營",
+                    "position": "既得利益代表、維護制度穩定與階級壟斷之正統權力中樞",
+                    "resources": "官方合法暴力、主流資源壟斷、嚴密法度律令與軍政體系",
+                    "relationship_to_protagonist": "體制性正面宿敵與制度壓迫者"
                 },
                 {
-                    "name": "拜星教深淵教團",
-                    "position": "信奉外神降世、以生靈獻祭換取扭曲禁忌威能",
-                    "resources": "深淵侵蝕血印、狂信徒死士、高層潛伏政客",
-                    "relationship_to_protagonist": "暗線死敵與毀滅世界危機源頭"
+                    "name": "極端狂熱與暗流破壞勢力",
+                    "position": "信奉顛覆既有世界秩序、以極端手段獲取禁忌威能之激進團體",
+                    "resources": "狂熱死士、隱蔽滲透網絡、破壞性非對稱武裝或禁術",
+                    "relationship_to_protagonist": "暗線死敵與全面危機之引爆源頭"
                 },
                 {
-                    "name": "深井高階學院與灰區黑市商會",
-                    "position": "表面學術至高殿堂，暗中利益交換、灰色專利走私",
-                    "resources": "海量禁書孤本、稀有附魔素材、中立情報拍賣行",
-                    "relationship_to_protagonist": "重要資源與情報周旋地"
+                    "name": "灰色周旋與利益交換樞紐",
+                    "position": "超脫正面對立、以利益與情報為核心的游移周旋勢力",
+                    "resources": "稀有物資拍賣網絡、無孔不入的暗網情報、中立避難所",
+                    "relationship_to_protagonist": "亦敵亦友之情報與資源交接地"
                 }
             ]
             for fc in fallback_candidates:
@@ -313,6 +358,8 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
                     faction_info=faction,
                     tier=tier,
                     target_batch_count=4,
+                    foreshadowing_requirements=foreshadowing_reqs,
+                    volumes_overview=volumes_overview,
                 )
 
                 llm_stream = call_llm_stream("character", messages, stream=stream, force_json=force_json)
@@ -382,7 +429,17 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
     # =========================================================================
     # 模式 B / C: expand 與 modify 模式（單次增量或局部修改）
     # =========================================================================
-    messages = build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=novel_id)
+    messages = build_character_designer_messages(
+        worldview_text,
+        existing_chars_json,
+        user_prompt,
+        hint,
+        mode,
+        target_char_index,
+        novel_id=novel_id,
+        foreshadowing_requirements=foreshadowing_reqs,
+        volumes_overview=volumes_overview,
+    )
     
     db.save_chat_message(novel_id, "user", f"執行角色設計。模式: {mode}, 指示: {user_prompt or hint}", message_type="pipeline")
     

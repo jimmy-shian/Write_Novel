@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Unit tests for GoldRulesManager and Governance
+GoldRulesManager 與治理單元測試：
+- GoldRule 序列化 / 反序列化
+- 依 agent scope 與 status 過濾查詢
+- 提示詞格式化輸出
 """
-
-import os
-import tempfile
-import pytest
 from backend.services.gold_rules.gold_rules_manager import (
     GoldRule,
     GoldRulesManager,

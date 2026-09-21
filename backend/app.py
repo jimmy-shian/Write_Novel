@@ -42,6 +42,8 @@ from backend.api.autonomous.routes import router as autonomous_router
 from backend.api.temporal_graph.routes import router as temporal_graph_router
 from backend.api.terms.routes import router as terms_router
 from backend.api.proposals.routes import router as proposals_router
+from backend.api.narrative.routes import router as narrative_router
+from backend.api.geometry.routes import router as geometry_router
 from backend.services.hf_sync import restore_database, async_backup, is_hf_sync_available, DB_PATH
 
 # Restore database from Hugging Face Dataset if running in cloud / configured
@@ -103,6 +105,8 @@ api_routers = [
     temporal_graph_router,
     terms_router,
     proposals_router,
+    narrative_router,
+    geometry_router,
 ]
 
 api_router = APIRouter(prefix="/api")

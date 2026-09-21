@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
+"""
+篇卷骨架批次生成單元測試：
+- 批次提示詞建構（全卷大綱、批次標示、前文脈絡）
+- 批次章節就緒判定
+- handler 批次章節索引抽取
+- planner 端到端（mock LLM 串流）
+"""
 import json
 import uuid
-import pytest
 
 from backend import persistence as db
 from backend.agents.volume_skeleton.prompts import build_volume_skeleton_planner_messages

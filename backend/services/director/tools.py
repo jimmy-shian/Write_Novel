@@ -12,3 +12,4 @@ from backend.services.director.tool_registry.evaluator import evaluate_output
 from backend.services.director.tool_registry.supplement import supplement_content
 from backend.services.director.tool_registry.inspect import inspect_content_block, expand_collapsed_json
 from backend.services.director.tool_registry.navigator import goto_generation_position
+from backend.services.director.tool_registry.geometry_repair import repair_story_geometry

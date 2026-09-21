@@ -464,8 +464,9 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
                 "existing_character_names": existing_character_names,
                 "existing_character_briefs": existing_character_briefs,
                 "rule": (
-                    "characters_active 優先使用此名冊中的既有命名角色。若本批劇情確實需要新增命名角色，"
-                    "可在章節骨架中使用具體姓名，並在 new_characters 宣告；總監審核時自動合流角色庫。"
+                    "characters_active 優先使用此名冊中的既有命名角色。規劃章節情節時，請深度結合角色卡中的 "
+                    "want（核心追求）、need（內在需求）、fatal_flaw（性格致命缺陷）與 secret（秘密）來推動情節衝突與人物代價。"
+                    "若本批劇情確實需要新增命名角色，可在章節骨架中使用具體姓名，並在 new_characters 宣告；總監審核時自動合流角色庫。"
                 ),
             }, ensure_ascii=False, indent=2)
             + "\n"
@@ -475,7 +476,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
             f"【本次後端骨架分批生成任務】\n"
             f"- 目標：生成第 {volume_index} 卷【{current_vol.get('title')}】之第 {batch_start} 至第 {batch_end} 章（共 {batch_count} 章，全卷第 {batch_num}/{total_batches} 批次）。\n"
             f"- 必須包含且僅輸出這些 chapter_index：{batch_indexes}。\n"
-            f"- 必須緊密承接上方前文已規劃章節的情節與局勢，嚴禁情節斷層！\n"
+            f"- 請緊密承接前文已規劃章節的情節與局勢，保持前後連貫推進。\n"
             f"- {user_prompt or '請為本批章節生成連貫、短句化的輕量章節骨架，落實伏筆與轉折。'}"
         )
 

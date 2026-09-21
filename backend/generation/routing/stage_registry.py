@@ -5,7 +5,19 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 
-STAGE_ORDER = ["worldview", "characters", "foreshadowing", "volumes", "volume_skeleton", "writer", "editor"]
+STAGE_ORDER = [
+    "worldview",
+    "characters",
+    "foreshadowing",
+    "geometry",
+    "macro_semantic",
+    "character_semantic",
+    "cross_relation",
+    "volumes",
+    "volume_skeleton",
+    "writer",
+    "editor",
+]
 VALID_STAGES = set(STAGE_ORDER + ["evaluate"])
 VALID_SCOPES = {"global", "volume", "chapter", "section", "selection"}
 VALID_TASK_TYPES = {"generate", "regenerate", "patch", "batch_generate", "refine", "evaluate"}
@@ -17,6 +29,10 @@ STAGE_ALIASES = {
     "macro_skeleton": "volume_skeleton",
     "plot": "volumes",
     "director": "evaluate",
+    "geom": "geometry",
+    "story_geometry": "geometry",
+    "macro": "macro_semantic",
+    "cross": "cross_relation",
 }
 
 TASK_TYPE_ALIASES = {
@@ -42,6 +58,10 @@ STAGE_TO_AGENT_NAME = {
     "worldview": "architect",
     "characters": "character",
     "foreshadowing": "architect",
+    "geometry": "geometry",
+    "macro_semantic": "architect",
+    "character_semantic": "character",
+    "cross_relation": "architect",
     "volumes": "volumes",
     "volume_skeleton": "volume_skeleton",
     "writer": "writer",
@@ -62,6 +82,10 @@ DEFAULT_SCOPE_BY_STAGE = {
     "worldview": "global",
     "characters": "global",
     "foreshadowing": "global",
+    "geometry": "global",
+    "macro_semantic": "global",
+    "character_semantic": "global",
+    "cross_relation": "global",
     "volumes": "global",
     "volume_skeleton": "volume",
     "writer": "chapter",

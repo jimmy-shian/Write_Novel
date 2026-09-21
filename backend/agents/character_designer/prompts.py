@@ -112,20 +112,22 @@ def _format_factions_summary(worldview_text: str) -> str:
         return "（依世界觀正文設定之主要陣營）"
 
 
-def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=None, faction_info=None, tier=1, target_batch_count=4, wave=None):
-    """角色設計師提示詞拼接（支援世界觀陣營梯隊分段生成：每陣營 5-10 人）"""
+def build_character_designer_messages(worldview_text, existing_chars_json, user_prompt, hint, mode, target_char_index, novel_id=None, faction_info=None, tier=1, target_batch_count=4, wave=None, foreshadowing_requirements=None, volumes_overview=None):
+    """角色設計師提示詞拼接（支援世界觀陣營梯隊分段生成：每陣營 5-10 人，整合伏筆承載與篇卷結構）"""
     schema_snippet = get_json_schema_prompt_snippet("character")
     system_prompt = f"{CHARACTER_DESIGNER_PROMPT}\n\n{schema_snippet}\n{CONTEXT_REQUEST_RULE}\n\n{CHARACTER_DESIGNER_GUIDELINES}\n\n{JSON_OBJECT_OUTPUT_CONTRACT}\n"
     system_prompt += build_agent_context_contract(
         "Character Designer / 角色設計師",
-        "- 經後端挑選的世界觀背景與作品核心基石，必須包含 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- generate 模式：支援以陣營梯隊（Faction-Driven）分段生成，每個陣營保證生成 5-10 位具備完整深度的角色 Bible。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
-        "根據作品核心基石與可見世界觀設計立體深刻的群像角色 Bible。角色要服務於世界觀衝突、勢力格局、登場策略與作者原案需求；不得用空世界觀硬編角色。",
+        "- 經後端挑選的世界觀背景與作品核心基石，包含 factions / 勢力設定與 progressive_character_plan / 角色登場策略。\n- 伏筆承載需求（特定角色需承接隱藏伏筆/秘密）與全書分卷結構（若有，供角色登場時期 entry_phase 與弧線對齊）。\n- generate 模式：支援以陣營梯隊（Faction-Driven）分段生成，每個陣營保證生成 5-10 位具備完整深度的角色 Bible。\n- expand/modify 模式：會提供現有角色聖經與總監提示；modify 可能提供被修改角色完整內容。",
+        "根據作品核心基石與可見世界觀設計立體深刻的群像角色 Bible。角色動機、隱藏秘密與登場時期（entry_phase）須與已確立的伏筆線索或卷大綱無縫銜接；不得用空世界觀硬編角色。",
         "輸出完整合法的 characters JSON 物件（{'characters': [...]}）。分段生成時每次只輸出當前批次指定陣營梯隊的角色；expand/modify 應保留既有角色並補充或修正，避免刪除無關角色。"
     )
     
     core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
     existing_summary = _format_existing_chars_summary(existing_chars_json)
     factions_summary = _format_factions_summary(worldview_text)
+    foreshadow_block = f"【全書伏筆網絡與秘密承載需求（角色需承接之命運伏筆）】\n{foreshadowing_requirements}\n\n" if foreshadowing_requirements else ""
+    volumes_block = f"【全書分卷結構概覽（供角色登場時期 entry_phase 與情節弧線對齊）】\n{volumes_overview}\n\n" if volumes_overview else ""
 
     if mode == "generate":
         # =========================================================================
@@ -148,12 +150,12 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
    - `false_belief`: 核心認知偏見（堅信的扭曲真理）
    - `belief_collapse_3beats`: 三階動態信念崩塌節奏（陣列 3 項：認知初裂 -> 體制反噬 -> 致命真相）
 3. 必填心理與行動欄位：
-   - `name`: 具體姓名（嚴禁代號）
+   - `name`: 具體角色姓名
    - `role`: 陣營領袖 / 首席執行官 / 核心宿敵 / 王牌強者 / 導師
-   - `faction`: 必須填寫【{f_name}】
+   - `faction`: 填寫【{f_name}】
    - `want`, `need`, `fatal_flaw`, `want_need_conflict`, `secret`, `speech_profile`, `motivation`, `arc`, `appearance`, `background`, `relationships`
-4. ⚠️ 跨角色與跨陣營關係約束：
-   - 必須在 `relationships` 中，與【前續已確立角色】（特別是主角及對立勢力代表）建立具體的衝突、同盟、牽制或利益往來！"""
+4. 跨角色與跨陣營關係：
+   - 在 `relationships` 中，與前續已確立角色（特別是主角及對立勢力代表）建立具體的衝突、同盟、牽制或利益往來。"""
             else:
                 tier_label = "第二梯隊：中堅骨幹、內部異見者、雙面間諜與基層代表"
                 tier_req = f"""請為陣營【{f_name}】設計 {target_batch_count} 位鮮活的中堅與基層群像角色（使該陣營總角色數充實至 6-10 人）：
@@ -162,16 +164,16 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
    - 內部異見者 / 改革派 / 叛逆者（對高層意志產生質疑與動搖者）。
    - 雙面間諜 / 跨陣營暗線聯絡人 / 灰色交易者。
    - 基層行動人員 / 市井幫手。
-2. 配角獨立生命力必填欄位：
-   - `independent_arc`: 配角三階段獨立成長線（物件：{{"phase_1": "...", "phase_2": "...", "phase_3": "..."}}），不得淪為傳聲筒！
+2. 配角獨立生命力：
+   - `independent_arc`: 配角三階段獨立成長線（物件：{{"phase_1": "...", "phase_2": "...", "phase_3": "..."}}），賦予配角獨立動機與生命力。
    - `off_screen_goal`: 場外個人追求（在主線劇情之外的真實生活目標）
 3. 必填心理與行動欄位：
-   - `name`: 具體姓名
+   - `name`: 具體角色姓名
    - `role`: 中堅隊長 / 審查官 / 異見者 / 潛伏間諜 / 技術專家 / 基層幹員
-   - `faction`: 必須填寫【{f_name}】
+   - `faction`: 填寫【{f_name}】
    - `want`, `need`, `fatal_flaw`, `want_need_conflict`, `secret`, `speech_profile`, `motivation`, `arc`, `appearance`, `background`, `relationships`
-4. ⚠️ 複雜關係網織造：
-   - 必須在 `relationships` 欄位中，與該陣營第一梯隊高層及其他陣營角色建立緊密的暗線關聯（監視、背叛、救命恩情、雙面情報等）。"""
+4. 角色關係網交織：
+   - 在 `relationships` 欄位中，與該陣營第一梯隊高層及其他陣營角色建立緊密的暗線關聯（監視、背叛、救命恩情、雙面情報等）。"""
 
             user_content = f"""{core_context}【世界觀核心背景】
 {worldview_text}
@@ -179,7 +181,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 【世界觀各大陣營格局】
 {factions_summary}
 
-【前續批次已確立之角色 Bible（請與這些角色產生緊密的關係交織）】
+{foreshadow_block}{volumes_block}【前續批次已確立之角色 Bible（請與這些角色產生緊密的關係交織）】
 {existing_summary}
 
 【本次分段生成任務：陣營【{f_name}】— {tier_label}】
@@ -191,7 +193,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 {tier_req}
 
 【輸出格式】
-最外層必須是合法的單一 JSON 物件 `{{"characters": [...]}}`，列表中「僅」包含本次設計的 {target_batch_count} 位角色。
+最外層必須是合法的單一 JSON 物件 `{{"characters": [...]}}`，列表中包含本次設計的 {target_batch_count} 位角色。
 """
         else:
             # 兼容模式：無特定陣營傳入時的全量引導
@@ -201,26 +203,27 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
 【世界觀各大陣營格局】
 {factions_summary}
 
-【前續已確立之角色 Bible】
+{foreshadow_block}{volumes_block}【前續已確立之角色 Bible】
 {existing_summary}
 
 【使用者要求】
 {user_prompt or "請根據作品核心基石與世界觀，為各陣營設計豐富立體的角色與配角群像。"}
 
 請為本作品生成符合結構的角色 Bible JSON 設定。
-硬性要求：
-1. 核心主角群的人設、動機、特殊能力與弱點必須嚴格契合【作品核心基石】（例如主角的專屬能力與原創設定），嚴禁脫離原案瞎編其他設定。
-2. 必須讀取並落實世界觀中的 `factions` / 勢力設定，每個陣營至少規劃 5-10 人，為主要角色標明所屬勢力、利益立場、與其他勢力的衝突或合作關係。
-3. 必須讀取並落實 `progressive_character_plan` / 角色登場策略，讓角色功能、首次登場階段與群像節奏對齊。
-4. 必須建立可供後續 volumes、volume_skeleton、writer 使用的角色關係資料，例如 relationships / relationship_matrix / role / faction / entry_phase 等 schema 允許欄位。
-5. 不要只列人物簡介；每位核心角色都要有可寫作的動機、弱點、成長弧線、聲音/行為特徵與關係張力。
-6. 反派與敵對人物必須定義 `wound_origin`（創傷原點）與 `false_belief`（偏見執念），拒絕純臉譜化；立場動搖/轉變角色必填 `belief_collapse_3beats`（三階信仰崩塌節奏）；重要配角必填 `independent_arc` 與 `off_screen_goal`。
+
+【角色塑造指引】
+1. 核心主角群的人設、動機、特殊能力與弱點緊扣作品核心基石，充分展現主角的專屬魅力與成長空間。
+2. 落實世界觀中的 factions 勢力設定，標明主要角色的所屬勢力、立場與博弈關係。
+3. 結合 progressive_character_plan 登場策略，使角色定位與群像節奏相輔相成。
+4. 建立清晰的角色關係資料（如 relationships、role、faction 等），為後續章節互動打下扎實基礎。
+5. 每位核心角色具備深刻的動機、內在矛盾、性格特徵與人際張力。
+6. 對立面人物具備合理的成長創傷或認知偏執，展現豐富的人性層次。
 """
     elif mode == "expand":
         user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
-【現有角色聖經】
+{foreshadow_block}{volumes_block}【現有角色聖經】
 {existing_chars_json}
 
 【總監批判與擴增提示 (Hint)】
@@ -248,7 +251,7 @@ def build_character_designer_messages(worldview_text, existing_chars_json, user_
         user_content = f"""【世界觀背景】
 {worldview_text}
 
-【現有角色聖經】
+{foreshadow_block}{volumes_block}【現有角色聖經】
 {existing_chars_json}
 {target_char_content}
 
@@ -301,15 +304,15 @@ def build_missing_character_designer_messages(worldview_summary, existing_chars_
         except Exception:
             pass
 
-    schema_snippet = format_json_schema_prompt(schema, label="this missing character schema")
-    system_prompt = f"""你是一位頂尖的角色設計大師（Character Designer）。
-請根據世界觀背景與新角色首次登場的章節骨架，為新登場的角色【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
+    schema_snippet = format_json_schema_prompt(schema, label="missing_character")
+    system_prompt = f"""你好！我們正在為新登場的角色【{new_char_name}】設計立體深刻的角色設定。你是一位擅長塑造靈魂人物的角色設計顧問。
+請根據世界觀背景與首次登場的章節骨架，為【{new_char_name}】設計一個具備深度與心理層次的角色卡設定。
 
-⚠️【剛性約束項目】：
-1. 輸出必須符合以下角色 schema：
+【角色設定指引】：
+1. 請參考下列角色資料格式：
 {schema_snippet}
-2. name 欄位必須是角色的具體姓名【{new_char_name}】，絕對禁止填寫無關名稱。
-3. 角色的人設、動機 (motivation)、致命缺陷 (fatal_flaw)、發聲風格 (speech_style) 必須與章節大綱的情境完全契合，且不可與現有的其他角色衝突。
+2. name 欄位請填入角色名稱【{new_char_name}】。
+3. 角色的人設、動機、致命缺陷與發聲風格請與章節大綱的情境契合，與既有角色形成良好互補與辨識度。
 4. {JSON_OBJECT_OUTPUT_CONTRACT}
 """
     system_prompt += build_agent_context_contract(

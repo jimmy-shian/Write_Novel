@@ -369,7 +369,8 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
              _to_traditional(thinking) if thinking else None, next_version, 1 if is_dirty else 0)
         )
     # 模組化關聯：正文被清空（空字串/空白）時，連動清除該章衍生的時序圖譜
-    # 與自動術語。不論經由 UI 手動、API、提案套用或自動管線，只要走 save_chapter
+    # 與自動術語，以及 Story Engine 2.0 的該章衝突簽名與敘事審計。
+    # 不論經由 UI 手動、API、提案套用或自動管線，只要走 save_chapter
     # 都會觸發，呼叫方無需各自散寫 DELETE。
     if content is None or not str(content).strip():
         try:
@@ -378,6 +379,16 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
             summary = delete_chapter_slice(novel_id, int(chapter_index))
             try:
                 summary["auto_terms_deleted"] = delete_terms_by_chapter(novel_id, int(chapter_index))
+            except Exception:
+                pass
+            try:
+                from backend.persistence.repositories.narrative import (
+                    delete_chapter_signatures,
+                    delete_chapter_audits,
+                )
+                nar = delete_chapter_signatures(novel_id, int(chapter_index))
+                nar.update(delete_chapter_audits(novel_id, int(chapter_index)))
+                summary["narrative_cleared"] = nar
             except Exception:
                 pass
             print(f"[Cascade] Chapter {chapter_index} prose cleared, derived data removed: {summary}")
@@ -517,6 +528,17 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
             shift_graph_chapters(novel_id, end_del, -del_count)
         except Exception as e:
             print(f"[WARN] Failed to shift graph chapters after {end_del}: {e}")
+        # 2.6. 模組化關聯：Story Engine 2.0 同範圍刪除簽名/審計並平移後續章序，
+        #      設定用量的 last_used 標記同步對齊。
+        try:
+            from backend.persistence.repositories.narrative import (
+                delete_narrative_range,
+                shift_narrative_chapters,
+            )
+            delete_narrative_range(novel_id, start_del, end_del)
+            shift_narrative_chapters(novel_id, end_del, -del_count)
+        except Exception as e:
+            print(f"[WARN] Failed to delete/shift narrative slice [{start_del}, {end_del}]: {e}")
         try:
             from backend.persistence.repositories.story_terms import shift_term_chapters
             shift_term_chapters(novel_id, end_del, -del_count)

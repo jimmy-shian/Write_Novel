@@ -22,4 +22,13 @@ from backend.persistence.repositories.story_terms import *
 from backend.persistence.repositories.draft_proposals import *
 from backend.persistence.repositories.chat_memory import *
 from backend.persistence.repositories.preferences import *
+from backend.persistence.repositories.narrative import *
+from backend.persistence.repositories.geometry import *
+
+# 自動確保資料庫 schema 完整性（包括新版 Narrative 體系表格）
+try:
+    db_init()
+except Exception as _init_exc:
+    pass
+
 

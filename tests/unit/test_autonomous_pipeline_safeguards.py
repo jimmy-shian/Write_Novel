@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
+"""
+自主流水線防護單元測試：
+- 階段就緒判定 helpers（空狀態 / 佔位符 / 實質內容）
+- reset_novel_content 清空生成資料但保留小說基本資料
+- get_status 多工隔離（不得回傳他書狀態）
+"""
 import json
-import uuid
-import pytest
 
 from backend import persistence as db
 from backend.services.autonomous_pipeline import (
@@ -13,9 +17,8 @@ from backend.services.autonomous_pipeline import (
 )
 
 
-def test_validation_helpers_with_empty_and_substantive_data():
-    novel_id = f"test_valid_{uuid.uuid4()}"
-    db.create_novel(novel_id, "測試驗證小說", "仙俠", "古典")
+def test_validation_helpers_with_empty_and_substantive_data(novel_factory):
+    novel_id = novel_factory(title="測試驗證小說", genre="仙俠", style="古典")
 
     # 1. 初始空狀態校驗
     assert _is_worldview_ready(novel_id) is False
@@ -64,14 +67,10 @@ def test_validation_helpers_with_empty_and_substantive_data():
     db.save_characters(novel_id, json.dumps(real_chars, ensure_ascii=False))
     assert _are_characters_ready(novel_id) is True
 
-    # 清理
-    db.delete_novel(novel_id)
 
-
-def test_reset_novel_content():
-    novel_id = f"test_reset_{uuid.uuid4()}"
+def test_reset_novel_content(novel_factory):
+    novel_id = novel_factory(title="測試重置小說", genre="玄幻", style="史詩")
     prompt_text = "這是一段測試用的大綱靈感故事簡述。"
-    db.create_novel(novel_id, "測試重置小說", "玄幻", "史詩")
     db.update_novel_pipeline_prompt(novel_id, prompt_text)
 
     # 寫入生成資料
@@ -106,15 +105,13 @@ def test_reset_novel_content():
     assert novel["title"] == "測試重置小說"
     assert novel["pipeline_prompt"] == prompt_text
 
-    # 清理
-    db.delete_novel(novel_id)
-
 
 def test_autonomous_pipeline_get_status_isolation():
+    """多工查詢隔離：查詢他書不得回傳運行中小說的狀態。"""
     from backend.services.autonomous_pipeline import AutonomousPipelineManager, NovelPipelineTask
 
     mgr = AutonomousPipelineManager()
-    
+
     # 模擬小說 A 正在背景自主寫作中
     task_a = NovelPipelineTask("novel_A", "小說A")
     task_a.is_running = True
@@ -130,7 +127,7 @@ def test_autonomous_pipeline_get_status_isolation():
         assert res_a["current_chapter"] == 5
         assert res_a["active_tasks_count"] == 1
 
-        # 2. 前端切換至小說 B (未運行)：絕對不能回傳小說 A 的狀態！
+        # 2. 前端切換至小說 B（未運行）：絕對不能回傳小說 A 的狀態
         res_b = mgr.get_status("novel_B")
         assert res_b["novel_id"] == "novel_B"
         assert res_b["is_running"] is False
@@ -139,13 +136,10 @@ def test_autonomous_pipeline_get_status_isolation():
         assert res_b["active_tasks_count"] == 1
         assert res_b["active_tasks"][0]["novel_id"] == "novel_A"
 
-        # 3. 前端全域查詢 (None)：應回傳當前正在運行的任務 (小說 A)
+        # 3. 前端全域查詢（None）：應回傳當前正在運行的任務（小說 A）
         res_global = mgr.get_status(None)
         assert res_global["novel_id"] == "novel_A"
         assert res_global["is_running"] is True
-
     finally:
-        # 清理測試狀態
         task_a.is_running = False
         mgr.tasks.pop("novel_A", None)
-

@@ -15,7 +15,7 @@ from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
 from backend.generation.routing.router import execute_generation_task
 from backend.services.graphiti.extractor import ChapterFactExtractor
-from backend.common.config import VOLUME_SKELETON_BATCH_SIZE
+from backend.common.config import VOLUME_SKELETON_BATCH_SIZE, MIN_VOLUME_COUNT
 from backend.schemas.validation import split_consecutive_batches
 
 
@@ -33,6 +33,7 @@ class NovelPipelineTask:
         self.progress_percent = 0
         self.status_message = "等待啟動"
         self.logs: List[Dict[str, str]] = []
+        self.log_seq = 0
         self.error: Optional[str] = None
         self.start_time: Optional[str] = None
         self.last_heartbeat: str = datetime.datetime.now().strftime("%H:%M:%S")
@@ -41,7 +42,10 @@ class NovelPipelineTask:
     def log(self, message: str, level: str = "info"):
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
         self.last_heartbeat = now_str
-        entry = {"time": now_str, "msg": message, "level": level}
+        # seq 為單調遞增序號：即使 logs 因記憶體上限被截斷 (-100)，
+        # 前端仍可靠 seq 精準增量同步，不會因長度凍結而漏接日誌
+        self.log_seq += 1
+        entry = {"seq": self.log_seq, "time": now_str, "msg": message, "level": level}
         self.logs.append(entry)
         if len(self.logs) > 100:
             self.logs = self.logs[-100:]
@@ -66,6 +70,7 @@ class NovelPipelineTask:
             "progress_percent": self.progress_percent,
             "status_message": self.status_message,
             "logs": list(self.logs),
+            "log_seq": self.log_seq,
             "error": self.error,
             "stop_requested": self.stop_requested,
             "start_time": self.start_time,
@@ -111,6 +116,7 @@ class AutonomousPipelineManager:
                     "progress_percent": 0,
                     "status_message": "未運行",
                     "logs": [],
+                    "log_seq": 0,
                     "error": None,
                     "start_time": None,
                     "active_tasks_count": len(active_list),
@@ -144,6 +150,7 @@ class AutonomousPipelineManager:
                 "progress_percent": 0,
                 "status_message": "等待啟動",
                 "logs": [],
+                "log_seq": 0,
                 "error": None,
                 "start_time": None,
                 "active_tasks_count": 0,
@@ -320,6 +327,16 @@ class AutonomousPipelineManager:
             else:
                 task.log("世界觀設定已就緒，跳過生成。")
 
+            # 1.5 世界觀設定體系同步與 Setting Audit A 審計
+            try:
+                from backend.agents.setting_auditor import run_setting_audit
+                from backend.services.narrative import SettingRegistry
+                SettingRegistry.sync_systems_from_worldview(novel_id)
+                audit_a = run_setting_audit(novel_id, "worldview")
+                task.log(f"⚙️ [Setting Audit A] 世界觀設定與力量體系註冊完成 (審計結果: {audit_a.get('overall_decision')})")
+            except Exception as sa_exc:
+                task.log(f"⚠️ Setting Audit A 執行異常 (非致命): {sa_exc}", level="warn")
+
             # 2. 檢查並生成主要角色設定（陣營梯隊導向群像：各陣營 5-10 人，全書至少 15+ 位）
             if task.stop_requested: return
             if not _are_characters_ready(novel_id, min_count=15):
@@ -404,6 +421,28 @@ class AutonomousPipelineManager:
             if not vols:
                 raise RuntimeError("分卷結構尚未生成成功，無法繼續後續流程。")
 
+            # 4.5 敘事幾何骨架 (Geometry-First):純程式碼零 LLM 消耗，
+            # 在分卷確定後、細綱與正文之前先鋪設全書拓撲 (長距伏筆/多線合流/主題對比邊)，
+            # 後續 volume_skeleton / writer 才能遵照拓撲架構生成。
+            if task.stop_requested: return
+            if not _is_geometry_ready(novel_id):
+                task.current_stage = "geometry"
+                task.progress_percent = 37
+                task.status_message = "正在鋪設全書敘事幾何骨架 (長距伏筆/多線合流/主題對比)..."
+                task.log("開始生成敘事幾何骨架 (Geometry-First, 純程式零 LLM)...")
+                self._execute_stage_with_retry(
+                    task=task,
+                    stage="geometry",
+                    task_type="generate",
+                    instruction="請根據已確立的分卷架構鋪設全書敘事幾何骨架 (Motif 拓撲編織)",
+                    user_prompt="生成全書敘事幾何骨架",
+                    verify_fn=lambda: _is_geometry_ready(novel_id),
+                )
+                task.log("✅ 敘事幾何骨架已鋪設完成並持久化！")
+                db.save_chat_message(novel_id, "assistant", "🧭 **【總監通報】** 全書敘事幾何骨架 (長距伏筆/多線合流/主題對比邊) 已鋪設完成，後續細綱與正文將遵照拓撲架構生成！", message_type="chat")
+            else:
+                task.log("敘事幾何骨架已就緒，跳過生成。")
+
             # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆 100% 具備細綱)
             if task.stop_requested: return
             for v_idx, vol in enumerate(vols, start=1):
@@ -443,6 +482,12 @@ class AutonomousPipelineManager:
                         task.log(f"✅ 第 {vol_idx} 卷【{vol_title}】第 {b_start}-{b_end} 章骨架細綱已完成！")
 
                     task.log(f"🎉 第 {vol_idx} 卷【{vol_title}】全卷章節細綱骨架規劃完成！")
+                    try:
+                        from backend.agents.setting_auditor import run_setting_audit
+                        audit_b = run_setting_audit(novel_id, "skeleton", {"volume_index": vol_idx})
+                        task.log(f"⚙️ [Setting Audit B] 第 {vol_idx} 卷骨架設定與因果合理性審計完成 (結果: {audit_b.get('overall_decision')})")
+                    except Exception as sb_exc:
+                        task.log(f"⚠️ Setting Audit B 執行異常 (非致命): {sb_exc}", level="warn")
                     vols = db.get_volumes(novel_id)
             
             db.save_chat_message(novel_id, "assistant", "📝 **【總監通報】** 全書所有分卷詳細情節骨架與細綱已全數生成完畢！", message_type="chat")
@@ -589,6 +634,8 @@ class AutonomousPipelineManager:
                 task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
 
                 # (2.5) 同步提取時序事實與動態圖譜 (Graphiti Temporal Graph)
+                # 同次 LLM 順帶歸一化衝突簽名 + 設定調用（Story Engine 搭便車，零額外呼叫）
+                graph_res: Dict[str, Any] = {}
                 try:
                     task.log(f"🧠 正在為第 {ch_idx} 章同步提取時序記憶圖譜事實...")
                     ch_obj = db.get_chapter(novel_id, ch_idx)
@@ -599,13 +646,192 @@ class AutonomousPipelineManager:
                             chapter_index=ch_idx,
                             chapter_text=ch_text,
                             agent_name="copilot"
-                        )
+                        ) or {}
                         facts_added = graph_res.get("facts_added", 0)
                         terms_created = graph_res.get("terms_created", 0)
                         terms_updated = graph_res.get("terms_updated", 0)
                         task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實，術語庫新增 {terms_created}/更新 {terms_updated})")
                 except Exception as g_exc:
                     task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
+
+                # (2.6) 註冊衝突簽名 (Conflict Signature) 與長程敘事因果審計 (Narrative Auditor)
+                try:
+                    from backend.services.narrative import ConflictLedger, SettingRegistry, NarrativeAuditor
+                    outline = None
+                    for v in vols:
+                        for c in (v.get("chapters_outline") or []):
+                            if isinstance(c, dict) and c.get("chapter_index") == ch_idx:
+                                outline = c
+                                break
+                        if outline:
+                            break
+
+                    hint = outline.get("conflict_signature_hint") if isinstance(outline, dict) else None
+                    if not isinstance(hint, dict) or not hint:
+                        # hint 缺失時直接用整章 outline 兜底提取，保證不斷鏈
+                        hint = outline if isinstance(outline, dict) else None
+                    # LLM 歸一化簽名優先（同次圖譜提取順帶），失敗則離線啟發式兜底
+                    llm_sig = (graph_res or {}).get("conflict_signature") or {}
+                    if not isinstance(llm_sig, dict):
+                        llm_sig = {}
+                    sig_dict = ConflictLedger.extract_signature_from_chapter(
+                        novel_id=novel_id,
+                        chapter_index=ch_idx,
+                        outline_hint=hint,
+                        prose_text=ch_text,
+                        outline=outline if isinstance(outline, dict) else None,
+                        llm_signature=llm_sig or None,
+                    )
+                    # 冪等：同章已登記則跳過，避免重跑管線產生重複簽名
+                    existing_sigs = db.get_conflict_signatures(novel_id, limit=500)
+                    already = any(
+                        int(s.get("chapter_start") or 0) <= ch_idx <= int(s.get("chapter_end") or s.get("chapter_start") or 0)
+                        for s in existing_sigs
+                    )
+                    sig_row = None
+                    if not already:
+                        sig_row = ConflictLedger.record_signature(
+                            novel_id=novel_id,
+                            chapter_start=sig_dict["chapter_start"],
+                            chapter_end=sig_dict["chapter_end"],
+                            pressure_type=sig_dict["pressure_type"],
+                            protagonist_strategy=sig_dict["protagonist_strategy"],
+                            outcome=sig_dict["outcome"],
+                            initiator=sig_dict.get("initiator"),
+                            antagonist_goal=sig_dict.get("antagonist_goal"),
+                            power_used=sig_dict.get("power_used"),
+                            twist_mechanism=sig_dict.get("twist_mechanism"),
+                            cost=sig_dict.get("cost"),
+                            emotional_effect=sig_dict.get("emotional_effect"),
+                            setting_used=sig_dict.get("setting_used"),
+                        )
+                    else:
+                        sig_row = next(
+                            (
+                                s for s in existing_sigs
+                                if int(s.get("chapter_start") or 0) <= ch_idx <= int(s.get("chapter_end") or s.get("chapter_start") or 0)
+                            ),
+                            sig_dict,
+                        )
+
+                    # setting_usage 可能是 list[str] / list[dict] / dict / str，四種全吃
+                    def _iter_setting_names(su):
+                        if su is None:
+                            return
+                        if isinstance(su, str):
+                            if su.strip():
+                                yield su.strip()
+                            return
+                        if isinstance(su, dict):
+                            if su.get("system_name"):
+                                yield str(su["system_name"]).strip()
+                            elif su.get("name"):
+                                yield str(su["name"]).strip()
+                            return
+                        if isinstance(su, list):
+                            for item in su:
+                                if isinstance(item, dict):
+                                    nm = item.get("system_name") or item.get("name")
+                                    if nm and str(nm).strip():
+                                        yield str(nm).strip()
+                                elif isinstance(item, str) and item.strip():
+                                    yield item.strip()
+
+                    # 大綱點名 + LLM 實際調用 + 簽名指名，三路合併去重後記 usage
+                    _llm_settings = (graph_res or {}).get("setting_usage") or []
+                    if not isinstance(_llm_settings, list):
+                        _llm_settings = []
+                    _seen_names: set = set()
+                    _all_su = []
+                    if outline and outline.get("setting_usage"):
+                        _all_su.append(outline["setting_usage"])
+                    _all_su.extend(_llm_settings)
+                    if sig_row and sig_row.get("setting_used"):
+                        _all_su.append(str(sig_row["setting_used"]))
+                    for _su_item in _all_su:
+                        for sys_name in _iter_setting_names(_su_item):
+                            if sys_name in _seen_names:
+                                continue
+                            _seen_names.add(sys_name)
+                            ok = SettingRegistry.record_system_usage(
+                                novel_id=novel_id,
+                                system_name=sys_name,
+                                chapter_index=ch_idx,
+                            )
+                            if not ok:
+                                # 大綱點名了但運作庫沒這個實體：自動補登後再記一次，
+                                # 否則 usage_count 永遠是 0。
+                                try:
+                                    db.upsert_setting_system(
+                                        novel_id=novel_id,
+                                        name=sys_name,
+                                        setting_type="generic",
+                                        mechanism=f"第 {ch_idx} 章劇情調用之世界觀設定",
+                                        cost="動用該設定須承擔相應代價",
+                                        boundary="受世界法則與環境條件約束",
+                                    )
+                                    SettingRegistry.record_system_usage(
+                                        novel_id=novel_id,
+                                        system_name=sys_name,
+                                        chapter_index=ch_idx,
+                                    )
+                                except Exception:
+                                    pass
+                    audit_res = NarrativeAuditor.audit_chapter_prose(
+                        novel_id=novel_id,
+                        chapter_index=ch_idx,
+                        prose_text=ch_text,
+                        current_outline=outline,
+                        candidate_conflict_sig=sig_row or sig_dict,
+                    )
+                    task.log(f"📊 [Narrative Auditor 2.0] 第 {ch_idx} 章敘事因果診斷完成: [{audit_res.get('overall_action')}]")
+
+                    # (2.7) 閉環自修「修到好」：判 REVISE/CRITICAL 即反覆
+                    # 「Editor 重寫 → resolve → 引擎重審 → 總監硬性校驗」，
+                    # 直到 Narrative Auditor 判決進入通過態（PASS/WATCH/安靜章）
+                    # 或觸發安全上限（預設 3 輪，防止無人值守無限燒 LLM 配額）；
+                    # 達上限的殘留診斷保留給看板處置與下一章上下文約束，不阻礙流水線。
+                    if audit_res.get("overall_action") in ("REVISE", "CRITICAL") and not task.stop_requested:
+                        try:
+                            from backend.services.narrative.fix import fix_chapter_until_pass as _auto_fix_loop
+                            task.log(
+                                f"🛠️ 第 {ch_idx} 章診斷為 [{audit_res.get('overall_action')}]，"
+                                "啟動閉環修正（修到總監/引擎評斷通過為止）..."
+                            )
+                            fix_res = _auto_fix_loop(novel_id, ch_idx, log_fn=task.log)
+                            reaudit = fix_res.get("final_reaudit") or {}
+                            loop_status = fix_res.get("status")
+                            if loop_status == "passed":
+                                task.log(
+                                    f"✅ 第 {ch_idx} 章閉環修正通過（{len(fix_res.get('rounds', []))} 輪、"
+                                    f"累計處置 {fix_res.get('total_fixed', 0)} 筆診斷，"
+                                    f"最終判決: [{reaudit.get('overall_action', fix_res.get('final_action'))}]）"
+                                )
+                            elif loop_status == "no_change":
+                                task.log(
+                                    f"⚠️ 第 {ch_idx} 章閉環修正中止（Editor 未產生新版，原文保留；"
+                                    f"最終判決: [{reaudit.get('overall_action', '?')}]）",
+                                    level="warn",
+                                )
+                            else:
+                                task.log(
+                                    f"⚠️ 第 {ch_idx} 章閉環修正達安全上限仍為 "
+                                    f"[{reaudit.get('overall_action', fix_res.get('final_action'))}]；"
+                                    f"殘留 {fix_res.get('total_fixed', 0)} 筆已處置診斷，"
+                                    "其餘待看板處置與下一章約束",
+                                    level="warn",
+                                )
+                            # 修正後正文已變：刷新本章文字供後續圖譜/日誌使用
+                            try:
+                                _fixed_row = db.get_chapter(novel_id, ch_idx)
+                                if _fixed_row and (_fixed_row.get("content") or "").strip():
+                                    ch_text = _fixed_row["content"]
+                            except Exception:
+                                pass
+                        except Exception as fix_exc:
+                            task.log(f"⚠️ 第 {ch_idx} 章自動修正異常 (保留原稿繼續): {fix_exc}", level="warn")
+                except Exception as n_exc:
+                    task.log(f"⚠️ 第 {ch_idx} 章長程敘事診斷異常 (安全跳過不阻礙): {n_exc}", level="warn")
 
                 db.save_chat_message(
                     novel_id,
@@ -713,7 +939,15 @@ def _are_turning_points_ready(novel_id: str, min_count: int = 5) -> bool:
 
 def _are_volumes_ready(novel_id: str) -> bool:
     vols = db.get_volumes(novel_id)
-    return bool(vols and len(vols) > 0)
+    return bool(vols and len(vols) >= MIN_VOLUME_COUNT)
+
+
+def _is_geometry_ready(novel_id: str) -> bool:
+    try:
+        stats = db.get_geometry_stats(novel_id)
+        return bool(stats and int(stats.get("node_count") or 0) > 0)
+    except Exception:
+        return False
 
 
 def _has_volume_skeleton(novel_id: str, volume_index: int) -> bool:

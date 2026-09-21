@@ -35,6 +35,18 @@ EXTRACTION_SYSTEM_PROMPT = """你是一位精通長篇小說故事設定與動�
   "invalidated_fact_ids_or_statements": [
     "被本章劇情推翻、作廢或改變的舊事實敘述"
   ],
+  "conflict_signature": {
+    "pressure_type": "本章對立勢力施加的主要壓力類型（限以下枚舉擇一）: oppression(階層壓迫)|suppression(特權打壓)|blockade(資源封鎖)|humiliation(公開羞辱)|assassination(暗殺圍殺)|frame_up(構陷誣告)|legal_strangulation(律法絞殺)|manipulation(情報操弄)|emotional_coercion(情感勒索)|exclusion(體制排擠)|other(其他或無明顯衝突)",
+    "protagonist_strategy": "主角本章主要應對策略（限以下枚舉擇一）: play_dumb_or_weak(裝傻示弱)|asymmetric_wit(非對稱智鬥)|rules_loophole(規則漏洞)|direct_clash(正面硬撼)|strategic_retreat(戰略撤退)|negotiation(談判交易)|investigation(調查取證)|damage_control(止損善後)|recuperation(休養沉澱)|groundwork(鋪墊經營)|adaptive_response(臨機應變)|payoff_execution(收束爆發)",
+    "outcome": "本章衝突結局模式（限以下枚舉擇一）: public_shock(震驚全場)|uneasy_truce(暫時休戰)|costly_victory(慘勝)|setback(受挫)|escape(脫身)|reversal(反轉)|progression(推進)|revelation(真相揭露)",
+    "initiator": "發起施壓的勢力或人物名稱",
+    "antagonist_goal": "對手的目的簡述",
+    "power_used": "主角動用的關鍵力量或手段",
+    "cost": "主角付出的實質代價（若無則填空字串）",
+    "emotional_effect": "本章帶給讀者的主要情緒效果",
+    "setting_used": "本章運用的世界觀設定名稱（若無則填空字串）"
+  },
+  "setting_usage": ["本章實際調用的世界觀設定名稱清單"],
   "terms": [
     {
       "term": "專有名詞或術語 (例如: 滅世晨星、星輝門閥)",
@@ -128,6 +140,8 @@ class ChapterFactExtractor:
             data.setdefault("entities", [])
             data.setdefault("new_facts", [])
             data.setdefault("invalidated_fact_ids_or_statements", [])
+            data.setdefault("conflict_signature", {})
+            data.setdefault("setting_usage", [])
             data.setdefault("terms", [])
         except Exception as e:
             # Fallback for mock or failure（保留舊行為，但加上可觀測性）
@@ -146,6 +160,43 @@ class ChapterFactExtractor:
                 }],
                 "invalidated_fact_ids_or_statements": []
             }
+
+        # 0. 歸一化 Story Engine 2.0 衝突簽名（LLM 枚舉值優先，非法值直接丟棄
+        #    交給離線啟發式兜底；此處絕不拋錯）
+        conflict_signature: Dict[str, Any] = {}
+        setting_usage: List[str] = []
+        try:
+            from backend.services.narrative.conflict_ledger import ConflictLedger as _CL
+            _raw_sig = data.get("conflict_signature") or {}
+            if isinstance(_raw_sig, dict):
+                def _enum(v: Any, allowed: tuple) -> str:
+                    s = str(v or "").strip().lower()
+                    return s if s in allowed else ""
+                _p = _enum(_raw_sig.get("pressure_type"), _CL.PRESSURE_TYPES)
+                _s = _enum(_raw_sig.get("protagonist_strategy"), _CL.PROTAGONIST_STRATEGIES)
+                _o = _enum(_raw_sig.get("outcome"), _CL.OUTCOMES)
+                if _p or _s or _o:
+                    conflict_signature = {
+                        "pressure_type": _p or None,
+                        "protagonist_strategy": _s or None,
+                        "outcome": _o or None,
+                        "initiator": str(_raw_sig.get("initiator") or "").strip()[:40] or None,
+                        "antagonist_goal": str(_raw_sig.get("antagonist_goal") or "").strip()[:120] or None,
+                        "power_used": str(_raw_sig.get("power_used") or "").strip()[:120] or None,
+                        "cost": str(_raw_sig.get("cost") or "").strip()[:120] or None,
+                        "emotional_effect": str(_raw_sig.get("emotional_effect") or "").strip()[:120] or None,
+                        "setting_used": str(_raw_sig.get("setting_used") or "").strip()[:40] or None,
+                    }
+            _raw_su = data.get("setting_usage") or []
+            if isinstance(_raw_su, list):
+                for _item in _raw_su:
+                    if isinstance(_item, str) and _item.strip():
+                        setting_usage.append(_item.strip()[:40])
+                    elif isinstance(_item, dict) and (_item.get("system_name") or _item.get("name")):
+                        setting_usage.append(str(_item.get("system_name") or _item.get("name")).strip()[:40])
+        except Exception:
+            conflict_signature = {}
+            setting_usage = []
 
         # 1. Upsert Entities
         entity_id_map = {}
@@ -259,6 +310,8 @@ class ChapterFactExtractor:
             "terms_created": terms_created,
             "terms_updated": terms_updated,
             "terms_kept_manual": terms_kept_manual,
+            "conflict_signature": conflict_signature,
+            "setting_usage": setting_usage,
             "status": "fallback" if used_fallback else "success",
             "used_fallback": used_fallback,
             "fallback_reason": fallback_reason,

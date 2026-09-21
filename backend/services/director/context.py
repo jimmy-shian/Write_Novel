@@ -364,10 +364,63 @@ def build_writer_review_context(novel_id, chapter_index, characters_text):
 
     allocated_tasks = current_outline.get("allocated_tasks", {}) if isinstance(current_outline, dict) else {}
 
+    # 提取當章活躍角色名稱
+    active_names = []
+    if current_outline and isinstance(current_outline.get("characters_active"), list):
+        active_names = [c if isinstance(c, str) else c.get("name", "") for c in current_outline["characters_active"]]
+
+    # Graphiti Temporal Graph Facts（動態世界線事實，檢驗角色生死與陣營關係）
+    temporal_facts = ""
+    try:
+        from backend.services.graphiti.temporal_graph import TemporalGraphService
+        temporal_facts = TemporalGraphService.build_narrative_context(
+            novel_id=novel_id,
+            at_chapter=target_idx,
+            active_characters=active_names,
+            max_facts=15,
+        )
+    except Exception:
+        temporal_facts = ""
+
+    # Conflict Novelty Context（衝突因果防重複摘要）
+    conflict_guard = ""
+    try:
+        from backend.services.narrative.conflict_ledger import ConflictLedger
+        conflict_guard = ConflictLedger.build_anti_repetition_prompt_snippet(novel_id, target_idx)
+    except Exception:
+        conflict_guard = ""
+
+    # Setting Boundaries & Mechanism（設定運作機制與代價邊界）
+    setting_block = ""
+    try:
+        from backend.services.narrative.setting_registry import SettingRegistry
+        setting_names = current_outline.get("setting_usage", []) if isinstance(current_outline, dict) else []
+        setting_block = SettingRegistry.get_scoped_context_for_writer(novel_id, setting_names)
+    except Exception:
+        setting_block = ""
+
+    # Unresolved Narrative Audits（前文未處置因果診斷）
+    unresolved_audits = []
+    try:
+        raw_audits = db.get_narrative_audits(novel_id, unresolved_only=True, limit=5) or []
+        for a in raw_audits:
+            unresolved_audits.append({
+                "chapter_index": a.get("chapter_index"),
+                "dimension": a.get("dimension"),
+                "severity": a.get("severity"),
+                "recommendation": str(a.get("recommendation") or "")[:200]
+            })
+    except Exception:
+        unresolved_audits = []
+
     packet = {
         "review_scope": "writer_chapter_continuity_and_outline_compliance",
         "chapter_index": target_idx,
         "narrative_memory_context": narrative_memory.build_writer_memory_context(novel_id, target_idx),
+        "temporal_graph_facts": temporal_facts,
+        "conflict_novelty_context": conflict_guard,
+        "setting_boundaries_context": setting_block,
+        "unresolved_narrative_audits": unresolved_audits,
         "foreshadowing_turning_allocation_context": build_foreshadowing_allocation_context(
             novel_id,
             scope="chapter",
@@ -413,10 +466,63 @@ def build_editor_review_context(novel_id, chapter_index, characters_text):
     _, polished = split_generated_prose(polished)
     _, original = split_generated_prose(original)
 
+    # 提取當章活躍角色名稱
+    active_names = []
+    if current_outline and isinstance(current_outline.get("characters_active"), list):
+        active_names = [c if isinstance(c, str) else c.get("name", "") for c in current_outline["characters_active"]]
+
+    # Graphiti Temporal Graph Facts
+    temporal_facts = ""
+    try:
+        from backend.services.graphiti.temporal_graph import TemporalGraphService
+        temporal_facts = TemporalGraphService.build_narrative_context(
+            novel_id=novel_id,
+            at_chapter=target_idx,
+            active_characters=active_names,
+            max_facts=15,
+        )
+    except Exception:
+        temporal_facts = ""
+
+    # Conflict Novelty Context
+    conflict_guard = ""
+    try:
+        from backend.services.narrative.conflict_ledger import ConflictLedger
+        conflict_guard = ConflictLedger.build_anti_repetition_prompt_snippet(novel_id, target_idx)
+    except Exception:
+        conflict_guard = ""
+
+    # Setting Boundaries & Mechanism
+    setting_block = ""
+    try:
+        from backend.services.narrative.setting_registry import SettingRegistry
+        setting_names = current_outline.get("setting_usage", []) if isinstance(current_outline, dict) else []
+        setting_block = SettingRegistry.get_scoped_context_for_writer(novel_id, setting_names)
+    except Exception:
+        setting_block = ""
+
+    # Unresolved Narrative Audits
+    unresolved_audits = []
+    try:
+        raw_audits = db.get_narrative_audits(novel_id, unresolved_only=True, limit=5) or []
+        for a in raw_audits:
+            unresolved_audits.append({
+                "chapter_index": a.get("chapter_index"),
+                "dimension": a.get("dimension"),
+                "severity": a.get("severity"),
+                "recommendation": str(a.get("recommendation") or "")[:200]
+            })
+    except Exception:
+        unresolved_audits = []
+
     packet = {
         "review_scope": "editor_before_after_comparison",
         "chapter_index": target_idx,
         "narrative_memory_context": narrative_memory.build_editor_context_packet(novel_id, target_idx, original),
+        "temporal_graph_facts": temporal_facts,
+        "conflict_novelty_context": conflict_guard,
+        "setting_boundaries_context": setting_block,
+        "unresolved_narrative_audits": unresolved_audits,
         "foreshadowing_turning_allocation_context": build_foreshadowing_allocation_context(
             novel_id,
             scope="chapter",

@@ -12,6 +12,8 @@ from backend.common.llm import call_llm_stream
 from backend.common.config import (
     MIN_FORESHADOWING_SEEDS,
     MIN_KEY_TURNING_POINTS,
+    MIN_VOLUME_COUNT,
+    MAX_VOLUME_COUNT,
     VOLUME_SKELETON_BATCH_SIZE,
     VOLUME_SKELETON_BATCH_RETRIES,
     VOLUME_SKELETON_SEGMENT_RETRIES,
@@ -173,13 +175,13 @@ def _director_decision_needs_recovery(parsed, current_stage=None, novel_id=None)
     if action == "TOOL_CALL" or "tool_call" in parsed:
         tool_call = parsed.get("tool_call") or {}
         tool_name = tool_call.get("tool_name")
-        if not tool_name or tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position"}:
+        if not tool_name or tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry"}:
             return True
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
     if action == "CONTINUE" and target == "foreshadowing" and not re_search_batch_marker(text):
         return True
-    # 剛性防禦：characters 階段若只有 1 位角色，嚴禁放行進入下一階段（foreshadowing/volumes 等）
+    # 剛性防禦：characters 階段若少於 2 位角色，嚴禁放行進入下一階段
     if current_stage == "characters" and action == "CONTINUE" and target not in {"characters", "character_designer"}:
         if novel_id:
             char_data = db.get_latest_characters(novel_id)
@@ -191,6 +193,28 @@ def _director_decision_needs_recovery(parsed, current_stage=None, novel_id=None)
                         return True
                 except Exception:
                     pass
+
+    # 剛性防禦：foreshadowing 階段若伏筆或轉折不足 MIN_FORESHADOWING_SEEDS (50 條)，嚴禁放行進入 volumes
+    if current_stage == "foreshadowing" and action == "CONTINUE" and target not in {"foreshadowing", "foreshadowing_orchestrator"}:
+        if novel_id:
+            wb = db.get_latest_worldbuilding(novel_id)
+            if wb and wb.get("content"):
+                try:
+                    from backend.models.parsers import extract_json_block
+                    wb_dict = extract_json_block(wb["content"]) or {}
+                    seeds = wb_dict.get("foreshadowing_seeds", [])
+                    turns = wb_dict.get("key_turning_points", [])
+                    if len(seeds) < MIN_FORESHADOWING_SEEDS or len(turns) < MIN_KEY_TURNING_POINTS:
+                        return True
+                except Exception:
+                    pass
+
+    # 剛性防禦：volumes 階段若篇卷數量不足 MIN_VOLUME_COUNT (10 卷)，嚴禁放行進入 volume_skeleton
+    if current_stage == "volumes" and action == "CONTINUE" and target not in {"volumes", "volumes_planner"}:
+        if novel_id:
+            vols = db.get_volumes(novel_id) or []
+            if len(vols) < MIN_VOLUME_COUNT:
+                return True
     return False
 
 
@@ -245,7 +269,7 @@ def _get_director_decision_error_message(parsed, raw_text, current_stage=None, n
         tool_name = tool_call.get("tool_name")
         if not tool_name:
             return "當 action 為 TOOL_CALL 時，必須在 'tool_call' 下指定 'tool_name' 欄位。請指定有效的工具名稱。"
-        if tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position"}:
+        if tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry"}:
             return f"未知的總監工具名稱：{tool_name}。請使用合法的工具名稱。"
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
@@ -261,6 +285,16 @@ def _get_director_decision_error_message(parsed, raw_text, current_stage=None, n
             "小說無法在單一人格的真空環境下展開衝突。請將 action 改為調用或要求角色設計師補充反派與配角：\n"
             "- 必須至少包含 1 位主角 + 1 位主要對立反派/宿敵 + 關鍵配角\n"
             "- 請調用 character_designer 或指定 target 為 characters 進行角色擴充，嚴禁直接放行至後續階段！"
+        )
+    if current_stage == "foreshadowing" and action == "CONTINUE" and target not in {"foreshadowing", "foreshadowing_orchestrator"}:
+        return (
+            f"【伏筆與轉折階段放行阻斷】長篇小說要求全書伏筆網絡與核心關鍵轉折點各達到至少 {MIN_FORESHADOWING_SEEDS} 條！\n"
+            "目前累積數量尚未達標。請指示伏筆與轉折編織師繼續進行分批生成（target: foreshadowing），嚴禁提前放行至篇卷規劃階段。"
+        )
+    if current_stage == "volumes" and action == "CONTINUE" and target not in {"volumes", "volumes_planner"}:
+        return (
+            f"【篇卷階段放行阻斷】長篇小說要求全書篇卷規劃達到至少 {MIN_VOLUME_COUNT} 卷（且每卷 40-50 章）！\n"
+            "目前篇卷數量尚未達標。請指示篇卷規劃師繼續分批推演後續篇卷（target: volumes），嚴禁提前放行至章節細綱階段。"
         )
     return "JSON 格式不符合總監決策合約，請確認頂層欄位與命名規範。"
 
@@ -778,6 +812,12 @@ def run_director_decision(
                 if decision:
                     yield "data: " + json.dumps({"type": "content", "delta": "\n```json\n" + json.dumps(decision, ensure_ascii=False, indent=2) + "\n```\n"}, ensure_ascii=False) + "\n\n"
                     return
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            elif tool_name == "repair_story_geometry":
+                from backend.services.director.tools import repair_story_geometry
+                result = repair_story_geometry(novel_id=novel_id, **params)
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n[幾何修復結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             else:

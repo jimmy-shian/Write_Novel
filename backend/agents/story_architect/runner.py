@@ -99,10 +99,11 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     genre = novel.get("genre", "Fantasy")
     style = novel.get("style", "Classic Modernism")
     pipeline_prompt = (novel.get("pipeline_prompt") or "").strip()
-    if pipeline_prompt and user_prompt and str(user_prompt).strip() and str(user_prompt).strip() != pipeline_prompt:
-        effective_user_prompt = f"【故事原案大綱靈感】\n{pipeline_prompt}\n\n【本次生成要求】\n{str(user_prompt).strip()}"
+    clean_user_prompt = str(user_prompt or "").strip()
+    if pipeline_prompt and clean_user_prompt and clean_user_prompt != pipeline_prompt and pipeline_prompt not in clean_user_prompt:
+        effective_user_prompt = f"【故事原案大綱靈感】\n{pipeline_prompt}\n\n【本次生成要求】\n{clean_user_prompt}"
     else:
-        effective_user_prompt = str(user_prompt).strip() if (user_prompt and str(user_prompt).strip()) else pipeline_prompt
+        effective_user_prompt = clean_user_prompt or pipeline_prompt
     user_prompt = effective_user_prompt
     
     # 讀取已有的世界觀設定
@@ -142,6 +143,42 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
             regen_acts = True
             regen_char_plan = True
             
+    # 提取既有設定資產（角色、篇卷、伏筆概況），在增量修訂模式下維護設定連續性
+    existing_assets_summary = ""
+    if not is_initial:
+        asset_sections = []
+        try:
+            c_data = db.get_latest_characters(novel_id)
+            if c_data:
+                cp = c_data.get("parsed_data") or json.loads(c_data.get("json_data", "{}"))
+                c_list = cp.get("characters", []) if isinstance(cp, dict) else (cp if isinstance(cp, list) else [])
+                c_names = [f"{c.get('name')}（{c.get('role', '未定')}）" for c in c_list if isinstance(c, dict) and c.get("name")]
+                if c_names:
+                    asset_sections.append(f"- 已確立核心角色（共 {len(c_names)} 位）: {', '.join(c_names[:20])}")
+        except Exception:
+            pass
+
+        try:
+            vols = db.get_volumes(novel_id)
+            if vols:
+                v_titles = [f"第 {v.get('volume_index', i+1)} 卷《{v.get('title')}》" for i, v in enumerate(vols) if isinstance(v, dict) and v.get("title")]
+                if v_titles:
+                    asset_sections.append(f"- 已確立篇卷架構（共 {len(v_titles)} 卷）: {', '.join(v_titles[:10])}")
+        except Exception:
+            pass
+
+        try:
+            wb_json = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+            s_cnt = len(wb_json.get("foreshadowing_seeds", []))
+            t_cnt = len(wb_json.get("key_turning_points", []))
+            if s_cnt or t_cnt:
+                asset_sections.append(f"- 已佈設伏筆網絡: 伏筆種子 {s_cnt} 條，關鍵轉折點 {t_cnt} 條")
+        except Exception:
+            pass
+
+        if asset_sections:
+            existing_assets_summary = "\n".join(asset_sections)
+
     # 紀錄對話歷史
     db.save_chat_message(novel_id, "user", f"開始生成世界觀。要求: {user_prompt}", message_type="pipeline")
     
@@ -150,7 +187,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     last_messages = []
     if regen_core:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成核心世界觀設定（Theme, Conflict, Worldview, Outline）..."}, ensure_ascii=False) + "\n\n"
-        messages = build_worldview_core_messages(genre, style, user_prompt, novel_id=novel_id)
+        messages = build_worldview_core_messages(genre, style, user_prompt, novel_id=novel_id, existing_assets_context=existing_assets_summary)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)
@@ -176,7 +213,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     acts_json_str = ""
     if regen_acts:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『多幕式劇情起伏結構』(Multi-Act Structure)..."}, ensure_ascii=False) + "\n\n"
-        messages = build_multi_act_structure_messages(core_json_str, user_prompt, novel_id=novel_id)
+        messages = build_multi_act_structure_messages(core_json_str, user_prompt, novel_id=novel_id, existing_assets_context=existing_assets_summary)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)
@@ -199,7 +236,7 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
     char_plan_json_str = ""
     if regen_char_plan:
         yield "data: " + json.dumps({"type": "status", "message": "正在規劃與生成『角色漸進登場規劃策略』(Progressive Character Plan)..."}, ensure_ascii=False) + "\n\n"
-        messages = build_progressive_character_plan_messages(core_json_str, acts_json_str, user_prompt, novel_id=novel_id)
+        messages = build_progressive_character_plan_messages(core_json_str, acts_json_str, user_prompt, novel_id=novel_id, existing_assets_context=existing_assets_summary)
         last_messages = messages
         llm_stream = call_llm_stream("architect", messages, stream=stream, force_json=force_json)
         acc = StreamAccumulator(llm_stream)

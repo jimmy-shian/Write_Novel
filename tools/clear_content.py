@@ -34,6 +34,14 @@ TABLES_TO_CLEAR = [
     "pipeline_tasks",
     "chapters_backup",
     "last_agent_run",
+    # Story Engine 2.0 敘事推理引擎
+    "setting_systems",
+    "conflict_signatures",
+    "narrative_audits",
+    # 時序動態記憶圖譜
+    "temporal_facts",
+    "temporal_episodes",
+    "temporal_entities",
 ]
 
 
@@ -136,7 +144,9 @@ def confirm_clear(conn, selected_ids):
     print("  將刪除：worldbuilding, characters, character_bible, volumes,")
     print("          plot_chapters, chapters, chat_memory, director_reviews,")
     print("          chapter_memory, arc_summaries, foreshadowing_blueprints,")
-    print("          foreshadowing_seeds, pipeline_locks, pipeline_runs, pipeline_tasks")
+    print("          foreshadowing_seeds, pipeline_locks, pipeline_runs, pipeline_tasks,")
+    print("          setting_systems, conflict_signatures, narrative_audits,")
+    print("          temporal_facts, temporal_episodes, temporal_entities")
 
     while True:
         try:

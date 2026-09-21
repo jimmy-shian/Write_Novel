@@ -17,6 +17,7 @@ from backend.prompts.common.context import (
 
 from backend.generation.routing.schema import GenerationTaskRequest
 from backend.services import narrative_memory
+from backend.services.director.context_compiler import GeometryContextCompiler
 
 
 def _json_text(value: Any) -> str:
@@ -223,6 +224,22 @@ def build_generation_context(task: GenerationTaskRequest) -> Dict[str, Any]:
                 task.target.chapter_index,
             )
 
+    # Geometry Context Package (Layer 3 & 4)
+    geometry_bundle: Dict[str, Any] = {"has_geometry": False, "data": {}}
+    if db.has_geometry(task.novel_id):
+        ch_idx = task.target.chapter_index or 1
+        pkg = GeometryContextCompiler.compile(task.novel_id, ch_idx)
+        geometry_bundle = {
+            "has_geometry": pkg.has_geometry,
+            "target_node_id": pkg.target_node_id,
+            "structural_role": pkg.structural_role,
+            "role_obligation": pkg.role_obligation,
+            "incoming_edges": pkg.incoming_edges_summary,
+            "outgoing_obligations": pkg.outgoing_obligations,
+            "cross_threads": pkg.cross_context_threads,
+            "echo_contrasts": pkg.echo_contrast_context,
+        }
+
     return {
         "novel_id": task.novel_id,
         "task_id": task.task_id,
@@ -238,4 +255,5 @@ def build_generation_context(task: GenerationTaskRequest) -> Dict[str, Any]:
         "characters": _build_character_bundle(task, characters_source),
         "plot": _build_plot_bundle(task, volumes, plot_data),
         "narrative_memory": memory_bundle,
+        "geometry": geometry_bundle,
     }

@@ -111,52 +111,86 @@ If input contains `系統決策校驗回報`:
 
 STAGE_REVIEW_RULES = {
     "worldview": """
-## Stage Review: worldview
-Check core worldview, multi-act structure, and progressive character plan.
-If the Python validation report confirms worldview is complete, route to `characters` with `CONTINUE`.
-Put any critique inside `reason`; do not write a separate report.
-""",
-    "foreshadowing": """
-## Stage Review: foreshadowing
-Check both `foreshadowing_seeds` and `key_turning_points`.
-If the Python validation report confirms both batches are complete (>=50 items each) and structurally valid, route to `volumes` with `CONTINUE`.
-Do not repeatedly call `expand_collapsed_json` if items are already validated by the system.
-If one batch is missing, route to `foreshadowing` with the required batch marker.
-If characters are missing, route to `characters` before continuing foreshadowing.
+## Stage Review: worldview (世界觀與運作規則審查)
+總監角色為「專業小說主編與策劃顧問」：
+1. 宏觀架構檢視：
+   - 力量體系與社會制度是否具備明確運作機制、代價與邊界？避免「萬能無代價」或「無上限數值膨脹」。
+   - 陣營勢力是否有合法的體制訴求與生存動機，呈現豐富的博弈張力。
+2. 判定與路由：
+   - 若 Python validation report 確認 worldview 完整且架構具備深度，使用 `CONTINUE` 前往 `characters`。
+   - 若世界觀設定過於粗糙或欠缺代價邊界，可透過 `CONTINUE` 或 `AUTO_REGENERATE` target `worldview`，並在 `agent_prompt` 與 `hint` 中明確指出需強化的法則限制。
+   - 所有評語與改進建議均寫在 `reason` 內。
 """,
     "characters": """
-## Stage Review: characters
-Check character list, character count, protagonist completeness, relationship logic, and fit with worldview.
-CRITICAL HARD CONSTRAINT:
-- A novel must have a dynamic cast (minimum 2-3 characters: Protagonist, Antagonist/Rival, and key supporting allies).
-- ABSOLUTELY FORBIDDEN to approve `CONTINUE` to foreshadowing/volumes if there is only 1 character (single protagonist)!
-- If character count < 2 (or only 1 character exists, or antagonist is missing), you MUST reject and route to `character_designer` with `CONTINUE` target `character_designer` (or `INCREMENTAL_APPEND_CHARACTER`) requiring expansion of antagonist and supporting cast!
-- Only when cast has at least Protagonist + Antagonist/Allies and meets criteria, route to `foreshadowing` (if seeds/turns incomplete) or `volumes`.
+## Stage Review: characters (角色深度與人物弧線審查)
+總監以專業小說家視角審視人物深度，塑造鮮活立體的群像：
+1. 創作檢驗標準：
+   - 【立體動機 (Want vs Need)】：核心角色是否有外在追求 (Want) 與內在缺陷 (Fatal Flaw) 的拉扯。
+   - 【主角代價與邊界】：主角的能力是否有相應的代價與限制，讓成長與破局更具說服力。
+   - 【反派合理動機】：反派是否具有合理的利益、陣營立場或價值信念，避免臉譜化的生硬對抗。
+   - 【配角獨立能動性】：關鍵盟友與配角擁有各自的追求與生存危機，豐富世界廣度。
+2. 角色規模與推進：
+   - 角色總數建議 >= 2~3 位（主角 + 宿敵/反派 + 關鍵盟友）。若僅有單一主角或缺少反派，請指示補充角色。
+   - 若角色已具備基礎結構但仍需深化，總監可在 `reason` 明確給予創作反饋，並發出 `INCREMENTAL_MODIFY_CHARACTER`、`INCREMENTAL_APPEND_CHARACTER` 或要求 `character_designer` 進行角色深度塑造。
+   - 只有在人物群像具備張力且設定齊全時，才 `CONTINUE` 路由至 `foreshadowing`。
+""",
+    "foreshadowing": """
+## Stage Review: foreshadowing (伏筆網絡與轉折多樣性審查)
+總監審查全書的長線懸念閉環與戲劇爆發點：
+1. 伏筆與轉折品質要求：
+   - 【伏筆閉環】：長程伏筆是否具備從埋設、表層偽裝到認知顛覆與收束的完整鏈條，避免拋出設定卻無收尾。
+   - 【轉折多樣化】：重大轉折是否由角色的缺陷、兩難抉擇或重大代價觸發，呈現多元化的轉折模式（如背叛、信念崩塌、局勢洗牌、重大代價等）。
+2. 判定與循環：
+   - 檢查 `foreshadowing_seeds` 與 `key_turning_points`。若 validation report 確認兩批皆齊全且模式具備多樣性，才使用 `CONTINUE` 路由至 `volumes`。
+   - 若有一批缺失，以 `[BATCH: foreshadowing_seeds]` 或 `[BATCH: key_turning_points]` 要求 `foreshadowing` 生成。
+   - 若轉折模式過於單一，總監可要求 `foreshadowing` 針對特定伏筆/轉折進行深化重寫。
 """,
     "volumes": """
-## Stage Review: volumes
-Check volume count, chapter counts, macro-arc alignment, and volume functions.
-If volumes are missing, route to `volumes`.
-If complete, route to `volume_skeleton`.
+## Stage Review: volumes (長篇篇卷階梯躍遷審查)
+1. 篇卷躍遷標準：
+   - 檢查卷數、章節規劃與核心衝突原型。
+   - 每一卷的核心衝突注重本質躍遷，相鄰卷展現不同的矛盾焦點，使格局階梯式展開。
+   - 每卷宣告專屬困境與限制 (`volume_vulnerability`)，讓主角的破局具備張力。
+2. 判定：
+   - 若卷大綱齊備且各卷有明確功能遞進，使用 `CONTINUE` 路由至 `volume_skeleton` (附帶 `volume_index: 1`)。
+   - 若缺失則路由至 `volumes` 生成。
 """,
     "volume_skeleton": """
-## Stage Review: volume_skeleton
-Check the active volume skeleton against volume range, allocated_tasks, continuity, and character/faction consistency.
-If a volume skeleton is missing, route to `volume_skeleton` with `volume_index`.
-Do not ask for segmented generation; request one complete lightweight volume skeleton.
-If the validation report shows missing characters (under 【2.1. 本卷活躍角色建存校驗】 showing ❌), you must immediately trigger `INCREMENTAL_APPEND_CHARACTER` to add ALL missing characters in batch.
+## Stage Review: volume_skeleton (細綱因果鏈與情節節奏審查)
+1. 創作審查標準：
+   - 【因果推進鏈】：章節之間注重緊密銜接，上一章產生的後果自然成為下一章的起因或阻礙。
+   - 【場景功能輪替】：檢查 `scene_function` 是否合理分佈（鋪墊、交鋒、休整沉澱、探索發現、代價承受、高潮引爆），張弛有度。
+   - 【破局多樣性】：同卷內破局手法多樣化；每章具備實質狀態位移。
+2. 缺失角色攔截與角色補全循環：
+   - 若驗證報告在【本卷活躍角色建存校驗】顯示未建存的新角色，總監可觸發 `INCREMENTAL_APPEND_CHARACTER` 批量補全角色設定後放行。
+3. 判定：
+   - 若骨架完整、因果緊湊、無缺失角色，以 `CONTINUE` 路由至 `writer` 撰寫第一章正文 (`chapter_index: 1`)。
+   - 若骨架內容空泛或套路重複，在 `agent_prompt` 明確指示需加強的衝突障礙並要求重新規劃該卷骨架。
 """,
     "writer": """
-## Stage Review: writer
-Check the current chapter prose against outline, characters, style, and allocated tasks.
-If prose is missing or invalid, route to `writer` with `chapter_index`.
-If prose passes, route to `editor` for the same chapter.
-If the validation report shows missing characters (under 【2.1. 本卷活躍角色建存校驗】 showing ❌), you must immediately trigger `INCREMENTAL_APPEND_CHARACTER` to add ALL missing characters in batch before continuing writing or proceeding.
+## Stage Review: writer (正文文學質感與創作審查)
+總監以文學責任編輯視角，進行單章正文全面質檢：
+1. 審核指標：
+   - 【生動文風】：關注正文是否自然生動，避免機械口癖與套路標籤，讓對話與描寫貼合情境。
+   - 【視角與沉浸感】：POV 視角專注，透過角色感官自然展現環境與在場他人反應。
+   - 【代價與博弈真實感】：博弈過程是否有實質阻礙、代價與智鬥思考。
+   - 【Show, Don't Tell】：情緒與壓迫感透過具體細節與行動展現，避免空洞抽象說明。
+   - 【動態時序與設定一致性】：參照上下文提供的「動態時序事實 (temporal_graph_facts)」與「設定邊界 (setting_boundaries)」，檢視角色狀態、生死、持有物與能力運用是否吻合既有世界線，避免設定失真與穿幫。
+   - 【衝突新穎度與因果推進】：參照「衝突防重複摘要 (conflict_novelty)」與「待處置因果審計 (unresolved_narrative_audits)」，確認破局手段未與近期章節重複，情節推進具備紮實的因果代價。
+2. 判定與循環：
+   - 若正文需要修訂，總監可使用 `AUTO_REGENERATE` target `writer`（附 `chapter_index`），並在 `agent_prompt` 指出具體的優化方向。
+   - 若正文合格且符合場景契約，使用 `CONTINUE` 路由至 `editor` 進行進一步潤色修飾。
+   - 若驗證報告顯示本章出現未登錄新角色，必須先以 `INCREMENTAL_APPEND_CHARACTER` 補全角色。
 """,
     "editor": """
-## Stage Review: editor
-Check edited prose preserves outline, character voice, continuity, and improves readability.
-If edit passes, route to next missing `writer` chapter, or `FINISH` when complete.
+## Stage Review: editor (潤色與風格定稿審查)
+1. 審查指引：
+   - 檢查潤色後的正文是否保留了大綱核心情節與角色獨特語言風格，並消除冗餘、提升節奏感與文學張力。
+   - 結合「動態時序事實」與「設定邊界」確認潤色修訂未無意更動關鍵事實（如道具歸屬、陣營動向、規則限制），守護作品邏輯嚴密性。
+   - 若存在待處置之因果審計項，確認潤色稿已妥善撫平或修正。
+2. 判定：
+   - 潤色合格後，路由至下一章 `writer`（附 `chapter_index: N+1`）。
+   - 若全書規劃章節已全數完成，路由至 `FINISH`。
 """,
 }
 
