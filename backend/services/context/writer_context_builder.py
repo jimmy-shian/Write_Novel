@@ -297,6 +297,34 @@ class WriterContextBuilder:
             _audits = _db.get_narrative_audits(novel_id, unresolved_only=True, limit=5) or []
         except Exception:
             _audits = []
+
+        # (A3-b) 前章代價欠帳警報：若上一章存在零代價破局的未處置診斷，強制注入提醒
+        _cost_debt_alerts = []
+        try:
+            if chapter_index > 1:
+                from backend import persistence as _db2
+                _prev_audits = _db2.get_narrative_audits(
+                    novel_id, chapter_index=chapter_index - 1, unresolved_only=True, limit=10
+                ) or []
+                _cost_debt_alerts = [
+                    a for a in _prev_audits
+                    if a.get("dimension") in ("ability_constraints", "conflict_novelty")
+                ]
+        except Exception:
+            _cost_debt_alerts = []
+
+        if _cost_debt_alerts:
+            lines.append("### 🚨【前章代價欠帳警報（剛性約束）】")
+            lines.append(
+                "主角在上一章動用了高位能力或高階策略破局，但尚未支付實質代價。"
+                "本章情節**必須**體現該行動的代價引力（後遺症、追查壓力、資源匱乏或社會關係損耗），"
+                "不得連續兩章零代價推進。"
+            )
+            for _ca in _cost_debt_alerts[:3]:
+                _rec = str(_ca.get("recommendation") or "").strip()[:200]
+                lines.append(f"  * 前章未償診斷 [{_ca.get('dimension', '')}]：{_rec}")
+            lines.append("")
+
         if _audits:
             lines.append("### 🩺【前文敘事診斷待辦 (必須在本章規避或修補)】")
             for _a in _audits[:5]:

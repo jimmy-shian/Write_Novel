@@ -43,6 +43,7 @@ def build_fix_instructions(targets: List[Dict[str, Any]]) -> str:
         lines.append(f"- [{label}] 佐證：{a.get('evidence', '')}")
         lines.append(f"  改法：{a.get('recommendation', '')}")
     lines.append("注意：只修正上述問題點，不得改變本章大綱事件、人物立場與伏筆走向。")
+    lines.append("紅線：必須實質更換情節因果鏈與主角博弈方式；嚴禁僅在策略名詞上做同義替換蒙混（例如把 asymmetric_wit 改名為 adaptive_response）；若診斷指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。")
     return "\n".join(lines)
 
 
@@ -97,6 +98,8 @@ def build_director_user_instruction(
         # 紅線附註一律保留，避免 LLM 合成時遺漏
         if "不得改變本章大綱" not in instruction:
             instruction += "\n注意：只修正上述問題點，不得改變本章大綱事件、人物立場與伏筆走向。"
+        if "因果鏈" not in instruction:
+            instruction += "\n紅線：必須實質更換情節因果鏈與主角博弈方式，嚴禁僅做策略名詞同義替換蒙混。"
         return instruction
     except Exception:
         return fallback
