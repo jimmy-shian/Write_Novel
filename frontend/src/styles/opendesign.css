@@ -1540,17 +1540,19 @@ html, body {
   color: var(--danger);
 }
 
-/* 1-Click Interactive Copy Card */
+/* 1-Click Interactive Copy Card — 卡頓修復：防止長文本擠壓右側按鈕成直排 + 限制重排範圍 */
 .copy-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   background-color: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 8px 12px;
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  contain: layout style;
 }
 
 .copy-card:hover {
@@ -1561,24 +1563,46 @@ html, body {
 .copy-card-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .copy-card-key {
   font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
+  flex-shrink: 0;
 }
 
 .copy-card-val {
   font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1.6;
   color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+}
+
+.copy-card-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding-top: 2px;
+  white-space: nowrap;
 }
 
 .copy-card-hint {
   font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* Dynamic API-Driven Model Chips */
@@ -1732,7 +1756,7 @@ html, body {
   position: fixed;
   inset: 0;
   background-color: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
+  /* 卡頓修復：backdrop-filter blur 在 Windows/Electron 下開窗極耗 GPU，直接移除 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1770,6 +1794,8 @@ html, body {
 .modal-body {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 16px;
 }
 
@@ -1866,6 +1892,43 @@ html, body {
 
   .copilot-panel.mobile-open {
     transform: translateX(0);
+  }
+
+  /* 手機/電腦獨立：手機版一律忽略電腦版收合窄條尺寸與格線，
+     抽屜尺寸只由 mobile-open 控制，電腦版點標籤在手機版不可點 */
+  .app-container.explorer-collapsed,
+  .app-container.copilot-collapsed,
+  .app-container.explorer-collapsed.copilot-collapsed {
+    grid-template-columns: unset;
+  }
+
+  .explorer-drawer.desktop-collapsed,
+  .copilot-panel.desktop-collapsed {
+    width: 80vw;
+    max-width: 320px;
+    align-items: stretch;
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .copilot-panel.desktop-collapsed {
+    width: 85vw;
+    max-width: 360px;
+  }
+
+  .explorer-drawer.desktop-collapsed.mobile-open,
+  .copilot-panel.desktop-collapsed.mobile-open {
+    transform: translateX(0);
+  }
+
+  .explorer-title-toggle,
+  .copilot-title-toggle {
+    pointer-events: none;
+  }
+
+  .explorer-expand-trigger-btn,
+  .copilot-expand-trigger-btn {
+    display: none;
   }
 
   .bottom-dock {

@@ -152,21 +152,34 @@ export const App: React.FC = () => {
 
   const [isExplorerOpenMobile, setIsExplorerOpenMobile] = useState(false);
   const [isCopilotOpenMobile, setIsCopilotOpenMobile] = useState(false);
+  // 手機/電腦獨立：此斷點需與 CSS（opendesign.css @media max-width:768px）保持一致；
+  // 電腦版點標籤收合/自動收合僅在電腦版 viewport 生效，手機版一律走 isOpenMobile 抽屜。
+  const isMobileViewport = () =>
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 768px)').matches;
   // 桌面端兩側欄折疊狀態（進入架構/幾何拓撲中樞時預設雙收合，釋放 260px + 320px 畫布；
-  // 切回編輯/世界觀時自動回歸展開）
+  // 切回編輯/世界觀時自動回歸展開；手機版不受影響）
   const isStructureFamily = (v: string) =>
     v === 'structure' || v === 'geometry' || v === 'graph' || v === 'narrative';
   const [isCopilotCollapsedDesktop, setIsCopilotCollapsedDesktop] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
+      return false;
+    }
     return isStructureFamily(activeView);
   });
   const [isExplorerCollapsedDesktop, setIsExplorerCollapsedDesktop] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
+      return false;
+    }
     return isStructureFamily(activeView);
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
 
-  // 視圖切換時自動收合/回歸：進拓撲雙收合放大中間，離開即回歸，避免導演室卡死收合態
+  // 視圖切換時自動收合/回歸：僅電腦版生效，手機版不連動，
+  // 避免手機切視圖時污染電腦版收合態、或電腦收合態污染手機抽屜
   useEffect(() => {
+    if (isMobileViewport()) return;
     if (isStructureFamily(activeView)) {
       setIsCopilotCollapsedDesktop(true);
       setIsExplorerCollapsedDesktop(true);
@@ -821,7 +834,10 @@ export const App: React.FC = () => {
         isOpenMobile={isExplorerOpenMobile}
         onCloseMobile={() => setIsExplorerOpenMobile(false)}
         isCollapsedDesktop={isExplorerCollapsedDesktop}
-        onToggleCollapseDesktop={() => setIsExplorerCollapsedDesktop((v) => !v)}
+        onToggleCollapseDesktop={() => {
+          if (isMobileViewport()) return;
+          setIsExplorerCollapsedDesktop((v) => !v);
+        }}
         onSelectNovel={(id) => {
           setActiveNovelId(id);
           setIsExplorerOpenMobile(false);
@@ -975,7 +991,10 @@ export const App: React.FC = () => {
       <CopilotDrawer
         isOpenMobile={isCopilotOpenMobile}
         isCollapsedDesktop={isCopilotCollapsedDesktop}
-        onToggleCollapseDesktop={() => setIsCopilotCollapsedDesktop((prev) => !prev)}
+        onToggleCollapseDesktop={() => {
+          if (isMobileViewport()) return;
+          setIsCopilotCollapsedDesktop((prev) => !prev);
+        }}
         isStreaming={isStreaming}
         isAutoRunning={isAutoRunning}
         thinkingText={thinkingText}

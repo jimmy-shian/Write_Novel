@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
@@ -19,6 +20,38 @@ from backend.geometry.repair import GeometryRepairCondition
 from backend.services.director.tools import repair_story_geometry
 
 router = APIRouter(tags=["geometry"])
+
+# 節點 Context 包裹 TTL 快取：Modal 連點/重開不再每次全圖載入編譯（60 秒）
+# key -> (expire_at, payload)
+_NODE_CONTEXT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_NODE_CONTEXT_TTL_SEC = 60.0
+
+
+def _get_cached_node_context(cache_key: str) -> Optional[Dict[str, Any]]:
+    entry = _NODE_CONTEXT_CACHE.get(cache_key)
+    if not entry:
+        return None
+    expire_at, payload = entry
+    if time.monotonic() > expire_at:
+        _NODE_CONTEXT_CACHE.pop(cache_key, None)
+        return None
+    return payload
+
+
+def _set_cached_node_context(cache_key: str, payload: Dict[str, Any]) -> None:
+    if len(_NODE_CONTEXT_CACHE) >= 200:
+        # 簡單淘汰最舊（插入序首個）
+        oldest = next(iter(_NODE_CONTEXT_CACHE), None)
+        if oldest is not None:
+            _NODE_CONTEXT_CACHE.pop(oldest, None)
+    _NODE_CONTEXT_CACHE[cache_key] = (time.monotonic() + _NODE_CONTEXT_TTL_SEC, payload)
+
+
+def invalidate_node_context_cache(novel_id: str) -> None:
+    """幾何圖變更（生成/修復/語義更新）時清除該作品快取，避免舊義務殘留。"""
+    prefix = f"{novel_id}:"
+    for k in [k for k in _NODE_CONTEXT_CACHE if k.startswith(prefix)]:
+        _NODE_CONTEXT_CACHE.pop(k, None)
 
 
 @router.get("/novels/{novel_id}/geometry")
@@ -165,6 +198,7 @@ def generate_geometry_endpoint(
     generator = GeometryGenerator(params)
     graph = generator.generate()
     db.save_geometry_graph(novel_id, graph)
+    invalidate_node_context_cache(novel_id)
     stats = db.get_geometry_stats(novel_id)
 
     return {
@@ -203,6 +237,7 @@ def repair_geometry_endpoint(
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message") or result.get("error"))
 
+    invalidate_node_context_cache(novel_id)
     return result
 
 
@@ -220,12 +255,17 @@ def update_node_semantic_endpoint(
         raise HTTPException(status_code=404, detail=f"Geometry node {node_id} not found")
 
     db.update_node_semantic(novel_id, node_id, payload)
+    invalidate_node_context_cache(novel_id)
     return {"status": "success", "node_id": node_id, "updated_semantic": payload}
 
 
 @router.get("/novels/{novel_id}/geometry/nodes/{node_id}/context")
 def get_node_context_endpoint(novel_id: str, node_id: str):
     """取得指定節點的上下文約束與敘事義務包裹 (Layer 3 & Layer 4)。"""
+    cache_key = f"{novel_id}:{node_id}"
+    cached = _get_cached_node_context(cache_key)
+    if cached is not None:
+        return cached
     if not db.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="Novel not found")
     node = db.get_geometry_node(novel_id, node_id)
@@ -245,7 +285,7 @@ def get_node_context_endpoint(novel_id: str, node_id: str):
         chapter_index=chapter_index,
         target_node_id=node_id,
     )
-    return {
+    payload = {
         "novel_id": pkg.novel_id,
         "chapter_index": pkg.chapter_index,
         "target_node_id": pkg.target_node_id,
@@ -259,3 +299,5 @@ def get_node_context_endpoint(novel_id: str, node_id: str):
         "geometry_overlay_text": pkg.format_geometry_overlay(),
         "cross_context_text": pkg.format_cross_context(),
     }
+    _set_cached_node_context(cache_key, payload)
+    return payload

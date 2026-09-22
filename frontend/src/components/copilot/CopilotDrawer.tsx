@@ -40,6 +40,16 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
   onDeleteChatMessage,
   onClearChatMemory,
 }) => {
+  // 手機/電腦獨立：手機版 viewport 下點標籤不得連動電腦版收合狀態，
+  // 電腦版點標籤/窄條僅在電腦版 viewport 生效。
+  const isMobileViewport = () =>
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 768px)').matches;
+  const handleToggleCollapseDesktopOnly = () => {
+    if (isMobileViewport()) return;
+    onToggleCollapseDesktop?.();
+  };
+
   const [activeTab, setActiveTab] = useState<CopilotTab>('stages');
   const [prompt, setPrompt] = useState('');
   const [activeStage, setActiveStage] = useState<CreationStage>(currentStage);
@@ -139,13 +149,15 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
 
   const currentStageDef = STAGE_DEFINITIONS.find((s) => s.id === activeStage) || STAGE_DEFINITIONS[0];
 
-  if (isCollapsedDesktop) {
+  // 手機/電腦獨立：手機抽屜開啟時一律顯示完整內容，不受電腦版收合影響；
+  // 電腦版收合窄條僅在手機抽屜關閉時才顯示（即純電腦版情境）。
+  if (isCollapsedDesktop && !isOpenMobile) {
     return (
       <aside className={`copilot-panel desktop-collapsed ${isOpenMobile ? 'mobile-open' : ''}`}>
         <button
           type="button"
           className="copilot-expand-trigger-btn"
-          onClick={onToggleCollapseDesktop}
+          onClick={handleToggleCollapseDesktopOnly}
           title="展開"
           aria-label="展開"
         >
@@ -158,13 +170,13 @@ export const CopilotDrawer: React.FC<CopilotDrawerProps> = ({
 
   return (
     <aside className={`copilot-panel ${isOpenMobile ? 'mobile-open' : ''}`}>
-      {/* 1. Header with Title & Badges（標題本身可點收合） */}
+      {/* 1. Header with Title & Badges（標題本身可點收合，僅電腦版 viewport 生效） */}
       <div className="copilot-header">
         {onToggleCollapseDesktop ? (
           <button
             type="button"
             className="copilot-title copilot-title-toggle"
-            onClick={onToggleCollapseDesktop}
+            onClick={handleToggleCollapseDesktopOnly}
             title="收合"
             aria-label="收合"
           >

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, memo } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { IconCopy, IconCheck } from './Icons';
 
@@ -9,26 +9,37 @@ interface CopyCardProps {
   className?: string;
 }
 
-export const CopyCard: React.FC<CopyCardProps> = ({
+export const CopyCard: React.FC<CopyCardProps> = memo(function CopyCard({
   label,
   value,
   hint = '點擊複製',
   className = '',
-}) => {
+}: CopyCardProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     const success = await copyToClipboard(value);
     if (success) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  };
+  }, [value]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        void handleCopy();
+      }
+    },
+    [handleCopy]
+  );
 
   return (
     <div
       className={`copy-card ${className}`}
-      onClick={handleCopy}
+      onClick={() => void handleCopy()}
+      onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
       title="點擊複製到剪貼簿"
@@ -52,4 +63,4 @@ export const CopyCard: React.FC<CopyCardProps> = ({
       </div>
     </div>
   );
-};
+});

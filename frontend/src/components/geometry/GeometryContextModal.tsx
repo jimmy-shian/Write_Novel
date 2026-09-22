@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GeometryNodeDto, NodeContextPackage } from '../../types/geometry';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
@@ -12,6 +12,22 @@ interface GeometryContextModalProps {
   onFetchContext: (nodeId: string) => Promise<NodeContextPackage | null>;
 }
 
+// 模組級快取：同節點二次點開秒開，不再打後端全圖編譯
+const contextCache = new Map<string, NodeContextPackage>();
+
+export function getCachedGeometryContext(nodeId: string): NodeContextPackage | null {
+  return contextCache.get(nodeId) ?? null;
+}
+
+export function setCachedGeometryContext(nodeId: string, pkg: NodeContextPackage): void {
+  // 簡單 LRU：超過 100 個節點清掉最舊的，避免長篇常駐爆記憶體
+  if (!contextCache.has(nodeId) && contextCache.size >= 100) {
+    const oldest = contextCache.keys().next().value;
+    if (oldest) contextCache.delete(oldest);
+  }
+  contextCache.set(nodeId, pkg);
+}
+
 export const GeometryContextModal: React.FC<GeometryContextModalProps> = ({
   isOpen,
   onClose,
@@ -20,31 +36,52 @@ export const GeometryContextModal: React.FC<GeometryContextModalProps> = ({
 }) => {
   const [pkg, setPkg] = useState<NodeContextPackage | null>(null);
   const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
+
+  const nodeId = node?.node_id ?? null;
 
   useEffect(() => {
-    if (!isOpen || !node) {
-      setPkg(null);
+    if (!isOpen || !nodeId) return;
+    const cached = contextCache.get(nodeId);
+    if (cached) {
+      setPkg(cached);
+      setLoading(false);
       return;
     }
-    let isMounted = true;
+    // 無快取：先顯示客戶端 fallback（秒開），再背景補上後端編譯結果
+    setPkg(null);
     setLoading(true);
-    onFetchContext(node.node_id)
+    const requestId = ++requestIdRef.current;
+    let cancelled = false;
+    onFetchContext(nodeId)
       .then((res) => {
-        if (isMounted) setPkg(res);
+        if (cancelled || requestIdRef.current !== requestId || !res) return;
+        setCachedGeometryContext(nodeId, res);
+        setPkg(res);
+      })
+      .catch(() => {
+        // 保持 fallback 文案，不閃白
       })
       .finally(() => {
-        if (isMounted) setLoading(false);
+        if (!cancelled && requestIdRef.current === requestId) setLoading(false);
       });
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
-  }, [isOpen, node, onFetchContext]);
+  }, [isOpen, nodeId, onFetchContext]);
+
+  const fallbackText = useMemo(() => {
+    if (!node) return '';
+    return `[幾何節點 ${node.node_id}] 結構角色: ${node.structural_role}，所屬章節: 第 ${node.chapter_start}-${node.chapter_end} 章`;
+  }, [node]);
+
+  const geometryOverlayText = useMemo(
+    () => pkg?.geometry_overlay_text || fallbackText,
+    [pkg, fallbackText]
+  );
+  const crossContextText = useMemo(() => pkg?.cross_context_text || '', [pkg]);
 
   if (!isOpen || !node) return null;
-
-  const fullPromptText = pkg
-    ? `${pkg.geometry_overlay_text || ''}\n\n${pkg.cross_context_text || ''}`.trim()
-    : `[幾何節點 ${node.node_id}] 結構角色: ${node.structural_role}，所屬章節: 第 ${node.chapter_start}-${node.chapter_end} 章`;
 
   return (
     <Modal
@@ -70,36 +107,39 @@ export const GeometryContextModal: React.FC<GeometryContextModalProps> = ({
           </span>
         </div>
 
-        {loading ? (
-          <div className="p-8 text-center text-[var(--text-muted)]">
-            編譯幾何結構義務與跨線約束中...
+        {/* Layer 3: Geometry Overlay — 有 fallback 秒開，載入中只在卡片上方顯示小提示，不整塊閃爍 */}
+        <div className="space-y-2">
+          <span className="font-bold text-sm text-[var(--text-primary)]">
+            Layer 3: 幾何結構角色與敘事義務 (Geometry Overlay)
+            {loading && (
+              <span className="ml-2 font-normal text-[11px] text-[var(--text-muted)]">
+                編譯中…
+              </span>
+            )}
+          </span>
+          <CopyCard
+            label="提示詞覆蓋區塊 (點擊一鍵複製)"
+            value={geometryOverlayText}
+          />
+        </div>
+
+        {/* Layer 4: Cross-Relation Context */}
+        {crossContextText ? (
+          <div className="space-y-2">
+            <span className="font-bold text-sm text-[var(--text-primary)]">
+              Layer 4: 跨距線程交織與對照關聯 (Cross Context)
+            </span>
+            <CopyCard
+              label="跨線合流與主題對比約束"
+              value={crossContextText}
+            />
           </div>
         ) : (
-          <>
-            {/* Layer 3: Geometry Overlay */}
-            <div className="space-y-2">
-              <span className="font-bold text-sm text-[var(--text-primary)]">
-                Layer 3: 幾何結構角色與敘事義務 (Geometry Overlay)
-              </span>
-              <CopyCard
-                label="提示詞覆蓋區塊 (點擊一鍵複製)"
-                value={pkg?.geometry_overlay_text || `結構角色: ${node.structural_role}`}
-              />
+          loading && (
+            <div className="p-4 text-center text-[var(--text-muted)]">
+              編譯幾何結構義務與跨線約束中...
             </div>
-
-            {/* Layer 4: Cross-Relation Context */}
-            {pkg?.cross_context_text && (
-              <div className="space-y-2">
-                <span className="font-bold text-sm text-[var(--text-primary)]">
-                  Layer 4: 跨距線程交織與對照關聯 (Cross Context)
-                </span>
-                <CopyCard
-                  label="跨線合流與主題對比約束"
-                  value={pkg.cross_context_text}
-                />
-              </div>
-            )}
-          </>
+          )
         )}
       </div>
     </Modal>

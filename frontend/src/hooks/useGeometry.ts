@@ -127,16 +127,37 @@ export function useGeometry(novelId: string | null, options: UseGeometryOptions 
     [novelId, loadGraph]
   );
 
-  // 取得節點 Context 包裹
+  // 取得節點 Context 包裹（含記憶體快取 + 在途請求去重，避免連點/重渲染狂打後端）
+  const contextCacheRef = useRef(new Map<string, NodeContextPackage>());
+  const inflightRef = useRef(new Map<string, Promise<NodeContextPackage | null>>());
   const fetchNodeContext = useCallback(
     async (nodeId: string): Promise<NodeContextPackage | null> => {
       if (!novelId || !nodeId) return null;
-      try {
-        return await geometryApi.getNodeContext(novelId, nodeId);
-      } catch (err) {
-        console.warn('載入節點 Context 失敗，退回客戶端預覽', err);
-        return null;
-      }
+      const cacheKey = `${novelId}:${nodeId}`;
+      const cached = contextCacheRef.current.get(cacheKey);
+      if (cached) return cached;
+      const inflight = inflightRef.current.get(cacheKey);
+      if (inflight) return inflight;
+      const p = (async () => {
+        try {
+          const res = await geometryApi.getNodeContext(novelId, nodeId);
+          if (res) {
+            if (contextCacheRef.current.size >= 100) {
+              const oldest = contextCacheRef.current.keys().next().value;
+              if (oldest) contextCacheRef.current.delete(oldest);
+            }
+            contextCacheRef.current.set(cacheKey, res);
+          }
+          return res;
+        } catch (err) {
+          console.warn('載入節點 Context 失敗，退回客戶端預覽', err);
+          return null;
+        } finally {
+          inflightRef.current.delete(cacheKey);
+        }
+      })();
+      inflightRef.current.set(cacheKey, p);
+      return p;
     },
     [novelId]
   );
