@@ -175,7 +175,7 @@ def _director_decision_needs_recovery(parsed, current_stage=None, novel_id=None)
     if action == "TOOL_CALL" or "tool_call" in parsed:
         tool_call = parsed.get("tool_call") or {}
         tool_name = tool_call.get("tool_name")
-        if not tool_name or tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry"}:
+        if not tool_name or tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry", "dispatch_foreshadowing_quota"}:
             return True
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
@@ -269,7 +269,7 @@ def _get_director_decision_error_message(parsed, raw_text, current_stage=None, n
         tool_name = tool_call.get("tool_name")
         if not tool_name:
             return "當 action 為 TOOL_CALL 時，必須在 'tool_call' 下指定 'tool_name' 欄位。請指定有效的工具名稱。"
-        if tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry"}:
+        if tool_name not in {"invoke_sub_agent", "evaluate_output", "supplement_content", "inspect_content_block", "expand_collapsed_json", "goto_generation_position", "repair_story_geometry", "dispatch_foreshadowing_quota"}:
             return f"未知的總監工具名稱：{tool_name}。請使用合法的工具名稱。"
     target = str(parsed.get("target") or "").lower()
     text = json.dumps(parsed, ensure_ascii=False)
@@ -818,6 +818,12 @@ def run_director_decision(
                 from backend.services.director.tools import repair_story_geometry
                 result = repair_story_geometry(novel_id=novel_id, **params)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[幾何修復結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
+                tool_followup_context = _build_tool_followup_context(tool_name, params, result)
+
+            elif tool_name == "dispatch_foreshadowing_quota":
+                from backend.services.director.tools import dispatch_foreshadowing_quota
+                result = dispatch_foreshadowing_quota(novel_id=novel_id, **params)
+                yield "data: " + json.dumps({"type": "content", "delta": f"\n[伏筆配額派發結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             else:

@@ -30,6 +30,10 @@ TOOL_REGISTRY = {
         "description": "【敘事幾何修復工具】：僅限符合以下4大重大條件之一時調用：1.密度超載(>=3轉折或>=4伏筆或2場景跳躍+1人物轉折) 2.因果斷層(缺B必須INSERT橋接章) 3.收束撞車(同卷收>=2大線+卷末高潮，3節點不夠需EXPAND 3->5) 4.章數膨脹(volume.chapter_count需調整重排)。操作支援 SPLIT, EXPAND, INSERT, COMPRESS。未符合4條件一律不准加節點，改走舊 evaluate_output 打回重寫。",
         "parameters": ["novel_id", "operation", "condition", "target_nodes", "reason", "detail", "gatekeeper_context"],
     },
+    "dispatch_foreshadowing_quota": {
+        "description": "【伏筆配額派發工具】：由總監依據全書宏觀架構與分卷節奏，為指定卷或全書派發伏筆埋設(plants)、伏筆回收(payoffs)與關鍵轉折(turns)任務。Python 做剛性夾具驗證（1<=plant<payoff<=T、章號在卷區間內）。取代舊版隨機分配演算法。",
+        "parameters": ["novel_id", "volume_index", "plants", "payoffs", "turns"],
+    },
 }
 
 def export_tools() -> Dict[str, Any]:

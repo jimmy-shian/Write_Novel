@@ -345,7 +345,12 @@ VOLUME_SCHEMA = {
     "chapter_count": 50,
     "time_timeline": "",
     "sequence_context": "",
-    "applicable_rules": []
+    "applicable_rules": [],
+    "foreshadowing_quota": {
+        "target_plants": 0,
+        "target_payoffs": 0,
+        "target_turns": 0,
+    },
 }
 
 VOLUMES_LIST_SCHEMA = []

@@ -6,3 +6,4 @@ from backend.services.director.tool_registry.supplement import supplement_conten
 from backend.services.director.tool_registry.inspect import inspect_content_block, expand_collapsed_json
 from backend.services.director.tool_registry.navigator import goto_generation_position
 from backend.services.director.tool_registry.geometry_repair import repair_story_geometry
+from backend.services.director.tool_registry.foreshadowing_dispatch import dispatch_foreshadowing_quota

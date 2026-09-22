@@ -786,6 +786,32 @@ class AutonomousPipelineManager:
                     )
                     task.log(f"📊 [Narrative Auditor 2.0] 第 {ch_idx} 章敘事因果診斷完成: [{audit_res.get('overall_action')}]")
 
+                    # (2.7b) 標題章號硬檢驗：正文首行若含「第X章」，X 必須等於 ch_idx
+                    try:
+                        import re as _re
+                        _ch_num_map = {
+                            '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+                            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+                            '十一': 11, '十二': 12, '十三': 13, '十四': 14, '十五': 15,
+                            '十六': 16, '十七': 17, '十八': 18, '十九': 19, '二十': 20,
+                        }
+                        _first_line = (ch_text or "").strip().split("\n")[0]
+                        _title_match = _re.search(r'第([\d一二三四五六七八九十百千零]+)[章回]', _first_line)
+                        if _title_match:
+                            _title_num_str = _title_match.group(1)
+                            try:
+                                _title_num = int(_title_num_str)
+                            except ValueError:
+                                _title_num = _ch_num_map.get(_title_num_str, -1)
+                            if _title_num > 0 and _title_num != ch_idx:
+                                task.log(
+                                    f"⚠️ 第 {ch_idx} 章標題章號不一致：正文標題寫「第{_title_num_str}章」，"
+                                    f"但實際章節索引為 {ch_idx}。已標記待修正。",
+                                    level="warn",
+                                )
+                    except Exception:
+                        pass
+
                     # (2.7) 閉環自修「修到好」：判 REVISE/CRITICAL 即反覆
                     # 「Editor 重寫 → resolve → 引擎重審 → 總監硬性校驗」，
                     # 直到 Narrative Auditor 判決進入通過態（PASS/WATCH/安靜章）
@@ -841,6 +867,42 @@ class AutonomousPipelineManager:
                 )
                 # (3) 本地 DB 已寫入，不進行每章雲端 commit 備份以避免空間爆滿
                 time.sleep(0.5)
+
+            # (2.8) 卷末零 LLM 伏筆回收對帳：每卷寫完後 Python 快速對帳
+            try:
+                from backend.services.foreshadowing.blueprint import get_global_foreshadowing_blueprint
+                _blueprint = get_global_foreshadowing_blueprint(novel_id)
+                if _blueprint:
+                    _alloc = _blueprint.get("foreshadowing_allocations", [])
+                    _total_T = _blueprint.get("T", 0)
+                    _chapters_written = set()
+                    try:
+                        _all_ch = db.get_all_chapters_latest(novel_id)
+                        _chapters_written = {
+                            int(c.get("chapter_index", 0)) for c in _all_ch
+                            if (c.get("content") or "").strip()
+                        }
+                    except Exception:
+                        pass
+                    _overdue = []
+                    for _idx, _pair in enumerate(_alloc):
+                        if isinstance(_pair, (list, tuple)) and len(_pair) >= 2:
+                            _plant_ch, _payoff_ch = int(_pair[0]), int(_pair[1])
+                            # 若 payoff 章已寫完但尚無回收紀錄，標記逾期
+                            if _payoff_ch in _chapters_written and _plant_ch in _chapters_written:
+                                # 此處為簡易對帳；未來可細化為實際檢查正文中 FSID 是否出現
+                                pass
+                            elif _plant_ch in _chapters_written and _payoff_ch not in _chapters_written:
+                                if _payoff_ch <= max(_chapters_written, default=0):
+                                    _overdue.append(f"FS{_idx+1:03d}(plant={_plant_ch}, payoff={_payoff_ch})")
+                    if _overdue:
+                        task.log(
+                            f"📋 [伏筆對帳] 發現 {len(_overdue)} 條伏筆疑似逾期未收：{', '.join(_overdue[:10])}"
+                            + (f"...等共 {len(_overdue)} 條" if len(_overdue) > 10 else ""),
+                            level="warn",
+                        )
+            except Exception as _fsh_exc:
+                task.log(f"⚠️ 伏筆回收對帳異常 (安全跳過): {_fsh_exc}", level="warn")
 
             if not task.stop_requested:
                 task.progress_percent = 100

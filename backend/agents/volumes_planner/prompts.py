@@ -145,7 +145,7 @@ def build_volumes_planner_messages(worldview_text, existing_vols, user_prompt, h
 2. 角色弧線與矛盾焦點：
    - 各卷的主導衝突原型應與核心角色的人設定位與核心追求（want）緊密對齊。
 3. 伏筆收束與轉折爆發：
-   - 各卷的轉折高潮應承接伏筆網絡中的關鍵埋設與收束。
+   - 各卷的轉折高潮應承接伏筆網絡中的關鍵埋設與收束。每卷輸出時請帶有 `foreshadowing_quota` 槽位，標註本卷之 `target_plants`（預計埋設數）、`target_payoffs`（預計回收數）與 `target_turns`（關鍵轉折數）。
 4. 篇卷衝突原型：
    - 每卷明確指定其主導衝突原型，相鄰篇卷展現不同層次的矛盾衝突。
 5. 反套路思考：
