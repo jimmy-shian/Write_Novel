@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Graphiti-inspired Temporal Knowledge Graph Repository.
 Handles Episodes, Entities, and Facts with temporal validity windows (valid_from / invalid_from).
@@ -148,6 +148,38 @@ def add_fact(
         "target_entity_id": target_entity_id,
         "relation_type": relation_type,
         "episode_id": episode_id
+    }
+
+
+def record_temporal_fact(
+    novel_id: str,
+    statement: str,
+    valid_from: int = 1,
+    invalid_from: Optional[int] = None,
+    source_entity_id: Optional[str] = None,
+    target_entity_id: Optional[str] = None,
+    relation_type: Optional[str] = None,
+    episode_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """快捷寫入時序事實記錄 (相容測試與外部介面)"""
+    fact_id = f"fact_{uuid.uuid4().hex[:12]}"
+    conn = get_db_connection()
+    is_active = 0 if invalid_from is not None else 1
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO temporal_facts (
+            id, novel_id, source_entity_id, target_entity_id, relation_type,
+            fact_statement, valid_from_chapter, invalid_from_chapter, is_active, superseded_by, episode_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+    """, (fact_id, novel_id, source_entity_id, target_entity_id, relation_type, statement, valid_from, invalid_from, is_active, episode_id))
+    conn.commit()
+    return {
+        "id": fact_id,
+        "novel_id": novel_id,
+        "fact_statement": statement,
+        "valid_from_chapter": valid_from,
+        "invalid_from_chapter": invalid_from,
+        "is_active": bool(is_active)
     }
 
 def invalidate_fact(fact_id: str, invalid_from_chapter: int, superseded_by: Optional[str] = None) -> bool:

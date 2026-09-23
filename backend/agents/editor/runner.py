@@ -14,7 +14,8 @@ import traceback
 from functools import partial
 
 from backend import persistence as db
-from backend.common.llm import call_llm_stream
+from backend.common import llm
+call_llm_stream = llm.call_llm_stream
 from backend.common.utils import StreamAccumulator
 from backend.schemas.constraints import load_retrospective_gold_rules
 from backend.agents.editor.prompts import (
@@ -45,6 +46,9 @@ def _is_llm_failure_output(text: str) -> bool:
     此檢查僅攔截明顯的 LLM 系統失敗模式，不做固定比例的語言判斷。
     """
     if not text or len(text.strip()) < 100:
+        return True
+    from backend.common.refusal_filter import is_refusal_or_disclaimer
+    if is_refusal_or_disclaimer(text):
         return True
     # 命中已知英文佔位句模式
     if _LLM_FAILURE_RE.search(text[:500]):
@@ -95,7 +99,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             scene_contract_or_outline=outline,
             editor_context=editor_context,
         )
-        reviewer_iter = call_llm_stream("editor", reviewer_messages, stream=False, force_json=True)
+        reviewer_iter = llm.call_llm_stream("editor", reviewer_messages, stream=False, force_json=True)
         reviewer_acc = StreamAccumulator(reviewer_iter)
         for _ in reviewer_acc:
             pass
@@ -141,7 +145,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             edit_instructions=edit_instructions,
             editor_context=editor_context,
         )
-        stream_iter = call_llm_stream("editor", rewriter_messages, stream=stream, force_json=False)
+        stream_iter = llm.call_llm_stream("editor", rewriter_messages, stream=stream, force_json=False)
         messages = rewriter_messages  # 供 save_last_agent_run 使用
     else:
         # 路徑 B：單次拋光 — 原稿品質良好，只做細微潤色
@@ -151,11 +155,14 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             original_prose=original_prose,
             editor_context=editor_context,
         )
-        stream_iter = call_llm_stream("editor", messages, stream=stream, force_json=force_json)
+        stream_iter = llm.call_llm_stream("editor", messages, stream=stream, force_json=force_json)
 
     acc = StreamAccumulator(stream_iter)
     for chunk in acc:
-        yield chunk
+        if isinstance(chunk, dict):
+            yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+        else:
+            yield chunk
 
     full_text = acc.content
     if full_text.strip():
@@ -173,17 +180,24 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
 
+        from backend.common.refusal_filter import is_refusal_or_disclaimer, sanitize_meta_narrative
+        if is_refusal_or_disclaimer(cleaned_text):
+            err_msg = f"第 {chapter_index} 章編輯輸出包含 AI 拒答或安全免責聲明，本次丟棄並保留原稿。"
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
         # LLM 失敗模式偵測：若輸出為英文佔位句或過短，丟棄並保留原稿
         if _is_llm_failure_output(cleaned_text):
             print(f"[EditorAgent] LLM failure detected for chapter {chapter_index}: output discarded, original preserved.")
             yield "data: " + json.dumps({
-                "type": "status",
+                "type": "error",
                 "message": f"⚠️ 第 {chapter_index} 章編輯輸出偵測到 LLM 失敗模式（英文佔位或過短），已丟棄異常輸出並保留原稿。",
             }, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
 
-        final_prose = cleaned_text if cleaned_text else full_text
+        final_prose = sanitize_meta_narrative(cleaned_text if cleaned_text else full_text)
 
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,

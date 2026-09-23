@@ -9,7 +9,7 @@ import json
 import threading
 import time
 import datetime
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Union
 
 from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
@@ -17,14 +17,15 @@ from backend.generation.routing.router import execute_generation_task
 from backend.services.graphiti.extractor import ChapterFactExtractor
 from backend.common.config import VOLUME_SKELETON_BATCH_SIZE, MIN_VOLUME_COUNT
 from backend.schemas.validation import split_consecutive_batches
+from backend.common.refusal_filter import is_refusal_or_disclaimer
 
 
 class NovelPipelineTask:
     """單本小說的自主生成任務狀態實例"""
 
-    def __init__(self, novel_id: str, novel_title: str):
+    def __init__(self, novel_id: str, novel_title: str = ""):
         self.novel_id = novel_id
-        self.novel_title = novel_title
+        self.novel_title = novel_title or novel_id
         self.is_running = False
         self.stop_requested = False
         self.current_stage = "idle"
@@ -78,10 +79,14 @@ class NovelPipelineTask:
         }
 
 
+GenerationTaskState = NovelPipelineTask
+
+
 class AutonomousPipelineManager:
     """多小說並行無人值守管理器 (單例模式)"""
     _instance = None
     _lock = threading.Lock()
+    execute_generation_task = staticmethod(execute_generation_task)
 
     def __new__(cls):
         with cls._lock:
@@ -156,6 +161,8 @@ class AutonomousPipelineManager:
                 "active_tasks_count": 0,
                 "active_tasks": [],
             }
+
+    get_task_status = get_status
 
     def start_pipeline(self, novel_id: str, prompt: str = "", max_chapters: int = 5) -> Dict[str, Any]:
         with self._lock:
@@ -248,28 +255,51 @@ class AutonomousPipelineManager:
     def _execute_stage_with_retry(
         self,
         task: NovelPipelineTask,
-        stage: str,
-        task_type: str,
-        instruction: str,
-        user_prompt: str,
+        stage: str = "writer",
+        task_type: Union[str, Dict[str, Any]] = "generate",
+        instruction: Union[str, Callable[[], bool]] = "",
+        user_prompt: str = "",
         scope: str = "global",
         target: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         verify_fn: Optional[Callable[[], bool]] = None,
         max_retries: int = 5,
+        stage_name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> Any:
         """具備指數退避自動重試、防卡死機制與實質資料庫校驗的 Stage 執行器"""
+        if stage_name:
+            stage = stage_name
+        if payload and isinstance(payload, dict):
+            if not target:
+                target = payload
+            elif isinstance(target, dict):
+                target.update(payload)
+        # 兼容彈性參數呼叫（例如 (task, stage, target_dict, verify_fn, max_retries=...)）
+        if isinstance(task_type, dict):
+            target = task_type
+            task_type = "generate"
+            if callable(instruction):
+                verify_fn = instruction
+                instruction = ""
+        elif callable(instruction) and verify_fn is None:
+            verify_fn = instruction
+            instruction = ""
+
         last_exc = None
         for attempt in range(1, max_retries + 1):
             if task.stop_requested:
                 return None
             try:
+                ch_target = target.get("chapter_index") if isinstance(target, dict) else None
                 payload = {
                     "novel_id": task.novel_id,
                     "task_type": task_type,
                     "stage": stage,
                     "scope": scope,
                     "target": target or {},
+                    "chapter_index": ch_target,
                     "context_mode": "full",
                     "instruction": instruction,
                     "user_prompt": user_prompt,
@@ -283,10 +313,11 @@ class AutonomousPipelineManager:
                 if extra_body:
                     payload.update(extra_body)
 
-                resp = execute_generation_task(payload)
-                if not resp or not resp.ok:
-                    err_detail = resp.error if resp else "Empty response returned from generation router"
-                    raise RuntimeError(err_detail)
+                exec_fn = getattr(self, "execute_generation_task", execute_generation_task)
+                resp = exec_fn(payload)
+                if not resp or not getattr(resp, "ok", False):
+                    err_detail = getattr(resp, "error", None) if resp else "Empty response returned from generation router"
+                    raise RuntimeError(err_detail or "Generation task execution failed")
 
                 # 實質校驗：確認該階段所需的成品已真正寫入資料庫
                 if verify_fn and not verify_fn():
@@ -296,6 +327,12 @@ class AutonomousPipelineManager:
 
             except Exception as exc:
                 last_exc = exc
+                if stage in ("chapter", "writer") and target and target.get("chapter_index"):
+                    try:
+                        db.rollback_or_purge_chapter(task.novel_id, int(target["chapter_index"]))
+                        task.log(f"🧹 已清除第 {target['chapter_index']} 章未通過或異常之草稿，準備重試...", level="warn")
+                    except Exception:
+                        pass
                 if attempt >= max_retries or task.stop_requested:
                     raise last_exc
                 delay = min(25, 3 * attempt)
@@ -563,9 +600,14 @@ class AutonomousPipelineManager:
             task.total_chapters = total_target
             task.log(f"進入正文寫作流水線，全書共規劃 {total_target} 章節")
 
-            # 讀取目前資料庫已存在且有內容的章節
             existing_db_chapters = db.get_chapters(novel_id)
-            written_indices = {int(c.get("chapter_index") or 0) for c in existing_db_chapters if c.get("content") and len(c.get("content", "").strip()) > 50}
+            written_indices = {
+                int(c.get("chapter_index") or 0)
+                for c in existing_db_chapters
+                if c.get("content")
+                and len(c.get("content", "").strip()) >= 50
+                and not is_refusal_or_disclaimer(c.get("content", ""))
+            }
 
             for ch_idx in range(1, total_target + 1):
                 if task.stop_requested:
@@ -1048,7 +1090,7 @@ def _is_chapter_written(novel_id: str, chapter_index: int) -> bool:
     for c in chapters:
         if int(c.get("chapter_index") or 0) == chapter_index:
             content = (c.get("content") or "").strip()
-            if len(content) >= 50:
+            if len(content) >= 50 and not is_refusal_or_disclaimer(content):
                 return True
     return False
 

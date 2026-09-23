@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Draft Proposals Repository.
 Stores AI draft suggestions and review checklists for human review before final application.
@@ -15,6 +15,10 @@ def create_proposal(
     original_text: str = "",
     review_comments: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
+    from backend.common.refusal_filter import assert_not_refusal
+    if proposed_text and str(proposed_text).strip():
+        assert_not_refusal(str(proposed_text), f"Proposal Chapter {chapter_index}")
+
     proposal_id = f"prop_{uuid.uuid4().hex[:12]}"
     conn = get_db_connection()
     cursor = conn.cursor()

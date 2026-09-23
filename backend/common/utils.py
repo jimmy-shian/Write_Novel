@@ -177,7 +177,7 @@ class StreamAccumulator:
 
     def __next__(self):
         chunk = next(self._gen)
-        if chunk.startswith("data:"):
+        if isinstance(chunk, str) and chunk.startswith("data:"):
             try:
                 data = json.loads(chunk[5:].strip())
                 if data.get("type") == "content":
@@ -188,6 +188,15 @@ class StreamAccumulator:
                     self._error = data.get("message") or "LLM API Error"
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
+        elif isinstance(chunk, dict):
+            if "text" in chunk:
+                self._content.append(str(chunk["text"]))
+            elif "delta" in chunk:
+                self._content.append(str(chunk["delta"]))
+            elif "content" in chunk:
+                self._content.append(str(chunk["content"]))
+            if chunk.get("type") == "error":
+                self._error = chunk.get("message") or "LLM API Error"
         return chunk
 
     @property

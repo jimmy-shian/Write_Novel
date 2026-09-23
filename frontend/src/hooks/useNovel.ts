@@ -44,6 +44,15 @@ export function useNovel() {
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 追蹤最新章節游標（供清空等非同步流程使用，避免閉包拿到舊值）
+  const activeChapterIndexRef = useRef(activeChapterIndex);
+  useEffect(() => {
+    activeChapterIndexRef.current = activeChapterIndex;
+  }, [activeChapterIndex]);
+
+  // 清空流程中禁止 selectChapter 的自動儲存，避免把已刪除的舊正文寫回後端
+  const suppressAutosaveRef = useRef(false);
+
   // Load novel list on mount
   const refreshNovels = useCallback(async () => {
     try {
@@ -174,8 +183,8 @@ export function useNovel() {
     (chapterIdx: number) => {
       if (chapterIdx === activeChapterIndex) return;
 
-      // Auto-save previous chapter if dirty
-      if (isDirty && activeNovelId) {
+      // Auto-save previous chapter if dirty (清空流程中停用，避免復活已刪章節)
+      if (isDirty && activeNovelId && !suppressAutosaveRef.current) {
         saveChapter(activeNovelId, activeChapterIndex, editorContent).catch(console.error);
       }
 
@@ -301,18 +310,49 @@ export function useNovel() {
   );
 
   // Reset novel generated content (selective scopes supported)
+  // 直接抓取清空後的最新詳情並原子重置編輯區，避免 App 層用舊 novelDetail 的
+  // selectChapter(1) 把舊正文寫回顯示區（清空後需手動整理才消失的 bug）。
   const handleResetNovelContent = useCallback(
     async (id: string, scopes?: string[]) => {
+      suppressAutosaveRef.current = true;
+      setIsLoading(true);
       try {
         await resetNovelContent(id, scopes);
-        await refreshActiveNovel();
+        const data = await getNovel(id);
+        setNovelDetail(data);
+
+        const chaptersCleared =
+          !scopes || scopes.length === 0 || scopes.includes('all') || scopes.includes('chapters');
+        if (chaptersCleared) {
+          // 章節游標歸 1 並清空編輯區（後端此時已無章節，不依賴舊快照找文）
+          setActiveChapterIndex(1);
+          try {
+            localStorage.setItem(`writenovel_last_chapter_${id}`, '1');
+          } catch {
+            /* 忽略 storage 寫入失敗 */
+          }
+          setEditorContent('');
+          setOriginalContent('');
+          setIsDirty(false);
+        } else {
+          // 未勾選章節清除：保留目前章節游標，顯示後端最新正文
+          const cur = activeChapterIndexRef.current;
+          const ch = data.chapters?.find((c) => c.chapter_index === cur);
+          const text = ch ? ch.content : '';
+          setEditorContent(text);
+          setOriginalContent(text);
+          setIsDirty(false);
+        }
         await refreshNovels();
       } catch (err: any) {
         setErrorMessage(err.message || '清空小說生成內容失敗');
         throw err;
+      } finally {
+        suppressAutosaveRef.current = false;
+        setIsLoading(false);
       }
     },
-    [refreshActiveNovel, refreshNovels]
+    [refreshNovels]
   );
 
   // Modular auto-persisting mutations for Worldbuilding

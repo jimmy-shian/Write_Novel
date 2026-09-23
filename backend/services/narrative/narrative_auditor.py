@@ -35,6 +35,15 @@ class NarrativeAuditor:
         (r"(?:這一切|這場遊戲|這局棋)(?:，|,)?(?:才剛剛?開始|僅僅是個開始)", "公式化宣言句式"),
     ]
 
+    # 通用公式化開篇模式（套路環境/微動作/模板開場）
+    FORMULAIC_OPENING_PATTERNS = [
+        (r"網咖.*?(?:泡麵|屏幕|鍵盤|機箱|煙味|汗水)", "cyber_cafe", "網咖/廉價泡麵/電腦屏幕定型開頭"),
+        (r"(?:老舊的|逼仄.*?|斑駁.*?)?霓虹招牌.*?(?:滋滋|光暈|雨水|微弱|閃爍)", "neon_buzzing", "霓虹招牌滋滋作響套路開局"),
+        (r"(?:刺耳的)?(?:鬧鐘|鐘聲|鬧鈴).*?(?:驚醒|醒來|冷汗|心臟)", "alarm_waking", "鬧鐘驚醒/冷汗心悸套路開局"),
+        (r"(?:窗外|夜雨|暴雨|大雨).*?(?:暴雨|灰濛濛|拍打|水窪|壓抑)", "rain_weather", "窗外陰雨/拍打玻璃天氣開場"),
+        (r"(?:酒館|酒吧).*?(?:玻璃杯|酒保|冰塊|碰撞)", "bar_whiskey", "酒館/擦拭玻璃杯定型開局"),
+    ]
+
     # 通用抽象公式化結尾模式（預言/宣告/宏大抒情，而非現場實質情節動作）
     FORMULAIC_ENDING_PATTERNS = [
         (r"(?:風暴|暴風雨|波瀾|暗湧|序幕|帷幕|輪迴|變革|血雨腥風|動盪|深淵|黑暗).*?(?:拉開|落下|將至|降臨|展開|醞釀|到來|重啟|吞噬)", "宏大預言/風暴序幕套路結尾"),
@@ -42,6 +51,233 @@ class NarrativeAuditor:
         (r"等待著?(?:他|她|他們|這座.*?|整個.*?)(?:的)?(?:，|,)?(?:將是|又是).*?", "「等待著他的將是」宣告式收束"),
         (r"(?:命運|歷史).*?(?:齒輪|車輪|筆觸|天平).*?(?:轉動|落下|開啟|傾斜)", "命運齒輪抽象宏大宣告"),
     ]
+
+    @classmethod
+    def _check_opening_repetition(
+        cls,
+        novel_id: str,
+        chapter_index: int,
+        prose_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        """動態檢測章節開篇是否陷入公式化模板開局，或與近期章節連續出現同類開篇模式。"""
+        if not prose_text or len(prose_text.strip()) < 20:
+            return None
+
+        opening_snippet = prose_text.strip()[:400]
+        cur_cliche_key = None
+        cur_cliche_label = None
+
+        for pat, key, label in cls.FORMULAIC_OPENING_PATTERNS:
+            if re.search(pat, opening_snippet):
+                cur_cliche_key = key
+                cur_cliche_label = label
+                break
+
+        if not cur_cliche_key:
+            # Check 2-gram similarity with immediate previous chapter's opening
+            if chapter_index > 1:
+                try:
+                    prev_ch = db.get_latest_chapter(novel_id, chapter_index - 1)
+                    if prev_ch and (prev_ch.get("content") or "").strip():
+                        prev_open = prev_ch["content"].strip()[:100]
+                        cur_open = opening_snippet[:100]
+                        prev_first = re.split(r"[。！？\n]", prev_open)[0].strip()
+                        cur_first = re.split(r"[。！？\n]", cur_open)[0].strip()
+                        if len(prev_first) >= 15 and len(cur_first) >= 15:
+                            prev_2grams = set(prev_first[i:i+2] for i in range(len(prev_first) - 1))
+                            cur_2grams = set(cur_first[i:i+2] for i in range(len(cur_first) - 1))
+                            if prev_2grams and cur_2grams:
+                                overlap = len(prev_2grams & cur_2grams) / min(len(prev_2grams), len(cur_2grams))
+                                if overlap >= 0.50:
+                                    return {
+                                        "dimension": "voice_integrity",
+                                        "severity": "warning",
+                                        "evidence": f"連續跨章（第 {chapter_index - 1} 章與本章）開篇存在極高句式與詞彙重合（重疊度 {int(overlap * 100)}%）。",
+                                        "recommendation": "開篇應避免連續跨章套用相同切入點模式，請更換全新感官、對白或突發行動入局。",
+                                        "action_required": True,
+                                    }
+                except Exception:
+                    pass
+            return None
+
+        # 檢查近期章節（前 1~3 章）開頭是否也有相同套路
+        consecutive_count = 1
+        prev_examples = []
+        try:
+            for prev_idx in range(max(1, chapter_index - 3), chapter_index):
+                prev_ch = db.get_latest_chapter(novel_id, prev_idx)
+                if prev_ch and (prev_ch.get("content") or "").strip():
+                    prev_open = prev_ch["content"].strip()[:400]
+                    for pat, key, label in cls.FORMULAIC_OPENING_PATTERNS:
+                        if key == cur_cliche_key and re.search(pat, prev_open):
+                            consecutive_count += 1
+                            prev_examples.append(f"第 {prev_idx} 章（{label}）")
+                            break
+        except Exception:
+            pass
+
+        if consecutive_count >= 2:
+            return {
+                "dimension": "voice_integrity",
+                "severity": "warning",
+                "evidence": f"本章開篇命中「{cur_cliche_label}」；且近 3 章中已有 {', '.join(prev_examples)} 採用同類定型開局。",
+                "recommendation": "開篇嚴禁連續跨章復用相同場景切入點或環境套路，請更換全新視角、對白或突發行動入局。",
+                "action_required": True,
+            }
+        else:
+            return {
+                "dimension": "voice_integrity",
+                "severity": "watch",
+                "evidence": f"本章開篇出現模板化場景起筆（{cur_cliche_label}）。",
+                "recommendation": "建議開篇嘗試更豐富多元的切入方式（如行動中入局、對白切入），避免單一套路起筆。",
+                "action_required": False,
+            }
+
+    @classmethod
+    def _check_meta_narrative_leak(cls, prose_text: str) -> Optional[Dict[str, Any]]:
+        """檢測正文是否洩漏大綱標籤、上一章銜接語等元文本 (Meta-Narrative Leakage)。"""
+        if not prose_text:
+            return None
+        patterns = [
+            (r"(?:那是|正如|承接|延續|接續)?(?:上一章|前一章|上回|上一回)(?:情節|內容|所述|發生的事|在|中)?", "上一章/前一章元敘事銜接"),
+            (r"在上一章中", "在上一章中元評論"),
+            (r"【(?:場景目標|核心阻礙|轉折點|推進拍點|本章任務|視角人物|知情邊界|實質狀態位移)】", "大綱結構化標籤洩漏"),
+            (r"(?:作者|筆者|旁白|寫作者)(?:在此|向讀者|不得不|需要|特此)?(?:向讀者)?(?:說明|提示|解釋|強調|告誡)", "作者破壁發言/第四面牆打破"),
+            (r"向讀者(?:說明|交代|解釋|揭示)", "向讀者元評論"),
+        ]
+        for pat, label in patterns:
+            for m in re.finditer(pat, prose_text):
+                match_span = m.group(0)
+                start_pos = m.start()
+                # Exclude in-world book/scroll references like "這卷古籍的上一章節"
+                surrounding = prose_text[max(0, start_pos - 30):min(len(prose_text), start_pos + len(match_span) + 30)]
+                if re.search(r"(?:古籍|經卷|典籍|書籍|古冊|殘卷|書卷|卷軸|秘笈|魔導書|書中|冊中|筆記)的?(?:上一章|前一章|上一節|上一回)", surrounding):
+                    continue
+                return {
+                    "dimension": "meta_narrative_leak",
+                    "severity": "critical",
+                    "evidence": f"正文檢測到破壁元敘事或大綱標籤洩漏：「{match_span}」（{label}）。",
+                    "recommendation": "正文嚴禁出現『上一章』、第四面牆打破或大綱標籤等元文本；小說必須100%處於沉浸式故事世界內部，禁止旁白對讀者或寫作大綱進行元評論。",
+                    "action_required": True,
+                }
+        return None
+
+    @classmethod
+    def _check_terms_compliance(cls, novel_id: str, prose_text: str) -> Optional[Dict[str, Any]]:
+        """檢查術語庫名詞是否被近義詞隨意替換或未嚴格遵守唯一性。"""
+        if not novel_id or not prose_text:
+            return None
+        try:
+            terms = db.get_terms(novel_id)
+            if not terms:
+                return None
+            SYNONYM_REPLACEMENTS = {
+                "靈能": ["法力", "真氣", "內力", "魔法值"],
+                "星能": ["能量", "核能", "靈力"],
+                "超元": ["超能", "異能"],
+                "真元": ["真氣", "內力", "魔力", "法力", "靈力"],
+            }
+            for t in terms:
+                term_name = t.get("term", "")
+                if not term_name:
+                    continue
+                synonyms = SYNONYM_REPLACEMENTS.get(term_name, [])
+                for syn in synonyms:
+                    if syn in prose_text and term_name not in prose_text:
+                        return {
+                            "dimension": "terms_compliance",
+                            "severity": "warning",
+                            "evidence": f"檢測到使用近義詞「{syn}」代替登錄術語「{term_name}」",
+                            "recommendation": f"請將全篇「{syn}」修改為術語庫標準名稱「{term_name}」，嚴禁隨意使用近義詞換皮。",
+                            "action_required": True,
+                        }
+                # Corrupted proper noun fuzzy check (length >= 4)
+                if len(term_name) >= 4 and term_name not in prose_text:
+                    prefix = term_name[:2]
+                    suffix = term_name[-2:]
+                    pat = rf"{prefix}[\u4e00-\u9fa5]{{1,2}}{suffix}"
+                    fuzzy_match = re.search(pat, prose_text)
+                    if fuzzy_match and fuzzy_match.group(0) != term_name:
+                        corrupted = fuzzy_match.group(0)
+                        return {
+                            "dimension": "terms_compliance",
+                            "severity": "warning",
+                            "evidence": f"檢測到疑似錯訛或擅改之專有名詞「{corrupted}」（登錄術語為「{term_name}」）",
+                            "recommendation": f"請將「{corrupted}」修正為標準專有名詞「{term_name}」，嚴禁隨意變造字詞。",
+                            "action_required": True,
+                        }
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def _check_temporal_fact_compliance(
+        cls, novel_id: str, chapter_index: int, prose_text: str
+    ) -> Optional[Dict[str, Any]]:
+        """檢查正文是否違反時序記憶圖譜事實（如陣亡角色復活、已破壞物品復現）。"""
+        if not novel_id or not prose_text:
+            return None
+        try:
+            facts = db.get_all_facts(novel_id)
+            if not facts:
+                return None
+            for f in facts:
+                inv_ch = f.get("invalid_from_chapter")
+                stmt = f.get("fact_statement", "")
+                if inv_ch is not None and chapter_index >= inv_ch and stmt:
+                    m = re.search(r"([\u4e00-\u9fa5]{2,6}).*?(?:戰死|身亡|犧牲|隕落|死亡|消散|陣亡|死去|被殺|身死道消|自爆.*?身亡|斬首)", stmt)
+                    if m:
+                        raw_name = m.group(1)
+                        # Strip trailing verbs/prepositions if captured
+                        raw_name = re.sub(r"[在為於被自].*$", "", raw_name).strip()
+                        cleaned_name = re.sub(r"^(?:長老|將軍|隊長|護法|掌門|殿主|教主|舵主|宗主|堂主|老祖|師尊|師父)", "", raw_name).strip()
+                        faction_cleaned = re.sub(r"^.*?(?:教|宗|門|殿|閣|會|幫|府)", "", raw_name).strip()
+                        candidate_names = []
+                        if raw_name:
+                            candidate_names.append(raw_name)
+                        if cleaned_name and len(cleaned_name) >= 2 and cleaned_name not in candidate_names:
+                            candidate_names.append(cleaned_name)
+                        if faction_cleaned and len(faction_cleaned) >= 2 and faction_cleaned not in candidate_names:
+                            candidate_names.append(faction_cleaned)
+                        for cname in candidate_names:
+                            if re.search(rf"{cname}.*?(?:說|道|笑|拍|走|看|拔|站|回|微|現身|出手|狂笑|獰笑|冷笑|殺出|喝道|大喊)", prose_text):
+                                return {
+                                    "dimension": "temporal_graph_compliance",
+                                    "severity": "critical",
+                                    "evidence": f"時序世界線穿幫：已於第 {inv_ch} 章戰死之角色「{cname}」在正文中再次行動或發言。",
+                                    "recommendation": f"「{cname}」已於第 {inv_ch} 章陣亡，嚴禁在後續章節復活或直接參與對話。",
+                                    "action_required": True,
+                                }
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def _check_ability_costs_and_boundaries(
+        cls,
+        novel_id: str,
+        chapter_index: int,
+        prose_text: str,
+        outline: Optional[Dict[str, Any]] = None,
+        candidate_conflict_sig: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """檢查高階破局與重大交鋒中是否出現零代價、輕鬆隨意秒殺等套路。"""
+        sig = candidate_conflict_sig or {}
+        cost = str(sig.get("cost") or "").strip().lower()
+        strategy = sig.get("protagonist_strategy", "")
+        pressure = sig.get("pressure_type", "")
+        effortless_markers = ["輕鬆隨意", "隨手一擊", "毫髮無傷", "毫無波瀾", "隨手拍飛", "不費吹灰之力"]
+        is_effortless = any(m in prose_text for m in effortless_markers)
+
+        if (cost in ("無", "none", "零代價", "") or is_effortless) and (pressure in ("life_or_death", "high", "生死危機") or strategy in ("direct_clash", "asymmetric_wit")):
+            return {
+                "dimension": "ability_constraints",
+                "severity": "warning",
+                "evidence": "高難度生死交鋒中，主角以零代價或過度輕易的定型化方式破局（缺乏體力/資源消耗或反噬代價）。",
+                "recommendation": "必須在正文中具體描寫能力代價、精神負擔或情境阻力，禁止無痛通脹破局。",
+                "action_required": True,
+            }
+        return None
 
     @classmethod
     def _check_ending_repetition(
@@ -106,7 +342,7 @@ class NarrativeAuditor:
         prose_text: str,
     ) -> Optional[Dict[str, Any]]:
         """動態檢查是否有特定非通用短語在相鄰章節高頻復現（物象或微動作去重）。"""
-        if not prose_text or chapter_index <= 1:
+        if not prose_text or chapter_index <= 1 or len(prose_text.strip()) < 300:
             return None
 
         try:
@@ -122,7 +358,8 @@ class NarrativeAuditor:
                 "不知不覺", "與此同時", "與此相反", "不可思議", "毫不猶豫",
                 "轉身離去", "搖了搖頭", "深吸一口", "點了點頭", "眉頭微皺",
                 "就在這時", "下一瞬間", "片刻之後", "抬起頭來", "緩緩開口",
-                "與此相關", "顯而易見", "無時無刻", "不由自主", "自言自語"
+                "與此相關", "顯而易見", "無時無刻", "不由自主", "自言自語",
+                "後續情節", "情節發展", "情節推進", "角色對白", "進度平穩",
             }
             repeated_motifs = []
             for phrase, count in cur_counts.items():
@@ -160,6 +397,27 @@ class NarrativeAuditor:
         outline = current_outline or {}
         scene_func = outline.get("scene_function", "progression")
         findings: List[Dict[str, Any]] = []
+
+        # 0. 拒答與免責聲明檢測 (AI Refusal & Safety Disclaimer)
+        from backend.common.refusal_filter import is_refusal_or_disclaimer
+        if is_refusal_or_disclaimer(prose_text):
+            findings.append({
+                "dimension": "voice_integrity",
+                "severity": "critical",
+                "evidence": "正文輸出包含 AI 助手拒答、免責聲明或安全性限制聲明語句。",
+                "recommendation": "此輸出為無效拒答，禁止存入正文庫；必須清空並重新觸發章節寫作流水線。",
+                "action_required": True,
+            })
+
+        # 0b. 破壁元敘事與大綱洩漏檢測 (Meta-Narrative Leakage)
+        meta_finding = cls._check_meta_narrative_leak(prose_text)
+        if meta_finding:
+            findings.append(meta_finding)
+
+        # 0c. 開篇套路與跨章重複檢測 (Opening Deduplication)
+        opening_finding = cls._check_opening_repetition(novel_id, chapter_index, prose_text)
+        if opening_finding:
+            findings.append(opening_finding)
 
         # -----------------------------------------------------------------
         # 維度 1: voice_integrity & gesture_reuse (語言、動作與收尾重複診斷)
@@ -267,6 +525,23 @@ class NarrativeAuditor:
                     except Exception:
                         pass
 
+        # 維度 3b: ability_costs_and_boundaries (生死交鋒無代價與秒殺套路)
+        ability_finding = cls._check_ability_costs_and_boundaries(
+            novel_id, chapter_index, prose_text, outline=outline, candidate_conflict_sig=candidate_conflict_sig
+        )
+        if ability_finding:
+            findings.append(ability_finding)
+
+        # 維度 5: terms_compliance (術語庫規範遵守檢測)
+        terms_finding = cls._check_terms_compliance(novel_id, prose_text)
+        if terms_finding:
+            findings.append(terms_finding)
+
+        # 維度 6: temporal_graph_compliance (時序事實世界線穿幫檢測)
+        temporal_finding = cls._check_temporal_fact_compliance(novel_id, chapter_index, prose_text)
+        if temporal_finding:
+            findings.append(temporal_finding)
+
         # -----------------------------------------------------------------
         # 維度 4: pacing_balance & breathing_space (節奏呼吸診斷)
         # -----------------------------------------------------------------
@@ -287,11 +562,12 @@ class NarrativeAuditor:
             overall_action = "CRITICAL"
         elif warning_issues:
             overall_action = "REVISE"
+        elif is_breathing_scene:
+            overall_action = "NO_ACTION_REQUIRED"
         elif watch_issues:
             overall_action = "WATCH"
         else:
-            # 如果是安靜章或無任何重大疑慮，判定為健全無須動作
-            overall_action = "NO_ACTION_REQUIRED" if is_breathing_scene else "PASS"
+            overall_action = "PASS"
 
         # 持久化診斷記錄
         for f in findings:

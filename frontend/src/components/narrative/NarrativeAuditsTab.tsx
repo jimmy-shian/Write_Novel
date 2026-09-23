@@ -207,7 +207,7 @@ export const NarrativeAuditsTab: React.FC<NarrativeAuditsTabProps> = ({
 
       {/* 3. Toolbar & Filters */}
       <div className="narrative-toolbar">
-        <div className="toolbar-left">
+        <div className="toolbar-left audits-toolbar-left">
           <div className="tab-filters">
             <button
               type="button"
@@ -226,7 +226,7 @@ export const NarrativeAuditsTab: React.FC<NarrativeAuditsTabProps> = ({
           </div>
 
           <CustomSelect
-            className="select-sm ml-2"
+            className="audit-dimension-select"
             value={filterDimension}
             onChange={(v) => setFilterDimension(v)}
             options={[

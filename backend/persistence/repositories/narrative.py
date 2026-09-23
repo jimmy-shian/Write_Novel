@@ -82,6 +82,27 @@ def upsert_setting_system(
     return dict(row) if row else {}
 
 
+def create_setting_system(
+    novel_id: str,
+    name: str,
+    sys_type: str = "generic",
+    mechanism: str = "",
+    cost: Optional[str] = None,
+    boundary: Optional[str] = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """快捷建立世界觀設定系統實體 (相容測試與外部介面)"""
+    return upsert_setting_system(
+        novel_id=novel_id,
+        name=name,
+        setting_type=sys_type,
+        mechanism=mechanism,
+        cost=cost,
+        boundary=boundary,
+        **kwargs
+    )
+
+
 def get_setting_systems(novel_id: str, active_only: bool = False) -> List[Dict[str, Any]]:
     """取得該作品所有已登錄之設定系統"""
     conn = get_db_connection()
@@ -290,20 +311,28 @@ def get_narrative_audits(
     return [dict(r) for r in rows]
 
 
-def resolve_narrative_audit(audit_id: str) -> bool:
+def resolve_narrative_audit(audit_id: Any) -> bool:
     """標記某診斷已被修復或處置"""
+    if isinstance(audit_id, dict):
+        audit_id = audit_id.get("id")
+    if not audit_id:
+        return False
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE narrative_audits SET resolved = 1 WHERE id = ?", (audit_id,))
+    cursor.execute("UPDATE narrative_audits SET resolved = 1 WHERE id = ?", (str(audit_id),))
     conn.commit()
     return cursor.rowcount > 0
 
 
-def delete_narrative_audit(audit_id: str) -> bool:
+def delete_narrative_audit(audit_id: Any) -> bool:
     """刪除單筆敘事診斷（用於清除誤報，如 self-match 假陽性）"""
+    if isinstance(audit_id, dict):
+        audit_id = audit_id.get("id")
+    if not audit_id:
+        return False
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM narrative_audits WHERE id = ?", (audit_id,))
+    cursor.execute("DELETE FROM narrative_audits WHERE id = ?", (str(audit_id),))
     conn.commit()
     return cursor.rowcount > 0
 

@@ -763,6 +763,9 @@ export const App: React.FC = () => {
   // Reset novel generated content (selective scopes)
   const handleResetNovel = async (id: string, scopes?: string[]) => {
     try {
+      // 章節游標歸 1 與編輯區清空已在 handleResetNovelContent 內原子完成
+      // （直接使用清空後的最新詳情，不再呼叫依賴舊 novelDetail 快照的 selectChapter，
+      // 否則會把舊正文寫回顯示區，需手動整理才消失）。
       await handleResetNovelContent(id, scopes);
       // 清空後各看板 SSOT 同步刷新：graphSlice / proposals / chat / 幾何快取皆為獨立 state，
       // 不會隨 novelDetail 自動更新；若不主動刷新，時序圖譜與幾何樹會殘留舊顯示（本次回報 bug）。
@@ -775,13 +778,7 @@ export const App: React.FC = () => {
       try {
         await refreshChatMemory();
       } catch { /* 同上 */ }
-      // 章節游標歸 1（此時 isDirty 已被 refreshActiveNovel 清掉，不會誤存已刪章節），
-      // 並廣播 reset-content 事件：敘事引擎經事件自動刷新，幾何經事件自動重載樹。
-      try {
-        if (activeChapterIndex !== 1) {
-          selectChapter(1);
-        }
-      } catch { /* 忽略 */ }
+      // 廣播 reset-content 事件：敘事引擎經事件自動刷新，幾何經事件自動重載樹。
       emitChapterContentUpdated(id, 'reset-content', 1);
       const count = scopes?.length ?? 0;
       showToast(count > 0 ? `已清空所選 ${count} 項生成內容！` : '小說生成內容已成功清空，回到初始設定狀態！', 'success');

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Graphiti Temporal Knowledge Graph Service.
 Provides temporal graph querying, NetworkX subgraph traversal, and temporal context assembly.
@@ -78,23 +78,46 @@ class TemporalGraphService:
         )
         
         if not active_facts:
-            # Fallback to general active facts if character-specific are empty
             active_facts = db.get_facts_at_chapter(novel_id, at_chapter)[:max_facts]
         else:
             active_facts = active_facts[:max_facts]
 
-        lines = []
-        lines.append(f"【Graphiti 時序動態記憶 (第 {at_chapter} 章世界線狀態)】")
-        
-        if active_facts:
+        all_facts = db.get_all_facts(novel_id)
+        recently_invalidated = [
+            f for f in all_facts
+            if f.get("invalid_from_chapter") is not None
+            and 0 < (at_chapter - f["invalid_from_chapter"]) <= 5
+        ]
+
+        return TemporalGraphService.format_temporal_facts_prompt(
+            active_facts=active_facts,
+            invalidated_facts=recently_invalidated[:5],
+            chapter_index=at_chapter
+        )
+
+    @staticmethod
+    def format_temporal_facts_prompt(
+        facts: Optional[List[Dict[str, Any]]] = None,
+        active_facts: Optional[List[Dict[str, Any]]] = None,
+        invalidated_facts: Optional[List[Dict[str, Any]]] = None,
+        chapter_index: int = 1,
+    ) -> str:
+        """
+        Formats a dynamic, high-density temporal facts prompt with rigid worldline constraints.
+        """
+        effective_active = active_facts if active_facts is not None else (facts or [])
+        lines = [
+            f"【Graphiti 時序動態記憶 (第 {chapter_index} 章世界線狀態 - 剛性約束鐵律)】",
+            "本章情節必須嚴格錨定以下世界線事實，禁止違背已發生之歷史與客觀狀態：",
+        ]
+        if effective_active:
             lines.append("▶ 當前生效之關鍵事實與關係 (Temporal Facts)：")
-            for f in active_facts:
+            for f in effective_active:
                 src = f.get("source_name")
                 tgt = f.get("target_name")
                 rel = f.get("relation_type")
-                stmt = f.get("fact_statement", "")
-                from_ch = f.get("valid_from_chapter", 1)
-                
+                stmt = f.get("fact_statement") or f.get("stmt") or ""
+                from_ch = f.get("valid_from_chapter") or f.get("from_ch") or 1
                 if src and tgt and rel:
                     lines.append(f"  - [第 {from_ch} 章起生效] {src} --({rel})--> {tgt}：{stmt}")
                 else:
@@ -102,18 +125,11 @@ class TemporalGraphService:
         else:
             lines.append("  (暫無特定時序事實記錄，依照總體世界觀與大綱推進)")
 
-        # Query recent superseded/invalidated facts for contrast
-        all_facts = db.get_all_facts(novel_id)
-        recently_invalidated = [
-            f for f in all_facts
-            if f.get("invalid_from_chapter") is not None
-            and 0 < (at_chapter - f["invalid_from_chapter"]) <= 5
-        ]
-        if recently_invalidated:
+        if invalidated_facts:
             lines.append("▶ 近期已作廢/改變之舊事實 (Invalidated / Superseded - 避免穿幫)：")
-            for f in recently_invalidated[:5]:
-                stmt = f.get("fact_statement", "")
-                inv_ch = f.get("invalid_from_chapter")
+            for f in invalidated_facts:
+                stmt = f.get("fact_statement") or f.get("stmt") or ""
+                inv_ch = f.get("invalid_from_chapter") or f.get("inv_ch") or "?"
                 lines.append(f"  - [於第 {inv_ch} 章已失效/被顛覆] {stmt}")
 
         return "\n".join(lines)

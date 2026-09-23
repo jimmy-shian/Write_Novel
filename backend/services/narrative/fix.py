@@ -30,8 +30,12 @@ DEFAULT_MAX_FIX_ROUNDS = 3
 
 DIMENSION_LABELS = {
     "voice_integrity": "語言/口癖/動作重複",
+    "opening_repetition": "開篇套路與跨章重複",
+    "meta_narrative_leak": "破壁元敘事/大綱標籤洩漏",
     "conflict_novelty": "長程因果套路重複",
     "ability_constraints": "超常能力邊界/代價缺失",
+    "terms_compliance": "術語庫專有名詞合規",
+    "temporal_graph_compliance": "時序圖譜世界線一致性",
     "pacing_balance": "節奏呼吸與沉澱",
 }
 
@@ -146,6 +150,16 @@ def fix_chapter_from_audits(
         )
         for _ in writer_gen:
             pass
+    except TypeError:
+        try:
+            writer_gen = run_chapter_writer(
+                novel_id, chapter_index,
+                user_prompt=user_instruction,
+            )
+            for _ in writer_gen:
+                pass
+        except Exception as e:
+            print(f"[WARN] run_chapter_writer fallback in fix loop notice: {e}")
     except Exception as e:
         print(f"[WARN] run_chapter_writer in fix loop notice: {e}")
 
@@ -157,6 +171,16 @@ def fix_chapter_from_audits(
         )
         for _ in editor_gen:
             pass
+    except TypeError:
+        try:
+            editor_gen = run_editor_agent(
+                novel_id, chapter_index,
+                edit_instructions=user_instruction,
+            )
+            for _ in editor_gen:
+                pass
+        except Exception as e:
+            print(f"[WARN] run_editor_agent fallback in fix loop notice: {e}")
     except Exception as e:
         print(f"[WARN] run_editor_agent in fix loop notice: {e}")
 
@@ -332,6 +356,7 @@ def fix_chapter_until_pass(
         "novel_id": novel_id,
         "chapter_index": chapter_index,
         "rounds": rounds,
+        "rounds_used": len(rounds),
         "final_action": (final_reaudit or {}).get("overall_action"),
         "total_fixed": total_fixed,
         "final_reaudit": final_reaudit,

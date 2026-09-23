@@ -6319,6 +6319,38 @@ html, body {
   gap: 8px;
 }
 
+/* 審計 Tab：篩選 chips + 維度下拉單行排列（避免換行） */
+.narrative-toolbar .toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.narrative-toolbar .tab-filters {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.narrative-toolbar .custom-select.audit-dimension-select {
+  width: auto;
+  flex: 0 1 240px;
+  min-width: 170px;
+}
+
+.narrative-toolbar .toolbar-right {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .narrative-toolbar .toolbar-left {
+    flex-wrap: wrap;
+  }
+}
+
 /* Health Banner（整塊可點，下拉式收合動畫） */
 .setting-health-banner {
   display: flex;

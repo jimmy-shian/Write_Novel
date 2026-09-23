@@ -224,21 +224,96 @@ class WriterContextBuilder:
 
         return beats
 
+    def _format_narrative_continuity_context(self, raw_packet: Dict[str, Any], chapter_index: int = 1) -> str:
+        """
+        Converts narrative memory packet into clean, literary continuity prose without raw JSON dumps.
+        """
+        if not raw_packet or not isinstance(raw_packet, dict):
+            if chapter_index <= 1:
+                return "▶ 本章為故事開篇第一章，請建立核心世界觀質感與人物初始處境。"
+            return ""
+
+        lines = []
+        if chapter_index <= 1:
+            lines.append("▶ 本章為故事開篇第一章，請建立核心世界觀質感與人物初始處境。")
+            return "\n".join(lines)
+
+        tail = raw_packet.get("previous_chapter_tail")
+        if tail and str(tail).strip():
+            lines.append(f"▶ 前章結尾現場場景留白（請自然承接情緒餘波與動作流向）：\n{str(tail).strip()}")
+
+        active_chars = raw_packet.get("active_characters") or []
+        if isinstance(active_chars, list) and active_chars:
+            char_lines = []
+            for ac in active_chars:
+                if isinstance(ac, dict) and ac.get("name"):
+                    st = ac.get("state") or ac.get("state_change") or "維持警備狀態"
+                    char_lines.append(f"  - **{ac['name']}**：{st}")
+                elif isinstance(ac, str):
+                    char_lines.append(f"  - {ac}")
+            if char_lines:
+                lines.append("▶ 出場人物當前身心狀態：\n" + "\n".join(char_lines))
+
+        recent_memories = raw_packet.get("recent_chapter_memories") or []
+        if isinstance(recent_memories, list) and recent_memories:
+            mem_lines = []
+            # 保留最近至多 6 章摘要並限制單章上限，嚴格遵守 Context Token 預算
+            scoped_memories = recent_memories[-6:]
+            for m in scoped_memories:
+                if isinstance(m, dict):
+                    idx = m.get("chapter_index", "")
+                    summ = m.get("chapter_summary") or m.get("summary") or ""
+                    if summ:
+                        clean_summ = str(summ).strip()[:300]
+                        mem_lines.append(f"  - 第 {idx} 章情勢演變：{clean_summ}")
+            if mem_lines:
+                lines.append("▶ 近期情勢演進脈絡：\n" + "\n".join(mem_lines))
+
+        arc_summary = raw_packet.get("current_arc_summary")
+        if arc_summary and isinstance(arc_summary, str) and arc_summary.strip():
+            lines.append(f"▶ 當前階段主線大勢：{arc_summary.strip()}")
+
+        return "\n\n".join(lines).strip()
+
+    def _format_clue_payoff_details(self, details: Any) -> str:
+        """將伏筆藍圖與轉折任務格式化為沉浸式自然指示，避免 JSON 原始結構洩漏。"""
+        if not details:
+            return ""
+        if isinstance(details, str):
+            try:
+                data = json.loads(details)
+            except Exception:
+                return details.strip()
+        else:
+            data = details
+        if isinstance(data, list):
+            lines = []
+            for item in data:
+                if isinstance(item, dict):
+                    name = item.get("clue_name") or item.get("seed_text") or item.get("name") or "伏筆"
+                    inst = item.get("instruction") or item.get("clue_instruction") or item.get("payoff_event") or item.get("desc") or ""
+                    lines.append(f"- 伏筆/任務「{name}」：{inst}")
+                elif isinstance(item, str):
+                    lines.append(f"- {item}")
+            return "\n".join(lines)
+        return str(data).strip()
+
     def format_writer_prompt_context(
         self,
-        novel_id: str,
-        worldview_text: str,
-        characters_bible: Any,
-        current_outline: Dict[str, Any],
-        surrounding_plot: str,
-        vol_outline_context: str,
-        clue_payoff_details: str,
-        custom_style: str,
-        chapter_index: int,
+        novel_id: str = "",
+        worldview_text: str = "",
+        characters_bible: Any = None,
+        current_outline: Optional[Dict[str, Any]] = None,
+        surrounding_plot: str = "",
+        vol_outline_context: str = "",
+        clue_payoff_details: str = "",
+        custom_style: str = "",
+        chapter_index: int = 1,
         user_prompt: Optional[str] = None,
         narrative_memory_context: Optional[str] = None,
     ) -> str:
         """將解構後的各元件格式化為乾淨、無 JSON 資料庫污染的寫作指引文字。"""
+        current_outline = current_outline or {}
         # 1. 解析角色清單
         char_list = []
         if isinstance(characters_bible, dict):
@@ -267,6 +342,12 @@ class WriterContextBuilder:
 
         # 6. 組裝純淨文字區塊
         lines = []
+
+        # (A0) 紅線禁令：嚴禁元敘事與開篇套路
+        lines.append("### 🚫【紅線禁令：嚴禁元敘事與開篇套路】")
+        lines.append("- **嚴禁元敘事洩漏**：正文嚴禁出現「那是上一章...」、「正如前一章所述」、「承接上一章情節」等破壁敘事詞彙；小說必須 100% 維持在沉浸式故事世界內部，禁止旁白對讀者或寫作大綱進行元評論。")
+        lines.append("- **開篇切入去重**：嚴禁連續跨章復用相同的開頭場景（如反覆以網咖、霓虹燈光、夜雨等定型意象開局）；每一章開篇必須更換全新的感官切入點、對白或突發行動。")
+        lines.append("")
 
         core_context = format_novel_core_context(novel_id, for_stage="writer")
         if core_context:
@@ -387,7 +468,6 @@ class WriterContextBuilder:
             if volume_direction:
                 lines.append(volume_direction)
             lines.append("")
-
         # (D) 連續性與時序記憶任務 (Graphiti Temporal Graph)
         active_char_names = [cs["name"] for cs in char_states]
         temporal_graph_context = TemporalGraphService.build_narrative_context(
@@ -398,10 +478,28 @@ class WriterContextBuilder:
         )
         lines.append("### 🔗【敘事連續性與時序記憶約束 (Graphiti Memory)】")
         lines.append(temporal_graph_context)
-        if narrative_memory_context and narrative_memory_context.strip():
-            lines.append("")
-            lines.append("▶ 前置章節概要與承接：")
-            lines.append(narrative_memory_context.strip())
+        if narrative_memory_context:
+            if isinstance(narrative_memory_context, dict):
+                formatted_mem = self._format_narrative_continuity_context(narrative_memory_context, chapter_index)
+                if formatted_mem.strip():
+                    lines.append("")
+                    lines.append(formatted_mem)
+            elif isinstance(narrative_memory_context, str) and narrative_memory_context.strip():
+                try:
+                    parsed = json.loads(narrative_memory_context)
+                    if isinstance(parsed, dict):
+                        formatted_mem = self._format_narrative_continuity_context(parsed, chapter_index)
+                        if formatted_mem.strip():
+                            lines.append("")
+                            lines.append(formatted_mem)
+                    else:
+                        lines.append("")
+                        lines.append("▶ 前置章節概要與承接：")
+                        lines.append(narrative_memory_context.strip())
+                except Exception:
+                    lines.append("")
+                    lines.append("▶ 前置章節概要與承接：")
+                    lines.append(narrative_memory_context.strip())
         if clue_payoff_details and clue_payoff_details.strip():
             lines.append("")
             lines.append("【本章伏筆與轉折任務】")
@@ -416,10 +514,12 @@ class WriterContextBuilder:
             matched_terms = [t for t in terms if t.get("term") and t["term"] in context_haystack]
             selected_terms = matched_terms[:15] if matched_terms else terms[:10]
             if selected_terms:
-                lines.append("### 📖【術語庫與名詞約束 (Story Terms - 嚴格維持全書一致性)】")
+                lines.append("### 📖【術語庫與名詞約束 (Story Terms - 剛性約束與唯一性)】")
+                lines.append("> 剛性約束：以下專有名詞為唯一標準名稱。嚴禁自造替代名詞或進行近義詞替換，行文中涉及相關概念時必須強制沿用。")
                 for t in selected_terms:
                     cat = f"[{t['category']}] " if t.get("category") else ""
-                    lines.append(f"- **{cat}{t['term']}**：{t['definition']}")
+                    note = f" (備註/約束：{t['notes']})" if t.get("notes") else ""
+                    lines.append(f"- **{cat}{t['term']}**：{t['definition']}{note}")
                 lines.append("")
 
         # (E) 世界觀背景（精簡版）。只接受已由上游 stage-scope 篩選的資料。

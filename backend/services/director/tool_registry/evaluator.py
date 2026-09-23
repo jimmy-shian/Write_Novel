@@ -211,6 +211,16 @@ def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> 
     if not content:
         issues.append("content 不可為空")
         return issues
+
+    from backend.common.refusal_filter import is_refusal_or_disclaimer
+    if is_refusal_or_disclaimer(content):
+        issues.append("content 包含 AI 拒答或安全免責聲明標記")
+
+    meta_markers = ("那是上一章", "正如上一章", "承接上一章", "前一章所述", "本章節")
+    for mm in meta_markers:
+        if mm in content:
+            issues.append(f"content 包含元敘事洩漏標記：{mm}")
+
     if len(content) < min_len:
         issues.append(f"content 長度不足：至少 {min_len} 字，實際 {len(content)} 字")
 
@@ -251,7 +261,7 @@ def _latest_stage_output_for_evaluation(stage_name: str, novel_id: str) -> str:
         return chapter.get("content", "") if chapter else ""
     return ""
 
-def evaluate_output(stage_name: str, output_content: str = "", novel_id: str = "") -> Dict[str, Any]:
+def evaluate_output(stage_name: str, output_content: Any = "", novel_id: str = "") -> Dict[str, Any]:
     """
     [Tool 2] 評斷代理人的輸出結果
     透過 APPROVAL_CRITERIA_REGISTRY 進行硬性校驗
@@ -262,8 +272,13 @@ def evaluate_output(stage_name: str, output_content: str = "", novel_id: str = "
 
     issues = []
     narrative_audit = None
-    output_content = output_content or _latest_stage_output_for_evaluation(stage_name, novel_id)
-    parsed = extract_json_block(output_content)
+    if isinstance(output_content, dict):
+        parsed = output_content
+        raw_text = parsed.get("content") or parsed.get("text") or ""
+        output_content = raw_text
+    else:
+        output_content = output_content or _latest_stage_output_for_evaluation(stage_name, novel_id)
+        parsed = extract_json_block(output_content)
 
     if stage_name == "foreshadowing":
         if isinstance(parsed, dict):

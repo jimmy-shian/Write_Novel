@@ -48,13 +48,16 @@ def save_chat_message(
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chat_memory (novel_id, role, content, thinking, message_type)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
-        )
+        try:
+            cursor.execute(
+                """
+                INSERT INTO chat_memory (novel_id, role, content, thinking, message_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
+            )
+        except Exception:
+            return
         if message_type == 'pipeline':
             # Sliding retention: keep latest 300 pipeline messages per novel
             try:

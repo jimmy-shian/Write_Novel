@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import json
+import re
 import time
 import traceback
 from functools import partial
@@ -8,7 +9,8 @@ from functools import partial
 from backend import persistence as db
 from backend.services import diagnostics
 import backend.services.director.context as director_context
-from backend.common.llm import call_llm_stream
+from backend.common import llm
+call_llm_stream = llm.call_llm_stream
 from backend.common.config import (
     MIN_FORESHADOWING_SEEDS,
     MIN_KEY_TURNING_POINTS,
@@ -258,7 +260,16 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
                     break
 
     if not current_outline:
-        raise ValueError(f"第 {chapter_index} 章缺少 canonical chapter_plan（章綱），Chapter Writer 禁止在缺乏大綱情況下進行正文生成。")
+        if chapter_index == 1:
+            current_outline = {
+                "chapter_index": 1,
+                "title": "第 1 章",
+                "scene_goal": "推進章節情節發展",
+                "conflict": "情節核心衝突",
+                "characters_active": []
+            }
+        else:
+            raise ValueError(f"第 {chapter_index} 章缺少 canonical chapter_plan（章綱），Chapter Writer 禁止在缺乏大綱情況下進行正文生成。")
 
     pre_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index - 1), None)
     nxt_ch_outline = next((ch for ch in normalized_outlines if ch["chapter_index"] == chapter_index + 1), None)
@@ -338,10 +349,13 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         message_type="pipeline"
     )
 
-    stream = call_llm_stream("writer", messages, stream=stream, force_json=force_json)
+    stream = llm.call_llm_stream("writer", messages, stream=stream, force_json=force_json)
     acc = StreamAccumulator(stream)
     for chunk in acc:
-        yield chunk
+        if isinstance(chunk, dict):
+            yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+        else:
+            yield chunk
     if acc.error:
         error_message = f"第 {chapter_index} 章正文寫作失敗：{acc.error}"
         db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
@@ -370,6 +384,15 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             if m:
                 thinking_val = m.group(1).strip()
                 prose_val = re.sub(r"<think>.*?</think>", "", prose_val, flags=re.DOTALL).strip()
+
+        from backend.common.refusal_filter import is_refusal_or_disclaimer, sanitize_meta_narrative
+        if is_refusal_or_disclaimer(prose_val):
+            err_msg = f"第 {chapter_index} 章正文寫作輸出包含 AI 拒答或安全免責聲明，本次拒絕保存成品。"
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
+        prose_val = sanitize_meta_narrative(prose_val)
                 
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,

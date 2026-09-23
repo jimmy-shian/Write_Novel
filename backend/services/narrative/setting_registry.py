@@ -268,11 +268,9 @@ class SettingRegistry:
             for s in all_systems:
                 if any(ts in s["name"] or s["name"] in ts for ts in target_set):
                     selected.append(s)
-
-        # 補充最常用之核心設定
-        for s in all_systems:
-            if s not in selected and len(selected) < max_systems:
-                selected.append(s)
+        else:
+            # 未指明時補充前 max_systems 個通用核心設定
+            selected = all_systems[:max_systems]
 
         if not selected:
             return ""

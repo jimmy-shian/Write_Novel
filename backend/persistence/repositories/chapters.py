@@ -354,6 +354,10 @@ get_all_chapters = get_all_chapters_latest
 get_chapter = get_latest_chapter
 
 def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None, is_dirty=False):
+    from backend.common.refusal_filter import assert_not_refusal
+    if content and str(content).strip():
+        assert_not_refusal(str(content), f"Chapter {chapter_index}")
+
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
@@ -395,6 +399,70 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
         except Exception as e:
             print(f"[WARN] Failed to cascade-clear derived data for chapter {chapter_index}: {e}")
     return next_version
+
+
+def rollback_or_purge_chapter(novel_id: str, chapter_index: int) -> dict:
+    """
+    Rolls back chapter to the latest clean (non-refusal) prior version.
+    If no clean version exists, purges all rows for this chapter and cleans up cascade.
+    """
+    from backend.common.refusal_filter import is_refusal_or_disclaimer
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        # Always purge pending/dirty draft proposals, audits, memories, and temporal facts for this rolled back attempt
+        cursor.execute("DELETE FROM draft_proposals WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
+        cursor.execute("DELETE FROM narrative_audits WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
+        try:
+            cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
+        except Exception:
+            pass
+        try:
+            from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+            delete_chapter_slice(novel_id, int(chapter_index))
+        except Exception:
+            pass
+
+        rows = cursor.execute(
+            "SELECT id, version, content FROM chapters WHERE novel_id = ? AND chapter_index = ? ORDER BY version DESC",
+            (novel_id, chapter_index)
+        ).fetchall()
+        if not rows:
+            return {"status": "not_found", "version": None}
+
+        clean_row = None
+        dirty_ids = []
+        for r in rows:
+            c_text = r["content"] or ""
+            if is_refusal_or_disclaimer(c_text) or not str(c_text).strip():
+                dirty_ids.append(r["id"])
+            else:
+                if clean_row is None:
+                    clean_row = r
+
+        # If no refusal was detected, but caller explicitly invoked rollback on this chapter,
+        # pop the latest version (or purge entirely if only 1 version exists)
+        if not dirty_ids:
+            if len(rows) == 1:
+                cursor.execute("DELETE FROM chapters WHERE id = ?", (rows[0]["id"],))
+                return {"status": "purged", "version": None}
+            else:
+                cursor.execute("DELETE FROM chapters WHERE id = ?", (rows[0]["id"],))
+                clean_row = rows[1]
+
+        for d_id in dirty_ids:
+            cursor.execute("DELETE FROM chapters WHERE id = ?", (d_id,))
+
+        if clean_row and clean_row["id"] not in dirty_ids:
+            return {
+                "status": "rolled_back",
+                "version": clean_row["version"],
+                "content": clean_row["content"]
+            }
+        else:
+            cursor.execute("DELETE FROM chapters WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
+            return {"status": "purged", "version": None}
+
 
 # --- CHAT MEMORY (Modularized into backend.persistence.repositories.chat_memory) ---
 from backend.persistence.repositories.chat_memory import (  # noqa: E402
