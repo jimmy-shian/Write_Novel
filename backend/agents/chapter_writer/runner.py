@@ -88,6 +88,9 @@ _extract_chapters_in_range = extract_chapters_in_range
 
 from backend.agents.shared.context_requests import _handle_director_context_request
 
+# Hard floor to catch truncated model responses before synopsis/memory persistence.
+MIN_CHAPTER_PROSE_LENGTH = 1200
+
 GENERIC_ACTIVE_CHARACTER_MARKERS = (
     "主角",
     "配角",
@@ -177,7 +180,7 @@ def _missing_named_active_characters(outline, characters_bible):
 # =============================================================================
 # 6. Chapter Writer Agent
 # =============================================================================
-def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None, stream=False, force_json=False, context_bundle=None):
+def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism", user_prompt=None, stream=False, force_json=False, context_bundle=None, fix_mode=False, fix_targets=None, banned_hits=None):
     """
     Writing Stage: generate prose from the current chapter contract and scoped continuity context.
     The Writer must not receive future-chapter payoff instructions or unrestricted history.
@@ -319,6 +322,26 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         if task_lines:
             clue_payoff_details = "\n".join(task_lines)
 
+    # In the final 10% only, surface unresolved planted seeds as a convergence check.
+    # They are advisory canon context; current chapter allocations remain authoritative.
+    try:
+        planned_total = sum(db._get_clean_chapter_count(v) for v in all_vols)
+        finale_start = max(1, int(planned_total * 0.9))
+        if planned_total and chapter_index >= finale_start:
+            unresolved = narrative_memory.get_unresolved_foreshadowing(novel_id, chapter_index, limit=20)
+            if unresolved:
+                finale_lines = [
+                    "【終局收束檢查：尚未被後續伏筆回收任務標記的已埋線索】",
+                    "僅在本章大綱與既有正文允許時自然收束；不得硬塞、不可以此推翻已確立的情節，也不得把已在正文中解決的線索重複回收。",
+                ]
+                finale_lines.extend(
+                    f"- 第 {item.get('chapter_index', '?')} 章埋設：{json.dumps(item.get('source', item.get('seed_id')), ensure_ascii=False)}"
+                    for item in unresolved
+                )
+                clue_payoff_details = "\n".join(part for part in (clue_payoff_details, "\n".join(finale_lines)) if part)
+    except Exception as exc:
+        print(f"[ChapterWriter] Finale continuity context unavailable for chapter {chapter_index}: {exc}")
+
     memory_packet = narrative_memory.build_writer_memory_context(novel_id, chapter_index)
     if context_bundle:
         memory_packet["context_bus_reference"] = {
@@ -340,6 +363,9 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
         novel_id=novel_id,
+        fix_mode=fix_mode,
+        fix_targets=fix_targets,
+        banned_hits=banned_hits,
     )
     
     db.save_chat_message(
@@ -358,6 +384,12 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             yield chunk
     if acc.error:
         error_message = f"第 {chapter_index} 章正文寫作失敗：{acc.error}"
+        db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+        yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
+    if acc.finish_reason == "length":
+        error_message = f"第 {chapter_index} 章生成達模型輸出上限而被截斷；本次拒絕保存，請提高 Writer 的輸出 token 上限或分段生成後再重試。"
         db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
         yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
@@ -385,7 +417,11 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
                 thinking_val = m.group(1).strip()
                 prose_val = re.sub(r"<think>.*?</think>", "", prose_val, flags=re.DOTALL).strip()
 
-        from backend.common.refusal_filter import is_refusal_or_disclaimer, sanitize_meta_narrative
+        from backend.common.refusal_filter import (
+            find_meta_narrative_leaks,
+            is_refusal_or_disclaimer,
+            sanitize_meta_narrative,
+        )
         if is_refusal_or_disclaimer(prose_val):
             err_msg = f"第 {chapter_index} 章正文寫作輸出包含 AI 拒答或安全免責聲明，本次拒絕保存成品。"
             yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
@@ -393,6 +429,31 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             return
 
         prose_val = sanitize_meta_narrative(prose_val)
+        if len(prose_val.strip()) < MIN_CHAPTER_PROSE_LENGTH:
+            err_msg = (
+                f"第 {chapter_index} 章正文僅 {len(prose_val.strip())} 字，低於最低完整章節長度 "
+                f"{MIN_CHAPTER_PROSE_LENGTH} 字；疑似生成中斷，未保存，請重新生成。"
+            )
+            db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        meta_hits = find_meta_narrative_leaks(prose_val)
+        if meta_hits:
+            err_msg = f"第 {chapter_index} 章正文仍含元敘事語句（{', '.join(meta_hits[:3])}），未保存，請重寫相關句子後重試。"
+            db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        from backend.services.narrative.narrative_auditor import find_explicit_term_alias_hits
+        term_alias_hits = find_explicit_term_alias_hits(novel_id, prose_val)
+        if term_alias_hits:
+            hit_text = "、".join(f"「{hit['forbidden_alias']}」應使用正式名稱「{hit['canonical_term']}」" for hit in term_alias_hits[:5])
+            err_msg = f"第 {chapter_index} 章術語一致性檢查未通過：{hit_text}。正文未保存，請修正後重試。"
+            db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
                 
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,
@@ -400,7 +461,10 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             prose_val,
             outline=current_outline,
         )
-        synopsis = memory_summary.get("chapter_summary") or current_outline.get("title", f"第 {chapter_index} 章")
+        synopsis = narrative_memory.build_chapter_synopsis_from_prose(
+            prose_val,
+            fallback=memory_summary.get("chapter_summary") or current_outline.get("title", f"第 {chapter_index} 章"),
+        )
         saved_version = db.save_chapter(novel_id, chapter_index, prose_val, synopsis=synopsis, thinking=thinking_val)
         narrative_memory.store_chapter_memory(
             novel_id,

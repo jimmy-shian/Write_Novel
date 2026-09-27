@@ -33,9 +33,14 @@ def build_chapter_writer_messages(
     narrative_memory_context: Optional[str] = None,
     required_character_set: Optional[List[str]] = None,
     novel_id: str = "",
+    fix_mode: bool = False,
+    fix_targets: Optional[List[Dict[str, Any]]] = None,
+    banned_hits: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, str]]:
     """正文作家寫作提示詞拼接（情境化解構版）"""
     system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE + "\n\n" + CHAPTER_WRITER_GUIDELINES
+    if fix_mode:
+        system_prompt += "\n\n【修正輪特別禁令】：禁用句與套路動作零容忍，其優先級高於文學美感與銜接要求。被標記之套路動作與因果必須實質打破，出現禁用句即判失敗。"
     system_prompt += build_agent_context_contract(
         "Chapter Writer / 正文作家",
         "- 指定章節之場景契約（包含 POV 視角人物、戲劇目標與知情邊界）。\n- 結構化推進拍點 (Scene Beats)。\n- 本章出場角色的人格特質與當前狀態。\n- 前章銜接背景與本章任務。",
@@ -64,6 +69,9 @@ def build_chapter_writer_messages(
         chapter_index=chapter_index,
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
+        fix_mode=fix_mode,
+        fix_targets=fix_targets,
+        banned_hits=banned_hits,
     )
 
     return [

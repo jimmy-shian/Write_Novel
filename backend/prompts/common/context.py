@@ -5,6 +5,7 @@ Prompt Builder (隔離的提示詞構建與拼接層)
 """
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Set
 from backend.schemas import agent_json
 from backend import persistence as db
@@ -604,7 +605,11 @@ def format_novel_core_context(novel_id: str, for_stage: Optional[str] = None) ->
         lines.append(f"- **商業定位與核心看點**：{profile.get('commercial_positioning', '長篇小說')} | {profile.get('dominant_appeal', '升級智鬥與爽感反轉')}")
         lines.append(f"- **敘事推進偏好**：{profile.get('pacing_preference', '緊湊推進、有張有弛')} (複雜度：{profile.get('narrative_complexity', 'multi_faction')})")
 
-    if pipeline_prompt and (for_stage or "").lower() not in ("writer", "editor"):
+    stage = (for_stage or "").lower()
+    # The full pipeline prompt can contain future plot turns and the ending.
+    # Keep it out of Writer/Editor context; durable genre/style/profile fields
+    # above provide the spoiler-free creative compass.
+    if pipeline_prompt and stage not in ("writer", "editor"):
         lines.append(f"- **故事原案靈感核心 (Inspirational Direction)**：\n  {pipeline_prompt}")
         lines.append("  *(提示：上述原案為創作方向與精神內核種子，鼓勵在情節演進中進行多維度深化、反轉與意料之外的合理推演)*")
 

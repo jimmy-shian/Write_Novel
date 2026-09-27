@@ -247,14 +247,18 @@ def add_conflict_signature(
     return dict(row) if row else {}
 
 
-def get_conflict_signatures(novel_id: str, limit: int = 40) -> List[Dict[str, Any]]:
+def get_conflict_signatures(novel_id: str, limit: int = 40, max_chapter: Optional[int] = None) -> List[Dict[str, Any]]:
     """取得全書或近期衝突因果特徵記錄"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    rows = cursor.execute(
-        "SELECT * FROM conflict_signatures WHERE novel_id = ? ORDER BY chapter_start DESC LIMIT ?",
-        (novel_id, limit),
-    ).fetchall()
+    query = "SELECT * FROM conflict_signatures WHERE novel_id = ?"
+    params: List[Any] = [novel_id]
+    if max_chapter is not None:
+        query += " AND chapter_start <= ?"
+        params.append(max_chapter)
+    query += " ORDER BY chapter_start DESC LIMIT ?"
+    params.append(limit)
+    rows = cursor.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -294,6 +298,7 @@ def get_narrative_audits(
     chapter_index: Optional[int] = None,
     unresolved_only: bool = False,
     limit: int = 30,
+    max_chapter: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """查詢小說的敘事診斷歷史"""
     conn = get_db_connection()
@@ -303,6 +308,9 @@ def get_narrative_audits(
     if chapter_index is not None:
         query += " AND chapter_index = ?"
         params.append(chapter_index)
+    if max_chapter is not None:
+        query += " AND chapter_index <= ?"
+        params.append(max_chapter)
     if unresolved_only:
         query += " AND resolved = 0"
     query += " ORDER BY chapter_index DESC, created_at DESC LIMIT ?"

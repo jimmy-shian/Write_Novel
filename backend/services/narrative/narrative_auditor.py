@@ -19,6 +19,30 @@ from backend.services.narrative.conflict_ledger import ConflictLedger
 from backend.services.narrative.setting_registry import SettingRegistry
 
 
+def _is_one_character_edit(left: str, right: str) -> bool:
+    """True only for one insertion, deletion, or substitution; avoids broad prefix collisions."""
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    i = j = edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) > len(right):
+            i += 1
+        elif len(right) > len(left):
+            j += 1
+        else:
+            i += 1
+            j += 1
+    edits += int(i < len(left) or j < len(right))
+    return edits == 1
+
+
 class NarrativeAuditor:
     """提供 Director 2.0 的全面敘事推理與診斷能力。"""
 
@@ -171,6 +195,14 @@ class NarrativeAuditor:
             terms = db.get_terms(novel_id)
             if not terms:
                 return None
+            # Terms explicitly registered as separate canon entries are not typos of
+            # one another, even when the old prefix/suffix heuristic considers them close.
+            # This is essential for places, factions, devices, and variants with shared names.
+            registered_terms = {
+                str(item.get("term") or "").strip()
+                for item in terms
+                if str(item.get("term") or "").strip()
+            }
             SYNONYM_REPLACEMENTS = {
                 "靈能": ["法力", "真氣", "內力", "魔法值"],
                 "星能": ["能量", "核能", "靈力"],
@@ -199,6 +231,8 @@ class NarrativeAuditor:
                     fuzzy_match = re.search(pat, prose_text)
                     if fuzzy_match and fuzzy_match.group(0) != term_name:
                         corrupted = fuzzy_match.group(0)
+                        if corrupted in registered_terms or not _is_one_character_edit(term_name, corrupted):
+                            continue
                         return {
                             "dimension": "terms_compliance",
                             "severity": "warning",
@@ -590,3 +624,130 @@ class NarrativeAuditor:
             "is_breathing_scene": is_breathing_scene,
             "summary": f"第 {chapter_index} 章診斷結論：[{overall_action}]。發現 {len(findings)} 項觀察點。"
         }
+
+    @classmethod
+    def extract_banned_hits(cls, prose_text: str) -> List[Dict[str, Any]]:
+        return extract_banned_hits(prose_text)
+
+
+def extract_banned_hits(prose_text: str) -> List[Dict[str, Any]]:
+    """以 NarrativeAuditor 的 GESTURE_REUSE_PATTERNS、FORMULAIC_OPENING_PATTERNS（僅掃開頭 400 字）、
+    FORMULAIC_ENDING_PATTERNS（僅掃結尾 400 字）掃描正文，
+    回傳 [{pattern_label, matched_sentence, paragraph_index, context_20chars, matched_text}]
+    """
+    if not prose_text or not prose_text.strip():
+        return []
+
+    hits: List[Dict[str, Any]] = []
+    paragraphs = [p.strip() for p in prose_text.splitlines() if p.strip()]
+
+    # 1. 開篇套路（僅掃前 400 字）
+    opening_text = prose_text.strip()[:400]
+    for pat, key, label in NarrativeAuditor.FORMULAIC_OPENING_PATTERNS:
+        for m in re.finditer(pat, opening_text):
+            matched_str = m.group(0)
+            p_idx = 1
+            matched_sentence = matched_str
+            for idx, p in enumerate(paragraphs, 1):
+                if matched_str in p:
+                    p_idx = idx
+                    sentences = re.split(r"(?<=[。！？!?\n])", p)
+                    for s in sentences:
+                        if matched_str in s:
+                            matched_sentence = s.strip()
+                            break
+                    break
+            start_pos = m.start()
+            context_20 = opening_text[max(0, start_pos - 20):min(len(opening_text), m.end() + 20)]
+            hits.append({
+                "pattern_label": f"開篇套路：{label}",
+                "matched_sentence": matched_sentence,
+                "paragraph_index": p_idx,
+                "context_20chars": context_20,
+                "matched_text": matched_str,
+            })
+            break
+
+    # 2. 結尾套路（僅掃末尾 400 字）
+    ending_text = prose_text.strip()[-400:]
+    for pat, label in NarrativeAuditor.FORMULAIC_ENDING_PATTERNS:
+        for m in re.finditer(pat, ending_text):
+            matched_str = m.group(0)
+            p_idx = len(paragraphs)
+            matched_sentence = matched_str
+            for idx in range(len(paragraphs), 0, -1):
+                p = paragraphs[idx - 1]
+                if matched_str in p:
+                    p_idx = idx
+                    sentences = re.split(r"(?<=[。！？!?\n])", p)
+                    for s in sentences:
+                        if matched_str in s:
+                            matched_sentence = s.strip()
+                            break
+                    break
+            start_pos = m.start()
+            context_20 = ending_text[max(0, start_pos - 20):min(len(ending_text), m.end() + 20)]
+            hits.append({
+                "pattern_label": f"結尾套路：{label}",
+                "matched_sentence": matched_sentence,
+                "paragraph_index": p_idx,
+                "context_20chars": context_20,
+                "matched_text": matched_str,
+            })
+            break
+
+    # 3. 模板動作/口癖檢測（全篇各段落掃描）
+    for p_idx, p in enumerate(paragraphs, 1):
+        sentences = re.split(r"(?<=[。！？!?\n])", p)
+        for s in sentences:
+            s_clean = s.strip()
+            if not s_clean:
+                continue
+            for pat, label in NarrativeAuditor.GESTURE_REUSE_PATTERNS:
+                for m in re.finditer(pat, s_clean):
+                    matched_str = m.group(0)
+                    start_pos = m.start()
+                    context_20 = s_clean[max(0, start_pos - 20):min(len(s_clean), m.end() + 20)]
+                    hits.append({
+                        "pattern_label": label,
+                        "matched_sentence": s_clean,
+                        "paragraph_index": p_idx,
+                        "context_20chars": context_20,
+                        "matched_text": matched_str,
+                    })
+
+    return hits
+
+
+def find_explicit_term_alias_hits(novel_id: str, prose_text: str) -> List[Dict[str, str]]:
+    """Find only aliases explicitly marked as forbidden in the story-term registry.
+
+    Ordinary words and unmarked synonyms are not rejected: this keeps the hard gate
+    precise and lets the author distinguish a true canonical alias from a related concept.
+    Notes syntax: ``禁用別稱：咒禁、禁法``. A ``forbidden_aliases`` list is also supported.
+    """
+    if not novel_id or not prose_text:
+        return []
+    try:
+        terms = db.get_terms(novel_id) or []
+    except Exception:
+        return []
+    hits = []
+    marker = re.compile(r"(?:禁用別稱|禁止稱作|錯誤稱呼|禁止使用)\s*[：:]\s*([^\n。；;]+)")
+    for item in terms:
+        canonical = str(item.get("term") or "").strip()
+        if not canonical:
+            continue
+        aliases = item.get("forbidden_aliases") or []
+        if isinstance(aliases, str):
+            aliases = re.split(r"[,，、/／|｜]", aliases)
+        elif not isinstance(aliases, list):
+            aliases = [aliases]
+        notes = str(item.get("notes") or "")
+        for declaration in marker.findall(notes):
+            aliases.extend(re.split(r"[,，、/／|｜]", declaration))
+        for alias in dict.fromkeys(str(value).strip() for value in aliases if value):
+            if len(alias) < 2 or alias == canonical or alias not in prose_text:
+                continue
+            hits.append({"canonical_term": canonical, "forbidden_alias": alias})
+    return hits

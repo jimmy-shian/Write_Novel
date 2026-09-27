@@ -40,14 +40,26 @@ DIMENSION_LABELS = {
 }
 
 
-def build_fix_instructions(targets: List[Dict[str, Any]]) -> str:
+def build_fix_instructions(
+    targets: List[Dict[str, Any]],
+    banned_hits: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     lines = ["【總監 2.0 敘事診斷定向修正】以下為本章已被確認的問題，請針對性重寫，其餘優秀段落保留："]
+    has_causal = any(a.get("dimension") in ("conflict_novelty", "ability_constraints") for a in targets)
+    has_voice = any(a.get("dimension") == "voice_integrity" for a in targets)
     for a in targets:
         label = DIMENSION_LABELS.get(a.get("dimension", ""), a.get("dimension", ""))
         lines.append(f"- [{label}] 佐證：{a.get('evidence', '')}")
         lines.append(f"  改法：{a.get('recommendation', '')}")
+    if banned_hits:
+        lines.append("【精確命中之禁用原文段落】")
+        for h in banned_hits[:10]:
+            lines.append(f"- 第 {h.get('paragraph_index', 1)} 段：『{h.get('matched_sentence', '')}』[{h.get('pattern_label', '')}]")
     lines.append("注意：只修正上述問題點，不得改變本章大綱事件、人物立場與伏筆走向。")
-    lines.append("紅線：必須實質更換情節因果鏈與主角博弈方式；嚴禁僅在策略名詞上做同義替換蒙混（例如把 asymmetric_wit 改名為 adaptive_response）；若診斷指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。")
+    if has_causal:
+        lines.append("紅線：必須實質更換情節因果鏈與主角博弈方式；嚴禁僅在策略名詞上做同義替換蒙混（例如把 asymmetric_wit 改名為 adaptive_response）；若診斷指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。")
+    if has_voice:
+        lines.append("紅線：嚴格刪除或替換所有標記之禁用句與套路動作，出現禁用句即判失敗。")
     return "\n".join(lines)
 
 
@@ -56,54 +68,103 @@ def build_director_user_instruction(
     chapter_index: int,
     targets: List[Dict[str, Any]],
     reaudit_findings: Optional[List[Dict[str, Any]]] = None,
+    banned_hits: Optional[List[Dict[str, Any]]] = None,
+    round_idx: int = 1,
 ) -> str:
     """
-    總監指令合成：把敘事引擎的診斷與建議（含上一輪「引擎重審」的殘留 findings）
-    交給總監 LLM，由總監產生一段給 Editor 的「user 修正指令」，具體說明內文要怎麼改。
+    總監指令合成：把敘事引擎的診斷與建議（含上一輪「引擎重審」的殘留 findings 與正文精確命中錨點）
+    交給總監 LLM，由總監產生一段給 Writer 與 Editor 的「user 修正指令」，具體說明內文要怎麼改。
     LLM 失敗或離線時降級回確定性模板 build_fix_instructions，永不拋錯。
     """
-    fallback = build_fix_instructions(targets)
+    fallback = build_fix_instructions(targets, banned_hits=banned_hits)
     try:
         from backend.common.llm import call_llm
 
         engine_lines: List[str] = []
         for a in targets:
             label = DIMENSION_LABELS.get(a.get("dimension", ""), a.get("dimension", ""))
+            sev = a.get("severity", "warning")
+            dim = a.get("dimension", "")
             engine_lines.append(
-                f"- [{label}] 佐證：{a.get('evidence', '')}\n  引擎建議：{a.get('recommendation', '')}"
+                f"- [{label}/{sev}] 維度：{dim} | 佐證：{a.get('evidence', '')}\n  引擎建議：{a.get('recommendation', '')}"
             )
         if reaudit_findings:
-            engine_lines.append("【引擎重審（上一輪修正後）殘留觀察，必須一併處置】")
-            for f in reaudit_findings:
+            engine_lines.append(f"【引擎重審（上一輪第 {max(1, round_idx - 1)} 輪修正後殘留觀察，必須一併處置）】")
+            for f in reaudit_findings[:5]:
                 label = DIMENSION_LABELS.get(f.get("dimension", ""), f.get("dimension", ""))
                 engine_lines.append(
                     f"- [{label}/{f.get('severity', '')}] 佐證：{f.get('evidence', '')}"
                     f"\n  引擎建議：{f.get('recommendation', '')}"
                 )
+        if banned_hits:
+            engine_lines.append("【正文精確命中之禁用原文與位置（請針對性重寫）】")
+            for h in banned_hits[:10]:
+                ctx = h.get("context_20chars", "")
+                ctx_str = f"（前後文：…{ctx}…）" if ctx else ""
+                engine_lines.append(
+                    f"- 第 {h.get('paragraph_index', 1)} 段：『{h.get('matched_sentence', '')}』[標籤：{h.get('pattern_label', '')}]{ctx_str}"
+                )
+
+        # 注入開頭/結尾上下文與前章開頭（用於開篇去重與結尾收束）
+        try:
+            ch_row = db.get_latest_chapter(novel_id, chapter_index)
+            cur_text = (ch_row.get("content") or "").strip() if ch_row else ""
+            if cur_text:
+                engine_lines.append(f"【本章當前開篇 100 字】：{cur_text[:100]}")
+                engine_lines.append(f"【本章當前結尾 100 字】：{cur_text[-100:]}")
+            if chapter_index > 1:
+                prev_row = db.get_latest_chapter(novel_id, chapter_index - 1)
+                prev_text = (prev_row.get("content") or "").strip() if prev_row else ""
+                if prev_text:
+                    engine_lines.append(f"【前一章開篇 100 字（本章開篇切入必須與之去重）】：{prev_text[:100]}")
+        except Exception:
+            pass
+
+        # 注入衝突簽名脈絡（若有）
+        try:
+            recent_sigs = db.get_conflict_signatures(novel_id, limit=4, max_chapter=chapter_index - 1)
+            if recent_sigs:
+                sig_summaries = [
+                    f"第{s['chapter_start']}章[壓迫:{s.get('pressure_type')}->主角策略:{s.get('protagonist_strategy')}->結果:{s.get('outcome')}]"
+                    for s in recent_sigs
+                ]
+                engine_lines.append(f"【近 4 章因果策略簽名】：{'; '.join(sig_summaries)}")
+        except Exception:
+            pass
+
         if not engine_lines:
             return fallback
 
         system_prompt = (
             "你是小說創作流水線的總監（Director）。敘事引擎（Narrative Auditor）已完成離線診斷，"
-            "你的任務是把引擎的診斷與建議，轉寫成一段給 Writer（正文寫作作家）與 Editor 的「修正指令」："
-            "具體、可執行、逐點說明情節因果與內文要怎麼改（例如：打破公式化套路、換掉重複的主角破局策略、"
-            "為強力破局補上實質代價與外部引力、替換模板化動作為角色獨特微動作等），"
-            "並嚴守紅線：不得改變本章核心大綱主旨、人物立場與伏筆走向。"
+            "你的任務是把引擎的診斷與建議，轉寫成一段給 Writer 與 Editor 的「修正指令」："
+            "具體、可執行、逐點說明情節因果與內文要怎麼改，輸出必須包含：\n"
+            "1.【禁用原文逐條】：列出必須刪除替換的套路句與段落位置。\n"
+            "2.【位置與替換方向】：說明開篇、結尾、微動作或對白之替換方式。\n"
+            "3.【策略與代價重寫要求】：若涉及因果問題，說明新的破局手段與支付代價。\n"
+            "4.【紅線】：不得改變本章核心大綱主旨、人物立場與伏筆走向。\n"
             "只輸出指令本文本身（繁體中文），不要 JSON、不要標題、不要客套話。"
         )
         user_prompt = (
             f"第 {chapter_index} 章敘事引擎診斷與建議如下：\n"
             + "\n".join(engine_lines)
-            + "\n\n請據此產生給 Writer 與 Editor 的 user 修正指令（300 字內，逐點列改法）。"
+            + "\n\n請據此產生給 Writer 與 Editor 的 user 修正指令（600 字內，逐點列改法）。"
         )
         instruction = (call_llm("copilot", system_prompt, user_prompt) or "").strip()
         if not instruction:
             return fallback
-        # 紅線附註一律保留，避免 LLM 合成時遺漏
+
+        # 紅線條件化附加，避免過度修正或約束洩漏
+        has_causal = any(a.get("dimension") in ("conflict_novelty", "ability_constraints") for a in targets)
+        has_voice = any(a.get("dimension") == "voice_integrity" for a in targets)
+
         if "不得改變本章大綱" not in instruction:
             instruction += "\n注意：只修正上述問題點，不得改變本章大綱事件、人物立場與伏筆走向。"
-        if "因果鏈" not in instruction:
-            instruction += "\n紅線：必須實質更換情節因果鏈與主角博弈方式，嚴禁僅做策略名詞同義替換蒙混。"
+        if has_causal and "因果鏈" not in instruction:
+            instruction += "\n紅線：必須實質更換情節因果鏈與主角博弈方式，嚴禁僅做策略名詞同義替換蒙混；若指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。"
+        if has_voice and ("禁用" not in instruction and "套路" not in instruction):
+            instruction += "\n紅線：嚴格刪除或替換所有標記之禁用句與套路動作，出現禁用句即判失敗。"
+
         return instruction
     except Exception:
         return fallback
@@ -114,15 +175,18 @@ def fix_chapter_from_audits(
     chapter_index: int,
     audit_ids: Optional[List[str]] = None,
     reaudit_findings: Optional[List[Dict[str, Any]]] = None,
+    round_idx: int = 1,
 ) -> Dict[str, Any]:
-    """執行閉環修正（Writer 重寫 -> Editor 潤色 -> 衝突簽名更新 -> 總監評斷），
+    """執行閉環修正（Writer 重構因果 -> Editor 定點手術/潤色 -> 衝突簽名更新 -> 總監評斷），
     回傳 status success / no_change，並附 reaudit。
 
     reaudit_findings：上一輪引擎重審的 findings（含建議），會一併納入給總監合成 user 指令。
+    round_idx：當前修正輪次。round_idx >= 2 時跳過 Writer，僅由 Editor 精準定點手術。
     """
     from backend.agents.chapter_writer.runner import run_chapter_writer
     from backend.agents.editor.runner import run_editor_agent
     from backend.services.narrative.conflict_ledger import ConflictLedger
+    from backend.services.narrative.narrative_auditor import extract_banned_hits
 
     ch_row = db.get_latest_chapter(novel_id, chapter_index)
     if not ch_row or not (ch_row.get("content") or "").strip():
@@ -137,44 +201,75 @@ def fix_chapter_from_audits(
         raise ValueError(f"第 {chapter_index} 章目前無未處置的敘事診斷")
 
     before_content = ch_row.get("content") or ""
-    # 步驟 1: 引擎診斷 + 上一輪重審建議 → 總監 LLM 合成修正指令
+    banned_hits = extract_banned_hits(before_content)
+    has_causal = any(a.get("dimension") in ("conflict_novelty", "ability_constraints") for a in targets)
+
+    # 步驟 1: 引擎診斷 + 精確命中錨點 + 上一輪重審建議 → 總監 LLM 合成修正指令
     user_instruction = build_director_user_instruction(
-        novel_id, chapter_index, targets, reaudit_findings=reaudit_findings,
+        novel_id,
+        chapter_index,
+        targets,
+        reaudit_findings=reaudit_findings,
+        banned_hits=banned_hits,
+        round_idx=round_idx,
     )
 
-    # 步驟 2: Writer 重寫正文（因果模式與破局策略在此階段徹底重構）
-    try:
-        writer_gen = run_chapter_writer(
-            novel_id, chapter_index,
-            user_prompt=user_instruction, stream=False,
-        )
-        for _ in writer_gen:
-            pass
-    except TypeError:
+    # 步驟 2: 分流決定是否執行 Writer
+    # 僅在第 1 輪且涉及長程因果/能力代價問題時，才由 Writer 重寫因果架構；
+    # 純微觀語言/口癖/開篇問題，或進入第 2 輪及以上，跳過 Writer，僅由 Editor 定點手術，避免全篇重寫引發打地鼠效應
+    should_run_writer = (round_idx == 1) and has_causal
+    current_spans = banned_hits
+
+    if should_run_writer:
         try:
             writer_gen = run_chapter_writer(
-                novel_id, chapter_index,
+                novel_id,
+                chapter_index,
                 user_prompt=user_instruction,
+                stream=False,
+                fix_mode=True,
+                fix_targets=targets,
+                banned_hits=banned_hits,
             )
             for _ in writer_gen:
                 pass
+            w_row = db.get_latest_chapter(novel_id, chapter_index)
+            if w_row and (w_row.get("content") or "").strip():
+                w_content = w_row["content"]
+                w_hits = extract_banned_hits(w_content)
+                if w_hits:
+                    current_spans = w_hits
+        except TypeError:
+            try:
+                writer_gen = run_chapter_writer(
+                    novel_id,
+                    chapter_index,
+                    user_prompt=user_instruction,
+                )
+                for _ in writer_gen:
+                    pass
+            except Exception as e:
+                print(f"[WARN] run_chapter_writer fallback in fix loop notice: {e}")
         except Exception as e:
-            print(f"[WARN] run_chapter_writer fallback in fix loop notice: {e}")
-    except Exception as e:
-        print(f"[WARN] run_chapter_writer in fix loop notice: {e}")
+            print(f"[WARN] run_chapter_writer in fix loop notice: {e}")
 
-    # 步驟 3: Editor 接手潤色（精修語言美感、去除模板動作與口癖）
+    # 步驟 3: Editor 接手定點手術或潤色（精修語言美感、定向消滅模板動作與口癖）
     try:
         editor_gen = run_editor_agent(
-            novel_id, chapter_index,
-            edit_instructions=user_instruction, stream=False,
+            novel_id,
+            chapter_index,
+            edit_instructions=user_instruction,
+            stream=False,
+            fix_mode=True,
+            fix_spans=current_spans,
         )
         for _ in editor_gen:
             pass
     except TypeError:
         try:
             editor_gen = run_editor_agent(
-                novel_id, chapter_index,
+                novel_id,
+                chapter_index,
                 edit_instructions=user_instruction,
             )
             for _ in editor_gen:
@@ -292,7 +387,7 @@ def fix_chapter_until_pass(
     for rnd in range(1, max(1, max_rounds) + 1):
         try:
             fix_res = fix_chapter_from_audits(
-                novel_id, chapter_index, reaudit_findings=prev_reaudit_findings,
+                novel_id, chapter_index, reaudit_findings=prev_reaudit_findings, round_idx=rnd,
             )
         except ValueError as ve:
             # 無正文或無未處置診斷：視為無事可修

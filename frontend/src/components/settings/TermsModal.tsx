@@ -387,7 +387,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, novelId
               <input
                 type="text"
                 className="form-input"
-                placeholder="補充出現章節、特殊禁忌或關聯人物..."
+                placeholder="補充出現章節、關聯人物；若需攔截別稱，填：禁用別稱：咒禁、禁法"
                 value={newNotes}
                 onChange={(e) => setNewNotes(e.target.value)}
               />
@@ -477,6 +477,7 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, novelId
                         <input
                           type="text"
                           className="form-input"
+                          placeholder="補充說明；禁用別稱格式：禁用別稱：咒禁、禁法"
                           value={editNotes}
                           onChange={(e) => setEditNotes(e.target.value)}
                         />

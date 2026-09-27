@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from backend import persistence as db
@@ -13,6 +14,7 @@ from backend.prompts.common.context import build_relevant_character_context
 
 RECENT_MEMORY_WINDOW = 5
 ARC_SIZE = 5
+LONG_RANGE_MEMORY_WINDOW = 50
 PREVIOUS_TAIL_LIMIT = 1200
 
 
@@ -81,15 +83,41 @@ def _outline_summary(outline: Optional[Dict[str, Any]]) -> str:
 
 def _active_characters(outline: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
     names = []
+    state_changes = {}
     if isinstance(outline, dict):
         names = outline.get("characters_active") or outline.get("characters") or []
+        raw_changes = outline.get("character_state_changes") or outline.get("relationship_changes") or []
+        if isinstance(raw_changes, dict):
+            state_changes = raw_changes
+        elif isinstance(raw_changes, list):
+            state_changes = {
+                str(item.get("name") or item.get("character") or "").strip(): item
+                for item in raw_changes if isinstance(item, dict)
+            }
     if isinstance(names, str):
         names = [names]
     result = []
     for name in names or []:
-        clean = str(name).strip()
+        item = name if isinstance(name, dict) else {}
+        clean = str(item.get("name") or item.get("character") or name).strip()
         if clean:
-            result.append({"name": clean, "behavior": "", "state_change": ""})
+            change = state_changes.get(clean, {})
+            if isinstance(change, str):
+                change = {"state_change": change}
+            if not isinstance(change, dict):
+                change = {}
+            state_change = (
+                item.get("state_change") or item.get("emotional_change") or
+                change.get("state_change") or change.get("emotional_change") or
+                change.get("change") or ""
+            )
+            relationship_change = item.get("relationship_change") or change.get("relationship_change") or ""
+            result.append({
+                "name": clean,
+                "behavior": str(item.get("behavior") or change.get("behavior") or ""),
+                "state_change": str(state_change),
+                "relationship_change": str(relationship_change),
+            })
     return result
 
 
@@ -141,10 +169,11 @@ def build_chapter_memory_summary(
         title = outline.get("title") or outline.get("chapter_title") or ""
     outline_brief = _outline_summary(outline)
     prose_excerpt = snippet_text(prose, 520, 520)
-    if outline_brief:
-        chapter_summary = f"{title}：{outline_brief}" if title else outline_brief
-    else:
-        chapter_summary = prose_excerpt
+    chapter_summary = build_chapter_synopsis_from_prose(
+        prose,
+        fallback=(f"{title}：{outline_brief}" if title and outline_brief else title or outline_brief or prose_excerpt),
+        limit=320,
+    )
     return {
         "chapter_index": int(chapter_index),
         "title": title or f"第 {chapter_index} 章",
@@ -152,10 +181,40 @@ def build_chapter_memory_summary(
         "active_characters": _active_characters(outline),
         "foreshadowing_progress": _foreshadowing_progress(outline, chapter_index),
         "timeline_event": (outline or {}).get("time_setting", "") if isinstance(outline, dict) else "",
-        "emotional_state": (outline or {}).get("emotional_state", "") if isinstance(outline, dict) else "",
+        "emotional_state": (
+            (outline or {}).get("emotional_requirement") or
+            (outline or {}).get("emotional_state") or
+            (outline or {}).get("emotional_tone") or ""
+        ) if isinstance(outline, dict) else "",
+        "relationship_changes": (outline or {}).get("relationship_changes", []) if isinstance(outline, dict) else [],
         "outline_reference": outline or {},
         "prose_excerpt": prose_excerpt,
     }
+
+
+def build_chapter_synopsis_from_prose(content: str, fallback: str = "", limit: int = 320) -> str:
+    """Create a deterministic synopsis from the saved prose, never from a stale outline.
+
+    This extractive summary uses the opening and closing complete sentences so that
+    a rewrite changing the chapter's direction cannot retain an obsolete outline synopsis.
+    """
+    _, prose = split_generated_prose(content or "")
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[。！？!?])\s*|\n+", prose)
+        if part and part.strip()
+    ]
+    if not sentences:
+        return str(fallback or "").strip()
+    selected = sentences[:2]
+    if len(sentences) > 3:
+        selected.append(sentences[-1])
+    synopsis = "".join(selected)
+    if len(synopsis) > limit:
+        synopsis = synopsis[:limit].rsplit("。", 1)[0]
+        if not synopsis:
+            synopsis = "".join(selected)[:limit].rstrip()
+    return synopsis or str(fallback or "").strip()
 
 
 def store_chapter_memory(
@@ -221,6 +280,7 @@ def _merge_character_progress(memories: List[Dict[str, Any]]) -> List[Dict[str, 
                 "name": name,
                 "last_seen_chapter": memory.get("chapter_index"),
                 "latest_state_change": item.get("state_change", ""),
+                "latest_relationship_change": item.get("relationship_change", ""),
             }
     return list(seen.values())
 
@@ -242,21 +302,155 @@ def unresolved_foreshadowing_from_memories(memories: List[Dict[str, Any]]) -> Li
     return list(states.values())
 
 
+def get_unresolved_foreshadowing(novel_id: str, before_chapter: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Return planted narrative seeds without a later allocated payoff, in story order."""
+    if not novel_id or int(before_chapter) <= 1:
+        return []
+    memories = _memory_payload(db.get_chapter_memories(novel_id, 1, int(before_chapter) - 1))
+    pending = unresolved_foreshadowing_from_memories(memories)
+    return pending[-max(1, int(limit)):]
+
+
 def build_writer_memory_context(novel_id: str, chapter_index: int, window: int = RECENT_MEMORY_WINDOW) -> Dict[str, Any]:
     target = int(chapter_index)
     recent = _memory_payload(db.get_chapter_memories(novel_id, max(1, target - window), target - 1))
     previous = db.get_latest_chapter(novel_id, target - 1) if target > 1 else None
     previous_tail = tail_text(previous.get("content", ""), PREVIOUS_TAIL_LIMIT) if previous else ""
     arc = db.get_arc_summary(novel_id, chapter_index=target - 1) if target > 1 else None
+    retrospective_start = max(1, target - LONG_RANGE_MEMORY_WINDOW)
+    retrospective_end = max(0, target - window - 1)
+    long_range_memories = _memory_payload(
+        db.get_chapter_memories(novel_id, retrospective_start, retrospective_end)
+    ) if target > window + 1 else []
+    try:
+        chapter_rows = {
+            int(row["chapter_index"]): row
+            for row in db.get_chapters_latest_range(novel_id, retrospective_start, retrospective_end)
+        } if retrospective_start <= retrospective_end else {}
+    except Exception:
+        chapter_rows = {}
+    long_range_retrospective = []
+    chapter_cache = dict(chapter_rows)
+    for offset in range(0, len(long_range_memories), ARC_SIZE):
+        group = long_range_memories[offset:offset + ARC_SIZE]
+        beats = []
+        for memory in group:
+            chapter_idx = int(memory.get("chapter_index") or 0)
+            chapter = chapter_cache.get(chapter_idx)
+            if chapter is None and chapter_idx:
+                chapter = db.get_latest_chapter(novel_id, chapter_idx)
+                chapter_cache[chapter_idx] = chapter
+            saved_prose = (chapter or {}).get("content") or ""
+            summary = (
+                build_chapter_synopsis_from_prose(saved_prose, fallback=memory.get("chapter_summary", ""), limit=180)
+                if saved_prose else str(memory.get("chapter_summary") or "")
+            )
+            summary = re.sub(r"\s+", " ", summary).strip()
+            if summary:
+                beats.append(f"第{memory.get('chapter_index', '?')}章：{summary[:180]}")
+        if beats:
+            long_range_retrospective.append("；".join(beats))
+    character_history = _build_character_history(novel_id, target, chapter_rows=chapter_cache)
     return {
         "memory_policy": "寫作必須以章節記憶、前章正文尾段、當前 arc summary 為連續性依據；伏筆僅處理本章大綱明確指派之任務。",
         "recent_chapter_memories": recent,
         "current_arc_summary": arc.get("summary_json") if arc else None,
+        "long_range_arc_retrospective": long_range_retrospective,
+        "character_emotional_and_relationship_history": character_history,
         "previous_chapter_tail": previous_tail,
     }
 
 
-def build_editor_context_packet(novel_id: str, chapter_index: int, original_prose: str) -> Dict[str, Any]:
+def _build_character_history(
+    novel_id: str,
+    target_chapter: int,
+    max_chars: int = 7000,
+    chapter_rows: Optional[Dict[int, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Recall first and latest recorded emotional/relationship moments for current cast."""
+    outline = get_chapter_outline(novel_id, target_chapter) or {}
+    active = _active_characters(outline)
+    if not active:
+        return []
+    memories = _memory_payload(db.get_chapter_memories(novel_id, 1, target_chapter - 1))
+    result = []
+    used_chars = 0
+    prose_cache = {}
+    chapter_rows = chapter_rows or {}
+    for character in active:
+        name = character["name"]
+        appearances = [
+            memory for memory in memories
+            if any(item.get("name") == name for item in (memory.get("active_characters") or []) if isinstance(item, dict))
+        ]
+        if not appearances:
+            continue
+        picked = [appearances[0]]
+        if appearances[-1] is not appearances[0]:
+            picked.append(appearances[-1])
+        if len(appearances) > 2:
+            picked.append(appearances[-2])
+        moments = []
+        for memory in picked:
+            active_record = next(
+                (item for item in (memory.get("active_characters") or []) if isinstance(item, dict) and item.get("name") == name),
+                {},
+            )
+            summary = str(memory.get("chapter_summary") or "").strip()
+            cache_key = (memory.get("chapter_index"), name)
+            evidence = prose_cache.get(cache_key)
+            if evidence is None:
+                historical_idx = int(memory.get("chapter_index") or 0)
+                historical_chapter = chapter_rows.get(historical_idx)
+                if historical_chapter is None and historical_idx:
+                    historical_chapter = db.get_latest_chapter(novel_id, historical_idx)
+                historical_prose = (historical_chapter or {}).get("content") or ""
+                evidence = _character_prose_evidence(historical_prose, name)
+                prose_cache[cache_key] = evidence
+            if not summary:
+                summary = str(memory.get("prose_excerpt") or "").replace("\n...(中略)...\n", " … ").strip()[:180]
+            event = {
+                "chapter_index": memory.get("chapter_index"),
+                "chapter_summary": summary[:180],
+                "state_change": active_record.get("state_change", ""),
+                "relationship_change": active_record.get("relationship_change", ""),
+                "textual_evidence": evidence,
+            }
+            cost = len(json.dumps(event, ensure_ascii=False))
+            if used_chars + cost > max_chars:
+                break
+            used_chars += cost
+            moments.append(event)
+        if moments:
+            result.append({"character": name, "recorded_moments": moments})
+        if used_chars >= max_chars:
+            break
+    return result
+
+
+def _character_prose_evidence(prose: str, character_name: str, limit: int = 300) -> str:
+    """Extract scene-local sentences about a character from the saved chapter prose."""
+    if not prose or not character_name:
+        return ""
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[。！？!?])\s*|\n+", prose)
+        if sentence and sentence.strip()
+    ]
+    matched_indexes = [i for i, sentence in enumerate(sentences) if character_name in sentence]
+    if not matched_indexes:
+        return ""
+    selected = []
+    for idx in matched_indexes[:2]:
+        for neighbor in (idx - 1, idx, idx + 1):
+            if 0 <= neighbor < len(sentences) and neighbor not in selected:
+                selected.append(neighbor)
+    selected.sort()
+    evidence = " ".join(sentences[i] for i in selected)
+    return evidence[:limit].rstrip()
+
+
+def build_editor_context_packet(novel_id: str, chapter_index: int, original_prose: str, fix_mode: bool = False) -> Dict[str, Any]:
     """
     Build lightweight, clean context for Editor according to CONTEXT_ARCHITECTURE_REVIEW.md Section 1.7:
     - Minimum required: scene goals / chapter function, previous chapter tail (800-1200 words), relevant terms, editor policy.
@@ -328,8 +522,16 @@ def build_editor_context_packet(novel_id: str, chapter_index: int, original_pros
         "chapter_index": chapter_index,
         "scene_goals": scene_goals,
         "previous_chapter_tail": previous_tail,
-        "story_terms": [{"term": t.get("term"), "definition": t.get("definition")} for t in terms_list],
-        "editor_policy": "潤色方針：以修辭優化、節奏微調、對白生動與文學美感提升為主；嚴格保留本章既有情節走向、人物生死與客觀事實，不隨意刪除核心事件。",
+        "character_emotional_and_relationship_history": _build_character_history(novel_id, target),
+        "story_terms": [
+            {"term": t.get("term"), "definition": t.get("definition"), "notes": t.get("notes", "")}
+            for t in terms_list
+        ],
+        "editor_policy": (
+            "修正方針：允許重寫被標記段落之因果、策略、微動作與代價，徹底打破套路；未標記段落與大綱主旨事件保留。"
+            if fix_mode else
+            "潤色方針：以修辭優化、節奏微調、對白生動與文學美感提升為主；嚴格保留本章既有情節走向、人物生死與客觀事實，不隨意刪除核心事件。"
+        ),
         "temporal_graph_facts": temporal_facts,
         "conflict_novelty_guard": conflict_guard,
         "setting_boundaries": setting_block,

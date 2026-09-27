@@ -325,8 +325,8 @@ class ConflictLedger:
         novel_id: str,
         current_chapter: int,
     ) -> str:
-        """為 WriterContextBuilder 產生乾淨且富啟發性的長程去套路化提示詞"""
-        recent = db.get_conflict_signatures(novel_id, limit=4)
+        max_ch = max(0, current_chapter - 1) if current_chapter and current_chapter > 1 else 0
+        recent = db.get_conflict_signatures(novel_id, limit=4, max_chapter=max_ch if max_ch > 0 else None) if max_ch > 0 else []
         if not recent:
             return ""
 

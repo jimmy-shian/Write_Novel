@@ -142,22 +142,60 @@ def assert_not_refusal(text: str, context_desc: str = "") -> None:
 
 def sanitize_meta_narrative(text: str) -> str:
     """
-    Strips leading meta bridge clauses and leaked outline tags cleanly from prose.
+    Removes only a redundant leading bridge clause without deleting narrative content.
     E.g. '承接上一章情節，李斯特拔出了長劍。' -> '李斯特拔出了長劍。'
+    Remaining meta narration and outline tags are handled by find_meta_narrative_leaks
+    as a hard validation failure so sanitization cannot silently erase story events.
     """
     if not text or not isinstance(text, str):
         return text or ""
     result = text
     # Strip leading meta bridge clauses
     result = re.sub(
-        r"^(?:承接|延續|接續|正如|根據)?(?:上一章|前一章|上回|上一回)(?:情節|內容|所述|發生的事)?[，,：:\s]*",
+        r"^(?:承接|延續|接續|正如|根據|如)?(?:上一章|前一章|上回|上一回|前文|上文)(?:的)?(?:結尾|情節|內容|所述|發生的事)?[，,：:\s]*",
         "",
         result.strip()
     )
-    # Strip common leaked outline tags
+    # Strip explicit outline bridges even when the model adds a short introductory clause.
     result = re.sub(
-        r"【(?:場景目標|核心阻礙|轉折點|推進拍點|本章任務|視角人物|知情邊界|實質狀態位移)】[^\n]*\n?",
+        r"^(?:接下來(?:我們)?(?:將|要)?|本章(?:將要|接下來)?)[，,：:\s]*",
         "",
-        result
+        result,
     )
     return result.strip()
+
+
+_META_NARRATIVE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"(?:正如|如同|如|根據|承接|延續|接續)(?:在)?(?:上一章|前一章|上回|上一回|前文|上文)",
+        r"(?:接上[文回]|承上|(?<![\u3400-\u9fff])續前(?![\u3400-\u9fff])|在(?:下一章|後一章|上一章|前一章)(?:中|裡|內)?)",
+        r"(?:下一章|後一章)(?:將(?:要)?|接下來(?:會|將)?)(?:描寫|講述|發生|交代)",
+        r"(?:上一章|前一章|上回|上一回)(?:的)?(?:結尾|情節|內容|所述|發生的事)",
+        r"(?:如前所述|正如前面(?:所)?(?:說|提到|描述)|上回說到|先前提到|前文提到|上文提及)",
+        r"(?:正如|如同|如)第\s*\d+\s*章(?:中|所)?(?:描述|提及|寫道|所述)",
+        r"在第\s*\d+\s*章(?:中|裡|內)",
+        r"讀者(?:可能)?(?:還)?記得",
+        r"(?:本章|接下來)(?:將要|我們將|即將)\s*(?:描寫|講述|呈現)",
+        r"(?:藉此|以此|用以)[^。！？\n]{0,40}(?:凸顯|呈現|展現|強化|營造|烘托)",
+        r"【(?:場景目標|核心阻礙|轉折點|推進拍點|本章任務|視角人物|知情邊界|實質狀態位移)】",
+    )
+)
+
+
+def find_meta_narrative_leaks(text: str) -> List[str]:
+    """Return explicit chapter/reader/outline meta-narrative spans in prose."""
+    if not text or not isinstance(text, str):
+        return []
+    hits = []
+    in_world_reference = re.compile(
+        r"(?:古籍|經卷|典籍|書籍|古冊|殘卷|書卷|卷軸|秘笈|魔導書|書中|冊中|筆記)的?(?:第\s*\d+\s*章|上一章|前一章|上一節|前文)"
+    )
+    for pattern in _META_NARRATIVE_PATTERNS:
+        for match in pattern.finditer(text):
+            surrounding = text[max(0, match.start() - 30):min(len(text), match.end() + 30)]
+            if in_world_reference.search(surrounding):
+                continue
+            hits.append(match.group(0))
+            break
+    return hits

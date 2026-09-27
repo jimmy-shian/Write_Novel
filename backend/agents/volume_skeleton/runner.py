@@ -107,6 +107,14 @@ def _build_nearby_skeleton_context(volume, batch_indexes):
     return "\n【同卷鄰近既有骨架（只供銜接，不要重寫這些章）】\n" + json.dumps(nearby, ensure_ascii=False, indent=2) + "\n"
 
 
+_PLACEHOLDER_SETTING_MARKERS = ("待設定", "未設定", "待補", "依劇情決定", "暫定名稱", "placeholder", "tbd")
+
+
+def _setting_text_is_substantive(value, minimum_length):
+    text = str(value or "").strip()
+    return len(text) >= minimum_length and not any(marker.lower() in text.lower() for marker in _PLACEHOLDER_SETTING_MARKERS)
+
+
 def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skeleton, chapters_skeleton=None, start_chapter=1):
     """
     從 LLM 生成的篇卷骨架資料中提取角色增量 (new_characters)、世界法則 (new_world_rules) 與勢力 (new_factions)。
@@ -119,10 +127,28 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
         return {"added_characters": [], "new_rules": [], "new_factions": [], "notice": ""}
 
     raw_new_chars = []
+    rejected_increments = []
+    rejected_character_names = set()
     if isinstance(parsed_skeleton, dict):
         nc = parsed_skeleton.get("new_characters")
         if isinstance(nc, list):
-            raw_new_chars = [item for item in nc if isinstance(item, dict)]
+            for item in nc:
+                if not isinstance(item, dict):
+                    rejected_increments.append("角色卡格式不是物件")
+                    continue
+                name = str(item.get("name") or "").strip()
+                missing = [
+                    field for field, minimum in (("role", 2), ("personality", 8), ("motivation", 8))
+                    if not _setting_text_is_substantive(item.get(field), minimum)
+                ]
+                if not _setting_text_is_substantive(name, 2) or missing:
+                    if name:
+                        rejected_character_names.add(name)
+                    rejected_increments.append(
+                        f"角色「{name or '未命名'}」未達角色卡最低資訊量（缺少或過短：{', '.join(missing) or 'name'}）"
+                    )
+                    continue
+                raw_new_chars.append(item)
 
     # 讀取現有角色名冊進行對比
     char_data = db.get_latest_characters(novel_id)
@@ -153,16 +179,15 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
                 name = str(raw_a).strip()
                 if not name or len(name) > 15 or name in GENERIC_IGNORE:
                     continue
+                if name in rejected_character_names:
+                    continue
                 if name not in existing_names and name not in declared_names:
-                    raw_new_chars.append({
-                        "name": name,
-                        "role": "本卷重要角色",
-                        "faction": f"第 {volume_index} 卷相關勢力",
-                        "personality": "行事符合劇情設定，具備鮮明目的與動機",
-                        "motivation": f"於第 {ch_idx} 章登場推動本卷劇情",
-                        "first_appearance_chapter": ch_idx
-                    })
-                    declared_names.add(name)
+                    # Do not silently promote a name-only outline mention into a
+                    # character card filled with generic placeholder traits.
+                    rejected_character_names.add(name)
+                    rejected_increments.append(
+                        f"角色「{name}」於第 {ch_idx} 章登場但未提供實質角色卡；未自動升格，請補齊 role、personality、motivation"
+                    )
 
     # 1. 持久化角色
     added_characters = []
@@ -178,10 +203,36 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
     if isinstance(parsed_skeleton, dict):
         nr = parsed_skeleton.get("new_world_rules")
         if isinstance(nr, list):
-            new_rules = [r for r in nr if r]
+            for rule in nr:
+                if isinstance(rule, dict):
+                    name = rule.get("name") or rule.get("rule_name")
+                    description = rule.get("description") or rule.get("details")
+                    if _setting_text_is_substantive(name, 2) and _setting_text_is_substantive(description, 30):
+                        new_rules.append(rule)
+                    else:
+                        rejected_increments.append(f"世界法則「{name or '未命名'}」說明不足 30 字或含佔位內容")
+                elif _setting_text_is_substantive(rule, 30):
+                    new_rules.append(rule)
+                elif rule:
+                    rejected_increments.append("世界法則文字不足 30 字或含佔位內容")
         nf = parsed_skeleton.get("new_factions")
         if isinstance(nf, list):
-            new_factions = [f for f in nf if f]
+            for faction in nf:
+                if isinstance(faction, dict):
+                    name = faction.get("name")
+                    description = " ".join(
+                        str(faction.get(key) or "").strip()
+                        for key in ("summary", "description", "alignment", "goals", "institution", "resources", "history")
+                        if faction.get(key)
+                    )
+                    if _setting_text_is_substantive(name, 2) and _setting_text_is_substantive(description, 24):
+                        new_factions.append(faction)
+                    else:
+                        rejected_increments.append(f"勢力「{name or '未命名'}」背景／立場說明不足 24 字或含佔位內容")
+                elif _setting_text_is_substantive(faction, 24):
+                    new_factions.append(faction)
+                elif faction:
+                    rejected_increments.append("勢力說明不足 24 字或含佔位內容")
 
     if new_rules or new_factions:
         try:
@@ -217,7 +268,7 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
 
     # 3. 總監審核通報
     notice_text = ""
-    if added_characters or new_rules or new_factions:
+    if added_characters or new_rules or new_factions or rejected_increments:
         lines = [f"📋 **【總監大綱增量設定審核通報 - 第 {volume_index} 卷】**"]
         if added_characters:
             lines.append(f"👤 **新增角色卡 ({len(added_characters)} 位)**：{', '.join(added_characters)}（已合流至全域角色庫，防止正文寫作性格偏離或立場翻轉）")
@@ -227,7 +278,9 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
         if new_factions:
             f_names = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in new_factions]
             lines.append(f"🚩 **新增活躍勢力 ({len(new_factions)} 個)**：{', '.join(f_names)}")
-        lines.append("⚡ 以上增量已完成原子持久化，後續 Writer Agent 將嚴格遵照上述設定進行正文編織。")
+        if rejected_increments:
+            lines.append(f"⚠️ **未升格為正式設定 ({len(rejected_increments)} 項)**：" + "；".join(rejected_increments[:12]))
+        lines.append("⚡ 通過最低資訊量檢查的增量已寫入設定庫；其餘僅留在骨架草稿，不會污染全域世界觀。")
         notice_text = "\n".join(lines)
         try:
             db.save_chat_message(novel_id, "assistant", notice_text, message_type="pipeline")
@@ -238,6 +291,7 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
         "added_characters": added_characters,
         "new_rules": new_rules,
         "new_factions": new_factions,
+        "rejected_increments": rejected_increments,
         "notice": notice_text,
     }
 

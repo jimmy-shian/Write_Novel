@@ -58,6 +58,8 @@ class WriterContextBuilder:
         outcome = current_outline.get("scene_outcome") or "達成部分目標或付出相應代價"
         scene_func = current_outline.get("scene_function") or "推進 (progression)"
         state_after = current_outline.get("story_state_after") or outcome
+        time_setting = current_outline.get("time_setting") or "承接前章時間線"
+        scene_setting = current_outline.get("scene_setting") or current_outline.get("location") or "依大綱指定場景"
 
         return {
             "chapter_index": chapter_index,
@@ -66,6 +68,8 @@ class WriterContextBuilder:
             "narrative_distance": "close",
             "thought_mode": "free_indirect",
             "scene_function": scene_func,
+            "time_setting": time_setting,
+            "scene_setting": scene_setting,
             "scene_goal": goal,
             "conflict": conflict,
             "turn": turn,
@@ -269,9 +273,62 @@ class WriterContextBuilder:
             if mem_lines:
                 lines.append("▶ 近期情勢演進脈絡：\n" + "\n".join(mem_lines))
 
+        long_range = raw_packet.get("long_range_arc_retrospective") or []
+        if isinstance(long_range, list) and long_range:
+            recap_lines = [f"  - {str(item).strip()}" for item in long_range if str(item).strip()]
+            if recap_lines:
+                lines.append("▶ 長程主線回顧（近期章節以外的既有正文證據）：\n" + "\n".join(recap_lines[-10:]))
+
+        character_history = raw_packet.get("character_emotional_and_relationship_history") or []
+        if isinstance(character_history, list) and character_history:
+            history_lines = []
+            for record in character_history:
+                if not isinstance(record, dict) or not record.get("character"):
+                    continue
+                name = str(record["character"])
+                events = record.get("recorded_moments") or []
+                if not events:
+                    continue
+                history_lines.append(f"  - **{name}** 的過往互動與情緒脈絡：")
+                for event in events[-3:]:
+                    if not isinstance(event, dict):
+                        continue
+                    details = []
+                    if event.get("state_change"):
+                        details.append(f"心理／立場變化：{event['state_change']}")
+                    if event.get("relationship_change"):
+                        details.append(f"關係變化：{event['relationship_change']}")
+                    if event.get("textual_evidence"):
+                        details.append(f"正文片段：{event['textual_evidence']}")
+                    elif event.get("chapter_summary"):
+                        details.append(str(event["chapter_summary"]))
+                    if details:
+                        history_lines.append(f"    · 第 {event.get('chapter_index', '?')} 章：" + "；".join(details))
+            if history_lines:
+                lines.append("▶ 本章活躍角色的動態情感與關係記憶（正文摘錄為證據，不可覆寫既定事實）：\n" + "\n".join(history_lines))
+
         arc_summary = raw_packet.get("current_arc_summary")
-        if arc_summary and isinstance(arc_summary, str) and arc_summary.strip():
+        if isinstance(arc_summary, str) and arc_summary.strip():
             lines.append(f"▶ 當前階段主線大勢：{arc_summary.strip()}")
+        elif isinstance(arc_summary, dict):
+            arc_text = str(arc_summary.get("arc_summary") or "").strip()
+            if arc_text:
+                lines.append(f"▶ 近階段主線大勢（已寫正文的跨章回顧）：{arc_text}")
+            progress = arc_summary.get("character_arc_progress") or []
+            progress_lines = []
+            if isinstance(progress, list):
+                for item in progress:
+                    if not isinstance(item, dict):
+                        continue
+                    changes = [
+                        str(item.get(field)).strip()
+                        for field in ("latest_state_change", "latest_relationship_change")
+                        if item.get(field) and str(item.get(field)).strip()
+                    ]
+                    if changes:
+                        progress_lines.append(f"  - {item.get('name', '角色')}：" + "；".join(changes))
+            if progress_lines:
+                lines.append("▶ 階段內角色狀態變化：\n" + "\n".join(progress_lines))
 
         return "\n\n".join(lines).strip()
 
@@ -311,6 +368,9 @@ class WriterContextBuilder:
         chapter_index: int = 1,
         user_prompt: Optional[str] = None,
         narrative_memory_context: Optional[str] = None,
+        fix_mode: bool = False,
+        fix_targets: Optional[List[Dict[str, Any]]] = None,
+        banned_hits: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """將解構後的各元件格式化為乾淨、無 JSON 資料庫污染的寫作指引文字。"""
         current_outline = current_outline or {}
@@ -343,6 +403,24 @@ class WriterContextBuilder:
         # 6. 組裝純淨文字區塊
         lines = []
 
+        # (Top) 修正輪最高指令置頂與禁用原文清單
+        if fix_mode and user_prompt and str(user_prompt).strip():
+            lines.append("### 🚨【本次修正最高指令：覆寫其他風格要求】")
+            lines.append(f"> 導演/作者特別指示：\n{str(user_prompt).strip()}")
+            lines.append("")
+
+        if fix_mode and banned_hits:
+            lines.append("### 🚫【本次禁用原文：出現即判失敗】")
+            lines.append("> 以下為正文已偵測到的嚴重公式化套路句/口癖，本輪生成必須徹底重寫或定點消除，出現任一條即視為失敗：")
+            for h in banned_hits:
+                p_idx = h.get("paragraph_index", 1)
+                sent = h.get("matched_sentence", "")
+                lbl = h.get("pattern_label", "")
+                ctx = h.get("context_20chars", "")
+                ctx_str = f"（前後文：…{ctx}…）" if ctx else ""
+                lines.append(f"- 第 {p_idx} 段：『{sent}』[{lbl}]{ctx_str}")
+            lines.append("")
+
         # (A0) 紅線禁令：嚴禁元敘事與開篇套路
         lines.append("### 🚫【紅線禁令：嚴禁元敘事與開篇套路】")
         lines.append("- **嚴禁元敘事洩漏**：正文嚴禁出現「那是上一章...」、「正如前一章所述」、「承接上一章情節」等破壁敘事詞彙；小說必須 100% 維持在沉浸式故事世界內部，禁止旁白對讀者或寫作大綱進行元評論。")
@@ -354,15 +432,27 @@ class WriterContextBuilder:
             lines.append(core_context)
             lines.append("")
 
-        # (A) 場景契約與狀態位移
+        # (A) 場景契約與時空邊界
         lines.append(f"### 🎬【場景契約 (Scene Contract) - 第 {chapter_index} 章】")
-        lines.append(f"- **場景功能定位 (Scene Function)**：{contract.get('scene_function', '推進 (progression)')}")
+        lines.append(f"- **本章指定時間 (Time)**：【{contract.get('time_setting', '承接前章時間線')}】")
+        lines.append(f"- **本章指定地點 (Location)**：【{contract.get('scene_setting', '依大綱指定場景')}】")
         lines.append(f"- **POV 視角人物**：{contract['pov_character']}（攝影機固定於此角色，以其感知、經驗與推論為限）")
+        lines.append(f"- **場景功能定位 (Scene Function)**：{contract.get('scene_function', '推進 (progression)')}")
         lines.append(f"- **敘事距離與模式**：{contract['narrative_mode']}（{contract['narrative_distance']} distance），支援自由間接引語 (Free Indirect Discourse)")
         lines.append(f"- **場景戲劇目標 (Goal)**：{contract['scene_goal']}")
         lines.append(f"- **核心阻礙衝突 (Conflict)**：{contract['conflict']}")
         lines.append(f"- **轉折點 (Turn)**：{contract['turn']}")
         lines.append(f"- **實質狀態位移 (Meaningful State Change)**：{contract.get('state_after', contract['outcome'])}")
+        lines.append("")
+
+        if fix_mode:
+            lines.append("### 🔓【本輪允許偏離】")
+            lines.append("- 允許更換破局手段、代價場景、微動作描寫與心理博弈細節，不視為偏離大綱；以打破套路與解決診斷為最高準則。")
+            lines.append("")
+
+        lines.append("### 🏛️【不可違背之場景時空公理（剛性約束）】")
+        lines.append(f"- **嚴格鎖定指定地點**：全章核心情節必須在【{contract.get('scene_setting', '依大綱指定場景')}】展開，嚴禁擅自更換至其他無關地點或延用前章已結束之舊場景。")
+        lines.append(f"- **嚴格鎖定時間流向**：本章時間為【{contract.get('time_setting', '承接前章時間線')}】。若大綱註明經過數小時或數天，開篇必須體現時間流逝與情境切換，嚴禁無縫秒接上一秒動作（例如前章已吃完或放下的食物、已結束的現場對話）。")
         lines.append("")
 
         # (A2) 長程衝突因果防重複指引 (Conflict Novelty Guard)
@@ -373,9 +463,17 @@ class WriterContextBuilder:
 
         # (A3) 未處置敘事診斷約束 (Unresolved Narrative Audits) —— 審計閉環：
         # 前文診斷若無人 resolve，自動餵給下一章 Writer，避免「有診斷、寫作照舊」。
+        # 修正輪直接傳入本次待修 targets；正常輪嚴格過濾：僅載入當前章之前的真實歷史診斷 (chapter_index < 當前章)，杜絕未來未寫章節之審計反向倒灌。
         try:
             from backend import persistence as _db
-            _audits = _db.get_narrative_audits(novel_id, unresolved_only=True, limit=5) or []
+            if fix_mode and fix_targets:
+                _audits = fix_targets
+            elif chapter_index and chapter_index > 1:
+                _audits = _db.get_narrative_audits(
+                    novel_id, unresolved_only=True, limit=5, max_chapter=chapter_index - 1
+                ) or []
+            else:
+                _audits = []
         except Exception:
             _audits = []
 
@@ -407,13 +505,13 @@ class WriterContextBuilder:
             lines.append("")
 
         if _audits:
-            lines.append("### 🩺【前文敘事診斷待辦 (必須在本章規避或修補)】")
+            lines.append("### 🩺【前文歷史敘事診斷待辦 (必須在本章規避或修補)】")
             for _a in _audits[:5]:
                 _ch = _a.get("chapter_index", "?")
                 _dim = _a.get("dimension", "")
                 _rec = str(_a.get("recommendation") or "").strip()[:200]
                 lines.append(f"  * 第 {_ch} 章 [{_dim}]：{_rec}")
-            lines.append("*(以上為總監 2.0 對前文的正式診斷，請在本章落筆時主動規避同類問題；已改善的診斷請於敘事引擎頁標記處置)*")
+            lines.append("*(以上為總監對歷史前文的正式診斷，請在本章落筆時主動規避同類問題)*")
             lines.append("")
 
         # (A4) 幾何結構角色、義務與跨距關聯 (Geometry-First Overlay & Cross Context)
@@ -510,12 +608,31 @@ class WriterContextBuilder:
         # (D2) 術語庫名詞邊界約束 (Glossary)
         terms = get_terms(novel_id)
         if terms:
-            context_haystack = json.dumps(current_outline, ensure_ascii=False) + " " + " ".join(active_char_names) + " " + contract.get("scene_goal", "")
-            matched_terms = [t for t in terms if t.get("term") and t["term"] in context_haystack]
-            selected_terms = matched_terms[:15] if matched_terms else terms[:10]
+            chapter_haystack = (
+                json.dumps(current_outline, ensure_ascii=False) + " " + " ".join(active_char_names) + " " +
+                contract.get("scene_goal", "") + " " + (clue_payoff_details or "")
+            )
+            broader_haystack = " ".join(((worldview_text or "")[:8000], narrative_memory_context or ""))
+            directly_relevant = [t for t in terms if t.get("term") and t["term"] in chapter_haystack]
+            context_relevant = [
+                t for t in terms
+                if t.get("term") and t["term"] in broader_haystack and t not in directly_relevant
+            ]
+            selected_terms = (directly_relevant + context_relevant)[:15]
+            if not selected_terms:
+                # Prefer hand-curated entries and terms recently updated near this chapter,
+                # rather than an arbitrary alphabetical slice of a large glossary.
+                selected_terms = sorted(
+                    terms,
+                    key=lambda t: (
+                        0 if t.get("source_chapter") is None else 1,
+                        abs(int(t.get("updated_chapter") or chapter_index) - int(chapter_index)),
+                    ),
+                )[:10]
             if selected_terms:
                 lines.append("### 📖【術語庫與名詞約束 (Story Terms - 剛性約束與唯一性)】")
                 lines.append("> 剛性約束：以下專有名詞為唯一標準名稱。嚴禁自造替代名詞或進行近義詞替換，行文中涉及相關概念時必須強制沿用。")
+                lines.append("> 備註若以「禁用別稱：」標記別稱，正文不得使用該稱呼；其他備註僅作參考，不得推定為禁用詞。")
                 for t in selected_terms:
                     cat = f"[{t['category']}] " if t.get("category") else ""
                     note = f" (備註/約束：{t['notes']})" if t.get("notes") else ""
@@ -531,8 +648,8 @@ class WriterContextBuilder:
             lines.append(clean_wv)
             lines.append("")
 
-        # (F) 使用者額外提示詞
-        if user_prompt and str(user_prompt).strip():
+        # (F) 使用者額外提示詞（正常輪保留，修正輪已置頂）
+        if not fix_mode and user_prompt and str(user_prompt).strip():
             lines.append("### ✍️【使用者特定創作指示（最高優先級要求）】")
             lines.append(f"> 導演/作者特別指示：{str(user_prompt).strip()}")
             lines.append("*(請作家在落實本章情節、對白與人物行動時，務必具體遵循上述要求)*")
@@ -569,6 +686,9 @@ def build_writer_scene_context(
     chapter_index: int,
     user_prompt: Optional[str] = None,
     narrative_memory_context: Optional[str] = None,
+    fix_mode: bool = False,
+    fix_targets: Optional[List[Dict[str, Any]]] = None,
+    banned_hits: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """便捷函數：為 Chapter Writer 組裝情境化上下文。"""
     return _GLOBAL_WRITER_CONTEXT_BUILDER.format_writer_prompt_context(
@@ -583,4 +703,7 @@ def build_writer_scene_context(
         chapter_index=chapter_index,
         user_prompt=user_prompt,
         narrative_memory_context=narrative_memory_context,
+        fix_mode=fix_mode,
+        fix_targets=fix_targets,
+        banned_hits=banned_hits,
     )

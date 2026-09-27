@@ -349,6 +349,24 @@ def get_all_chapters_latest(novel_id):
     """, (novel_id,)).fetchall()
     return [dict(r) for r in rows]
 
+
+def get_chapters_latest_range(novel_id, start_chapter, end_chapter):
+    """Load latest prose versions only within an inclusive chapter range."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    rows = cursor.execute("""
+        SELECT c.* FROM chapters c
+        INNER JOIN (
+            SELECT chapter_index, MAX(version) AS max_v
+            FROM chapters
+            WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?
+            GROUP BY chapter_index
+        ) latest ON c.chapter_index = latest.chapter_index AND c.version = latest.max_v
+        WHERE c.novel_id = ?
+        ORDER BY c.chapter_index ASC
+    """, (novel_id, int(start_chapter), int(end_chapter), novel_id)).fetchall()
+    return [dict(row) for row in rows]
+
 get_chapters = get_all_chapters_latest
 get_all_chapters = get_all_chapters_latest
 get_chapter = get_latest_chapter

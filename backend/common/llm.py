@@ -366,6 +366,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
     accumulated_content = []
     has_yielded_anything = False
     in_think_block = False
+    completion_reason = None
     
     try:
         base_url = config["base_url"].rstrip("/")
@@ -407,7 +408,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 if not parsed_json or len(parsed_json) == 0:
                     raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
             
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done", "finish_reason": choice.get("finish_reason")}, ensure_ascii=False) + "\n\n"
             return
 
         response = requests.post(
@@ -452,6 +453,8 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 choices = data_json.get("choices", [])
                 if not choices:
                     continue
+
+                completion_reason = choices[0].get("finish_reason") or completion_reason
                     
                 delta = choices[0].get("delta", {})
                 
@@ -522,7 +525,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 continue
         
         # If we reached here, the call succeeded!
-        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+        yield "data: " + json.dumps({"type": "done", "finish_reason": completion_reason}) + "\n\n"
         return
         
     except Exception as e:

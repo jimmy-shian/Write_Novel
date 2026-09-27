@@ -3,6 +3,7 @@
 剛性評估與診斷模組 (Rigid Evaluation & Diagnostics Module)
 """
 import json
+import re
 
 from backend.common.config import (
     MIN_FORESHADOWING_SEEDS,
@@ -28,6 +29,19 @@ WORLDVIEW_SEED_REFERENCE_KEYS = {
     "volume",
     "volume_index",
 }
+
+
+def _synopsis_body_overlap(synopsis, content):
+    """Conservative extractive consistency signal; semantic paraphrases are not auto-failed."""
+    def grams(value):
+        normalized = re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", str(value or "")).lower()
+        return {normalized[i:i + 2] for i in range(len(normalized) - 1)}
+
+    synopsis_grams = grams(synopsis)
+    body_grams = grams(content)
+    if len(synopsis_grams) < 8:
+        return None
+    return len(synopsis_grams & body_grams) / len(synopsis_grams)
 
 
 def _format_worldview_seed_for_report(seed):
@@ -904,6 +918,32 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
  
     else:
         report_lines.append(f"  - 正文已寫作有效章節數：共 {len(valid_written_ch)} 章 (總紀錄數: {len(written_ch)} 章)")
+        short_chapters = [
+            (int(ch["chapter_index"]), len((ch.get("content") or "").strip()))
+            for ch in valid_written_ch
+            if ch.get("chapter_index") is not None and len((ch.get("content") or "").strip()) < 1200
+        ]
+        if short_chapters:
+            samples = "、".join(f"第 {idx} 章（{length} 字）" for idx, length in short_chapters[:20])
+            suffix = f"等共 {len(short_chapters)} 章" if len(short_chapters) > 20 else f"共 {len(short_chapters)} 章"
+            report_lines.append(f"  - ⚠️ [正文篇幅異常] 低於 1200 字的有效章節：{samples}（{suffix}）；請檢查是否生成中斷或確為刻意短章。")
+        synopsis_mismatches = []
+        synopsis_missing = []
+        for ch in valid_written_ch:
+            chapter_idx = ch.get("chapter_index")
+            content = ch.get("content") or ""
+            synopsis = str(ch.get("synopsis") or "").strip()
+            if not synopsis:
+                synopsis_missing.append(chapter_idx)
+                continue
+            overlap = _synopsis_body_overlap(synopsis, content)
+            if overlap is not None and overlap < 0.15:
+                synopsis_mismatches.append((chapter_idx, round(overlap, 2)))
+        if synopsis_mismatches:
+            examples = "、".join(f"第 {idx} 章（字面覆蓋率 {score:.0%}）" for idx, score in synopsis_mismatches[:20])
+            report_lines.append(f"  - ⚠️ [Synopsis 疑似與正文不符] {examples}{'等' if len(synopsis_mismatches) > 20 else ''}；此為保守字面訊號，請人工確認語意摘要。")
+        if synopsis_missing:
+            report_lines.append(f"  - ⚠️ [Synopsis 缺失] 章節：{synopsis_missing[:20]}{'等' if len(synopsis_missing) > 20 else ''}")
         
         # 連續性檢查與缺漏檢測
         written_indexes = sorted([int(ch["chapter_index"]) for ch in valid_written_ch])

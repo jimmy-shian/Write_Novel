@@ -385,4 +385,121 @@ def test_fix_loop_resolves_conflict_novelty(monkeypatch, _mock_director_llm):
     assert ch2_updated_sig is not None
     assert ch2_updated_sig["protagonist_strategy"] == "negotiation"
 
-    db.delete_novel(novel_id)
+    db.delete_novel(novel_id)
+
+
+def test_extract_banned_hits_finds_gestures_and_cliches():
+    """extract_banned_hits 必須精確抓出段落序號、匹配句與前後文。"""
+    from backend.services.narrative.narrative_auditor import extract_banned_hits
+
+    prose = (
+        "老舊的霓虹招牌在雨水中滋滋作響，閃爍著微弱的光暈。\n\n"
+        "李斯特抬起頭，嘴角微微勾起一抹冷笑，注視著遠處的黑影。\n\n"
+        "這一切只是個開始，命運的齒輪開始轉動。"
+    )
+    hits = extract_banned_hits(prose)
+    assert len(hits) >= 3
+
+    labels = [h["pattern_label"] for h in hits]
+    assert any("開篇套路" in l for l in labels)
+    assert any("嘴角勾起" in l for l in labels)
+    assert any("結尾套路" in l or "命運齒輪" in l for l in labels)
+
+    gesture_hit = next(h for h in hits if "嘴角勾起" in h["pattern_label"])
+    assert gesture_hit["paragraph_index"] == 2
+    assert "嘴角微微勾起一抹冷笑" in gesture_hit["matched_sentence"]
+
+
+def test_red_line_conditioned_by_dimension():
+    """純 voice_integrity 目標不得收到因果鏈更換紅線；conflict_novelty 必須收到。"""
+    pure_voice_targets = [{
+        "dimension": "voice_integrity",
+        "evidence": "嘴角勾起笑意 (3次)",
+        "recommendation": "替換為角色獨特微動作",
+    }]
+    voice_inst = build_director_user_instruction("test_novel_any", 1, pure_voice_targets)
+    assert "不得改變本章大綱" in voice_inst
+    assert "因果鏈" not in voice_inst  # 純口癖不得強加因果鏈紅線
+
+    causal_targets = [{
+        "dimension": "conflict_novelty",
+        "evidence": "連續3章使用裝傻示弱破局",
+        "recommendation": "更換破局策略",
+    }]
+    causal_inst = build_director_user_instruction("test_novel_any", 1, causal_targets)
+    assert "不得改變本章大綱" in causal_inst
+    assert "因果鏈" in causal_inst  # 因果目標必須包含因果鏈紅線
+
+
+def test_round_2_skips_writer_and_passes_spans_to_editor(monkeypatch, _mock_director_llm):
+    """第 2 輪及純口癖修正輪跳過 Writer，僅由 Editor 精準定點手術，且 Editor 提示詞含命中 span。"""
+    from backend.services.narrative.fix import fix_chapter_from_audits
+
+    novel_id = "test_skip_writer_round2"
+    db.delete_novel(novel_id)
+    db.create_novel(novel_id, "跳過Writer測試", "奇幻", "冒險")
+    bad = _bad_prose()
+    db.save_chapter(novel_id, 1, bad)
+
+    NarrativeAuditor.audit_chapter_prose(
+        novel_id=novel_id, chapter_index=1,
+        prose_text=bad, current_outline={"scene_function": "climax"},
+    )
+
+    writer_called = {"count": 0}
+    def spy_writer(*args, **kwargs):
+        writer_called["count"] += 1
+        def _gen(): yield "data: [DONE]"
+        return _gen()
+    monkeypatch.setattr("backend.agents.chapter_writer.runner.run_chapter_writer", spy_writer)
+
+    editor_captured = {"fix_mode": None, "fix_spans": None}
+    def spy_editor(novel_id, chapter_index, edit_instructions=None, stream=False, fix_mode=False, fix_spans=None, **kwargs):
+        editor_captured["fix_mode"] = fix_mode
+        editor_captured["fix_spans"] = fix_spans
+        db.save_chapter(novel_id, chapter_index, _clean_prose())
+        def _gen(): yield "data: [DONE]"
+        return _gen()
+    monkeypatch.setattr("backend.agents.editor.runner.run_editor_agent", spy_editor)
+
+    # 執行 round_idx=2
+    res = fix_chapter_from_audits(novel_id, 1, round_idx=2)
+    assert res["status"] == "success"
+    # 第 2 輪嚴格跳過 Writer！
+    assert writer_called["count"] == 0
+    # Editor 收到 fix_mode=True 與提取出來的 spans
+    assert editor_captured["fix_mode"] is True
+    assert editor_captured["fix_spans"] is not None
+    assert len(editor_captured["fix_spans"]) > 0
+
+    db.delete_novel(novel_id)
+
+
+def test_editor_targeted_rewriter_prompt_structure_in_fix_mode():
+    """驗證 fix_mode 下 Targeted Rewriter 提示詞結構：指令置頂，span 包含段落號與原文。"""
+    from backend.agents.editor.prompts import build_targeted_rewriter_messages
+
+    spans = [{
+        "paragraph_index": 3,
+        "matched_sentence": "李斯特嘴角勾起一抹冷笑。",
+        "pattern_label": "嘴角勾起笑意/冷笑",
+    }]
+    msgs = build_targeted_rewriter_messages(
+        chapter_index=1,
+        original_prose="李斯特站在風雨中。\n\n長老沉默不語。\n\n李斯特嘴角勾起一抹冷笑。\n\n戰鬥爆發。",
+        diagnostic_report={"fix_mode": True},
+        edit_instructions="刪除第3段嘴角勾起，改為握緊劍柄指節發白。",
+        editor_context="不可破壞大綱核心情節",
+        fix_mode=True,
+        fix_spans=spans,
+    )
+
+    user_text = msgs[1]["content"]
+    # 指令置頂
+    assert user_text.startswith("【本次修正最高指令：覆寫其他風格要求】")
+    # 含段落號與待刪原文
+    assert "第 3 段" in user_text
+    assert "李斯特嘴角勾起一抹冷笑" in user_text
+    assert "必須整句刪除重寫" in user_text
+    # System 提示詞含修正輪特別禁令
+    assert "禁用模板庫零容忍" in msgs[0]["content"]

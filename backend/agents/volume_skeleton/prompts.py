@@ -154,6 +154,8 @@ def build_volume_skeleton_planner_messages(
 - events 包含核心事件物件；content 用「行動 -> 結果」短句精煉描述。
 - chapter_summary 35-70 字；cliffhanger 30 字內；scene_setting 與 time_setting 使用精煉短語。
 - characters_active 列出本章真正活躍角色（通常 1-4 名）。
+- 當活躍角色發生可持續的心理、立場或關係變化時，填寫 character_state_changes（name、state_change、relationship_change）；未發生明確變化則輸出空陣列，不要虛構情緒波動。
+- emotional_requirement 描述本章必要的情感效果（例如和解、告別、愧疚或信任破裂），僅在大綱確有此需求時填寫。
 
 【章節多樣性與反公式化指引】
 - 同卷破局多樣化：交鋒模式注重變化，靈活結合正面博弈、同伴支援、資源周旋與制度借力等多種形式。
@@ -170,6 +172,8 @@ def build_volume_skeleton_planner_messages(
   "events": [{{"scene_index": 1, "location": "舊站月台", "characters": ["主角"], "content": "追查異訊 -> 取得關鍵線索"}}],
   "characters_active": ["主角"],
   "emotional_tone": "懸疑",
+  "emotional_requirement": "",
+  "character_state_changes": [],
   "cliffhanger": "車門在無人處自行開啟。",
   "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
 }}
@@ -278,6 +282,8 @@ def build_volume_skeleton_completion_messages(
       "scene_beats": [{{"beat_index": 1, "beat_type": "setup", "description": "行動與結果", "involved_characters": []}}],
       "characters_active": ["活躍角色名稱"],
       "emotional_tone": "",
+      "emotional_requirement": "",
+      "character_state_changes": [{{"name": "角色名稱", "state_change": "心理或立場變化", "relationship_change": "與另一角色關係變化"}}],
       "scene_turn": "",
       "scene_outcome": "",
       "cliffhanger": "",

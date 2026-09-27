@@ -548,7 +548,7 @@ def run_director_decision(
         suggested_next_chapter=suggested_next_chapter,
         chapter_index=chapter_index,
         director_context_block=director_context_block,
-        gold_rules_context=_load_retrospective_gold_rules(novel_id)
+        gold_rules_context=_load_retrospective_gold_rules(novel_id, agent_scope="director")
     )
     
     requested_stream = bool(stream)

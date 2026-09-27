@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from backend import persistence as db
 from backend.schemas.agent_json import APPROVAL_CRITERIA_REGISTRY, format_criteria_for_prompt
@@ -206,7 +206,8 @@ def _content_from_writer_like_output(parsed: Any, output_content: str) -> tuple[
 def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> List[str]:
     issues: List[str] = []
     content, data = _content_from_writer_like_output(parsed, output_content)
-    min_len = 1500 if stage_name == "writer" else 1000
+    # Writer and Editor share the same hard floor used by generation and save guards.
+    min_len = 1200
 
     if not content:
         issues.append("content 不可為空")
@@ -216,16 +217,20 @@ def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> 
     if is_refusal_or_disclaimer(content):
         issues.append("content 包含 AI 拒答或安全免責聲明標記")
 
-    meta_markers = ("那是上一章", "正如上一章", "承接上一章", "前一章所述", "本章節")
-    for mm in meta_markers:
-        if mm in content:
-            issues.append(f"content 包含元敘事洩漏標記：{mm}")
+    from backend.common.refusal_filter import find_meta_narrative_leaks
+    for leak in find_meta_narrative_leaks(content):
+        issues.append(f"content 包含元敘事／寫作指令洩漏：{leak}")
 
     if len(content) < min_len:
         issues.append(f"content 長度不足：至少 {min_len} 字，實際 {len(content)} 字")
 
     if data:
-        for field in ("novel_id", "chapter_index", "synopsis"):
+        # Synopsis is derived and persisted by the chapter pipeline; it's only
+        # a required output field for schemas that explicitly include it.
+        required_fields = ["novel_id", "chapter_index"]
+        if "synopsis" in data:
+            required_fields.append("synopsis")
+        for field in required_fields:
             if not _non_empty_text(data.get(field)):
                 _append_limited_issue(issues, f"{field} 不可為空")
         if data.get("chapter_index") is not None:
@@ -239,6 +244,54 @@ def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> 
     for marker in blocked_markers:
         if marker.lower() in lowered:
             _append_limited_issue(issues, f"content 含占位或系統標記：{marker}")
+
+    return issues
+
+def _validate_chapter_setting_and_continuity(
+    content: str,
+    outline: Optional[Dict[str, Any]],
+    novel_id: str,
+    chapter_index: int,
+) -> List[str]:
+    """檢驗章節正文是否違反大綱之場景地點、時間流向或開篇定型去重禁令"""
+    issues: List[str] = []
+    if not content or not outline:
+        return issues
+
+    first_paragraph = content.strip().split("\n")[0] if content else ""
+    first_500 = content[:500]
+
+    # 1. 地點一致性校驗
+    scene_setting = outline.get("scene_setting") or outline.get("location") or ""
+    if scene_setting:
+        import re
+        room_match = re.search(r'(\d{3,4})\s*[室號房]', scene_setting)
+        if room_match:
+            expected_room = room_match.group(1)
+            actual_rooms = re.findall(r'(\d{3,4})\s*[室號房]', first_500)
+            for r in actual_rooms:
+                if r != expected_room:
+                    issues.append(f"【場景地點漂移】大綱指定房號為「{expected_room}室」，正文開篇卻寫作「{r}室/房」")
+                    break
+
+    # 2. 時間流向與開篇去重校驗
+    time_setting = outline.get("time_setting") or ""
+    if chapter_index > 1 and novel_id:
+        try:
+            prev_ch = db.get_chapter(novel_id, chapter_index - 1)
+            if prev_ch and prev_ch.get("content"):
+                prev_text = prev_ch["content"].strip()
+                prev_first_line = prev_text.split("\n")[0].strip() if prev_text else ""
+
+                if len(first_paragraph) >= 15 and len(prev_first_line) >= 15:
+                    if first_paragraph[:25] == prev_first_line[:25]:
+                        issues.append(f"【開篇定型模板重複】本章開篇「{first_paragraph[:25]}...」與前章開頭完全重複，違反開篇去重禁令")
+
+                if any(kw in time_setting for kw in ("下午", "傍晚", "第二天", "數小時", "深夜")):
+                    if any(conn in first_paragraph for conn in ("才剛平息", "上一秒", "剛推開桌上那塊", "剛把桌上那塊泡發")):
+                        issues.append(f"【時間連續性矛盾】大綱標明時間跨度為「{time_setting}」，正文開篇卻無縫秒接前章微觀動作")
+        except Exception:
+            pass
 
     return issues
 
@@ -261,7 +314,13 @@ def _latest_stage_output_for_evaluation(stage_name: str, novel_id: str) -> str:
         return chapter.get("content", "") if chapter else ""
     return ""
 
-def evaluate_output(stage_name: str, output_content: Any = "", novel_id: str = "") -> Dict[str, Any]:
+def evaluate_output(
+    stage_name: str,
+    output_content: Any = "",
+    novel_id: str = "",
+    chapter_index: Optional[int] = None,
+    quality_gate: bool = False,
+) -> Dict[str, Any]:
     """
     [Tool 2] 評斷代理人的輸出結果
     透過 APPROVAL_CRITERIA_REGISTRY 進行硬性校驗
@@ -342,30 +401,36 @@ def evaluate_output(stage_name: str, output_content: Any = "", novel_id: str = "
 
     elif stage_name in ("writer", "editor"):
         issues.extend(_validate_writer_like(parsed, output_content, stage_name))
-        if novel_id and not issues:
+        content, data = _content_from_writer_like_output(parsed, output_content)
+        ch_idx = chapter_index or data.get("chapter_index") or 1
+        try:
+            ch_idx = int(ch_idx)
+        except Exception:
+            ch_idx = 1
+        outline = None
+        if novel_id:
+            vols = db.get_volumes(novel_id)
+            for v in vols:
+                ch_list = v.get("chapters_outline") or []
+                if isinstance(ch_list, str):
+                    try:
+                        ch_list = json.loads(ch_list)
+                    except Exception:
+                        ch_list = []
+                for c in ch_list:
+                    if isinstance(c, dict) and c.get("chapter_index") == ch_idx:
+                        outline = c
+                        break
+                if outline:
+                    break
+
+            # 進行時空與連續性設定校驗 (Setting Continuity Check)
+            setting_issues = _validate_chapter_setting_and_continuity(content, outline, novel_id, ch_idx)
+            issues.extend(setting_issues)
+
+            # 進行長程敘事因果審計
             try:
                 from backend.services.narrative.narrative_auditor import NarrativeAuditor
-                content, data = _content_from_writer_like_output(parsed, output_content)
-                ch_idx = data.get("chapter_index") or 1
-                try:
-                    ch_idx = int(ch_idx)
-                except Exception:
-                    ch_idx = 1
-                outline = None
-                vols = db.get_volumes(novel_id)
-                for v in vols:
-                    ch_list = v.get("chapters_outline") or []
-                    if isinstance(ch_list, str):
-                        try:
-                            ch_list = json.loads(ch_list)
-                        except Exception:
-                            ch_list = []
-                    for c in ch_list:
-                        if isinstance(c, dict) and c.get("chapter_index") == ch_idx:
-                            outline = c
-                            break
-                    if outline:
-                        break
                 audit_res = NarrativeAuditor.audit_chapter_prose(
                     novel_id=novel_id,
                     chapter_index=ch_idx,
@@ -381,10 +446,34 @@ def evaluate_output(stage_name: str, output_content: Any = "", novel_id: str = "
             except Exception:
                 pass
 
+        # Formulaic style patterns are a hard gate only after editing. At the
+        # Writer draft stage they remain actionable feedback for Editor, avoiding
+        # rejecting a chapter before the pipeline has had a chance to revise it.
+        if quality_gate or stage_name == "editor":
+            try:
+                from backend.services.narrative.narrative_auditor import extract_banned_hits
+                banned_hits = extract_banned_hits(content)
+                if banned_hits:
+                    issues.append(
+                        f"【套路句檢查】正文含 {len(banned_hits)} 個公式化開篇、收尾或重複動作命中"
+                    )
+                for hit in banned_hits[:10]:
+                    label = hit.get("pattern_label") or "套路句"
+                    sample = (hit.get("matched_text") or hit.get("matched_sentence") or "").strip()
+                    issues.append(f"【套路句檢查】{label}" + (f"：{sample[:60]}" if sample else ""))
+            except Exception:
+                pass
+
     criteria_prompt = format_criteria_for_prompt(stage_name)
+    has_critical_drift = any(
+        i.startswith("【場景地點漂移】") or i.startswith("【時間連續性矛盾】") or i.startswith("【開篇定型模板重複】") or i.startswith("【敘事診斷紅線")
+        for i in issues
+    )
 
     result = {
         "passed": len(issues) == 0,
+        "critical_drift": has_critical_drift,
+        "action": "REVISE" if has_critical_drift else ("PASS" if len(issues) == 0 else "WARNING"),
         "message": "通過" if len(issues) == 0 else "; ".join(issues),
         "issues": issues,
         "criteria_reference": criteria_prompt,

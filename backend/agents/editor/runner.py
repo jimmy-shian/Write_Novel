@@ -56,11 +56,12 @@ def _is_llm_failure_output(text: str) -> bool:
     return False
 
 
-def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=False, force_json=False, context_bundle=None):
+def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=False, force_json=False, context_bundle=None, fix_mode=False, fix_spans=None):
     """
     Editor Stage (兩階段精修):
     1. Reviewer 評審原稿品質與合規性 (POV, 資訊傾倒, 對白, 套路詞)。
     2. 若需修改，由 Targeted Rewriter 局部精修；若原稿優秀則維持原樣或細微拋光。
+    fix_mode=True 時直接跳過 Reviewer，由總監指令與精確 span 驅動定向手術重寫。
     """
     chapter_data = db.get_latest_chapter(novel_id, chapter_index)
     if not chapter_data:
@@ -70,7 +71,16 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
     current_synopsis = chapter_data.get("synopsis", "")
     outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
 
-    editor_context_packet = narrative_memory.build_editor_context_packet(novel_id, chapter_index, original_prose)
+    editor_context_packet = narrative_memory.build_editor_context_packet(novel_id, chapter_index, original_prose, fix_mode=fix_mode)
+    try:
+        from backend.services.gold_rules.gold_rules_manager import load_scoped_gold_rules
+        editor_context_packet["approved_gold_rules"] = load_scoped_gold_rules(
+            novel_id=novel_id,
+            agent_scope="editor",
+            max_rules=8,
+        )
+    except Exception as exc:
+        print(f"[EditorAgent] Gold Rules context unavailable for chapter {chapter_index}: {exc}")
     if context_bundle:
         editor_context_packet["context_bus_reference"] = {
             "context_mode": context_bundle.get("context_mode"),
@@ -92,39 +102,44 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
     diagnostic_report = None
     revision_required = False
 
-    try:
-        reviewer_messages = build_reviewer_agent_messages(
-            chapter_index=chapter_index,
-            original_prose=original_prose,
-            scene_contract_or_outline=outline,
-            editor_context=editor_context,
-        )
-        reviewer_iter = llm.call_llm_stream("editor", reviewer_messages, stream=False, force_json=True)
-        reviewer_acc = StreamAccumulator(reviewer_iter)
-        for _ in reviewer_acc:
-            pass
-        reviewer_raw = reviewer_acc.content
-        if reviewer_raw and reviewer_raw.strip():
-            try:
-                diagnostic_report = extract_json_block(reviewer_raw)
-                if isinstance(diagnostic_report, dict):
-                    revision_required = bool(diagnostic_report.get("revision_required", False))
-                    # 額外信號：若存在明確瑕疵列表，即使 revision_required 未設，仍需修正
-                    if not revision_required:
-                        has_issues = any(
-                            diagnostic_report.get(k)
-                            for k in ("pov_violations", "knowledge_leaks", "info_dump_sections",
-                                      "dialogue_issues", "repetition_flags")
-                            if isinstance(diagnostic_report.get(k), list) and len(diagnostic_report.get(k, [])) > 0
-                        )
-                        if has_issues:
-                            revision_required = True
-            except Exception as parse_err:
-                print(f"[EditorAgent] Reviewer JSON parse failed, falling back to single-pass: {parse_err}")
-                diagnostic_report = None
-    except Exception as reviewer_err:
-        print(f"[EditorAgent] Reviewer stage failed, falling back to single-pass: {reviewer_err}")
-        diagnostic_report = None
+    if fix_mode:
+        # 修正輪直接跳過 Reviewer，由總監指令與精確 span 指引外科手術重寫
+        revision_required = True
+        diagnostic_report = {"fix_mode": True, "fix_spans": fix_spans or []}
+    else:
+        try:
+            reviewer_messages = build_reviewer_agent_messages(
+                chapter_index=chapter_index,
+                original_prose=original_prose,
+                scene_contract_or_outline=outline,
+                editor_context=editor_context,
+            )
+            reviewer_iter = llm.call_llm_stream("editor", reviewer_messages, stream=False, force_json=True)
+            reviewer_acc = StreamAccumulator(reviewer_iter)
+            for _ in reviewer_acc:
+                pass
+            reviewer_raw = reviewer_acc.content
+            if reviewer_raw and reviewer_raw.strip():
+                try:
+                    diagnostic_report = extract_json_block(reviewer_raw)
+                    if isinstance(diagnostic_report, dict):
+                        revision_required = bool(diagnostic_report.get("revision_required", False))
+                        # 額外信號：若存在明確瑕疵列表，即使 revision_required 未設，仍需修正
+                        if not revision_required:
+                            has_issues = any(
+                                diagnostic_report.get(k)
+                                for k in ("pov_violations", "knowledge_leaks", "info_dump_sections",
+                                          "dialogue_issues", "repetition_flags")
+                                if isinstance(diagnostic_report.get(k), list) and len(diagnostic_report.get(k, [])) > 0
+                            )
+                            if has_issues:
+                                revision_required = True
+                except Exception as parse_err:
+                    print(f"[EditorAgent] Reviewer JSON parse failed, falling back to single-pass: {parse_err}")
+                    diagnostic_report = None
+        except Exception as reviewer_err:
+            print(f"[EditorAgent] Reviewer stage failed, falling back to single-pass: {reviewer_err}")
+            diagnostic_report = None
 
     # 向前端 streaming 報告 Reviewer 結果
     if diagnostic_report is not None:
@@ -144,6 +159,8 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             diagnostic_report=diagnostic_report,
             edit_instructions=edit_instructions,
             editor_context=editor_context,
+            fix_mode=fix_mode,
+            fix_spans=fix_spans,
         )
         stream_iter = llm.call_llm_stream("editor", rewriter_messages, stream=stream, force_json=False)
         messages = rewriter_messages  # 供 save_last_agent_run 使用
@@ -165,6 +182,11 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             yield chunk
 
     full_text = acc.content
+    if acc.finish_reason == "length":
+        err_msg = f"第 {chapter_index} 章編輯輸出達模型輸出上限而被截斷，已保留原稿。"
+        yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+        return
     if full_text.strip():
         # 清理可能輸出的正文標記前綴
         cleaned_text = full_text.strip()
@@ -180,7 +202,11 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
 
-        from backend.common.refusal_filter import is_refusal_or_disclaimer, sanitize_meta_narrative
+        from backend.common.refusal_filter import (
+            find_meta_narrative_leaks,
+            is_refusal_or_disclaimer,
+            sanitize_meta_narrative,
+        )
         if is_refusal_or_disclaimer(cleaned_text):
             err_msg = f"第 {chapter_index} 章編輯輸出包含 AI 拒答或安全免責聲明，本次丟棄並保留原稿。"
             yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
@@ -198,6 +224,41 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             return
 
         final_prose = sanitize_meta_narrative(cleaned_text if cleaned_text else full_text)
+        # Editing must not turn a complete chapter into a truncated one. Existing short
+        # chapters remain editable so they can be repaired incrementally.
+        if len(original_prose.strip()) >= 1200 and len(final_prose.strip()) < 1200:
+            err_msg = f"第 {chapter_index} 章編輯稿僅 {len(final_prose.strip())} 字，低於完整章節最低長度 1200 字；已保留原稿。"
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        meta_hits = find_meta_narrative_leaks(final_prose)
+        if meta_hits:
+            err_msg = f"第 {chapter_index} 章編輯稿仍含元敘事語句（{', '.join(meta_hits[:3])}），已保留原稿。"
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        from backend.services.narrative.narrative_auditor import find_explicit_term_alias_hits
+        term_alias_hits = find_explicit_term_alias_hits(novel_id, final_prose)
+        if term_alias_hits:
+            hit_text = "、".join(f"「{hit['forbidden_alias']}」應使用正式名稱「{hit['canonical_term']}」" for hit in term_alias_hits[:5])
+            err_msg = f"第 {chapter_index} 章編輯稿術語一致性檢查未通過：{hit_text}，已保留原稿。"
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+        if original_prose:
+            from backend.services.narrative.narrative_auditor import extract_banned_hits
+            before_hits = extract_banned_hits(original_prose)
+            after_hits = extract_banned_hits(final_prose)
+            regressed = len(after_hits) > len(before_hits)
+            failed_fix = fix_mode and len(before_hits) > 0 and len(after_hits) >= len(before_hits)
+            if regressed or failed_fix:
+                err_msg = (
+                    f"第 {chapter_index} 章編輯稿的套路句命中數由 {len(before_hits)} 增至/仍為 "
+                    f"{len(after_hits)}，品質驗證未通過，已保留原稿。"
+                )
+                yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
 
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,
@@ -205,7 +266,10 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             final_prose,
             outline=outline,
         )
-        synopsis = memory_summary.get("chapter_summary") or current_synopsis
+        synopsis = narrative_memory.build_chapter_synopsis_from_prose(
+            final_prose,
+            fallback=memory_summary.get("chapter_summary") or current_synopsis,
+        )
         saved_version = db.save_chapter(novel_id, chapter_index, final_prose, synopsis=synopsis)
         narrative_memory.store_chapter_memory(
             novel_id,

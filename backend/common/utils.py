@@ -163,7 +163,7 @@ class StreamAccumulator:
         thinking_text = acc.thinking
     """
 
-    __slots__ = ("_gen", "_content", "_thinking", "_collect_thinking", "_error")
+    __slots__ = ("_gen", "_content", "_thinking", "_collect_thinking", "_error", "_finish_reason")
 
     def __init__(self, stream, collect_thinking=False):
         self._gen = iter(stream)
@@ -171,6 +171,7 @@ class StreamAccumulator:
         self._thinking = []
         self._collect_thinking = collect_thinking
         self._error = None
+        self._finish_reason = None
 
     def __iter__(self):
         return self
@@ -186,6 +187,8 @@ class StreamAccumulator:
                     self._thinking.append(data.get("delta", ""))
                 elif data.get("type") == "error":
                     self._error = data.get("message") or "LLM API Error"
+                if data.get("finish_reason"):
+                    self._finish_reason = data["finish_reason"]
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
         elif isinstance(chunk, dict):
@@ -197,6 +200,8 @@ class StreamAccumulator:
                 self._content.append(str(chunk["content"]))
             if chunk.get("type") == "error":
                 self._error = chunk.get("message") or "LLM API Error"
+            if chunk.get("finish_reason"):
+                self._finish_reason = chunk["finish_reason"]
         return chunk
 
     @property
@@ -210,3 +215,7 @@ class StreamAccumulator:
     @property
     def error(self):
         return self._error
+
+    @property
+    def finish_reason(self):
+        return self._finish_reason

@@ -59,9 +59,13 @@ def build_targeted_rewriter_messages(
     diagnostic_report: Dict[str, Any],
     edit_instructions: Optional[str] = None,
     editor_context: Optional[str] = None,
+    fix_mode: bool = False,
+    fix_spans: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, str]]:
     """組裝 Targeted Rewriter 定向精修提示詞"""
     system_prompt = TARGETED_REWRITER_PROMPT
+    if fix_mode:
+        system_prompt += "\n\n【修正輪特別禁令】：禁用模板庫零容忍，被標記段落必須重寫消除套路，未標記段落保留；出現禁用句即視為失敗。"
     system_prompt += build_agent_context_contract(
         "Targeted Rewriter / 定向正文精修",
         "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 時序動態事實、設定邊界約束與編輯指令。",
@@ -70,9 +74,36 @@ def build_targeted_rewriter_messages(
         allow_context_request=False,
     )
 
-    report_text = json.dumps(diagnostic_report, ensure_ascii=False, indent=2)
+    if fix_mode:
+        spans_text = ""
+        if fix_spans:
+            lines = []
+            for s in fix_spans:
+                p_idx = s.get("paragraph_index", 1)
+                sent = s.get("matched_sentence", "")
+                lbl = s.get("pattern_label", "")
+                lines.append(f"- [第 {p_idx} 段] 原文：『{sent}』(問題：{lbl}) -> 必須整句刪除重寫，嚴禁近義詞修飾！")
+            spans_text = "\n".join(lines)
+        else:
+            spans_text = "（無特定標記句，依修正指令進行局部修訂）"
 
-    user_content = f"""【Reviewer 品質診斷報告與待修復標記】
+        user_content = f"""【本次修正最高指令：覆寫其他風格要求】
+{edit_instructions or "依據診斷報告修正視角越界、設定傾倒或生硬對白，保留未標記之優秀段落。"}
+
+【待刪除/替換原文 span（必須定點消滅重寫，出現即判失敗）】
+{spans_text}
+
+【不可破壞的連續性約束】
+{editor_context or "（無額外約束）"}
+
+【第 {chapter_index} 章原始正文】
+{original_prose}
+
+請直接輸出修訂後的完整小說正文：
+"""
+    else:
+        report_text = json.dumps(diagnostic_report, ensure_ascii=False, indent=2)
+        user_content = f"""【Reviewer 品質診斷報告與待修復標記】
 {report_text}
 
 【額外精修指示】
