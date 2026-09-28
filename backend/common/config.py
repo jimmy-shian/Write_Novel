@@ -7,8 +7,8 @@ duplicated across agents.py and diagnostics.py.
 """
 
 # --- Foreshadowing constraints ---
-MIN_FORESHADOWING_SEEDS = 50
-MIN_KEY_TURNING_POINTS = 50
+MIN_FORESHADOWING_SEEDS = 150
+MIN_KEY_TURNING_POINTS = 150
 
 # --- Volume constraints ---
 MIN_VOLUME_COUNT = 10

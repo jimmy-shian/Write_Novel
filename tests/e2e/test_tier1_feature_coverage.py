@@ -151,7 +151,10 @@ def test_tier1_f2_writer_clean_prose_yields_success(novel_factory, monkeypatch):
     """F2: Clean prose passes through ChapterWriterRunner and persists normally."""
     from backend.agents.chapter_writer.runner import run_chapter_writer
     nid = novel_factory()
-    clean_text = "劍光一閃，黑衣刺客的短匕被凌空震飛。林默右腳踏前一步，掌力如潮水般湧出。"
+    clean_text = (
+        "劍光一閃，黑衣刺客的短匕被凌空震飛。林默右腳踏前一步，掌力如潮水般湧出。"
+        + "勁風激盪之下，整座偏殿的燭火瞬間熄滅，唯有外頭慘白的月光透過雕花窗櫺灑落進來。" * 35
+    )
 
     def mock_llm_stream(*args, **kwargs):
         yield {"text": f"<think>Normal reasoning</think>[START_OF_PROSE]{clean_text}", "done": True}

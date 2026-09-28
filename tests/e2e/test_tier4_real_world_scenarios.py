@@ -88,12 +88,12 @@ def test_t4_scenario_opening_cliche_auto_repaired_across_chapters(novel_factory,
     audit_init = NarrativeAuditor.audit_chapter_prose(nid, 2, db.get_chapter(nid, 2)["content"])
     assert audit_init.get("overall_action") in ("REVISE", "CRITICAL")
 
-    # Auto-fix loop rewrites chapter 2 with action opening
-    def mock_writer(novel_id, chapter_index, user_prompt=None):
+    def mock_writer(novel_id, chapter_index, user_prompt=None, **kwargs):
         db.save_chapter(novel_id, chapter_index, DIVERSE_OPENINGS_PASS["action"] + " 第二章全新動作開局！")
         yield 'data: {"type": "done"}\n\n'
 
-    def mock_editor(novel_id, chapter_index, edit_instructions=None):
+    def mock_editor(novel_id, chapter_index, edit_instructions=None, **kwargs):
+        db.save_chapter(novel_id, chapter_index, DIVERSE_OPENINGS_PASS["action"] + " 第二章全新動作開局！")
         yield 'data: {"type": "done"}\n\n'
 
     monkeypatch.setattr("backend.agents.chapter_writer.runner.run_chapter_writer", mock_writer)

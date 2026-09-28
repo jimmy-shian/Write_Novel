@@ -15,7 +15,12 @@ from backend import persistence as db
 from backend.services.hf_sync import async_backup, backup_database
 from backend.generation.routing.router import execute_generation_task
 from backend.services.graphiti.extractor import ChapterFactExtractor
-from backend.common.config import VOLUME_SKELETON_BATCH_SIZE, MIN_VOLUME_COUNT
+from backend.common.config import (
+    VOLUME_SKELETON_BATCH_SIZE,
+    MIN_VOLUME_COUNT,
+    MIN_FORESHADOWING_SEEDS,
+    MIN_KEY_TURNING_POINTS,
+)
 from backend.schemas.validation import split_consecutive_batches
 from backend.common.refusal_filter import is_refusal_or_disclaimer
 
@@ -394,44 +399,44 @@ class AutonomousPipelineManager:
             else:
                 task.log("各陣營角色設定已就緒，跳過生成。")
 
-            # 3. 檢查並編織全局伏筆與關鍵轉折 (目標各 50+ 條)
+            # 3. 檢查並編織全局伏筆與關鍵轉折 (目標各達 MIN 保底條數)
             if task.stop_requested: return
-            if not _are_seeds_ready(novel_id, min_count=50):
+            if not _are_seeds_ready(novel_id, min_count=MIN_FORESHADOWING_SEEDS):
                 task.current_stage = "foreshadowing_seeds"
                 task.progress_percent = 22
-                task.status_message = "正在分段編織全局懸念與長線伏筆網絡（目標 50+ 條）..."
-                task.log("開始編織全書伏筆網絡（分批累加生成至 50+ 條）...")
+                task.status_message = f"正在分段編織全局懸念與長線伏筆網絡（目標 {MIN_FORESHADOWING_SEEDS}+ 條）..."
+                task.log(f"開始編織全書伏筆網絡（分批累加生成至 {MIN_FORESHADOWING_SEEDS}+ 條）...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="foreshadowing",
                     task_type="generate",
-                    instruction="[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆（目標累加至 50+ 條）",
+                    instruction=f"[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆（目標累加至 {MIN_FORESHADOWING_SEEDS}+ 條）",
                     user_prompt="設計核心主線伏筆",
-                    verify_fn=lambda: _are_seeds_ready(novel_id, min_count=50),
+                    verify_fn=lambda: _are_seeds_ready(novel_id, min_count=MIN_FORESHADOWING_SEEDS),
                 )
-                task.log("✅ 伏筆網絡已編織完成（50+ 條）！")
-                db.save_chat_message(novel_id, "assistant", "🕸️ **【系統進度】** 全局懸念與長線伏筆網絡已編織完成（50+ 條）！", message_type="pipeline")
+                task.log(f"✅ 伏筆網絡已編織完成（{MIN_FORESHADOWING_SEEDS}+ 條）！")
+                db.save_chat_message(novel_id, "assistant", f"🕸️ **【系統進度】** 全局懸念與長線伏筆網絡已編織完成（{MIN_FORESHADOWING_SEEDS}+ 條）！", message_type="pipeline")
             else:
-                task.log("全書伏筆網絡已就緒（>= 50 條），跳過生成。")
+                task.log(f"全書伏筆網絡已就緒（>= {MIN_FORESHADOWING_SEEDS} 條），跳過生成。")
 
             if task.stop_requested: return
-            if not _are_turning_points_ready(novel_id, min_count=50):
+            if not _are_turning_points_ready(novel_id, min_count=MIN_KEY_TURNING_POINTS):
                 task.current_stage = "foreshadowing_turns"
                 task.progress_percent = 28
-                task.status_message = "正在規劃核心關鍵轉折點（與已確立之伏筆網絡聯動，目標 50+ 條）..."
-                task.log("開始規劃全書核心關鍵轉折點（與 50+ 條伏筆網絡深度聯動）...")
+                task.status_message = f"正在規劃核心關鍵轉折點（與已確立之伏筆網絡聯動，目標 {MIN_KEY_TURNING_POINTS}+ 條）..."
+                task.log(f"開始規劃全書核心關鍵轉折點（與 {MIN_FORESHADOWING_SEEDS}+ 條伏筆網絡深度聯動）...")
                 self._execute_stage_with_retry(
                     task=task,
                     stage="foreshadowing",
                     task_type="generate",
-                    instruction="[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件，呼應並引爆伏筆網絡（目標累加至 50+ 條）",
+                    instruction=f"[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件，呼應並引爆伏筆網絡（目標累加至 {MIN_KEY_TURNING_POINTS}+ 條）",
                     user_prompt="設計核心關鍵轉折點",
-                    verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=50),
+                    verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=MIN_KEY_TURNING_POINTS),
                 )
-                task.log("✅ 關鍵轉折點已規劃完成（50+ 條）！")
-                db.save_chat_message(novel_id, "assistant", "🎭 **【系統進度】** 全書核心關鍵轉折點已分段組合規劃就緒（50+ 條，與伏筆閉環聯動）！", message_type="pipeline")
+                task.log(f"✅ 關鍵轉折點已規劃完成（{MIN_KEY_TURNING_POINTS}+ 條）！")
+                db.save_chat_message(novel_id, "assistant", f"🎭 **【系統進度】** 全書核心關鍵轉折點已分段組合規劃就緒（{MIN_KEY_TURNING_POINTS}+ 條，與伏筆閉環聯動）！", message_type="pipeline")
             else:
-                task.log("全書關鍵轉折點已就緒（>= 50 條），跳過生成。")
+                task.log(f"全書關鍵轉折點已就緒（>= {MIN_KEY_TURNING_POINTS} 條），跳過生成。")
 
             # 4. 檢查並規劃分卷結構
             if task.stop_requested: return
@@ -601,13 +606,14 @@ class AutonomousPipelineManager:
             task.log(f"進入正文寫作流水線，全書共規劃 {total_target} 章節")
 
             existing_db_chapters = db.get_chapters(novel_id)
-            written_indices = {
-                int(c.get("chapter_index") or 0)
+            written_rows = {
+                int(c.get("chapter_index") or 0): c
                 for c in existing_db_chapters
                 if c.get("content")
                 and len(c.get("content", "").strip()) >= 50
                 and not is_refusal_or_disclaimer(c.get("content", ""))
             }
+            written_indices = set(written_rows.keys())
 
             for ch_idx in range(1, total_target + 1):
                 if task.stop_requested:
@@ -618,10 +624,17 @@ class AutonomousPipelineManager:
                 base_pct = 50 + int((ch_idx - 1) / total_target * 45)
                 task.progress_percent = base_pct
 
-                # 若該章節已被撰寫過，後端智慧直接略過並接續下一章
+                # 若該章節已被撰寫過，檢查 Editor 是否曾成功收尾：
+                # 上次精修失敗（failed）或只有 Writer 初稿（version==1 且無 Editor 驗收記錄）
+                # 的章節不可直接跳過，必須跳過 Writer、僅重試 Editor 及後續流程。
+                editor_retry_only = False
                 if ch_idx in written_indices:
-                    task.log(f"第 {ch_idx} 章已存在完整內容，跳過並接續下一章。")
-                    continue
+                    if _chapter_needs_editor_retry(novel_id, ch_idx, written_rows.get(ch_idx)):
+                        editor_retry_only = True
+                        task.log(f"第 {ch_idx} 章初稿仍在、但上次精修未完成，跳過 Writer、僅重試 Editor 及後續流程...")
+                    else:
+                        task.log(f"第 {ch_idx} 章已存在完整內容，跳過並接續下一章。")
+                        continue
 
                 # 確保該章所屬的卷具備骨架
                 curr_vol_idx = db.get_chapter_volume_index(vols, ch_idx) if vols else None
@@ -641,21 +654,27 @@ class AutonomousPipelineManager:
                         vols = db.get_volumes(novel_id)
 
                 # (1) 正文寫作 (含 5 次自動重試與驗證)
-                task.current_stage = f"writer_ch{ch_idx}"
-                task.status_message = f"✍️ 正在由 Writer Agent 撰寫第 {ch_idx}/{total_target} 章正文..."
-                task.log(f"開始撰寫第 {ch_idx} 章正文...")
+                # editor_retry_only 時沿用既有初稿，不重寫、不覆蓋，直接進入總監審查與精修。
+                if editor_retry_only:
+                    existing_draft = (written_rows.get(ch_idx) or {}).get("content") or ""
+                    task.current_stage = f"writer_ch{ch_idx}_reused"
+                    task.log(f"第 {ch_idx} 章沿用既有初稿（{len(existing_draft.strip())} 字），直接進入總監審查與精修...")
+                else:
+                    task.current_stage = f"writer_ch{ch_idx}"
+                    task.status_message = f"✍️ 正在由 Writer Agent 撰寫第 {ch_idx}/{total_target} 章正文..."
+                    task.log(f"開始撰寫第 {ch_idx} 章正文...")
 
-                self._execute_stage_with_retry(
-                    task=task,
-                    stage="writer",
-                    task_type="generate",
-                    scope="chapter",
-                    target={"chapter_index": ch_idx},
-                    instruction=f"請根據大綱撰寫第 {ch_idx} 章的完整故事正文，著重視角、心理、對白與感官細節",
-                    user_prompt=f"撰寫第 {ch_idx} 章",
-                    verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
-                )
-                task.log(f"第 {ch_idx} 章初稿撰寫完成！")
+                    self._execute_stage_with_retry(
+                        task=task,
+                        stage="writer",
+                        task_type="generate",
+                        scope="chapter",
+                        target={"chapter_index": ch_idx},
+                        instruction=f"請根據大綱撰寫第 {ch_idx} 章的完整故事正文，著重視角、心理、對白與感官細節",
+                        user_prompt=f"撰寫第 {ch_idx} 章",
+                        verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
+                    )
+                    task.log(f"第 {ch_idx} 章初稿撰寫完成！")
 
                 # (1.5) 總監章節品質與時空一致性審查 (Director Quality Gate)
                 director_eval: Dict[str, Any] = {}
@@ -762,16 +781,49 @@ class AutonomousPipelineManager:
                 if director_eval and director_eval.get("issues"):
                     editor_instruction += f"，並特別注意消弭總監提示之問題：{'; '.join(director_eval['issues'][:3])}"
 
-                self._execute_stage_with_retry(
-                    task=task,
-                    stage="editor",
-                    task_type="refine",
-                    scope="chapter",
-                    target={"chapter_index": ch_idx},
-                    instruction=editor_instruction,
-                    user_prompt=f"精修第 {ch_idx} 章",
-                    verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
-                )
+                try:
+                    self._execute_stage_with_retry(
+                        task=task,
+                        stage="editor",
+                        task_type="refine",
+                        scope="chapter",
+                        target={"chapter_index": ch_idx},
+                        instruction=editor_instruction,
+                        user_prompt=f"精修第 {ch_idx} 章",
+                        verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
+                    )
+                except Exception as editor_exc:
+                    # Editor 精修失敗不可中斷整條管線：Writer 初稿已保留，
+                    # 記一筆 failed 驗收供下次重啟時僅重試 Editor，然後繼續下一章。
+                    task.log(
+                        f"⚠️ 第 {ch_idx} 章精修失敗（已達重試上限）：{editor_exc}；"
+                        f"已保留 Writer 初稿，下次重啟將僅重試 Editor，流程繼續下一章...",
+                        level="warn",
+                    )
+                    try:
+                        db.save_director_review_status(
+                            novel_id=novel_id,
+                            stage_name="editor",
+                            status="failed",
+                            block_name=f"chapter_{ch_idx}",
+                            volume_index=curr_vol_idx,
+                            chapter_index=ch_idx,
+                            reason=f"Editor 精修異常失敗，已保留初稿待重試：{editor_exc}",
+                            decision_json={"chapter_index": ch_idx, "error": str(editor_exc)},
+                        )
+                    except Exception as eval_save_exc:
+                        task.log(f"⚠️ Editor 失敗記錄儲存失敗：{eval_save_exc}", level="warn")
+                    try:
+                        db.save_chat_message(
+                            novel_id,
+                            "assistant",
+                            f"⚠️ **【章節精修失敗通報】** 第 {ch_idx} 章 Writer 初稿已保留，"
+                            f"Editor 精修失敗原因：{editor_exc}。下次啟動將自動僅重試 Editor，流程已繼續下一章。",
+                            message_type="pipeline",
+                        )
+                    except Exception:
+                        pass
+                    continue
                 task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
 
                 # Final deterministic quality gate after Editor has had a chance to
@@ -1253,6 +1305,41 @@ def _is_chapter_written(novel_id: str, chapter_index: int) -> bool:
             content = (c.get("content") or "").strip()
             if len(content) >= 50 and not is_refusal_or_disclaimer(content):
                 return True
+    return False
+
+
+def _chapter_needs_editor_retry(novel_id: str, chapter_index: int, chapter_row=None) -> bool:
+    """判斷已寫章節是否需要「跳過 Writer、僅重試 Editor」。
+
+    需要重試的兩種情況（皆代表 Editor 從未成功收尾）：
+    1. 最近一次 Editor 驗收記錄為 failed（本次新增的失敗標記）。
+    2. 無任何 Editor 驗收記錄、且章節只有 version==1（僅 Writer 初稿，
+       Editor 從未成功存檔；成功精修必定會存新版本）。
+    已有 passed / revise / warning 記錄，或 version>=2 的舊章節，視為已完成，不重試。
+    """
+    try:
+        get_status = getattr(db, "get_chapter_editor_review_status", None)
+        review = get_status(novel_id, int(chapter_index)) if callable(get_status) else None
+    except Exception:
+        review = None
+    if isinstance(review, dict):
+        status = str(review.get("status") or "").strip().lower()
+        if status == "failed":
+            return True
+        if status in ("passed", "revise", "warning"):
+            return False
+    # 無 Editor 驗收記錄：用版本數判斷是否只有 Writer 初稿
+    try:
+        version = None
+        if isinstance(chapter_row, dict):
+            version = chapter_row.get("version")
+        if version is None:
+            latest = db.get_chapter(novel_id, int(chapter_index))
+            version = (latest or {}).get("version")
+        if version is not None and int(version) <= 1:
+            return True
+    except Exception:
+        pass
     return False
 
 

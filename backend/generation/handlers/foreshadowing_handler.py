@@ -2,7 +2,7 @@
 
 Director 需要在 agent_prompt 中帶入 [BATCH: foreshadowing_seeds] 或 [BATCH: key_turning_points]
 標記，後端會自動解析並僅生成對應類別的資料，保留另一類已有的資料不被覆蓋。
-這避免了單次生成 50+ 條伏筆 + 50+ 條轉折點導致 JSON 過長而解析錯誤。
+這避免了單次生成大量伏筆 + 大量轉折點導致 JSON 過長而解析錯誤。
 """
 
 from __future__ import annotations

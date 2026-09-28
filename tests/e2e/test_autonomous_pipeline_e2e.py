@@ -97,11 +97,12 @@ def test_pipeline_e2e_opening_deduplication_audit_loop(novel_factory, monkeypatc
     audit = NarrativeAuditor.audit_chapter_prose(nid, 2, db.get_chapter(nid, 2)["content"])
     assert audit.get("overall_action") in ("REVISE", "CRITICAL")
 
-    def mock_writer(novel_id, chapter_index, user_prompt=None):
+    def mock_writer(novel_id, chapter_index, user_prompt=None, **kwargs):
         db.save_chapter(novel_id, chapter_index, DIVERSE_OPENINGS_PASS["dialogue"] + " 第二章修改為對話開局。")
         yield 'data: {"type": "done"}\n\n'
 
-    def mock_editor(novel_id, chapter_index, edit_instructions=None):
+    def mock_editor(novel_id, chapter_index, edit_instructions=None, **kwargs):
+        db.save_chapter(novel_id, chapter_index, DIVERSE_OPENINGS_PASS["dialogue"] + " 第二章修改為對話開局。")
         yield 'data: {"type": "done"}\n\n'
 
     monkeypatch.setattr("backend.agents.chapter_writer.runner.run_chapter_writer", mock_writer)

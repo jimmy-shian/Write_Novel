@@ -141,7 +141,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         volumes_structure = ""
 
     field_label = {"foreshadowing_seeds": "伏筆種子", "key_turning_points": "關鍵轉折點"}.get(target_field or "", "伏筆與轉折")
-    db.save_chat_message(novel_id, "user", f"執行{field_label}生成（自動分批累加至 50 條）。要求: {user_prompt}", message_type="pipeline")
+    db.save_chat_message(novel_id, "user", f"執行{field_label}生成（自動分批累加至 {max(MIN_FORESHADOWING_SEEDS, MIN_KEY_TURNING_POINTS)} 條）。要求: {user_prompt}", message_type="pipeline")
 
     wb_dict = _extract_worldview_dict_preserving(wb["content"]) if wb else {}
     if not wb_dict:
@@ -154,12 +154,13 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
     from backend.models.parsers import extract_json_block
 
     # =========================================================================
-    # 模式 A: 伏筆種子分批累加生成 (Target: 50+ 條，小 Batch 每批 10 條細緻推演)
+    # 模式 A: 伏筆種子分批累加生成 (Target: MIN_FORESHADOWING_SEEDS 條，小 Batch 每批 10 條細緻推演)
     # =========================================================================
     if target_field == "foreshadowing_seeds":
-        target_count = max(MIN_FORESHADOWING_SEEDS, 50)
+        target_count = MIN_FORESHADOWING_SEEDS
         batch_size = 10
-        max_batches = 8
+        # 單批 10 條：上限需覆蓋從零開始的全部目標 (150/10=15)，多留 1 批吸收去重損耗
+        max_batches = 16
 
         current_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
         batch_idx = 0
@@ -237,12 +238,13 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         return
 
     # =========================================================================
-    # 模式 B: 關鍵轉折點分批累加生成 (Target: 50+ 條，小 Batch 每批 10 條，深度聯動伏筆)
+    # 模式 B: 關鍵轉折點分批累加生成 (Target: MIN_KEY_TURNING_POINTS 條，小 Batch 每批 10 條，深度聯動伏筆)
     # =========================================================================
     elif target_field == "key_turning_points":
-        target_count = max(MIN_KEY_TURNING_POINTS, 50)
+        target_count = MIN_KEY_TURNING_POINTS
         batch_size = 10
-        max_batches = 8
+        # 單批 10 條：上限需覆蓋從零開始的全部目標 (150/10=15)，多留 1 批吸收去重損耗
+        max_batches = 16
 
         current_turns = [t for t in (wb_dict.get("key_turning_points") or []) if isinstance(t, dict)]
         existing_seeds = [s for s in (wb_dict.get("foreshadowing_seeds") or []) if isinstance(s, dict)]
@@ -328,11 +330,11 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
         return
 
     # =========================================================================
-    # 模式 C: 全量模式（target_field=None）：依序執行 seeds 與 turns 兩大批次階段 (各 50+ 條)
+    # 模式 C: 全量模式（target_field=None）：依序執行 seeds 與 turns 兩大批次階段 (各達 MIN 保底條數)
     # =========================================================================
     yield "data: " + json.dumps({
         "type": "status",
-        "message": "開始全書伏筆與轉折分段組合生成：第一階段【編織伏筆種子網絡（目標 50+ 條）】..."
+        "message": f"開始全書伏筆與轉折分段組合生成：第一階段【編織伏筆種子網絡（目標 {MIN_FORESHADOWING_SEEDS}+ 條）】..."
     }, ensure_ascii=False) + "\n\n"
 
     for chunk in run_foreshadowing_orchestrator(
@@ -344,7 +346,7 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
 
     yield "data: " + json.dumps({
         "type": "status",
-        "message": "伏筆種子網絡建立就緒！進入第二階段【規劃核心關鍵轉折點（與伏筆網絡聯動，目標 50+ 條）】..."
+        "message": f"伏筆種子網絡建立就緒！進入第二階段【規劃核心關鍵轉折點（與伏筆網絡聯動，目標 {MIN_KEY_TURNING_POINTS}+ 條）】..."
     }, ensure_ascii=False) + "\n\n"
 
     for chunk in run_foreshadowing_orchestrator(

@@ -124,18 +124,26 @@ def test_process_and_persist_skeleton_increments_with_failsafe(novel_factory):
         "new_characters": [
             {
                 "name": "艾拉",
-                "role": "艦隊領航員",
+                "role": "艦隊首席資深領航員",
                 "faction": "深空探測會",
-                "personality": "理性冷靜，數據至上",
-                "motivation": "尋求第十號信標",
+                "personality": "理性冷靜，以數據與星圖推演為絕對準則",
+                "motivation": "尋求第十號信標背後隱藏的失落古代文明真相",
                 "first_appearance_chapter": 1,
             }
         ],
         "new_world_rules": [
-            {"name": "曲率航行過載律", "scope": "本卷專屬", "description": "連續躍遷三次需冷卻八小時"}
+            {
+                "name": "曲率航行過載律",
+                "scope": "本卷專屬",
+                "description": "所有常規曲率引擎在超負荷連續躍遷三次後，散熱器必須強制冷卻至少八個標準小時，否則將引發星核熔毀。",
+            }
         ],
         "new_factions": [
-            {"name": "深空探測會", "alignment": "中立探索", "summary": "致力於未知星區拓荒"}
+            {
+                "name": "深空探測會",
+                "alignment": "中立探索科研同盟",
+                "summary": "由星區各大自由學者與退役探險家自發組成的科研拓荒聯合機構，專注於邊緣未開拓星圖的拓荒與觀測。",
+            }
         ],
     }
 
@@ -156,19 +164,21 @@ def test_process_and_persist_skeleton_increments_with_failsafe(novel_factory):
         start_chapter=1,
     )
 
-    # 驗證增量結果
+    # 驗證增量結果：艾拉符合角色卡最低資訊量，成功加入
     added = result["added_characters"]
     assert "艾拉" in added
-    # Fail-Safe 應偵測到「雷蒙艦長」並自動立卡，而「守衛」被通用詞過濾
-    assert "雷蒙艦長" in added
+    # 嚴格 Fail-Safe：未宣告實質角色卡的「雷蒙艦長」被拒絕自動升格，記錄至 rejected_increments；「守衛」被通用詞過濾
+    assert "雷蒙艦長" not in added
     assert "守衛" not in added
+    rejected = result.get("rejected_increments", [])
+    assert any("雷蒙艦長" in r for r in rejected)
 
     # 驗證角色庫
     latest_chars = db.get_latest_characters(novel_id)["parsed_data"]["characters"]
     names = [c["name"] for c in latest_chars]
     assert "陸行" in names
     assert "艾拉" in names
-    assert "雷蒙艦長" in names
+    assert "雷蒙艦長" not in names
 
     # 驗證世界觀補丁
     patches = db.get_worldview_patches(novel_id)

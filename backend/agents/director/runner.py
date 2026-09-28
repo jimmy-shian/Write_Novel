@@ -194,7 +194,7 @@ def _director_decision_needs_recovery(parsed, current_stage=None, novel_id=None)
                 except Exception:
                     pass
 
-    # 剛性防禦：foreshadowing 階段若伏筆或轉折不足 MIN_FORESHADOWING_SEEDS (50 條)，嚴禁放行進入 volumes
+    # 剛性防禦：foreshadowing 階段若伏筆或轉折不足 MIN 保底條數，嚴禁放行進入 volumes
     if current_stage == "foreshadowing" and action == "CONTINUE" and target not in {"foreshadowing", "foreshadowing_orchestrator"}:
         if novel_id:
             wb = db.get_latest_worldbuilding(novel_id)

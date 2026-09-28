@@ -128,6 +128,26 @@ def save_director_review_status(
         )
 
 
+def get_chapter_editor_review_status(novel_id: str, chapter_index: int) -> Optional[Dict[str, Any]]:
+    """取得指定章節最近一次 Editor 精修驗收記錄（供管線接續判斷是否需重試 Editor）。
+
+    回傳最新一筆 stage_name='editor' 且 chapter_index 相符的記錄；
+    成功精修會留下 status='passed'，品質閘門放行會留下 'revise'，
+    Editor 階段異常失敗會留下 'failed'，無記錄代表舊版章節或從未進過 Editor。
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        """
+        SELECT * FROM director_reviews
+        WHERE novel_id = ? AND stage_name = 'editor' AND chapter_index = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (novel_id, int(chapter_index)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def get_latest_director_review_status(novel_id: str, stage_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Retrieve the latest Director review status record."""
     conn = get_db_connection()

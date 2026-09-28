@@ -3,8 +3,9 @@
 Prompt Builder (隔離的提示詞構建與拼接層)
 負責將系統提示詞與執行期資料做字串插值、拼接，確保 agents.py 只有純粹的核心邏輯與資料庫存取。
 """
-
 import json
+
+from backend.common.config import MIN_FORESHADOWING_SEEDS, MIN_KEY_TURNING_POINTS
 from backend.schemas import agent_json
 from backend import persistence as db
 from backend.schemas.agent_json import CHARACTER_BASIC_FIELDS
@@ -346,12 +347,12 @@ def build_director_decision_messages(
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（伏筆與轉折編織師）。
 2. 請核對「世界觀背景」以及「剛性校驗報告」。
-3. 確認伏筆種子（foreshadowing_seeds）是否包含必要欄位，且數量是否達到 50 個。
-4. 確認關鍵轉折點（key_turning_points）是否包含必要欄位，且數量是否達到 50 個。
+3. 確認伏筆種子（foreshadowing_seeds）是否包含必要欄位，且數量是否達到 {MIN_FORESHADOWING_SEEDS} 個。
+4. 確認關鍵轉折點（key_turning_points）是否包含必要欄位，且數量是否達到 {MIN_KEY_TURNING_POINTS} 個。
 5. **重要審查指引**：
-   - 若「系統底層結構/進度檢查報告」顯示伏筆種子與關鍵轉折點皆已達標（各 >= 50 筆）且無欄位錯誤，且展示內容品質良好，請直接下達 `CONTINUE` + `target: "volumes"` 進入篇卷規劃階段。
+   - 若「系統底層結構/進度檢查報告」顯示伏筆種子與關鍵轉折點皆已達標（各 >= {MIN_FORESHADOWING_SEEDS} 筆）且無欄位錯誤，且展示內容品質良好，請直接下達 `CONTINUE` + `target: "volumes"` 進入篇卷規劃階段。
    - 只有在內容存在明顯品質問題時，才使用 `supplement_content` 進行部分修正，或使用 `expand_collapsed_json` 進行抽查。
-   - 若資料庫與校驗報告已確認 50 筆完整合格，請直接 `CONTINUE` 進入 `volumes`，順暢推進創作流程。
+   - 若資料庫與校驗報告已確認 {MIN_FORESHADOWING_SEEDS} 筆完整合格，請直接 `CONTINUE` 進入 `volumes`，順暢推進創作流程。
 
 """
         user_content = f"""{default_user_prompt_section}

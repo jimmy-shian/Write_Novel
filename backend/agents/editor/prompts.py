@@ -123,6 +123,58 @@ def build_targeted_rewriter_messages(
     ]
 
 
+def build_length_expand_messages(
+    chapter_index: int,
+    short_prose: str,
+    deficit: int,
+    original_prose: Optional[str] = None,
+    editor_context: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """組裝長度不足自動擴寫重試提示詞。
+
+    用於 Editor 初次精修輸出被壓縮至 1200 字以下的情況：
+    以偏短的精修稿為基底，用感官／心理／動作細節補足 deficit 字數，
+    禁止刪減既有情節、禁止輸出評語，只輸出完整正文。
+    """
+    system_prompt = (
+        TARGETED_REWRITER_PROMPT
+        + "\n\n【擴寫補足特別指令（最高優先）】：本次任務是將偏短的精修稿擴寫補足至完整章節長度。"
+        "必須保留既有事件因果、人物狀態與關鍵情節，只能增加細節、不可刪除任何已有段落；"
+        "嚴禁輸出評語、引言、註解或 JSON。"
+    )
+    system_prompt += build_agent_context_contract(
+        "Targeted Rewriter / 篇幅擴寫補足",
+        "- 偏短的精修稿全文（擴寫基底）。\n- 原始正文（情節對照，不得遺漏關鍵事件）。\n- 不可破壞的連續性約束。",
+        "將偏短稿擴寫至完整章節長度，輸出精修後的完整繁體中文正文。",
+        "直接輸出擴寫後的完整正文，不要輸出評語、引言、註解或 JSON。",
+        allow_context_request=False,
+    )
+
+    reference_block = ""
+    if original_prose:
+        reference_block = f"\n【原始正文對照（不得遺漏其中關鍵情節）】\n{original_prose}\n"
+
+    user_content = f"""【篇幅缺口】：目前精修稿不足完整章節下限，尚缺約 {deficit} 字（全文必須達到 1200 字以上，以 Python len() 計）。
+
+【擴寫方法（只增不減）】
+- 以感官描寫、心理活動、動作細節、環境氛圍補足篇幅，呼應本章大綱與人物動機。
+- 不可刪除或合併已有段落，不可將對白壓縮為一句帶過，不可新增與大綱矛盾的新事件。
+- 禁止複製貼上式灌水：每段新增細節都必須推動情緒、塑造人物或鋪陳後續因果。
+{reference_block}
+【不可破壞的連續性約束】
+{editor_context or "（無額外約束）"}
+
+【待擴寫的偏短精修稿全文】
+{short_prose}
+
+請直接輸出擴寫補足後的完整小說正文（必須達到 1200 字以上）：
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+
 def build_editor_agent_messages(chapter_index, edit_instructions, original_prose, editor_context=None):
     """正文潤色編輯提示詞拼接"""
     system_prompt = EDITOR_PROMPT

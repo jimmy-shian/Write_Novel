@@ -20,9 +20,15 @@ from backend.common.utils import StreamAccumulator
 from backend.schemas.constraints import load_retrospective_gold_rules
 from backend.agents.editor.prompts import (
     build_editor_agent_messages,
+    build_length_expand_messages,
     build_reviewer_agent_messages,
     build_targeted_rewriter_messages,
 )
+
+# 完整章節最低長度（與 Writer / 總監 evaluator 共用同一硬底線）
+_MIN_COMPLETE_CHAPTER_LEN = 1200
+# 初次精修被壓縮至下限以下時，自動擴寫補足的最大重試次數
+_MAX_LENGTH_EXPAND_RETRIES = 2
 from backend.services import narrative_memory
 from backend.agents.shared.context_requests import _handle_director_context_request
 from backend.models.parsers import extract_json_block
@@ -182,55 +188,133 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             yield chunk
 
     full_text = acc.content
-    if acc.finish_reason == "length":
+    finish_reason = acc.finish_reason
+    if finish_reason == "length":
         err_msg = f"第 {chapter_index} 章編輯輸出達模型輸出上限而被截斷，已保留原稿。"
         yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
         return
-    if full_text.strip():
-        # 清理可能輸出的正文標記前綴
-        cleaned_text = full_text.strip()
+
+    from backend.common.refusal_filter import (
+        find_meta_narrative_leaks,
+        is_refusal_or_disclaimer,
+        sanitize_meta_narrative,
+    )
+
+    def _strip_prose_markers(text: str) -> str:
+        cleaned = (text or "").strip()
         special_markers = ["[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"]
         for marker in special_markers:
-            if marker in cleaned_text:
-                idx = cleaned_text.find(marker)
-                cleaned_text = cleaned_text[idx + len(marker):].strip()
+            if marker in cleaned:
+                idx = cleaned.find(marker)
+                cleaned = cleaned[idx + len(marker):].strip()
+                break
+        return cleaned
+
+    # 長度不足自動擴寫補足：初次精修被壓縮至下限以下時，以偏短稿為基底
+    # 追加細節補足至 1200 字，而非直接丟棄觸發整條管線重試／中斷。
+    expand_attempt = 0
+    final_prose = None
+    cleaned_text = ""
+    if full_text.strip():
+        while True:
+            cleaned_text = _strip_prose_markers(full_text)
+
+            if _handle_director_context_request(novel_id, "編輯姬", cleaned_text):
+                yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            if is_refusal_or_disclaimer(cleaned_text):
+                err_msg = f"第 {chapter_index} 章編輯輸出包含 AI 拒答或安全免責聲明，本次丟棄並保留原稿。"
+                yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            # LLM 失敗模式偵測：若輸出為英文佔位句或過短，丟棄並保留原稿
+            if _is_llm_failure_output(cleaned_text):
+                print(f"[EditorAgent] LLM failure detected for chapter {chapter_index}: output discarded, original preserved.")
+                yield "data: " + json.dumps({
+                    "type": "error",
+                    "message": f"⚠️ 第 {chapter_index} 章編輯輸出偵測到 LLM 失敗模式（英文佔位或過短），已丟棄異常輸出並保留原稿。",
+                }, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
+            candidate_prose = sanitize_meta_narrative(cleaned_text if cleaned_text else full_text)
+            # Editing must not turn a complete chapter into a truncated one. Existing short
+            # chapters remain editable so they can be repaired incrementally.
+            needs_expand = (
+                len(original_prose.strip()) >= _MIN_COMPLETE_CHAPTER_LEN
+                and len(candidate_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN
+                and finish_reason != "length"
+                and expand_attempt < _MAX_LENGTH_EXPAND_RETRIES
+            )
+            if not needs_expand:
+                final_prose = candidate_prose
                 break
 
-        if _handle_director_context_request(novel_id, "編輯姬", cleaned_text):
-            yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        from backend.common.refusal_filter import (
-            find_meta_narrative_leaks,
-            is_refusal_or_disclaimer,
-            sanitize_meta_narrative,
-        )
-        if is_refusal_or_disclaimer(cleaned_text):
-            err_msg = f"第 {chapter_index} 章編輯輸出包含 AI 拒答或安全免責聲明，本次丟棄並保留原稿。"
-            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
-
-        # LLM 失敗模式偵測：若輸出為英文佔位句或過短，丟棄並保留原稿
-        if _is_llm_failure_output(cleaned_text):
-            print(f"[EditorAgent] LLM failure detected for chapter {chapter_index}: output discarded, original preserved.")
+            deficit = _MIN_COMPLETE_CHAPTER_LEN - len(candidate_prose.strip())
+            expand_attempt += 1
+            print(
+                f"[EditorAgent] Chapter {chapter_index} edit too short "
+                f"({len(candidate_prose.strip())}/{_MIN_COMPLETE_CHAPTER_LEN}), "
+                f"auto-expand retry {expand_attempt}/{_MAX_LENGTH_EXPAND_RETRIES} (deficit ~{deficit})."
+            )
             yield "data: " + json.dumps({
-                "type": "error",
-                "message": f"⚠️ 第 {chapter_index} 章編輯輸出偵測到 LLM 失敗模式（英文佔位或過短），已丟棄異常輸出並保留原稿。",
+                "type": "status",
+                "message": f"編輯稿僅 {len(candidate_prose.strip())} 字，低於下限 {_MIN_COMPLETE_CHAPTER_LEN} 字，正在自動擴寫補足（第 {expand_attempt} 次，尚缺約 {deficit} 字）...",
             }, ensure_ascii=False) + "\n\n"
-            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            return
 
-        final_prose = sanitize_meta_narrative(cleaned_text if cleaned_text else full_text)
-        # Editing must not turn a complete chapter into a truncated one. Existing short
-        # chapters remain editable so they can be repaired incrementally.
-        if len(original_prose.strip()) >= 1200 and len(final_prose.strip()) < 1200:
-            err_msg = f"第 {chapter_index} 章編輯稿僅 {len(final_prose.strip())} 字，低於完整章節最低長度 1200 字；已保留原稿。"
+            try:
+                expand_messages = build_length_expand_messages(
+                    chapter_index=chapter_index,
+                    short_prose=candidate_prose,
+                    deficit=deficit,
+                    original_prose=original_prose,
+                    editor_context=editor_context,
+                )
+            except Exception as build_err:
+                print(f"[EditorAgent] Build expand prompt failed: {build_err}")
+                final_prose = candidate_prose
+                break
+
+            try:
+                expand_iter = llm.call_llm_stream("editor", expand_messages, stream=stream, force_json=False)
+                expand_acc = StreamAccumulator(expand_iter)
+                for chunk in expand_acc:
+                    if isinstance(chunk, dict):
+                        yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+                    else:
+                        yield chunk
+            except Exception as expand_err:
+                print(f"[EditorAgent] Length-expand retry failed: {expand_err}")
+                final_prose = candidate_prose
+                break
+
+            finish_reason = expand_acc.finish_reason
+            messages = expand_messages  # 供 save_last_agent_run 使用最後一次成功的擴寫提示
+            if finish_reason == "length":
+                err_msg = f"第 {chapter_index} 章編輯擴寫輸出達模型輸出上限而被截斷，已保留原稿。"
+                yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+            if not expand_acc.content.strip():
+                final_prose = candidate_prose
+                break
+            full_text = expand_acc.content
+            # 繼續迴圈重新清洗／校驗擴寫結果
+            continue
+
+        # 擴寫重試耗盡仍不足：保留既有護欄行為（丟棄並保留原稿，交由上層重試／通報）
+        if final_prose is None:
+            return
+        if len(original_prose.strip()) >= _MIN_COMPLETE_CHAPTER_LEN and len(final_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN:
+            err_msg = f"第 {chapter_index} 章編輯稿僅 {len(final_prose.strip())} 字，低於完整章節最低長度 {_MIN_COMPLETE_CHAPTER_LEN} 字（已自動擴寫 {expand_attempt} 次）；已保留原稿。"
             yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
+    if full_text.strip():
         meta_hits = find_meta_narrative_leaks(final_prose)
         if meta_hits:
             err_msg = f"第 {chapter_index} 章編輯稿仍含元敘事語句（{', '.join(meta_hits[:3])}），已保留原稿。"
