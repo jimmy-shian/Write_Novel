@@ -26,7 +26,7 @@ PASS_ACTIONS = {"PASS", "NO_ACTION_REQUIRED", "WATCH"}
 
 # 「修到好」的安全上限：無人值守流水線不可無限迴圈燒 LLM 配額；
 # 達上限仍未通過時保留原稿與殘留診斷，交由看板處置與下一章約束。
-DEFAULT_MAX_FIX_ROUNDS = 3
+DEFAULT_MAX_FIX_ROUNDS = 5
 
 DIMENSION_LABELS = {
     "voice_integrity": "語言/口癖/動作重複",
@@ -57,7 +57,7 @@ def build_fix_instructions(
             lines.append(f"- 第 {h.get('paragraph_index', 1)} 段：『{h.get('matched_sentence', '')}』[{h.get('pattern_label', '')}]")
     lines.append("注意：只修正上述問題點，不得改變本章大綱事件、人物立場與伏筆走向。")
     if has_causal:
-        lines.append("紅線：必須實質更換情節因果鏈與主角博弈方式；嚴禁僅在策略名詞上做同義替換蒙混（例如把 asymmetric_wit 改名為 adaptive_response）；若診斷指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。")
+        lines.append("紅線：必須實質更換情節因果鏈與主角博弈方式；嚴禁僅在策略名詞上做近義詞替換蒙混；若診斷指出代價缺失，必須補寫具體的能力冷卻、資源消耗、體能透支或代價暴露後果。")
     if has_voice:
         lines.append("紅線：嚴格刪除或替換所有標記之禁用句與套路動作，出現禁用句即判失敗。")
     return "\n".join(lines)
@@ -214,10 +214,11 @@ def fix_chapter_from_audits(
         round_idx=round_idx,
     )
 
-    # 步驟 2: 分流決定是否執行 Writer
-    # 僅在第 1 輪且涉及長程因果/能力代價問題時，才由 Writer 重寫因果架構；
-    # 純微觀語言/口癖/開篇問題，或進入第 2 輪及以上，跳過 Writer，僅由 Editor 定點手術，避免全篇重寫引發打地鼠效應
-    should_run_writer = (round_idx == 1) and has_causal
+    # 步驟 2: 總監優先級重點分流 (Priority-Based Agent Routing)
+    # 根據缺陷維度精準分派：
+    # - 若涉及核心因果、能力代價或主線任務（P0 級問題）：由 Writer 重新推演因果與情節架構（打破 round_idx==1 的死鎖，只要因果未解就由 Writer 負責根本解決）。
+    # - 純微觀語言、口癖、開篇切入或微調（P1/P2 級問題）：由 Editor 進行定點手術潤色，專注語法與調理，不碰因果。
+    should_run_writer = has_causal
     current_spans = banned_hits
 
     if should_run_writer:
@@ -253,7 +254,8 @@ def fix_chapter_from_audits(
         except Exception as e:
             print(f"[WARN] run_chapter_writer in fix loop notice: {e}")
 
-    # 步驟 3: Editor 接手定點手術或潤色（精修語言美感、定向消滅模板動作與口癖）
+    # 步驟 3: Editor 職責邊界收斂——專注語句、語法、口癖剔除與文風調理
+    # 若上一階段執行了 Writer，Editor 進行最後的語言拋光；若未跑 Writer，則由 Editor 進行定點微創手術
     try:
         editor_gen = run_editor_agent(
             novel_id,

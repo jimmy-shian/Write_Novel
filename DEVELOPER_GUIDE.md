@@ -141,6 +141,17 @@ frontend/src/
 2. **極簡無 Emoji 政策**：統一向量 SVG（`components/common/Icons.tsx`）與 6px 狀態圓點（`.status-dot.success`, `.status-dot.danger`）。
 3. **平台解耦與打包相容**：前端所有資源引用均使用相對路徑（`base: './'`），`platform/index.ts` 抽象平台能力，相容 Web / Android APK (Capacitor) / Windows Desktop (Electron)。
 
+### E. 智能體協同與敘事自癒進階架構
+1. **章節細緻元素契約 (Chapter Element Contract)**：
+   - 由 `VolumeSkeleton` 代理人在細綱規劃時完成「時間點、微觀場景光影氛圍、多層次出場角色（主角/常駐配角/過場路人）、世界觀法則/機制、3~5個推進拍點、狀態位移」的預先裝填。
+   - `WriterContextBuilder` 依此鎖定地點、時間、角色與能力邊界，正文寫作時嚴格遵循契約，杜絕無中生有或地點人物漂移。
+2. **總監優先級定向修復工單 (FocusFixPlan)**：
+   - 總監評估器 (`evaluator.py`) 將診斷問題嚴格分為：
+     - **P0 核心邏輯/因果/能力代價**：分派給 `ChapterWriter` 重新推演因果鏈與主角博弈方式，徹底打破輪次死鎖。
+     - **P1 時空/開篇/套路句微創手術**：分派給 `EditorAgent` 進行局部定點切除與置換，不碰主線情節。
+     - **P2 語句節奏與微觀修辭**：分派給 `EditorAgent` 優化文學流暢度與語句拋光。
+   - 每輪修復明確鎖定單一主目標，徹底消除多目標並行導致的「打地鼠」與空轉循環。
+
 ---
 
 ## 6. 自動化測試規範

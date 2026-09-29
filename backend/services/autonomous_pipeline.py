@@ -340,8 +340,32 @@ class AutonomousPipelineManager:
                         pass
                 if attempt >= max_retries or task.stop_requested:
                     raise last_exc
-                delay = min(25, 3 * attempt)
-                task.log(f"⚠️ [{stage}] 執行波動 ({exc})，將於 {delay} 秒後進行第 {attempt}/{max_retries} 次自動重試...", level="warn")
+
+                # 總監介入出具診斷處方箋，取代盲目次數重試
+                err_clean = str(exc).strip()
+                is_infra_error = any(k in err_clean for k in (
+                    "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "Connection refused",
+                    "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "API Key"
+                ))
+                if is_infra_error:
+                    director_prescription = (
+                        f"【總監診斷處方箋（第 {attempt + 1} 次連線環境診斷）】\n"
+                        f"檢測到上游模型通訊或身分驗證異常：{err_clean}。\n"
+                        f"此為模型連線/登入憑證問題（非創作大綱或情節邏輯錯誤）。請檢查模型服務端、API Key 或 WebChat2Local Cookie 是否正常。"
+                    )
+                else:
+                    director_prescription = (
+                        f"【總監診斷處方箋（第 {attempt + 1} 次定向重點修正）】\n"
+                        f"上一輪產出未達標準，核心病灶：{err_clean}。\n"
+                        f"請針對上述問題進行重點修正，確保符合規範約束與結構自洽。"
+                    )
+                if instruction:
+                    instruction = f"{director_prescription}\n原始任務指引：{instruction}"
+                else:
+                    instruction = director_prescription
+
+                delay = min(15, 2 * attempt)
+                task.log(f"🩺 [總監出具修正處方箋] 針對 [{stage}] 出具定向修復指導，將於 {delay} 秒後進行第 {attempt + 1}/{max_retries} 次重點修正：{exc}", level="warn")
                 time.sleep(delay)
 
         raise last_exc or RuntimeError(f"Stage {stage} failed after {max_retries} retries")

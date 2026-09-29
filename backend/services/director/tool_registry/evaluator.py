@@ -470,12 +470,52 @@ def evaluate_output(
         for i in issues
     )
 
+    # 系統性重點修正分類：將問題區分為 P0 (因果/結構), P1 (時空/開篇/套路), P2 (修辭/語法)
+    p0_issues = []
+    p1_issues = []
+    p2_issues = []
+    for iss in issues:
+        if iss.startswith("【敘事診斷紅線") or "因果" in iss or "知情邊界" in iss or "能力代價" in iss or "任務" in iss:
+            p0_issues.append(iss)
+        elif iss.startswith("【場景地點漂移】") or iss.startswith("【時間連續性矛盾】") or iss.startswith("【開篇定型模板重複】") or "套路句" in iss:
+            p1_issues.append(iss)
+        else:
+            p2_issues.append(iss)
+
+    # 生成總監重點修正工單 (FocusFixPlan)：每輪明確只修一個主目標，避免打地鼠與空轉
+    focus_fix_plan = None
+    if p0_issues:
+        focus_fix_plan = {
+            "priority": "P0_CRITICAL",
+            "target_agent": "writer",
+            "primary_issue": p0_issues[0],
+            "actionable_directive": f"【P0 核心因果/邏輯修復】：請重新推演並落實情節因果邏輯。\n問題：{p0_issues[0]}\n方針：嚴格遵循當前章節元素契約與因果邊界，嚴禁純名詞替換。",
+        }
+    elif p1_issues:
+        focus_fix_plan = {
+            "priority": "P1_MAJOR",
+            "target_agent": "editor",
+            "primary_issue": p1_issues[0],
+            "actionable_directive": f"【P1 時空/開篇/套路手術】：定點清除問題段落與套路句式。\n問題：{p1_issues[0]}\n方針：由 Editor 進行局部微創手術，替換開篇視角或定點刪改套路句，保持其餘情節不變。",
+        }
+    elif p2_issues:
+        focus_fix_plan = {
+            "priority": "P2_MINOR",
+            "target_agent": "editor",
+            "primary_issue": p2_issues[0],
+            "actionable_directive": f"【P2 語句與節奏調理】：潤色詞句與呼吸節奏。\n問題：{p2_issues[0]}\n方針：由 Editor 優化語法調理，增強文學質感與流暢度。",
+        }
+
     result = {
         "passed": len(issues) == 0,
         "critical_drift": has_critical_drift,
-        "action": "REVISE" if has_critical_drift else ("PASS" if len(issues) == 0 else "WARNING"),
+        "action": "REVISE" if (has_critical_drift or p0_issues or p1_issues) else ("PASS" if len(issues) == 0 else "WARNING"),
         "message": "通過" if len(issues) == 0 else "; ".join(issues),
         "issues": issues,
+        "p0_issues": p0_issues,
+        "p1_issues": p1_issues,
+        "p2_issues": p2_issues,
+        "focus_fix_plan": focus_fix_plan,
         "criteria_reference": criteria_prompt,
     }
     if narrative_audit:

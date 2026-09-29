@@ -69,7 +69,7 @@ def build_targeted_rewriter_messages(
     system_prompt += build_agent_context_contract(
         "Targeted Rewriter / 定向正文精修",
         "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 時序動態事實、設定邊界約束與編輯指令。",
-        "針對被標記之段落進行局部重寫修正，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
+        "職責邊界限制：專注於語句潤色、語法流暢、口癖剔除與文風調理，嚴禁推翻因果結構、篡改大綱核心事件或變更人物抉擇；針對被標記之段落進行局部修補，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
         "直接輸出精修後正文，不要輸出評語、引言、註解或 JSON。",
         allow_context_request=False,
     )

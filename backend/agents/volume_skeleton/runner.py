@@ -614,6 +614,10 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
                     yield "data: " + json.dumps({"type": "error", "message": f"第 {volume_index} 卷批次 {batch_start}-{batch_end} 仍缺失章節：{missing_after_parse}。"}, ensure_ascii=False) + "\n\n"
                     yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                     return
+                messages = messages + [{
+                    "role": "user",
+                    "content": f"【總監診斷處方箋】上一輪輸出缺失以下章節骨架：{missing_after_parse}。請務必補齊這些章節，保持章號連續，並確立完整的元素契約（包含時空、出場角色、世界觀法則與推進拍點）。"
+                }]
                 time.sleep(min(10, attempt))
                 continue
 

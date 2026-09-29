@@ -403,6 +403,14 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 yield "data: " + json.dumps({"type": "content", "delta": content}, ensure_ascii=False) + "\n\n"
             
             # --- Validations (before yielding done) ---
+            from backend.common.refusal_filter import is_refusal_or_disclaimer, get_refusal_pattern_match
+            if is_refusal_or_disclaimer(content):
+                match_info = get_refusal_pattern_match(content)
+                raise ValueError(
+                    f"模型回傳 AI 拒答或免責聲明 ({match_info})：'{content.strip()[:80]}'。"
+                    "請確認模型登入狀態、WebChat2Local Cookie 是否過期，或更換可用模型。"
+                )
+
             if force_json and agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
                 parsed_json = extract_json_block(content)
                 if not parsed_json or len(parsed_json) == 0:
@@ -524,7 +532,21 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 print(f"[LLM] Line processing error (non-fatal): {e}")
                 continue
         
-        # If we reached here, the call succeeded!
+        # If we reached here, validate accumulated content before yielding done
+        full_output = "".join(accumulated_content)
+        from backend.common.refusal_filter import is_refusal_or_disclaimer, get_refusal_pattern_match
+        if is_refusal_or_disclaimer(full_output):
+            match_info = get_refusal_pattern_match(full_output)
+            raise ValueError(
+                f"模型回傳 AI 拒答或免責聲明 ({match_info})：'{full_output.strip()[:80]}'。"
+                "請確認模型登入狀態、WebChat2Local Cookie 是否過期，或更換可用模型。"
+            )
+
+        if force_json and agent_name in ["architect", "character", "plot", "volumes", "volume_skeleton"]:
+            parsed_json = extract_json_block(full_output)
+            if not parsed_json or len(parsed_json) == 0:
+                raise ValueError("JSON validation failed: LLM output is not a valid JSON structure or is empty.")
+
         yield "data: " + json.dumps({"type": "done", "finish_reason": completion_reason}) + "\n\n"
         return
         

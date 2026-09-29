@@ -150,6 +150,24 @@ class WriterContextBuilder:
                 }
                 states.append(state_item)
 
+        found_names = {s["name"] for s in states}
+        for aname in active_names:
+            if aname and aname not in found_names:
+                is_one_off = any(k in aname for k in ("路人", "侍衛", "掌櫃", "小二", "店員", "乘客", "士兵", "隨從", "弟子", "刺客", "管家", "守衛"))
+                role_label = "單次過場角色/路人" if is_one_off else "大綱出場配角"
+                states.append({
+                    "name": aname,
+                    "role": role_label,
+                    "faction": "中立/環境人物",
+                    "is_pov": (aname == pov_character),
+                    "public_attitude": "對待他人：言行專注當前現場互動，依情境做出自然反應",
+                    "private_motivation": "履行當前場景情節功能與日常生存動機",
+                    "speech_profile_summary": "自然簡練，貼合身份",
+                    "knowledge_scope": ["僅知當前現場目擊之事"],
+                    "state_source": "scene_outline_scoped",
+                    "current_state_missing": False,
+                })
+
         return states
 
     @staticmethod
@@ -261,23 +279,24 @@ class WriterContextBuilder:
         recent_memories = raw_packet.get("recent_chapter_memories") or []
         if isinstance(recent_memories, list) and recent_memories:
             mem_lines = []
-            # 保留最近至多 6 章摘要並限制單章上限，嚴格遵守 Context Token 預算
-            scoped_memories = recent_memories[-6:]
+            # 固定預算精煉：保留最近 3 章情勢演變（單章限制 150 字），既確保前文連貫，又杜絕歷史無節制堆疊
+            scoped_memories = recent_memories[-3:]
             for m in scoped_memories:
                 if isinstance(m, dict):
                     idx = m.get("chapter_index", "")
                     summ = m.get("chapter_summary") or m.get("summary") or ""
                     if summ:
-                        clean_summ = str(summ).strip()[:300]
+                        clean_summ = str(summ).strip()[:150]
                         mem_lines.append(f"  - 第 {idx} 章情勢演變：{clean_summ}")
             if mem_lines:
-                lines.append("▶ 近期情勢演進脈絡：\n" + "\n".join(mem_lines))
+                lines.append("▶ 近期情勢演進脈絡（固定預算銜接）：\n" + "\n".join(mem_lines))
 
         long_range = raw_packet.get("long_range_arc_retrospective") or []
         if isinstance(long_range, list) and long_range:
-            recap_lines = [f"  - {str(item).strip()}" for item in long_range if str(item).strip()]
+            # 長程回顧收斂至核心 3 條重要進展
+            recap_lines = [f"  - {str(item).strip()[:120]}" for item in long_range if str(item).strip()]
             if recap_lines:
-                lines.append("▶ 長程主線回顧（近期章節以外的既有正文證據）：\n" + "\n".join(recap_lines[-10:]))
+                lines.append("▶ 長程關鍵主線進展：\n" + "\n".join(recap_lines[-3:]))
 
         character_history = raw_packet.get("character_emotional_and_relationship_history") or []
         if isinstance(character_history, list) and character_history:
@@ -289,23 +308,20 @@ class WriterContextBuilder:
                 events = record.get("recorded_moments") or []
                 if not events:
                     continue
-                history_lines.append(f"  - **{name}** 的過往互動與情緒脈絡：")
-                for event in events[-3:]:
+                history_lines.append(f"  - **{name}** 的過往重要轉變：")
+                # 每個角色僅保留最近 2 筆核心變化
+                for event in events[-2:]:
                     if not isinstance(event, dict):
                         continue
                     details = []
                     if event.get("state_change"):
-                        details.append(f"心理／立場變化：{event['state_change']}")
+                        details.append(f"心理／立場：{event['state_change']}")
                     if event.get("relationship_change"):
-                        details.append(f"關係變化：{event['relationship_change']}")
-                    if event.get("textual_evidence"):
-                        details.append(f"正文片段：{event['textual_evidence']}")
-                    elif event.get("chapter_summary"):
-                        details.append(str(event["chapter_summary"]))
+                        details.append(f"關係：{event['relationship_change']}")
                     if details:
                         history_lines.append(f"    · 第 {event.get('chapter_index', '?')} 章：" + "；".join(details))
             if history_lines:
-                lines.append("▶ 本章活躍角色的動態情感與關係記憶（正文摘錄為證據，不可覆寫既定事實）：\n" + "\n".join(history_lines))
+                lines.append("▶ 本章活躍角色動態情感與關係記憶（不可覆寫既定事實）：\n" + "\n".join(history_lines))
 
         arc_summary = raw_packet.get("current_arc_summary")
         if isinstance(arc_summary, str) and arc_summary.strip():
@@ -566,13 +582,13 @@ class WriterContextBuilder:
             if volume_direction:
                 lines.append(volume_direction)
             lines.append("")
-        # (D) 連續性與時序記憶任務 (Graphiti Temporal Graph)
+        # (D) 連續性與時序記憶任務 (Graphiti Temporal Graph - 聚焦本章活躍元素)
         active_char_names = [cs["name"] for cs in char_states]
         temporal_graph_context = TemporalGraphService.build_narrative_context(
             novel_id=novel_id,
             at_chapter=chapter_index,
             active_characters=active_char_names,
-            max_facts=18
+            max_facts=8
         )
         lines.append("### 🔗【敘事連續性與時序記憶約束 (Graphiti Memory)】")
         lines.append(temporal_graph_context)

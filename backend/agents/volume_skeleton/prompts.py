@@ -86,8 +86,8 @@ def build_volume_skeleton_planner_messages(
     system_prompt += build_agent_context_contract(
         "Volume Skeleton Planner / 卷章節骨架規劃師",
         "- 經後端挑選的世界觀背景。\n- 指定卷的標題、全卷概要、時間線、序列上下文、適用規則與全卷/當前批次章節範圍。\n- 本卷前文已生成章節脈絡與 Python 預計算的逐章 allocated_tasks 表。",
-        f"生成指定批次範圍（第 {start_ch} 至 {end_ch} 章，共 {vol_chapter_count} 章）的連續輕量章節骨架，嚴密承接前文章節脈絡與全卷大綱，並把預計算任務填入對應章節。",
-        f"輸出 chapters_skeleton JSON；chapter_index 必須完整連續覆蓋指定批次範圍（第 {start_ch} 至 {end_ch} 章）。每章只寫短骨架，不得生成詳細大綱或正文。"
+        f"生成指定批次範圍（第 {start_ch} 至 {end_ch} 章，共 {vol_chapter_count} 章）的章節元素契約與骨架，嚴密承接前文章節脈絡與全卷大綱，並把預計算任務與角色元素填入對應章節。",
+        f"輸出 chapters_skeleton JSON；chapter_index 必須完整連續覆蓋指定批次範圍（第 {start_ch} 至 {end_ch} 章）。每章確立完整元素契約（時空、出場角色、拍點與世界觀運作），並支援大綱期新增角色。"
     )
 
     vol_title = current_vol.get("title", f"第 {volume_index} 卷")
@@ -125,6 +125,32 @@ def build_volume_skeleton_planner_messages(
     core_context = f"{format_novel_core_context(novel_id)}\n\n" if novel_id else ""
     prior_section = f"\n{prior_chapters_context}\n" if prior_chapters_context else ""
 
+    geom_section = ""
+    if novel_id:
+        try:
+            from backend.persistence import load_geometry_graph
+            graph = load_geometry_graph(novel_id)
+            if graph and graph.nodes:
+                node_lines = ["【幾何圖譜結構角色與前後義務 (Geometry Graph Overlay)】"]
+                for ch_num in range(start_ch, end_ch + 1):
+                    ch_nodes = graph.get_chapter_nodes(ch_num)
+                    if ch_nodes:
+                        n = ch_nodes[0]
+                        role = n.structural_role.value if hasattr(n.structural_role, "value") else str(n.structural_role)
+                        in_edges = graph.get_incoming_edges(n.node_id)
+                        out_edges = graph.get_outgoing_edges(n.node_id)
+                        in_desc = [f"{e.edge_type.value if hasattr(e.edge_type, 'value') else e.edge_type} 來自節點 {e.source}" for e in in_edges[:2]]
+                        out_desc = [f"{e.edge_type.value if hasattr(e.edge_type, 'value') else e.edge_type} 至節點 {e.target}" for e in out_edges[:2]]
+                        node_lines.append(
+                            f"- 第 {ch_num} 章（節點 `{n.node_id}`）：結構角色 `{role}` | 線程 `{n.primary_thread}`"
+                            + (f" | 前置因果承接: {'; '.join(in_desc)}" if in_desc else "")
+                            + (f" | 後續結構義務: {'; '.join(out_desc)}" if out_desc else "")
+                        )
+                if len(node_lines) > 1:
+                    geom_section = "\n" + "\n".join(node_lines) + "\n"
+        except Exception:
+            pass
+
     user_content = f"""{core_context}【世界觀背景】
 {worldview_text}
 
@@ -141,6 +167,7 @@ def build_volume_skeleton_planner_messages(
 - 承接前文已規劃之情節進展與人物狀態，確保故事前後連貫。
 - 每章短句聚焦戲劇推進拍點 (Scene Beats)，專注於骨架結構。
 {prior_section}
+{geom_section}
 {surrounding_context}
 {precalc_clues}
 
@@ -149,12 +176,19 @@ def build_volume_skeleton_planner_messages(
 - 表中無任務的章節請輸出：foreshadowing_plants: [], foreshadowing_payoffs: [], turning_points: []。
 - 若某章安排了 plant/payoff/turning point，請在 chapter_summary 或 events[0].content 中以簡潔語句標註其劇情落點。
 
-【每章輕量骨架指引】
-- 每章點明：本章承接/推進、任務落點、時間、地點、活躍角色、相關勢力。
-- events 包含核心事件物件；content 用「行動 -> 結果」短句精煉描述。
-- chapter_summary 35-70 字；cliffhanger 30 字內；scene_setting 與 time_setting 使用精煉短語。
-- characters_active 列出本章真正活躍角色（通常 1-4 名）。
-- 當活躍角色發生可持續的心理、立場或關係變化時，填寫 character_state_changes（name、state_change、relationship_change）；未發生明確變化則輸出空陣列，不要虛構情緒波動。
+【每章細緻元素契約指引 (Chapter Element Contract)】
+- 本階段即為章節之完整元素鎖定！請將該章所需之所有元素細緻規劃，讓後續 Writer 僅需按計畫填入故事，不再依賴後期自由膨脹：
+- 時空與場景：time_setting 明確標註具體時間點或時段；scene_setting 描寫具體場景空間與環境特徵、光影氣氛，嚴禁模糊籠統。
+- 出場角色與知情邊界：characters_active 列出本章真正活躍出場的角色名單（包含核心主角、常駐配角，乃至於路人甲、乙、丙等功能性過場角色）。
+  *【細緻角色層次規劃（含路人與單次/常駐標註）】：
+    - 請細緻規劃每位出場角色是屬於「核心主角」、「常駐/重複出現配角」，或是「單次過場角色/路人甲乙丙」（如特定掌櫃、守衛、信使、群眾代表等）。
+    - 規劃時需定下其在該場景中的具體動機、功能與說話態度，防止正文盲猜。
+    - 若情節需要新角色或命名配角/路人，**必須在此大綱階段即做完整角色安排**，於頂層 new_characters 陣列中詳細填入，並標明是一次性還是可能再登場！
+    - 當活躍角色發生可持續的心理、立場或關係變化時，填寫 character_state_changes（name、state_change、relationship_change），確保性格隨劇情合理推進，杜絕前後矛盾。
+- 世界觀與元素運作機制：setting_usage 列出本章情節運作或涉及的具體世界觀法則、專有名詞、超常機制或專屬道具清單，在寫作前完成全部元素預先裝填。
+- 戲劇推進拍點：每章規劃 3-5 個精簡推進拍點（scene_beats 或 events），包含行動起點、意外阻礙、關鍵抉擇與落地後果。
+- 章節目標與位移：chapter_summary 概括核心情節；scene_goal 標註戲劇目標；scene_conflict 標註阻礙；cliffhanger 留出懸念鉤子。
+- 實質狀態位移：story_state_before 與 story_state_after 清楚標示情報、人際、風險或資源的實質改變。
 - emotional_requirement 描述本章必要的情感效果（例如和解、告別、愧疚或信任破裂），僅在大綱確有此需求時填寫。
 
 【章節多樣性與反公式化指引】
@@ -162,33 +196,45 @@ def build_volume_skeleton_planner_messages(
 - 保持劇情緊湊推進：每 3 章內安排實質的主線推進、角色抉擇或伏筆實質進展。
 - 重大轉折前置鋪墊：若某章安排角色立場轉變或重大轉折（turning point），前置章節宜具備動搖或懷疑的過渡鋪墊拍點。
 
-【單章輸出格式示意】
+【單章輸出格式示意（抽象通用結構）】
 {{
   "chapter_index": {start_ch},
-  "chapter_title": "月台異訊",
-  "chapter_summary": "主角追查異常線索，首次接觸隱秘記錄，將危機推向深處。",
-  "time_setting": "深夜末班前",
-  "scene_setting": "舊站月台",
-  "events": [{{"scene_index": 1, "location": "舊站月台", "characters": ["主角"], "content": "追查異訊 -> 取得關鍵線索"}}],
-  "characters_active": ["主角"],
-  "emotional_tone": "懸疑",
-  "emotional_requirement": "",
-  "character_state_changes": [],
-  "cliffhanger": "車門在無人處自行開啟。",
+  "chapter_title": "本章主旨標題（依故事簡介與情節自命，體現文學質感）",
+  "chapter_summary": "本章核心事件概括，交代人物行動、核心阻礙與衝突推進成果。",
+  "time_setting": "具體時間點或時間跨度",
+  "scene_setting": "具體場景空間、物理環境與氛圍特質",
+  "events": [
+    {{"scene_index": 1, "location": "場景空間", "characters": ["出場人物名"], "content": "行動推進 -> 遭遇阻礙/反制 -> 達成結果"}}
+  ],
+  "characters_active": ["主要出場角色名", "特定配角或路人甲(標註功能)"],
+  "emotional_tone": "情境氛圍基調",
+  "emotional_requirement": "本章情感要求或留白（若有）",
+  "character_state_changes": [
+    {{"name": "角色名", "state_change": "心理/立場轉向說明", "relationship_change": "與他人關係變化"}}
+  ],
+  "setting_usage": ["本章調用之世界觀法則或道具機制"],
+  "scene_beats": ["拍點一：起點行動與動機", "拍點二：意外阻礙或交鋒", "拍點三：關鍵抉擇與轉折", "拍點四：落地結果與實質代價"],
+  "story_state_before": "本章開始前局勢與情報狀態",
+  "story_state_after": "本章結束後實質位移之局勢或情報代價",
+  "cliffhanger": "章末具備實質懸念之收尾鉤子",
   "allocated_tasks": {{"foreshadowing_plants": [], "foreshadowing_payoffs": [], "turning_points": []}}
 }}
 
 【勢力與角色一致性及增量指引】
 - 勢力/組織的定義、立場與背景以世界觀中的設定為準。
 - 若章節使用既有角色，characters_active 請使用既有名冊中的名稱。
-- 【新登場人物設定】：若本批章節劇情需要引入新命名角色，請於 new_characters 中說明其陣營、性格與動機，協助正文作家準確掌握人物：
+- 【新登場人物設定】：若本批章節劇情需要引入新命名角色（包含主要配角或重要過場路人），請於 new_characters 中說明其陣營、性格與動機，協助正文作家準確掌握人物：
   - name: 角色全名
-  - role: 劇中定位（正派盟友 / 主要反派 / 導師 / 灰色中立 / 競爭者 / 地方幹員）
-  - faction: 所屬勢力
+  - role: 劇中定位（正派盟友 / 主要反派 / 導師 / 灰色中立 / 地方幹員 / 單次過場配角）
+  - faction: 所屬勢力或門派（無勢力則填獨立/平民）
   - personality: 核心性格特徵與說話風格
-  - motivation: 核心動機與訴求
+  - motivation: 核心動機、生存訴求或過場功能
   - first_appearance_chapter: 首次登場章節號
+  - is_one_off: 是否為單次過場角色 (true/false)
 - 若本批章節解鎖了新地域、專屬法則或新勢力，請一併在頂層 "new_world_rules" 與 "new_factions" 中回傳；若無新增則給予空陣列 []。
+
+【通用小說生成原則】
+- 本提示詞為通用小說大綱規劃規範，嚴禁依賴或套用任何特定單一小說之範例情節；所有情節、場景、角色與設定必須 100% 依據當前專案輸入的故事簡介、世界觀與篇卷規劃進行推演。
 
 【完整輸出 JSON 根結構範例】
 {{
@@ -199,11 +245,12 @@ def build_volume_skeleton_planner_messages(
   "new_characters": [
     {{
       "name": "新角色全名",
-      "role": "正派盟友 | 主要反派 | 導師 | 灰色中立 | 地方頭目",
+      "role": "正派盟友 | 主要反派 | 導師 | 灰色中立 | 地方頭目 | 單次過場配角",
       "faction": "所屬勢力或門派名稱",
       "personality": "性格特質與言語風格短句",
       "motivation": "核心訴求或衝突動機",
-      "first_appearance_chapter": {start_ch}
+      "first_appearance_chapter": {start_ch},
+      "is_one_off": false
     }}
   ],
   "new_world_rules": [

@@ -31,6 +31,16 @@ def _handle_director_context_request(novel_id, agent_label, full_text):
         return False
     message = f"{agent_label} 已暫停保存：需要總監補充上下文後再生成。\n{request}"
     db.save_chat_message(novel_id, "assistant", message, message_type="pipeline")
+    try:
+        db.save_director_review_status(
+            novel_id=novel_id,
+            stage_name=agent_label,
+            status="needs_context",
+            reason=request,
+            decision_json={"agent": agent_label, "context_request": request},
+        )
+    except Exception:
+        pass
     return True
 
 

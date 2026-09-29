@@ -128,9 +128,9 @@ def _inject_retry_feedback(messages: list, error: str, attempt: int, last_output
     feedback = {
         "role": "user",
         "content": (
-            f"【系統回報 - 第 {attempt} 次重試】\n"
-            f"上次輸出格式不符要求：{error}\n"
-            f"請只輸出純 JSON。\n"
+            f"【系統回報 / 總監診斷處方箋 - 定向修正第 {attempt} 次】\n"
+            f"上次輸出未通過格式校驗，核心病灶：{error}\n"
+            f"請重點修正上述病灶，嚴格遵循原始 JSON Schema 規範重新輸出純 JSON。\n"
             + (f"上次輸出 JSON 收合封包：{json.dumps(output_payload, ensure_ascii=False, indent=2)}" if output_payload else "")
         ),
     }
