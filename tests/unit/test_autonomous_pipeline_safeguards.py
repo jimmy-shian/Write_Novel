@@ -111,6 +111,8 @@ def test_autonomous_pipeline_get_status_isolation():
     from backend.services.autonomous_pipeline import AutonomousPipelineManager, NovelPipelineTask
 
     mgr = AutonomousPipelineManager()
+    saved_tasks = dict(mgr.tasks)
+    mgr.tasks.clear()
 
     # 模擬小說 A 正在背景自主寫作中
     task_a = NovelPipelineTask("novel_A", "小說A")
@@ -142,4 +144,5 @@ def test_autonomous_pipeline_get_status_isolation():
         assert res_global["is_running"] is True
     finally:
         task_a.is_running = False
-        mgr.tasks.pop("novel_A", None)
+        mgr.tasks.clear()
+        mgr.tasks.update(saved_tasks)

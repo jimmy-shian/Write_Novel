@@ -17,7 +17,7 @@ from backend.generation.orchestration.context_builder import build_generation_co
 from backend.generation.routing.schema import GenerationTaskOptions, GenerationTaskRequest
 from backend.services.context.writer_context_builder import WriterContextBuilder
 from backend.services.director.context_compiler import GeometryContextCompiler
-from backend.services.director.tools import repair_story_geometry
+from backend.services.director.tool_registry import repair_story_geometry
 
 
 def test_context_compiler_and_writer_prompt_injection(novel_factory):

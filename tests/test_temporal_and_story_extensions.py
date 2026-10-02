@@ -258,6 +258,11 @@ def test_pipeline_prompt_and_autonomous_status_lifecycle():
     stop_res = autonomous_manager.stop_pipeline(test_novel_id)
     assert stop_res["status"] == "stopping"
     assert stop_res.get("success") is True
+    t = autonomous_manager.tasks.get(test_novel_id)
+    if t:
+        t.is_running = False
+        t.stop_requested = True
+    autonomous_manager.tasks.pop(test_novel_id, None)
 
     db.delete_novel(test_novel_id)
 

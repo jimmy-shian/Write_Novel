@@ -15,10 +15,7 @@ from backend.persistence.repositories.agent_runs import (
     save_last_agent_run,
     get_last_agent_run,
     _compact_input_data,
-    save_prompt_override,
-    get_prompt_override,
 )
-from backend.prompts.prompt_manager import load_prompt_template
 from backend.persistence.repositories.chapters import save_chat_message
 from backend.services.hf_sync import (
     backup_database,
