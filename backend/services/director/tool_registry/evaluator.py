@@ -290,6 +290,22 @@ def _validate_chapter_setting_and_continuity(
                 if any(kw in time_setting for kw in ("下午", "傍晚", "第二天", "數小時", "深夜")):
                     if any(conn in first_paragraph for conn in ("才剛平息", "上一秒", "剛推開桌上那塊", "剛把桌上那塊泡發")):
                         issues.append(f"【時間連續性矛盾】大綱標明時間跨度為「{time_setting}」，正文開篇卻無縫秒接前章微觀動作")
+
+                # 3. 雙完結／全書終章結構混亂校驗
+                if "全書完" in prev_text or "全書收官" in prev_text or "全書終章" in prev_text:
+                    cliff = (outline.get("cliffhanger") or outline.get("scene_goal") or "")
+                    if "全書完" in cliff or "全書收官" in cliff or "完結" in cliff:
+                        issues.append("【雙完結結構矛盾】前一章已標註全書完結，本章大綱或正文再次宣告全書完結收官，造成篇章結構衝突")
+                    # 時間倒退校驗（前章已是未來或數月/數年後，本章又重回清晨紮營）
+                    prev_time = ""
+                    try:
+                        from backend.services import narrative_memory
+                        prev_outline = narrative_memory.get_chapter_outline(novel_id, chapter_index - 1) or {}
+                        prev_time = prev_outline.get("time_setting") or ""
+                    except Exception:
+                        pass
+                    if ("數月" in prev_time or "數年" in prev_time or "三千年" in prev_time) and ("清晨" in time_setting or "元年" in time_setting):
+                        issues.append(f"【時序倒流矛盾】前章時間設定為「{prev_time}」，本章又倒退至「{time_setting}」，造成敘事時間線混亂")
         except Exception:
             pass
 
@@ -466,16 +482,16 @@ def evaluate_output(
 
     criteria_prompt = format_criteria_for_prompt(stage_name)
     has_critical_drift = any(
-        i.startswith("【場景地點漂移】") or i.startswith("【時間連續性矛盾】") or i.startswith("【開篇定型模板重複】") or i.startswith("【敘事診斷紅線")
+        i.startswith("【場景地點漂移】") or i.startswith("【時間連續性矛盾】") or i.startswith("【開篇定型模板重複】") or i.startswith("【雙完結結構矛盾】") or i.startswith("【時序倒流矛盾】") or i.startswith("【敘事診斷紅線")
         for i in issues
     )
 
-    # 系統性重點修正分類：將問題區分為 P0 (因果/結構), P1 (時空/開篇/套路), P2 (修辭/語法)
+    # 系統性重點修正分類：將問題區分為 P0 (因果/結構/元敘事洩漏), P1 (時空/開篇/套路), P2 (修辭/語法)
     p0_issues = []
     p1_issues = []
     p2_issues = []
     for iss in issues:
-        if iss.startswith("【敘事診斷紅線") or "因果" in iss or "知情邊界" in iss or "能力代價" in iss or "任務" in iss:
+        if iss.startswith("【敘事診斷紅線") or iss.startswith("【雙完結結構矛盾】") or iss.startswith("【時序倒流矛盾】") or "因果" in iss or "知情邊界" in iss or "能力代價" in iss or "任務" in iss or "元敘事" in iss or "拒答" in iss or "長度不足" in iss:
             p0_issues.append(iss)
         elif iss.startswith("【場景地點漂移】") or iss.startswith("【時間連續性矛盾】") or iss.startswith("【開篇定型模板重複】") or "套路句" in iss:
             p1_issues.append(iss)

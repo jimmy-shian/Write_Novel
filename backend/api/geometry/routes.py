@@ -17,7 +17,7 @@ from backend import persistence as db
 from backend.geometry.generator import GeometryGenerator
 from backend.geometry.models import GeometryComplexity, GeometryParams, RepairOperation
 from backend.geometry.repair import GeometryRepairCondition
-from backend.services.director.tools import repair_story_geometry
+from backend.services.director.tool_registry import repair_story_geometry
 
 router = APIRouter(tags=["geometry"])
 

@@ -23,12 +23,23 @@ from backend.common.config import (
 )
 from backend.schemas.validation import split_consecutive_batches
 from backend.common.refusal_filter import is_refusal_or_disclaimer
+from backend.agents.director.runner import get_director_decision_sync
+
+
+class PipelineHaltedException(Exception):
+    """Raised when Director decides to halt autonomous execution (WAIT_USER or FINISH)."""
+
+    def __init__(self, action: str, reason: str = ""):
+        self.action = (action or "").upper().strip()
+        self.reason = reason or ""
+        super().__init__(f"Pipeline halted by Director: {self.action} ({self.reason})")
 
 
 class NovelPipelineTask:
     """單本小說的自主生成任務狀態實例"""
 
     def __init__(self, novel_id: str, novel_title: str = ""):
+        self._lock = threading.RLock()
         self.novel_id = novel_id
         self.novel_title = novel_title or novel_id
         self.is_running = False
@@ -47,14 +58,15 @@ class NovelPipelineTask:
 
     def log(self, message: str, level: str = "info"):
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
-        self.last_heartbeat = now_str
-        # seq 為單調遞增序號：即使 logs 因記憶體上限被截斷 (-100)，
-        # 前端仍可靠 seq 精準增量同步，不會因長度凍結而漏接日誌
-        self.log_seq += 1
-        entry = {"seq": self.log_seq, "time": now_str, "msg": message, "level": level}
-        self.logs.append(entry)
-        if len(self.logs) > 100:
-            self.logs = self.logs[-100:]
+        with self._lock:
+            self.last_heartbeat = now_str
+            # seq 為單調遞增序號：即使 logs 因記憶體上限被截斷 (-100)，
+            # 前端仍可靠 seq 精準增量同步，不會因長度凍結而漏接日誌
+            self.log_seq += 1
+            entry = {"seq": self.log_seq, "time": now_str, "msg": message, "level": level}
+            self.logs.append(entry)
+            if len(self.logs) > 100:
+                self.logs = self.logs[-100:]
         try:
             print(f"[AutoPipeline][{self.novel_title}][{now_str}] {message}")
         except Exception:
@@ -64,24 +76,47 @@ class NovelPipelineTask:
             except Exception:
                 pass
 
+    def finish(self, status_message: str = "創作完成"):
+        with self._lock:
+            self.is_running = False
+            self.current_stage = "completed"
+            self.progress_percent = 100
+            self.status_message = status_message
+            self.log(status_message, level="info")
+
+    def fail(self, error_message: str):
+        with self._lock:
+            self.is_running = False
+            self.error = error_message
+            self.current_stage = "error"
+            self.status_message = f"❌ 執行中斷: {error_message}"
+            self.log(f"執行出錯: {error_message}", level="error")
+
+    def get_logs(self, since_seq: int = 0) -> List[Dict[str, Any]]:
+        with self._lock:
+            if since_seq <= 0:
+                return list(self.logs)
+            return [entry for entry in self.logs if entry.get("seq", 0) > since_seq]
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "novel_id": self.novel_id,
-            "novel_title": self.novel_title,
-            "is_running": self.is_running,
-            "running": self.is_running,
-            "current_stage": self.current_stage,
-            "current_chapter": self.current_chapter,
-            "total_chapters": self.total_chapters,
-            "progress_percent": self.progress_percent,
-            "status_message": self.status_message,
-            "logs": list(self.logs),
-            "log_seq": self.log_seq,
-            "error": self.error,
-            "stop_requested": self.stop_requested,
-            "start_time": self.start_time,
-            "last_heartbeat": self.last_heartbeat,
-        }
+        with self._lock:
+            return {
+                "novel_id": self.novel_id,
+                "novel_title": self.novel_title,
+                "is_running": self.is_running,
+                "running": self.is_running,
+                "current_stage": self.current_stage,
+                "current_chapter": self.current_chapter,
+                "total_chapters": self.total_chapters,
+                "progress_percent": self.progress_percent,
+                "status_message": self.status_message,
+                "logs": list(self.logs),
+                "log_seq": self.log_seq,
+                "error": self.error,
+                "stop_requested": self.stop_requested,
+                "start_time": self.start_time,
+                "last_heartbeat": self.last_heartbeat,
+            }
 
 
 GenerationTaskState = NovelPipelineTask
@@ -268,7 +303,7 @@ class AutonomousPipelineManager:
         target: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         verify_fn: Optional[Callable[[], bool]] = None,
-        max_retries: int = 5,
+        max_retries: int = 20,
         stage_name: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
         **kwargs,
@@ -341,31 +376,154 @@ class AutonomousPipelineManager:
                 if attempt >= max_retries or task.stop_requested:
                     raise last_exc
 
-                # 總監介入出具診斷處方箋，取代盲目次數重試
+                # 判斷錯誤類型：基建類（連線/憑證）vs. 內容品質類
                 err_clean = str(exc).strip()
                 is_infra_error = any(k in err_clean for k in (
                     "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "Connection refused",
                     "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "API Key"
                 ))
+
                 if is_infra_error:
+                    # ── 基建類錯誤：跳過 Director LLM 呼叫，直接指數退避重試 ──
                     director_prescription = (
                         f"【總監診斷處方箋（第 {attempt + 1} 次連線環境診斷）】\n"
                         f"檢測到上游模型通訊或身分驗證異常：{err_clean}。\n"
                         f"此為模型連線/登入憑證問題（非創作大綱或情節邏輯錯誤）。請檢查模型服務端、API Key 或 WebChat2Local Cookie 是否正常。"
                     )
+                    if instruction:
+                        instruction = f"{director_prescription}\n原始任務指引：{instruction}"
+                    else:
+                        instruction = director_prescription
+                    delay = min(15, 2 * attempt)
+                    task.log(
+                        f"🩺 [基建異常] [{stage}] 連線/憑證問題，將於 {delay} 秒後進行第 {attempt + 1}/{max_retries} 次重試：{exc}",
+                        level="warn",
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # ── 內容/品質類錯誤：調用真正的 Director Agent 做智慧決策 ──
+                task.log(
+                    f"🎬 [Director 決策介入] [{stage}] 第 {attempt}/{max_retries} 次產出未達標，"
+                    f"正在調用 Director Agent 進行智慧決策...",
+                    level="warn",
+                )
+
+                # 從 target 提取 chapter/volume 索引
+                ch_idx_for_director = target.get("chapter_index") if isinstance(target, dict) else None
+                vol_idx_for_director = target.get("volume_index") if isinstance(target, dict) else None
+
+                director_extra = (
+                    f"【自主流程重試上下文 — 第 {attempt}/{max_retries} 次重試】\n"
+                    f"階段: {stage}\n"
+                    f"錯誤原因: {err_clean}\n"
+                    f"原始任務指引: {instruction or '(無)'}\n"
+                    f"請以真實使用者身份，根據圖譜引擎、角色聖經、大綱等上下文，"
+                    f"決定如何修正此 agent 的生成，並在 agent_prompt 中給出精確的修正指示。"
+                )
+
+                try:
+                    decision = get_director_decision_sync(
+                        novel_id=task.novel_id,
+                        current_stage=stage,
+                        user_prompt=user_prompt or f"自主流程 {stage} 階段重試決策",
+                        chapter_index=ch_idx_for_director,
+                        volume_index=vol_idx_for_director,
+                        extra_context=director_extra,
+                    )
+                except Exception as dir_exc:
+                    task.log(
+                        f"⚠️ Director 決策呼叫異常（退回文字處方箋模式）：{dir_exc}",
+                        level="warn",
+                    )
+                    decision = None
+
+                if decision and isinstance(decision, dict):
+                    action = str(decision.get("action") or "").upper().strip()
+                    task.log(
+                        f"🎬 [Director 決策結果] action={action}, "
+                        f"reason={str(decision.get('reason', '(無)'))[:120]}",
+                    )
+
+                    # Director 判斷需要使用者介入或任務已完成 → 提前中止重試
+                    if action in ("WAIT_USER", "FINISH"):
+                        task.log(
+                            f"🛑 [Director 決策中止] Director 判定 {action}，"
+                            f"提前中止重試。原因：{decision.get('reason', '(無)')}",
+                            level="warn",
+                        )
+                        try:
+                            db.save_chat_message(
+                                task.novel_id,
+                                "director",
+                                f"🛑 **【Director 自主決策中止重試】**\n"
+                                f"- 階段: {stage}\n"
+                                f"- 決策: {action}\n"
+                                f"- 原因: {decision.get('reason', '(無)')}\n"
+                                f"- 提示: {decision.get('hint', '(無)')}",
+                                message_type="director",
+                            )
+                        except Exception:
+                            pass
+                        raise PipelineHaltedException(action=action, reason=decision.get("reason", ""))
+
+                    # Director 決策動態拆章
+                    if action == "SPLIT_CHAPTER_OUTLINE":
+                        split_plan = decision.get("split_plan") or {}
+                        split_chapters = split_plan.get("chapters") or []
+                        target_ch = decision.get("chapter_index") or ch_idx_for_director
+                        if target_ch and split_chapters:
+                            from backend.persistence.repositories.volumes import split_and_expand_chapter_outline
+                            try:
+                                split_res = split_and_expand_chapter_outline(task.novel_id, target_ch, split_chapters)
+                                task.log(
+                                    f"✂️ [Director 拆章完成] 第 {target_ch} 章已動態拆分為 {len(split_chapters)} 章，"
+                                    f"總章數 +{split_res.get('delta', len(split_chapters) - 1)}"
+                                )
+                            except Exception as sp_exc:
+                                task.log(f"⚠️ [Director 拆章失敗]: {sp_exc}", level="warn")
+
+                    # Director 提供修正指令 → 注入到下一輪 instruction
+                    agent_prompt = decision.get("agent_prompt") or decision.get("hint") or ""
+                    if agent_prompt:
+                        director_instruction = (
+                            f"【Director Agent 第 {attempt + 1} 次智慧修正指令】\n"
+                            f"{agent_prompt}\n"
+                            f"（修正原因：{decision.get('reason', err_clean)}）"
+                        )
+                    else:
+                        director_instruction = (
+                            f"【Director Agent 第 {attempt + 1} 次定向修正】\n"
+                            f"上一輪產出未達標準，核心病灶：{err_clean}。\n"
+                            f"請針對上述問題進行重點修正，確保符合規範約束與結構自洽。"
+                        )
+
+                    if instruction:
+                        instruction = f"{director_instruction}\n原始任務指引：{instruction}"
+                    else:
+                        instruction = director_instruction
+
                 else:
+                    # Director 呼叫失敗或無法解析 → fallback 到舊的文字處方箋
+                    task.log(
+                        f"⚠️ Director 決策無法解析，退回文字處方箋模式。",
+                        level="warn",
+                    )
                     director_prescription = (
                         f"【總監診斷處方箋（第 {attempt + 1} 次定向重點修正）】\n"
                         f"上一輪產出未達標準，核心病灶：{err_clean}。\n"
                         f"請針對上述問題進行重點修正，確保符合規範約束與結構自洽。"
                     )
-                if instruction:
-                    instruction = f"{director_prescription}\n原始任務指引：{instruction}"
-                else:
-                    instruction = director_prescription
+                    if instruction:
+                        instruction = f"{director_prescription}\n原始任務指引：{instruction}"
+                    else:
+                        instruction = director_prescription
 
                 delay = min(15, 2 * attempt)
-                task.log(f"🩺 [總監出具修正處方箋] 針對 [{stage}] 出具定向修復指導，將於 {delay} 秒後進行第 {attempt + 1}/{max_retries} 次重點修正：{exc}", level="warn")
+                task.log(
+                    f"🩺 [Director 修正處方箋已就緒] 將於 {delay} 秒後進行第 {attempt + 1}/{max_retries} 次修正：{exc}",
+                    level="warn",
+                )
                 time.sleep(delay)
 
         raise last_exc or RuntimeError(f"Stage {stage} failed after {max_retries} retries")
@@ -508,6 +666,66 @@ class AutonomousPipelineManager:
                 db.save_chat_message(novel_id, "assistant", "🧭 **【系統進度】** 全書敘事幾何骨架 (長距伏筆/多線合流/主題對比邊) 已鋪設完成，後續細綱與正文將遵照拓撲架構生成！", message_type="pipeline")
             else:
                 task.log("敘事幾何骨架已就緒，跳過生成。")
+
+            # 4.6 宏觀語義填充 (Macro Semantic): 為幾何篇卷與線程注入故事主題、衝突核心與具體劇本線索
+            if task.stop_requested: return
+            if not _is_macro_semantic_ready(novel_id):
+                task.current_stage = "macro_semantic"
+                task.progress_percent = 38
+                task.status_message = "正在填充宏觀幾何語義 (篇卷主題/核心衝突/線程懸念)..."
+                task.log("開始填充宏觀敘事語義 (Pass 1 & Pass 2: 篇卷與線程主題)...")
+                self._execute_stage_with_retry(
+                    task=task,
+                    stage="macro_semantic",
+                    task_type="generate",
+                    instruction="請為幾何篇卷與線程填充宏觀故事主題、衝突核心與具體劇本線索",
+                    user_prompt="填充宏觀幾何語義",
+                    verify_fn=lambda: _is_macro_semantic_ready(novel_id),
+                )
+                task.log("✅ 宏觀幾何語義已填充完成！")
+                db.save_chat_message(novel_id, "assistant", "🎨 **【系統進度】** 全書宏觀故事主題與幾何線程懸念已填充完成！", message_type="pipeline")
+            else:
+                task.log("宏觀幾何語義已就緒，跳過生成。")
+
+            # 4.7 角色幾何語義填充 (Character Semantic): 將人物綁定至幾何角色弧線並注入心境轉折抉擇
+            if task.stop_requested: return
+            if not _is_character_semantic_ready(novel_id):
+                task.current_stage = "character_semantic"
+                task.progress_percent = 39
+                task.status_message = "正在綁定角色幾何弧線與關鍵心境位移 (Pass 3)..."
+                task.log("開始填充角色幾何語義 (角色人物綁定與心境轉折抉擇)...")
+                self._execute_stage_with_retry(
+                    task=task,
+                    stage="character_semantic",
+                    task_type="generate",
+                    instruction="請將角色聖經人物綁定至幾何角色弧線，並填充關鍵心境位移與代價抉擇",
+                    user_prompt="綁定角色弧線與心境位移",
+                    verify_fn=lambda: _is_character_semantic_ready(novel_id),
+                )
+                task.log("✅ 角色幾何語義已填充完成！")
+                db.save_chat_message(novel_id, "assistant", "🎭 **【系統進度】** 角色人物已綁定至幾何弧線，關鍵心境轉變與抉擇已注入！", message_type="pipeline")
+            else:
+                task.log("角色幾何語義已就緒，跳過生成。")
+
+            # 4.8 跨距關聯邊語義填充 (Cross Relation): 為幾何跨距 Motif 邊注入因果關係與碰撞動機
+            if task.stop_requested: return
+            if not _is_cross_relation_ready(novel_id):
+                task.current_stage = "cross_relation"
+                task.progress_percent = 40
+                task.status_message = "正在為跨距 Motif 邊注入因果關係與碰撞動機 (Pass 4)..."
+                task.log("開始填充跨線關聯語義 (Motif 邊因果與碰撞理由)...")
+                self._execute_stage_with_retry(
+                    task=task,
+                    stage="cross_relation",
+                    task_type="generate",
+                    instruction="請為幾何跨距 Motif 邊注入因果關係、多線碰撞矛盾與哲學對照理由",
+                    user_prompt="填充跨線關聯語義",
+                    verify_fn=lambda: _is_cross_relation_ready(novel_id),
+                )
+                task.log("✅ 跨線關聯語義已填充完成！")
+                db.save_chat_message(novel_id, "assistant", "🔗 **【系統進度】** 跨距 Motif 關聯因果與碰撞動機已注入完畢！", message_type="pipeline")
+            else:
+                task.log("跨線關聯語義已就緒，跳過生成。")
 
             # 5. 檢查並規劃全部分卷骨架 (各章節細綱 - 確保每卷皆 100% 具備細綱)
             if task.stop_requested: return
@@ -1191,19 +1409,30 @@ class AutonomousPipelineManager:
                 db.save_chat_message(novel_id, "assistant", f"🎉 **【創作完成通報】** 小說全書 {task.total_chapters} 章全自動創作已圓滿完成！所有正文已安全備份至私有雲端 Dataset。", message_type="pipeline")
                 backup_database(reason=f"Auto flow [{task.novel_title}]: all completed", force=True)
 
+        except PipelineHaltedException as halt_exc:
+            with task._lock:
+                task.is_running = False
+                if halt_exc.action == "WAIT_USER":
+                    task.current_stage = f"{task.current_stage}_wait_user"
+                    task.status_message = f"⏸️ 等待使用者介入: {halt_exc.reason}"
+                    task.log(f"⏸️ 流水線已由 Director 暫停等待使用者：{halt_exc.reason}", level="warn")
+                elif halt_exc.action == "FINISH":
+                    task.current_stage = "completed"
+                    task.progress_percent = 100
+                    task.status_message = "🎉 創作已由 Director 判定圓滿完成！"
+                    task.log("🎉 Director 判定全書創作已完成！", level="info")
+            return
         except Exception as exc:
             err_msg = str(exc)
-            task.error = err_msg
-            task.current_stage = "error"
-            task.status_message = f"❌ 執行中斷: {err_msg}"
-            task.log(f"執行出錯: {err_msg}", level="error")
+            task.fail(err_msg)
             try:
                 db.save_chat_message(novel_id, "assistant", f"⚠️ **【系統通報】** 雲端自主創作任務異常中斷：{err_msg}", message_type="chat")
             except Exception:
                 pass
         finally:
-            task.is_running = False
-            task.stop_requested = False
+            with task._lock:
+                task.is_running = False
+                task.stop_requested = False
             try:
                 db.release_pipeline_lock(novel_id)
             except Exception as e:
@@ -1289,6 +1518,50 @@ def _is_geometry_ready(novel_id: str) -> bool:
         return bool(stats and int(stats.get("node_count") or 0) > 0)
     except Exception:
         return False
+
+
+def _is_geometry_semantic_ready(novel_id: str, kind: str) -> bool:
+    """共用幾何語義就緒檢查 (kind: macro / character / cross)。"""
+    try:
+        stats = db.get_geometry_stats(novel_id)
+        if not stats or int(stats.get("node_count") or 0) == 0:
+            return False
+        if kind == "macro":
+            if int(stats.get("filled_threads") or 0) > 0 or int(stats.get("filled_volumes") or 0) > 0:
+                return True
+        elif kind == "character":
+            if int(stats.get("filled_nodes") or 0) > 0:
+                return True
+        elif kind == "cross":
+            if int(stats.get("edge_count") or 0) == 0:
+                return True
+            if int(stats.get("filled_edges") or 0) > 0:
+                return True
+        graph_loader = getattr(db, "load_geometry_graph", None)
+        if not callable(graph_loader):
+            return False
+        g = graph_loader(novel_id)
+        if not g:
+            return False
+        if kind == "macro":
+            return any(v.semantic for v in g.volumes.values())
+        if kind == "character":
+            return any(t.semantic and "character_binding" in t.semantic for t in g.threads.values())
+        return bool(g.edges) and any(e.semantic for e in g.edges)
+    except Exception:
+        return False
+
+
+def _is_macro_semantic_ready(novel_id: str) -> bool:
+    return _is_geometry_semantic_ready(novel_id, "macro")
+
+
+def _is_character_semantic_ready(novel_id: str) -> bool:
+    return _is_geometry_semantic_ready(novel_id, "character")
+
+
+def _is_cross_relation_ready(novel_id: str) -> bool:
+    return _is_geometry_semantic_ready(novel_id, "cross")
 
 
 def _has_volume_skeleton(novel_id: str, volume_index: int) -> bool:

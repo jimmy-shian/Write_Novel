@@ -32,24 +32,36 @@ def normalize_generation_task_payload(payload: Any) -> GenerationTaskRequest:
     return coerce_generation_task_request(payload)
 
 
-def _infer_chapter_index(novel_id: str) -> Optional[int]:
-    volumes = db.get_volumes(novel_id) or []
-    total = db.get_total_chapter_count(volumes)
+def _find_first_missing(chapters: Any, total: int) -> Optional[int]:
+    """Pure helper: first unwritten index in 1..total, None when all written."""
     if total <= 0:
         return 1
-
     written = set()
-    for chapter in db.get_all_chapters_latest(novel_id) or []:
-        try:
-            idx = int(chapter.get("chapter_index"))
-        except Exception:
-            continue
-        written.add(idx)
-
+    for chapter in chapters or []:
+        if isinstance(chapter, int):
+            written.add(chapter)
+        elif isinstance(chapter, dict):
+            try:
+                written.add(int(chapter.get("chapter_index")))
+            except Exception:
+                continue
     for idx in range(1, total + 1):
         if idx not in written:
             return idx
-    return total
+    return None
+
+
+def _infer_chapter_index(novel_id: str) -> Optional[int]:
+    """Infer the next unwritten chapter index from DB state.
+
+    Returns 1..total if an unwritten chapter exists.
+    Returns None when all planned chapters (1..total) have been written, preventing silent overwrites.
+    """
+    volumes = db.get_volumes(novel_id) or []
+    total = db.get_total_chapter_count(volumes)
+    chapters = db.get_all_chapters_latest(novel_id) or []
+    return _find_first_missing(chapters, total)
+
 
 
 def _infer_volume_index(novel_id: str) -> Optional[int]:

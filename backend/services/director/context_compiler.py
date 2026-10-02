@@ -59,6 +59,10 @@ class ContextPackage:
     outgoing_obligations: List[str] = field(default_factory=list)
     cross_context_threads: List[str] = field(default_factory=list)
     echo_contrast_context: List[str] = field(default_factory=list)
+    node_semantic: Optional[Dict[str, Any]] = None
+    internal_shift: str = ""
+    dramatic_choice: str = ""
+    focus_character: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def format_geometry_overlay(self) -> str:
@@ -71,6 +75,16 @@ class ContextPackage:
             f"- **結構角色定位 (Structural Role)**：`{self.structural_role}`",
             f"- **敘事核心職責**：{self.role_obligation}",
         ]
+
+        if self.internal_shift or self.dramatic_choice:
+            shift_parts = []
+            if self.focus_character:
+                shift_parts.append(f"焦點角色: {self.focus_character}")
+            if self.internal_shift:
+                shift_parts.append(f"心境位移: {self.internal_shift}")
+            if self.dramatic_choice:
+                shift_parts.append(f"抉擇代價: {self.dramatic_choice}")
+            lines.append(f"- **【本章核心心境位移與代價】**：{' | '.join(shift_parts)}")
 
         if self.incoming_edges_summary:
             lines.append("- **前置因果承接 (Incoming Links)**：")
@@ -236,6 +250,11 @@ class GeometryContextCompiler:
                     clash = e_sem.get("dramatic_clash") or e_sem.get("causal_link") or "呼應前文"
                     echo_contrasts.append(f"與第 {src_ch} 章形成 [{e_type}]：{clash}")
 
+        node_sem = node.semantic if (node and isinstance(node.semantic, dict)) else {}
+        internal_shift = node_sem.get("internal_shift") or ""
+        dramatic_choice = node_sem.get("dramatic_choice") or ""
+        focus_character = node_sem.get("focus_character") or ""
+
         return ContextPackage(
             novel_id=novel_id,
             chapter_index=chapter_index,
@@ -247,4 +266,8 @@ class GeometryContextCompiler:
             outgoing_obligations=outgoing_obligations,
             cross_context_threads=cross_threads,
             echo_contrast_context=echo_contrasts,
+            node_semantic=node_sem,
+            internal_shift=internal_shift,
+            dramatic_choice=dramatic_choice,
+            focus_character=focus_character,
         )

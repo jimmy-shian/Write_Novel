@@ -450,6 +450,33 @@ def detect_current_stage(novel_id):
     vols = db.get_volumes(novel_id)
     if not vols:
         return "volumes"
+
+    # 檢查敘事幾何與語義階段是否就緒 (Geometry -> Macro Semantic -> Character Semantic -> Cross Relation)
+    if hasattr(db, "has_geometry") and not db.has_geometry(novel_id):
+        return "geometry"
+
+    stats = db.get_geometry_stats(novel_id) if hasattr(db, "get_geometry_stats") else {}
+    graph_loader = getattr(db, "load_geometry_graph", None)
+    graph = graph_loader(novel_id) if callable(graph_loader) else None
+    has_macro_sem = (
+        int(stats.get("filled_threads") or 0) > 0
+        or int(stats.get("filled_volumes") or 0) > 0
+        or bool(graph and any(v.semantic for v in graph.volumes.values()))
+    )
+    if not has_macro_sem:
+        return "macro_semantic"
+
+    has_char_sem = int(stats.get("filled_nodes") or 0) > 0 or bool(
+        graph and any(t.semantic and "character_binding" in t.semantic for t in graph.threads.values())
+    )
+    if not has_char_sem:
+        return "character_semantic"
+
+    edge_count = int(stats.get("edge_count") or 0)
+    filled_edges = int(stats.get("filled_edges") or 0)
+    has_cross_sem = filled_edges > 0 or bool(graph and graph.edges and any(e.semantic for e in graph.edges))
+    if edge_count > 0 and not has_cross_sem:
+        return "cross_relation"
         
     # 如果有任何一卷尚未規劃完整骨架大綱，則為 volume_skeleton 階段
     has_all_skeletons = True

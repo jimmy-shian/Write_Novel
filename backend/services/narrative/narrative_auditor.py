@@ -162,28 +162,16 @@ class NarrativeAuditor:
         """檢測正文是否洩漏大綱標籤、上一章銜接語等元文本 (Meta-Narrative Leakage)。"""
         if not prose_text:
             return None
-        patterns = [
-            (r"(?:那是|正如|承接|延續|接續)?(?:上一章|前一章|上回|上一回)(?:情節|內容|所述|發生的事|在|中)?", "上一章/前一章元敘事銜接"),
-            (r"在上一章中", "在上一章中元評論"),
-            (r"【(?:場景目標|核心阻礙|轉折點|推進拍點|本章任務|視角人物|知情邊界|實質狀態位移)】", "大綱結構化標籤洩漏"),
-            (r"(?:作者|筆者|旁白|寫作者)(?:在此|向讀者|不得不|需要|特此)?(?:向讀者)?(?:說明|提示|解釋|強調|告誡)", "作者破壁發言/第四面牆打破"),
-            (r"向讀者(?:說明|交代|解釋|揭示)", "向讀者元評論"),
-        ]
-        for pat, label in patterns:
-            for m in re.finditer(pat, prose_text):
-                match_span = m.group(0)
-                start_pos = m.start()
-                # Exclude in-world book/scroll references like "這卷古籍的上一章節"
-                surrounding = prose_text[max(0, start_pos - 30):min(len(prose_text), start_pos + len(match_span) + 30)]
-                if re.search(r"(?:古籍|經卷|典籍|書籍|古冊|殘卷|書卷|卷軸|秘笈|魔導書|書中|冊中|筆記)的?(?:上一章|前一章|上一節|上一回)", surrounding):
-                    continue
-                return {
-                    "dimension": "meta_narrative_leak",
-                    "severity": "critical",
-                    "evidence": f"正文檢測到破壁元敘事或大綱標籤洩漏：「{match_span}」（{label}）。",
-                    "recommendation": "正文嚴禁出現『上一章』、第四面牆打破或大綱標籤等元文本；小說必須100%處於沉浸式故事世界內部，禁止旁白對讀者或寫作大綱進行元評論。",
-                    "action_required": True,
-                }
+        from backend.common.refusal_filter import find_meta_narrative_leaks
+        leaks = find_meta_narrative_leaks(prose_text)
+        if leaks:
+            return {
+                "dimension": "meta_narrative_leak",
+                "severity": "critical",
+                "evidence": f"正文檢測到破壁元敘事、寫作指令洩漏或大綱標籤：「{leaks[0]}」。",
+                "recommendation": "正文嚴禁出現『上一章』、第四面牆打破、AI負向寫作指令（如『沒有制式化的...』）或大綱標籤等元文本；小說必須100%處於沉浸式故事世界內部，禁止旁白對讀者或寫作大綱進行元評論。",
+                "action_required": True,
+            }
         return None
 
     @classmethod

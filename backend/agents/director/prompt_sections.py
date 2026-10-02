@@ -28,6 +28,8 @@ DIRECTOR_ACTIONS = """
 - `INCREMENTAL_MODIFY_CHARACTER_FULL`: repair multiple fields on one character.
 - `WAIT_USER`: only for true creative ambiguity requiring the author.
 - `FINISH`: only when all planned writing/editing is complete.
+- `SPLIT_CHAPTER_OUTLINE`: dynamically split a density-overloaded chapter outline into sequential chapters.
+- `EXPAND_CHAPTER_OUTLINE`: expand a chapter outline with deeper narrative detail and scene beats.
 """
 
 
@@ -181,6 +183,7 @@ STAGE_REVIEW_RULES = {
    - 若正文需要修訂，總監可使用 `AUTO_REGENERATE` target `writer`（附 `chapter_index`），並在 `agent_prompt` 指出具體的優化方向。
    - 若正文合格且符合場景契約，使用 `CONTINUE` 路由至 `editor` 進行進一步潤色修飾。
    - 若驗證報告顯示本章出現未登錄新角色，必須先以 `INCREMENTAL_APPEND_CHARACTER` 補全角色。
+   - 【密度過載與動態拆章】：若單章大綱包含過多密集劇情（轉折點 >= 2、伏筆任務 >= 4、事件 >= 3 或場景跳躍密集），切勿強行壓縮，應發出 `SPLIT_CHAPTER_OUTLINE` 動作進行動態拆章展開。
 """,
     "editor": """
 ## Stage Review: editor (潤色與風格定稿審查)

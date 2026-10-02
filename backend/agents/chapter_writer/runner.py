@@ -11,31 +11,7 @@ from backend.services import diagnostics
 import backend.services.director.context as director_context
 from backend.common import llm
 call_llm_stream = llm.call_llm_stream
-from backend.common.config import (
-    MIN_FORESHADOWING_SEEDS,
-    MIN_KEY_TURNING_POINTS,
-    VOLUME_SKELETON_BATCH_SIZE,
-    VOLUME_SKELETON_BATCH_RETRIES,
-    VOLUME_SKELETON_SEGMENT_RETRIES,
-    VOLUME_SKELETON_COMPLETION_PREFIX_LIMIT,
-)
 from backend.common.utils import deep_merge_dict, StreamAccumulator
-from backend.schemas.constraints import load_retrospective_gold_rules
-from backend.schemas.validation import (
-    normalize_foreshadowing_output,
-    foreshadowing_quantity_error,
-    foreshadowing_schema_error,
-    volume_plan_validation_error,
-    chapter_index_or_none,
-    volume_existing_chapter_indexes,
-    volume_missing_chapter_indexes,
-    parse_requested_chapter_indexes,
-    split_consecutive_batches,
-    extract_chapters_in_range,
-    suggest_segment_split,
-    extract_worldview_dict_preserving,
-    resolve_single_volume_index,
-)
 from backend.prompts.common.context import (
     compact_json_data,
     extract_character_basic,
@@ -74,18 +50,6 @@ from backend.agents.incremental.prompts import (
     build_incremental_character_messages,
 )
 
-_load_retrospective_gold_rules = load_retrospective_gold_rules
-_normalize_foreshadowing_output = normalize_foreshadowing_output
-_foreshadowing_quantity_error = foreshadowing_quantity_error
-_foreshadowing_schema_error = foreshadowing_schema_error
-_extract_worldview_dict_preserving = extract_worldview_dict_preserving
-_volume_plan_validation_error = volume_plan_validation_error
-_volume_existing_chapter_indexes = volume_existing_chapter_indexes
-_volume_missing_chapter_indexes = volume_missing_chapter_indexes
-_parse_requested_chapter_indexes = parse_requested_chapter_indexes
-_split_consecutive_batches = split_consecutive_batches
-_extract_chapters_in_range = extract_chapters_in_range
-
 from backend.agents.shared.context_requests import _handle_director_context_request
 
 # Hard floor to catch truncated model responses before synopsis/memory persistence.
@@ -117,7 +81,10 @@ def _active_character_names_from_outline(outline):
         parts = []
     names = []
     for item in parts:
-        text = str(item).strip()
+        if isinstance(item, dict):
+            text = str(item.get('name') or item.get('character') or '').strip()
+        else:
+            text = str(item or '').strip()
         if text:
             names.append(text)
     return names

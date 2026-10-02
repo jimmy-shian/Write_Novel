@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3
+import copy
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from backend.common.utils import deep_merge_dict, safe_filename
@@ -706,11 +707,375 @@ def save_single_plot_chapter(novel_id, chapter_index, chapter_outline):
     save_plot_chapters(novel_id, {"chapters": chapters}, skip_volume_sync=False, clear_chapters=False)
 
 
+def split_and_expand_chapter_outline(
+    novel_id: str,
+    chapter_index: int,
+    split_chapters: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    動態細綱拆分與全庫級聯擴展 (Dynamic Outline Splitting & Cascade Expansion).
+    當某章情節密度過載時，總監指示將其拆分為多個子章節（例如 1 拆 2）：
+    1. 找到承載 chapter_index 的目標篇卷 target_vol
+    2. 在 target_vol.chapters_outline 中將該章替換為 split_chapters，並依序賦予連續編號
+    3. 後續所有章節 (chapter_index + delta, ...) 依序順延
+    4. target_vol["chapter_count"] 累加 delta (len(split_chapters) - 1)
+    5. 後續所有篇卷的 chapters_outline 內部 chapter_index 同步平移順延
+    6. 原子事務更新 volumes 與 plot_chapters 主表
+    7. 平移下游已寫正文與輔助表索引：chapters, chapter_memory, temporal_*, story_terms, narrative_audits, arc_summaries, draft_proposals
+    8. 同步更新幾何圖譜 (GeometryGraph) 節點與座標
+    """
+    chapter_index = int(chapter_index)
+    if not split_chapters or len(split_chapters) < 2:
+        raise ValueError("split_chapters 必須至少包含 2 個拆分子章節")
 
+    delta = len(split_chapters) - 1
+    volumes = get_volumes(novel_id)
+    if not volumes:
+        raise ValueError(f"小說 {novel_id} 查無任何篇卷記錄")
 
+    # 1. 識別所屬目標篇卷
+    target_vol = None
+    target_vol_idx = None
 
+    # 先從各卷現有 chapters_outline 中查找
+    for v in volumes:
+        c_list = v.get("chapters_outline") or []
+        if isinstance(c_list, str):
+            try:
+                c_list = json.loads(c_list)
+            except Exception:
+                c_list = []
+        for ch in c_list:
+            if isinstance(ch, dict) and int(ch.get("chapter_index", 0)) == chapter_index:
+                target_vol = v
+                target_vol_idx = int(v.get("volume_index", 1))
+                break
+        if target_vol:
+            break
 
-# Cross-repository imports used by legacy domain functions during runtime.
+    # 若在 chapters_outline 中未顯式找到，依 chapter_count 計算的章節區間識別
+    if not target_vol:
+        target_vol_idx = get_chapter_volume_index(volumes, chapter_index)
+        for v in volumes:
+            if int(v.get("volume_index", 0)) == target_vol_idx:
+                target_vol = v
+                break
+
+    if not target_vol:
+        target_vol = volumes[0]
+        target_vol_idx = int(target_vol.get("volume_index", 1))
+
+    # 2. 處理目標篇卷內 chapters_outline
+    old_target_outline = target_vol.get("chapters_outline") or []
+    if isinstance(old_target_outline, str):
+        try:
+            old_target_outline = json.loads(old_target_outline)
+        except Exception:
+            old_target_outline = []
+    if not isinstance(old_target_outline, list):
+        old_target_outline = []
+
+    # 為 split_chapters 分配連續編號
+    prepared_splits = []
+    for i, sc in enumerate(split_chapters):
+        new_sc = copy.deepcopy(sc)
+        new_sc["chapter_index"] = chapter_index + i
+        prepared_splits.append(new_sc)
+
+    # 替換目標章節
+    replaced = False
+    original_target_ch = None
+    new_target_outline = []
+    for ch in old_target_outline:
+        if not isinstance(ch, dict):
+            continue
+        c_idx = int(ch.get("chapter_index", 0))
+        if c_idx == chapter_index:
+            original_target_ch = ch
+            new_target_outline.extend(prepared_splits)
+            replaced = True
+        elif c_idx > chapter_index:
+            ch_copy = copy.deepcopy(ch)
+            ch_copy["chapter_index"] = c_idx + delta
+            new_target_outline.append(ch_copy)
+        else:
+            new_target_outline.append(copy.deepcopy(ch))
+
+    if not replaced:
+        # 若原列表中無精確匹配，插入合適位置
+        new_target_outline.extend(prepared_splits)
+        new_target_outline.sort(key=lambda x: int(x.get("chapter_index", 0)))
+
+    # 計算新的 chapter_count
+    old_count = _get_clean_chapter_count(target_vol)
+    new_count = old_count + delta
+
+    # 3. 處理下游所有篇卷的大綱章節平移
+    downstream_updates = []
+    for v in volumes:
+        v_idx = int(v.get("volume_index", 0))
+        if v_idx > target_vol_idx:
+            v_outline = v.get("chapters_outline") or []
+            if isinstance(v_outline, str):
+                try:
+                    v_outline = json.loads(v_outline)
+                except Exception:
+                    v_outline = []
+            if isinstance(v_outline, list):
+                updated_v_outline = []
+                for ch in v_outline:
+                    if isinstance(ch, dict):
+                        ch_c = copy.deepcopy(ch)
+                        ch_c["chapter_index"] = int(ch_c.get("chapter_index", 0)) + delta
+                        updated_v_outline.append(ch_c)
+                    else:
+                        updated_v_outline.append(ch)
+                downstream_updates.append((v_idx, updated_v_outline))
+
+    # 4. 資料庫原子提交
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+
+        # 更新目標卷的 chapter_count 與 chapters_outline
+        cursor.execute(
+            "UPDATE volumes SET chapter_count = ?, chapters_outline = ?, is_dirty = 0 WHERE novel_id = ? AND volume_index = ?",
+            (
+                new_count,
+                json.dumps(_convert_obj_to_traditional(new_target_outline), ensure_ascii=False, indent=2),
+                novel_id,
+                target_vol_idx,
+            ),
+        )
+
+        # 更新下游篇卷的 chapters_outline
+        for v_idx, u_outline in downstream_updates:
+            cursor.execute(
+                "UPDATE volumes SET chapters_outline = ? WHERE novel_id = ? AND volume_index = ?",
+                (
+                    json.dumps(_convert_obj_to_traditional(u_outline), ensure_ascii=False, indent=2),
+                    novel_id,
+                    v_idx,
+                ),
+            )
+
+        # 5. 同步更新 plot_chapters 主表大綱
+        plot_row = cursor.execute(
+            "SELECT outline_json, MAX(version) as max_v FROM plot_chapters WHERE novel_id = ?",
+            (novel_id,),
+        ).fetchone()
+        if plot_row and plot_row["outline_json"]:
+            try:
+                p_parsed = json.loads(plot_row["outline_json"])
+                p_chaps = p_parsed.get("chapters", []) if isinstance(p_parsed, dict) else (p_parsed if isinstance(p_parsed, list) else [])
+                updated_all = []
+                p_replaced = False
+                for ch in p_chaps:
+                    if not isinstance(ch, dict):
+                        continue
+                    c_idx = int(ch.get("chapter_index", 0))
+                    if c_idx == chapter_index:
+                        updated_all.extend(prepared_splits)
+                        p_replaced = True
+                    elif c_idx > chapter_index:
+                        ch_c = copy.deepcopy(ch)
+                        ch_c["chapter_index"] = c_idx + delta
+                        updated_all.append(ch_c)
+                    else:
+                        updated_all.append(copy.deepcopy(ch))
+                if not p_replaced:
+                    updated_all.extend(prepared_splits)
+                updated_all.sort(key=lambda x: int(x.get("chapter_index", 0)))
+                next_v = (plot_row["max_v"] or 0) + 1
+                cursor.execute(
+                    "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
+                    (novel_id, json.dumps(_convert_obj_to_traditional({"chapters": updated_all}), ensure_ascii=False), next_v),
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to cascade split to plot_chapters: {e}")
+
+        # 6. 平移 chapters 表中的已寫正文
+        cursor.execute(
+            "UPDATE chapters SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+            (delta, novel_id, chapter_index),
+        )
+        try:
+            cursor.execute(
+                "UPDATE chapters_backup SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+                (delta, novel_id, chapter_index),
+            )
+        except Exception:
+            pass
+
+        # 7. 平移 chapter_memory 表（因有 UNIQUE(novel_id, chapter_index)，採降序逐筆平移防衝突）
+        mem_rows = cursor.execute(
+            "SELECT id, chapter_index FROM chapter_memory WHERE novel_id = ? AND chapter_index > ? ORDER BY chapter_index DESC",
+            (novel_id, chapter_index),
+        ).fetchall()
+        for mr in mem_rows:
+            cursor.execute(
+                "UPDATE chapter_memory SET chapter_index = ? WHERE id = ?",
+                (mr["chapter_index"] + delta, mr["id"]),
+            )
+
+        # 8. 平移 temporal_* 表
+        try:
+            cursor.execute(
+                "UPDATE temporal_episodes SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE temporal_facts SET valid_from_chapter = valid_from_chapter + ? WHERE novel_id = ? AND valid_from_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE temporal_facts SET invalid_from_chapter = invalid_from_chapter + ? WHERE novel_id = ? AND invalid_from_chapter IS NOT NULL AND invalid_from_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE temporal_entities SET created_chapter = created_chapter + ? WHERE novel_id = ? AND created_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE temporal_entities SET updated_chapter = updated_chapter + ? WHERE novel_id = ? AND updated_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to shift temporal tables: {e}")
+
+        # 9. 平移 story_terms 表
+        try:
+            cursor.execute(
+                "UPDATE story_terms SET source_chapter = source_chapter + ? WHERE novel_id = ? AND source_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE story_terms SET updated_chapter = updated_chapter + ? WHERE novel_id = ? AND updated_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+        except Exception:
+            pass
+
+        # 10. 平移 narrative_audits 表
+        try:
+            cursor.execute(
+                "UPDATE narrative_audits SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+                (delta, novel_id, chapter_index),
+            )
+        except Exception:
+            pass
+
+        # 11. 平移 arc_summaries 表（採降序以防 UNIQUE 衝突）
+        try:
+            arc_rows = cursor.execute(
+                "SELECT id, arc_start, arc_end FROM arc_summaries WHERE novel_id = ? AND arc_start > ? ORDER BY arc_start DESC",
+                (novel_id, chapter_index),
+            ).fetchall()
+            for ar in arc_rows:
+                cursor.execute(
+                    "UPDATE arc_summaries SET arc_start = ?, arc_end = ? WHERE id = ?",
+                    (ar["arc_start"] + delta, ar["arc_end"] + delta, ar["id"]),
+                )
+            cursor.execute(
+                "UPDATE arc_summaries SET arc_end = arc_end + ? WHERE novel_id = ? AND arc_start <= ? AND arc_end >= ?",
+                (delta, novel_id, chapter_index, chapter_index),
+            )
+        except Exception:
+            pass
+
+        # 12. 平移 draft_proposals
+        try:
+            cursor.execute(
+                "UPDATE draft_proposals SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+                (delta, novel_id, chapter_index),
+            )
+        except Exception:
+            pass
+
+    # 13. 同步幾何圖譜 (GeometryGraph)
+    try:
+        from backend.persistence.repositories.geometry import load_geometry_graph, save_geometry_graph
+        from backend.geometry.repair import GeometryRepairEngine
+        graph = load_geometry_graph(novel_id)
+        if graph:
+            engine = GeometryRepairEngine(graph)
+            # 尋找涵蓋 chapter_index 的節點
+            target_node = None
+            for n in graph.nodes.values():
+                start, end = n.chapter_window
+                if start <= chapter_index <= end:
+                    target_node = n
+                    break
+
+            if target_node:
+                if target_node.chapter_window == (chapter_index, chapter_index):
+                    # 節點剛好對應單一章節 -> 拆分為多個子節點
+                    from backend.geometry.models import RepairProposal, RepairOperation
+                    from backend.geometry.repair import GeometryRepairCondition
+                    prop = RepairProposal(
+                        operation=RepairOperation.SPLIT,
+                        target_nodes=[target_node.node_id],
+                        reason=f"Split chapter {chapter_index} into {len(split_chapters)} sub-chapters due to outline expansion",
+                        detail={"split_count": len(split_chapters)},
+                    )
+                    tp_cnt = len(original_target_ch.get("turning_points", [])) if original_target_ch else 0
+                    fs_cnt = len(original_target_ch.get("foreshadowing_tasks", [])) if original_target_ch else 0
+                    sj_cnt = original_target_ch.get("scene_jumps", 0) if original_target_ch else 0
+                    ca_cnt = len(original_target_ch.get("character_arcs", [])) if original_target_ch else 0
+
+                    if tp_cnt >= 3 or fs_cnt >= 4 or (sj_cnt >= 2 and ca_cnt >= 1):
+                        cond = GeometryRepairCondition.DENSITY_OVERLOAD
+                        gk_ctx = {
+                            "novel_id": novel_id,
+                            "turning_points_count": tp_cnt,
+                            "foreshadowing_tasks_count": fs_cnt,
+                            "scene_jumps_count": sj_cnt,
+                            "character_turns_count": ca_cnt,
+                        }
+                    else:
+                        cond = GeometryRepairCondition.CHAPTER_EXPANSION
+                        curr_cnt = graph.params.target_chapters or 50
+                        gk_ctx = {
+                            "novel_id": novel_id,
+                            "current_chapter_count": curr_cnt,
+                            "new_chapter_count": curr_cnt + delta,
+                        }
+
+                    split_res = engine.execute_repair(prop, cond, gk_ctx)
+                    if split_res.success:
+                        for s_idx, new_nid in enumerate(split_res.new_nodes):
+                            sn = graph.get_node(new_nid)
+                            if sn:
+                                sn.chapter_window = (chapter_index + s_idx, chapter_index + s_idx)
+                        engine.shift_downstream_chapters(after_chapter=chapter_index, delta=delta, exclude_node_ids=set(split_res.new_nodes))
+                else:
+                    # 節點為範圍窗口 -> 擴展自身 window 並平移後續節點
+                    start, end = target_node.chapter_window
+                    target_node.chapter_window = (start, end + delta)
+                    engine.shift_downstream_chapters(after_chapter=end, delta=delta, exclude_node_ids={target_node.node_id})
+            else:
+                engine.shift_downstream_chapters(after_chapter=chapter_index, delta=delta)
+
+            save_geometry_graph(novel_id, graph)
+    except Exception as geo_exc:
+        print(f"[WARN] Failed to synchronize GeometryGraph during split_and_expand_chapter_outline: {geo_exc}")
+
+    try:
+        precompute_global_foreshadowing(novel_id)
+    except Exception as e:
+        print(f"[WARN] Failed to precompute global foreshadowing inside split_and_expand_chapter_outline: {e}")
+
+    return {
+        "success": True,
+        "novel_id": novel_id,
+        "volume_index": target_vol_idx,
+        "chapter_index": chapter_index,
+        "split_count": len(split_chapters),
+        "delta": delta,
+        "new_chapter_count": new_count,
+        "split_chapters": prepared_splits,
+    }
+
 from backend.persistence.schema import db_init, sync_agent_configs_from_env
 from backend.persistence.repositories.agent_runs import *
 from backend.persistence.repositories.novels import *

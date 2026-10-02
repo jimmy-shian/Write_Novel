@@ -13,29 +13,9 @@ from backend.common.config import (
     MIN_FORESHADOWING_SEEDS,
     MIN_KEY_TURNING_POINTS,
     MIN_VOLUME_COUNT,
-    MAX_VOLUME_COUNT,
-    VOLUME_SKELETON_BATCH_SIZE,
-    VOLUME_SKELETON_BATCH_RETRIES,
-    VOLUME_SKELETON_SEGMENT_RETRIES,
-    VOLUME_SKELETON_COMPLETION_PREFIX_LIMIT,
 )
 from backend.common.utils import deep_merge_dict, StreamAccumulator
 from backend.schemas.constraints import load_retrospective_gold_rules
-from backend.schemas.validation import (
-    normalize_foreshadowing_output,
-    foreshadowing_quantity_error,
-    foreshadowing_schema_error,
-    volume_plan_validation_error,
-    chapter_index_or_none,
-    volume_existing_chapter_indexes,
-    volume_missing_chapter_indexes,
-    parse_requested_chapter_indexes,
-    split_consecutive_batches,
-    extract_chapters_in_range,
-    suggest_segment_split,
-    extract_worldview_dict_preserving,
-    resolve_single_volume_index,
-)
 from backend.prompts.common.context import (
     compact_json_data,
     extract_character_basic,
@@ -75,16 +55,6 @@ from backend.agents.incremental.prompts import (
 )
 
 _load_retrospective_gold_rules = load_retrospective_gold_rules
-_normalize_foreshadowing_output = normalize_foreshadowing_output
-_foreshadowing_quantity_error = foreshadowing_quantity_error
-_foreshadowing_schema_error = foreshadowing_schema_error
-_extract_worldview_dict_preserving = extract_worldview_dict_preserving
-_volume_plan_validation_error = volume_plan_validation_error
-_volume_existing_chapter_indexes = volume_existing_chapter_indexes
-_volume_missing_chapter_indexes = volume_missing_chapter_indexes
-_parse_requested_chapter_indexes = parse_requested_chapter_indexes
-_split_consecutive_batches = split_consecutive_batches
-_extract_chapters_in_range = extract_chapters_in_range
 
 from backend.agents.shared.tool_followup import (
     _build_tool_followup_context,
@@ -687,7 +657,7 @@ def run_director_decision(
                 
                 yield "data: " + json.dumps({"type": "status", "message": f"總監調用工具：正在呼叫子代理人 {agent_name}..."}, ensure_ascii=False) + "\n\n"
                 
-                from backend.services.director.tools import invoke_sub_agent
+                from backend.services.director.tool_registry import invoke_sub_agent
                 sub_gen = invoke_sub_agent(agent_name, task_description, context, novel_id, stream=requested_stream)
                 for sub_chunk in sub_gen:
                     yield sub_chunk
@@ -707,7 +677,7 @@ def run_director_decision(
                 output_content = params.get("output_content")
                 
                 yield "data: " + json.dumps({"type": "status", "message": f"總監調用工具：評估階段 {stage_name} 的輸出..."}, ensure_ascii=False) + "\n\n"
-                from backend.services.director.tools import evaluate_output
+                from backend.services.director.tool_registry import evaluate_output
                 eval_res = evaluate_output(stage_name, output_content, novel_id)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[評估結果] {json.dumps(eval_res, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, eval_res)
@@ -718,7 +688,7 @@ def run_director_decision(
                 evaluation_feedback = params.get("evaluation_feedback")
                 
                 yield "data: " + json.dumps({"type": "status", "message": f"總監調用工具：針對階段 {stage_name} 進行內容補強與局部修正..."}, ensure_ascii=False) + "\n\n"
-                from backend.services.director.tools import supplement_content
+                from backend.services.director.tool_registry import supplement_content
                 supp_gen = supplement_content(stage_name, original_output, evaluation_feedback, novel_id, stream=requested_stream)
                 for sub_chunk in supp_gen:
                     yield sub_chunk
@@ -767,7 +737,7 @@ def run_director_decision(
                     latest_output = _latest_stage_output_for_tool_review(novel_id, stage_name)
                     if latest_output:
                         try:
-                            from backend.services.director.tools import evaluate_output, inspect_content_block
+                            from backend.services.director.tool_registry import evaluate_output, inspect_content_block
                             post_tool_audit["hard_evaluation"] = evaluate_output(stage_name, latest_output, novel_id)
                             if stage_name in ("foreshadowing", "worldview"):
                                 start_idx, end_idx = _infer_tool_review_range(params)
@@ -794,19 +764,19 @@ def run_director_decision(
 
 
             elif tool_name == "inspect_content_block":
-                from backend.services.director.tools import inspect_content_block
+                from backend.services.director.tool_registry import inspect_content_block
                 result = inspect_content_block(novel_id=novel_id, **params)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[展開檢視結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             elif tool_name == "expand_collapsed_json":
-                from backend.services.director.tools import expand_collapsed_json
+                from backend.services.director.tool_registry import expand_collapsed_json
                 result = expand_collapsed_json(novel_id=novel_id, **params)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[展開檢視結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             elif tool_name == "goto_generation_position":
-                from backend.services.director.tools import goto_generation_position
+                from backend.services.director.tool_registry import goto_generation_position
                 result = goto_generation_position(novel_id=novel_id, **params)
                 decision = result.get("decision") if isinstance(result, dict) else None
                 if decision:
@@ -815,13 +785,13 @@ def run_director_decision(
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             elif tool_name == "repair_story_geometry":
-                from backend.services.director.tools import repair_story_geometry
+                from backend.services.director.tool_registry import repair_story_geometry
                 result = repair_story_geometry(novel_id=novel_id, **params)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[幾何修復結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
 
             elif tool_name == "dispatch_foreshadowing_quota":
-                from backend.services.director.tools import dispatch_foreshadowing_quota
+                from backend.services.director.tool_registry import dispatch_foreshadowing_quota
                 result = dispatch_foreshadowing_quota(novel_id=novel_id, **params)
                 yield "data: " + json.dumps({"type": "content", "delta": f"\n[伏筆配額派發結果] {json.dumps(result, ensure_ascii=False, indent=2)}\n"}, ensure_ascii=False) + "\n\n"
                 tool_followup_context = _build_tool_followup_context(tool_name, params, result)
@@ -907,3 +877,50 @@ def run_director_decision_help(novel_id, current_stage, help_action, help_reason
 # =============================================================================
 # 10. Incremental / Standalone AI Generators (Auxiliary Buttons support)
 # =============================================================================
+
+
+def get_director_decision_sync(
+    novel_id,
+    current_stage,
+    user_prompt,
+    chapter_index=None,
+    volume_index=None,
+    extra_context=None,
+    **kwargs,
+):
+    """同步獲取 Director 決策 JSON dict（供自主流程 retry 路徑使用）。
+
+    消費 run_director_decision 生成器的所有 SSE chunks，
+    提取最終決策 JSON 並返回 dict。
+    若無法解析則返回 None。
+
+    此函數為非生成器（純同步），不影響現有 run_director_decision 生成器邏輯。
+    """
+    from backend.models.parsers import extract_json_block
+
+    deltas = []
+    try:
+        for chunk in run_director_decision(
+            novel_id,
+            current_stage=current_stage,
+            user_prompt=user_prompt,
+            chapter_index=chapter_index,
+            volume_index=volume_index,
+            extra_context=extra_context,
+            stream=False,
+            force_json=False,
+            **kwargs,
+        ):
+            parsed = _parse_sse_data_chunk(chunk) if isinstance(chunk, str) else None
+            if parsed and parsed.get("type") == "content" and parsed.get("delta"):
+                deltas.append(parsed["delta"])
+    except Exception as exc:
+        print(f"[WARN] get_director_decision_sync: run_director_decision raised {exc}")
+        return None
+
+    combined = "".join(deltas)
+    if not combined.strip():
+        return None
+
+    decision = extract_json_block(combined)
+    return decision if isinstance(decision, dict) and decision.get("action") else None

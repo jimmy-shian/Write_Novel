@@ -40,6 +40,48 @@ DIMENSION_LABELS = {
 }
 
 
+def _classify_issue_dimension(issue: str) -> str:
+    if "套路" in issue or "公式化" in issue or "口癖" in issue:
+        return "voice_integrity"
+    if "因果" in issue or "代價" in issue or "邊界" in issue:
+        return "ability_constraints"
+    if "衝突" in issue:
+        return "conflict_novelty"
+    if "時序" in issue or "倒流" in issue:
+        return "temporal_graph_compliance"
+    return "pacing_balance"
+
+
+def _synthesize_audits_from_issues(
+    novel_id: str, chapter_index: int, issues: List[str]
+) -> List[Dict[str, Any]]:
+    """把總監硬性校驗 issues 具現化為敘事診斷，供下一輪繼續推進。"""
+    findings = []
+    for iss in issues or []:
+        dim = _classify_issue_dimension(iss)
+        severity = "critical" if "紅線" in iss else "warning"
+        try:
+            db.add_narrative_audit(
+                novel_id=novel_id,
+                chapter_index=chapter_index,
+                dimension=dim,
+                severity=severity,
+                evidence=iss,
+                recommendation=f"總監硬性校驗指示：{iss}",
+                action_required=True,
+            )
+        except Exception:
+            pass
+        findings.append({
+            "dimension": dim,
+            "severity": severity,
+            "evidence": iss,
+            "recommendation": f"總監硬性校驗指示：{iss}",
+            "action_required": True,
+        })
+    return findings
+
+
 def build_fix_instructions(
     targets: List[Dict[str, Any]],
     banned_hits: Optional[List[Dict[str, Any]]] = None,
@@ -142,7 +184,8 @@ def build_director_user_instruction(
             "1.【禁用原文逐條】：列出必須刪除替換的套路句與段落位置。\n"
             "2.【位置與替換方向】：說明開篇、結尾、微動作或對白之替換方式。\n"
             "3.【策略與代價重寫要求】：若涉及因果問題，說明新的破局手段與支付代價。\n"
-            "4.【紅線】：不得改變本章核心大綱主旨、人物立場與伏筆走向。\n"
+            "4.【建設性引導】：提供具體可操作的正面角色行動與明確代價支付（如體能消耗、資源耗竭、情報代價），引導情節自然收斂至故事目標。\n"
+            "5.【紅線】：不得改變本章核心大綱主旨、人物立場與伏筆走向。\n"
             "只輸出指令本文本身（繁體中文），不要 JSON、不要標題、不要客套話。"
         )
         user_prompt = (
@@ -164,6 +207,7 @@ def build_director_user_instruction(
             instruction += "\n紅線：必須實質更換情節因果鏈與主角博弈方式，嚴禁僅做策略名詞同義替換蒙混；若指出代價缺失，必須補寫具體的能力冷卻、資源消耗或情報暴露後果。"
         if has_voice and ("禁用" not in instruction and "套路" not in instruction):
             instruction += "\n紅線：嚴格刪除或替換所有標記之禁用句與套路動作，出現禁用句即判失敗。"
+        instruction += "\n紅線：小說正文必須100%處於故事世界內部，嚴禁將「沒有制式化的...」「他放棄了慣性手法」等寫作指導語、負向約束語直接寫入故事正文，違者直接駁回！"
 
         return instruction
     except Exception:
@@ -198,7 +242,13 @@ def fix_chapter_from_audits(
         wanted = set(audit_ids)
         targets = [a for a in targets if a.get("id") in wanted]
     if not targets:
-        raise ValueError(f"第 {chapter_index} 章目前無未處置的敘事診斷")
+        # 容錯合成：若傳入上一輪重審殘留 findings，自動合成診斷目標而不拋錯（防範 Disappearing Targets）
+        if reaudit_findings:
+            issues = [rf.get("evidence", "重審殘留問題") for rf in reaudit_findings]
+            _synthesize_audits_from_issues(novel_id, chapter_index, issues)
+            targets = [a for a in db.get_narrative_audits(novel_id, chapter_index=chapter_index, limit=50) if not a.get("resolved")]
+        if not targets:
+            raise ValueError(f"第 {chapter_index} 章目前無未處置的敘事診斷")
 
     before_content = ch_row.get("content") or ""
     banned_hits = extract_banned_hits(before_content)
@@ -284,6 +334,40 @@ def fix_chapter_from_audits(
     after_row = db.get_latest_chapter(novel_id, chapter_index)
     after_content = (after_row.get("content") or "") if after_row else ""
     changed = bool(after_content.strip()) and after_content.strip() != before_content.strip()
+
+    # 升級機制：若 Editor 未產生實質改動且尚有待處置審計項，升級由 Writer 依總監指示重構
+    if not changed and not should_run_writer and any(a.get("action_required") for a in targets):
+        try:
+            writer_gen = run_chapter_writer(
+                novel_id,
+                chapter_index,
+                user_prompt=user_instruction,
+                stream=False,
+                fix_mode=True,
+                fix_targets=targets,
+                banned_hits=banned_hits,
+            )
+            for _ in writer_gen:
+                pass
+            w_row = db.get_latest_chapter(novel_id, chapter_index)
+            w_content = (w_row.get("content") or "") if w_row else ""
+            if w_content.strip() and w_content.strip() != before_content.strip():
+                current_spans = extract_banned_hits(w_content)
+                editor_gen = run_editor_agent(
+                    novel_id,
+                    chapter_index,
+                    edit_instructions=user_instruction,
+                    stream=False,
+                    fix_mode=True,
+                    fix_spans=current_spans,
+                )
+                for _ in editor_gen:
+                    pass
+                after_row = db.get_latest_chapter(novel_id, chapter_index)
+                after_content = (after_row.get("content") or "") if after_row else ""
+                changed = bool(after_content.strip()) and after_content.strip() != before_content.strip()
+        except Exception as esc_exc:
+            print(f"[WARN] Escalation to Writer in fix loop: {esc_exc}")
 
     resolved_ids: List[str] = []
     if changed:
@@ -386,6 +470,30 @@ def fix_chapter_until_pass(
             except Exception:
                 pass
 
+    # 檢查章節細綱是否資訊密度過載；若過載則啟動動態拆章
+    from backend.services.narrative.density import (
+        is_chapter_outline_density_overloaded,
+        build_split_chapter_outlines,
+    )
+    outline = None
+    try:
+        from backend.services import narrative_memory
+        outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
+    except Exception:
+        outline = None
+
+    split_occurred = False
+    if outline and is_chapter_outline_density_overloaded(outline):
+        _log(f"✂️ 第 {chapter_index} 章大綱資訊密度過載（轉折/伏筆/事件超出單章容量），總監啟動動態拆章擴展...")
+        split_chapters = build_split_chapter_outlines(outline, split_count=2)
+        from backend.persistence.repositories.volumes import split_and_expand_chapter_outline
+        split_and_expand_chapter_outline(novel_id, chapter_index, split_chapters)
+        split_occurred = True
+        _log(
+            f"✅ 第 {chapter_index} 章已動態拆分為 2 章（第 {chapter_index} 章、第 {chapter_index + 1} 章），"
+            f"後續章節與幾何圖譜已連動平移。正文將錨定第 1 階段大綱修復推進。"
+        )
+
     for rnd in range(1, max(1, max_rounds) + 1):
         try:
             fix_res = fix_chapter_from_audits(
@@ -432,6 +540,18 @@ def fix_chapter_until_pass(
                     "warn",
                 )
                 status = "max_rounds" if rnd >= max(1, max_rounds) else "retrying"
+
+                # 解決 Disappearing Targets Bug：
+                # 引擎判定 PASS 後原 targets 已全部標記為 resolved，但總監硬性校驗未過。
+                # 將總監硬性校驗回報之 issues 具現化為未處置敘事診斷與 reaudit findings，
+                # 確保下一輪 (rnd + 1) 擁有具體目標繼續推進，杜絕 ValueError("無未處置的敘事診斷") 與 premature no_change！
+                issues = director_check.get("issues") or []
+                if not issues and director_check.get("message"):
+                    issues = [director_check["message"]]
+
+                synth_findings = _synthesize_audits_from_issues(novel_id, chapter_index, issues)
+                if synth_findings:
+                    prev_reaudit_findings = synth_findings
             else:
                 status = "passed"
                 _log(f"✅ 第 {chapter_index} 章閉環通過：引擎判 [{final_action}]，總監校驗通過（共 {rnd} 輪）")
@@ -458,6 +578,7 @@ def fix_chapter_until_pass(
         "total_fixed": total_fixed,
         "final_reaudit": final_reaudit,
         "director_check": director_check,
+        "split_occurred": split_occurred,
     }
 
 

@@ -101,6 +101,12 @@ def run_macro_semantic(
         except Exception:
             pass
 
+    for a_id, sem in filled_arcs.items():
+        try:
+            db.update_arc_semantic(novel_id, a_id, sem)
+        except Exception:
+            pass
+
     yield _sse({"type": "thinking", "delta": f"【Pass 1 完成】已成功填充 {len(filled_vols)} 卷語義與 {len(filled_arcs)} 條弧線。\n"})
 
     # ==========================================

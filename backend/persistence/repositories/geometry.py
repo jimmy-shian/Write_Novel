@@ -570,6 +570,17 @@ def update_volume_semantic(novel_id: str, volume_id: str, semantic: dict) -> Non
         )
 
 
+def update_arc_semantic(novel_id: str, arc_id: str, semantic: dict) -> None:
+    """更新弧容器的語義內容。"""
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE geometry_arcs SET semantic_json = ? WHERE novel_id = ? AND arc_id = ?",
+            (json.dumps(semantic, ensure_ascii=False), novel_id, arc_id),
+        )
+
+
 def get_geometry_stats(novel_id: str) -> dict:
     """回傳幾何圖統計與語義填充進度。"""
     conn = get_db_connection()
@@ -589,6 +600,16 @@ def get_geometry_stats(novel_id: str) -> dict:
         (novel_id,),
     ).fetchone()[0]
 
+    filled_edges = cursor.execute(
+        "SELECT COUNT(*) FROM geometry_edges WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
+        (novel_id,),
+    ).fetchone()[0]
+
+    filled_volumes = cursor.execute(
+        "SELECT COUNT(*) FROM geometry_volumes WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
+        (novel_id,),
+    ).fetchone()[0]
+
     return {
         "node_count": node_count,
         "edge_count": edge_count,
@@ -597,6 +618,8 @@ def get_geometry_stats(novel_id: str) -> dict:
         "unfilled_nodes": node_count - filled_nodes,
         "filled_threads": filled_threads,
         "unfilled_threads": thread_count - filled_threads,
+        "filled_edges": filled_edges,
+        "filled_volumes": filled_volumes,
         "filling_progress": round(filled_nodes / node_count, 3) if node_count > 0 else 0.0,
     }
 

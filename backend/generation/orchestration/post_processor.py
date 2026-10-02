@@ -28,28 +28,81 @@ def parse_sse_event(chunk: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _normalize_result_text(task: GenerationTaskRequest, raw_text: str) -> Any:
-    text = (raw_text or "").strip()
-    if not text:
+def _normalize_text_by_stage(raw: Any, target_stage: str) -> Any:
+    content_str = (raw or "").strip() if isinstance(raw, str) else ""
+    if not content_str:
         return {}
 
     parsed = None
     try:
-        parsed = extract_json_block(text)
+        parsed = extract_json_block(content_str)
     except Exception:
         parsed = None
 
+    # Priority 1: Writer and Editor stages strictly produce chapter prose
+    if target_stage in {"writer", "editor"}:
+        if isinstance(parsed, dict):
+            stripped = content_str.strip()
+            # Only unwrap if the entire response constitutes a JSON wrapper envelope,
+            # never when an embedded code block is surrounded by story prose.
+            is_root_envelope = (
+                (stripped.startswith("{") and stripped.endswith("}"))
+                or (stripped.startswith("```") and stripped.endswith("```"))
+            )
+            if is_root_envelope:
+                # If wrapped in markdown code fence, ensure it is a single outer block
+                if stripped.startswith("```") and stripped.endswith("```"):
+                    lines = stripped.splitlines()
+                    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+                        inner_lines = lines[1:-1]
+                        if any(l.strip().startswith("```") for l in inner_lines):
+                            inner_content = stripped[3:-3].strip()
+                            if inner_content.lower().startswith("json"):
+                                inner_content = inner_content[4:].strip()
+                            try:
+                                json_obj = json.loads(inner_content)
+                                is_root_envelope = isinstance(json_obj, dict)
+                            except Exception:
+                                is_root_envelope = False
+
+                if is_root_envelope:
+                    if "content" in parsed and isinstance(parsed["content"], str):
+                        return {"text": parsed["content"]}
+                    if "text" in parsed and isinstance(parsed["text"], str):
+                        return {"text": parsed["text"]}
+        return {"text": content_str}
+
+    # Priority 2: Structured stages expecting JSON schemas
     if isinstance(parsed, (dict, list)) and parsed:
         return parsed
 
-    if task.stage in {"writer", "editor"}:
-        return {"text": text}
+    return parsed if parsed is not None else {"text": content_str}
 
-    return parsed if parsed is not None else {"text": text}
+
+def _normalize_result_text(task: GenerationTaskRequest, raw_text: str) -> Any:
+    return _normalize_text_by_stage(raw_text, task.stage)
 
 
 def _derive_patches(task: GenerationTaskRequest, normalized_result: Any) -> List[Dict[str, Any]]:
     patches: List[Dict[str, Any]] = []
+
+    if task.stage in {"writer", "editor"}:
+        chapter_index = (task.target.chapter_index if task.target else None) or 1
+        content = ""
+        if isinstance(normalized_result, dict) and "text" in normalized_result:
+            content = normalized_result["text"]
+        elif isinstance(normalized_result, str):
+            content = normalized_result
+        if content:
+            patches.append(
+                {
+                    "op": "replace",
+                    "path": f"/chapters/{chapter_index}/content",
+                    "value": content,
+                }
+            )
+        return patches
+
     if isinstance(normalized_result, dict):
         for key, value in normalized_result.items():
             if key in {"result", "status", "error"}:
@@ -60,15 +113,6 @@ def _derive_patches(task: GenerationTaskRequest, normalized_result: Any) -> List
     elif normalized_result not in (None, "", {}):
         patches.append({"op": "replace", "path": f"/{task.stage}", "value": normalized_result})
 
-    if task.stage in {"writer", "editor"} and isinstance(normalized_result, dict) and "text" in normalized_result:
-        chapter_index = task.target.chapter_index or 1
-        patches.append(
-            {
-                "op": "replace",
-                "path": f"/chapters/{chapter_index}/content",
-                "value": normalized_result["text"],
-            }
-        )
     return patches
 
 
@@ -97,6 +141,9 @@ def _build_state_updates(task: GenerationTaskRequest) -> Dict[str, Any]:
         updates["plot"] = plot
     if vols:
         updates["volumes"] = vols
+
+    if getattr(db, "has_geometry", None) and db.has_geometry(novel_id):
+        updates["geometry"] = db.get_geometry_stats(novel_id)
 
     if task.stage in {"writer", "editor"} and task.target.chapter_index is not None:
         chapter = db.get_latest_chapter(novel_id, int(task.target.chapter_index))

@@ -130,24 +130,88 @@ def build_volume_skeleton_planner_messages(
         try:
             from backend.persistence import load_geometry_graph
             graph = load_geometry_graph(novel_id)
-            if graph and graph.nodes:
-                node_lines = ["【幾何圖譜結構角色與前後義務 (Geometry Graph Overlay)】"]
-                for ch_num in range(start_ch, end_ch + 1):
-                    ch_nodes = graph.get_chapter_nodes(ch_num)
-                    if ch_nodes:
-                        n = ch_nodes[0]
-                        role = n.structural_role.value if hasattr(n.structural_role, "value") else str(n.structural_role)
-                        in_edges = graph.get_incoming_edges(n.node_id)
-                        out_edges = graph.get_outgoing_edges(n.node_id)
-                        in_desc = [f"{e.edge_type.value if hasattr(e.edge_type, 'value') else e.edge_type} 來自節點 {e.source}" for e in in_edges[:2]]
-                        out_desc = [f"{e.edge_type.value if hasattr(e.edge_type, 'value') else e.edge_type} 至節點 {e.target}" for e in out_edges[:2]]
-                        node_lines.append(
-                            f"- 第 {ch_num} 章（節點 `{n.node_id}`）：結構角色 `{role}` | 線程 `{n.primary_thread}`"
-                            + (f" | 前置因果承接: {'; '.join(in_desc)}" if in_desc else "")
-                            + (f" | 後續結構義務: {'; '.join(out_desc)}" if out_desc else "")
-                        )
-                if len(node_lines) > 1:
-                    geom_section = "\n" + "\n".join(node_lines) + "\n"
+            if graph:
+                # 1. 注入 VolumeContainer.semantic (themes, core conflicts) 到 volume_macro_context
+                vol_container = next((v for v in graph.volumes.values() if v.volume_index == volume_index), None)
+                if vol_container and vol_container.semantic:
+                    vol_theme = vol_container.semantic.get("theme") or vol_container.semantic.get("volume_theme")
+                    vol_conflict = vol_container.semantic.get("core_conflict") or vol_container.semantic.get("conflict_core")
+                    if vol_theme:
+                        volume_macro_context["volume_theme"] = vol_theme
+                    if vol_conflict:
+                        volume_macro_context["core_conflict"] = vol_conflict
+                    volume_macro_context["volume_semantic"] = vol_container.semantic
+
+                # 2. 幾何圖譜節點與邊的語義覆蓋 (Geometry Graph Overlay)
+                if graph.nodes:
+                    node_lines = ["【幾何圖譜結構角色與前後義務 (Geometry Graph Overlay)】"]
+                    for ch_num in range(start_ch, end_ch + 1):
+                        ch_nodes = graph.get_chapter_nodes(ch_num)
+                        if ch_nodes:
+                            n = ch_nodes[0]
+                            role = n.structural_role.value if hasattr(n.structural_role, "value") else str(n.structural_role)
+                            in_edges = graph.get_incoming_edges(n.node_id)
+                            out_edges = graph.get_outgoing_edges(n.node_id)
+
+                            def _edge_desc(e, direction):
+                                e_type = e.edge_type.value if hasattr(e.edge_type, "value") else str(e.edge_type)
+                                causal = (e.semantic.get("causal_link") or e.semantic.get("dramatic_clash")) if isinstance(getattr(e, "semantic", None), dict) else ""
+                                link = f"{e_type} 來自節點 {e.source}" if direction == "in" else f"{e_type} 至節點 {e.target}"
+                                label = "因果" if direction == "in" else "義務"
+                                return link + (f" ({label}: {causal})" if causal else "")
+
+                            in_desc = [_edge_desc(e, "in") for e in in_edges[:2]]
+                            out_desc = [_edge_desc(e, "out") for e in out_edges[:2]]
+
+                            node_info = f"- 第 {ch_num} 章（節點 `{n.node_id}`）：結構角色 `{role}` | 線程 `{n.primary_thread}`"
+
+                            # 注入 node.semantic (internal_shift, dramatic_choice, focus_character)
+                            if n.semantic and isinstance(n.semantic, dict):
+                                focus_c = n.semantic.get("focus_character")
+                                shift = n.semantic.get("internal_shift")
+                                choice = n.semantic.get("dramatic_choice")
+                                if focus_c:
+                                    node_info += f" | 焦點角色: {focus_c}"
+                                if shift:
+                                    node_info += f" | 心境位移: {shift}"
+                                if choice:
+                                    node_info += f" | 抉擇代價: {choice}"
+
+                            if in_desc:
+                                node_info += f" | 前置因果承接: {'; '.join(in_desc)}"
+                            if out_desc:
+                                node_info += f" | 後續結構義務: {'; '.join(out_desc)}"
+                            node_lines.append(node_info)
+
+                    # 3. 注入本批次活躍線程人物綁定 (Active Character Thread Bindings)
+                    active_threads = set()
+                    for ch_num in range(start_ch, end_ch + 1):
+                        for cn in graph.get_chapter_nodes(ch_num):
+                            if cn.primary_thread:
+                                active_threads.add(cn.primary_thread)
+
+                    thread_binding_lines = []
+                    for t_id in sorted(active_threads):
+                        t_obj = graph.threads.get(t_id)
+                        if t_obj and t_obj.semantic and isinstance(t_obj.semantic, dict):
+                            b_data = t_obj.semantic.get("character_binding")
+                            if b_data and isinstance(b_data, dict):
+                                c_name = b_data.get("character_name") or b_data.get("character") or "未知"
+                                arc_t = b_data.get("arc_theme") or ""
+                                flaw = b_data.get("flaw_to_overcome") or ""
+                                t_line = f"- 線程 `{t_id}`: 綁定角色 `{c_name}`"
+                                if arc_t:
+                                    t_line += f" | 弧線主題: {arc_t}"
+                                if flaw:
+                                    t_line += f" | 待克服心魔: {flaw}"
+                                thread_binding_lines.append(t_line)
+
+                    if thread_binding_lines:
+                        node_lines.append("\n【幾何線程人物綁定與弧線契約 (Active Character Thread Bindings)】")
+                        node_lines.extend(thread_binding_lines)
+
+                    if len(node_lines) > 1:
+                        geom_section = "\n" + "\n".join(node_lines) + "\n"
         except Exception:
             pass
 

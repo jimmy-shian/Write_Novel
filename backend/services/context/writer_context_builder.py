@@ -26,6 +26,16 @@ from backend.services.narrative.setting_registry import SettingRegistry
 from backend.services.director.context_compiler import GeometryContextCompiler
 
 
+def _load_geometry_graph_safe(novel_id: str):
+    if not novel_id:
+        return None
+    try:
+        from backend.persistence import load_geometry_graph
+        return load_geometry_graph(novel_id)
+    except Exception:
+        return None
+
+
 class WriterContextBuilder:
     """負責為 Chapter Writer 構建最小必要且高度情境化的寫作上下文。"""
 
@@ -35,10 +45,18 @@ class WriterContextBuilder:
         characters_list: List[Dict[str, Any]],
         chapter_index: int,
     ) -> Dict[str, Any]:
-        """從章節大綱與角色清單提煉出當前場景的視角契約。"""
-        active_chars = current_outline.get("characters_active", []) if isinstance(current_outline, dict) else []
-        if isinstance(active_chars, str):
-            active_chars = [c.strip() for c in active_chars.split(",") if c.strip()]
+        active_raw = current_outline.get("characters_active", []) if isinstance(current_outline, dict) else []
+        active_chars: List[str] = []
+        if isinstance(active_raw, str):
+            active_chars = [c.strip() for c in active_raw.replace("，", ",").replace("、", ",").split(",") if c.strip()]
+        elif isinstance(active_raw, list):
+            for c in active_raw:
+                if isinstance(c, dict):
+                    nm = c.get("name") or c.get("character") or ""
+                    if nm and str(nm).strip():
+                        active_chars.append(str(nm).strip())
+                elif c and str(c).strip():
+                    active_chars.append(str(c).strip())
 
         # 預設選取第一個活躍角色或主角為 POV
         pov_char = "主角"
@@ -82,6 +100,8 @@ class WriterContextBuilder:
         current_outline: Dict[str, Any],
         characters_bible: Any,
         pov_character: str,
+        novel_id: str = "",
+        chapter_index: int = 1,
     ) -> List[Dict[str, Any]]:
         """針對本場景出場角色，提煉其即時心理狀態、知情邊界與語言傾向，而非傾倒底層設定表。"""
         char_list = []
@@ -90,9 +110,42 @@ class WriterContextBuilder:
         elif isinstance(characters_bible, list):
             char_list = characters_bible
 
-        active_names = current_outline.get("characters_active", []) if isinstance(current_outline, dict) else []
-        if isinstance(active_names, str):
-            active_names = [c.strip() for c in active_names.split(",") if c.strip()]
+        # 檢索幾何圖譜中的心境位移與線程人物弧線綁定 (Geometry Semantics Feed-Forward)
+        char_node_shifts = {}
+        thread_arc_bindings = {}
+        graph = _load_geometry_graph_safe(novel_id)
+        if graph:
+            for cn in graph.get_chapter_nodes(chapter_index):
+                if isinstance(getattr(cn, "semantic", None), dict):
+                    fc = cn.semantic.get("focus_character")
+                    if fc:
+                        char_node_shifts[fc] = cn.semantic
+            for t in graph.threads.values():
+                if isinstance(getattr(t, "semantic", None), dict):
+                    b = t.semantic.get("character_binding")
+                    if isinstance(b, dict):
+                        c_name = b.get("character_name") or b.get("character")
+                        if c_name:
+                            thread_arc_bindings[c_name] = b
+
+        active_raw = current_outline.get("characters_active", []) if isinstance(current_outline, dict) else []
+        active_names: List[str] = []
+        outline_char_meta: Dict[str, Dict[str, Any]] = {}
+        if isinstance(active_raw, str):
+            for c in active_raw.replace("，", ",").replace("、", ",").split(","):
+                c_str = c.strip()
+                if c_str:
+                    active_names.append(c_str)
+        elif isinstance(active_raw, list):
+            for c in active_raw:
+                if isinstance(c, dict):
+                    nm = c.get("name") or c.get("character") or ""
+                    if nm and str(nm).strip():
+                        nm_str = str(nm).strip()
+                        active_names.append(nm_str)
+                        outline_char_meta[nm_str] = c
+                elif c and str(c).strip():
+                    active_names.append(str(c).strip())
         active_set = set(active_names)
 
         states = []
@@ -131,36 +184,88 @@ class WriterContextBuilder:
                 if off_goal:
                     psychological_summary += f"（場外追求：{off_goal}）"
 
+                # 檢索幾何圖譜中的心境位移與弧線主題
+                shift_data = char_node_shifts.get(name) or next((v for k, v in char_node_shifts.items() if k in name or name in k), None)
+                binding_data = thread_arc_bindings.get(name) or next((v for k, v in thread_arc_bindings.items() if k in name or name in k), None)
+
+                if shift_data:
+                    s_shift = shift_data.get("internal_shift")
+                    s_choice = shift_data.get("dramatic_choice")
+                    if s_shift:
+                        psychological_summary += f"【本章心境位移：{s_shift}】"
+                    if s_choice:
+                        psychological_summary += f"【面臨抉擇代價：{s_choice}】"
+
+                arc_obligation = ""
+                if binding_data:
+                    arc_theme = binding_data.get("arc_theme")
+                    flaw = binding_data.get("flaw_to_overcome")
+                    if arc_theme:
+                        psychological_summary += f"【幾何弧線目標：{arc_theme}】"
+                        arc_obligation = f"弧線主題：{arc_theme}" + (f"；待克服心魔：{flaw}" if flaw else "")
+
+                # 提煉社交矩陣與即時關係張力 (Social Matrix)
+                rels = ch.get("relationships") or ch.get("social_matrix") or []
+                active_tensions = []
+                if isinstance(rels, list):
+                    for r in rels:
+                        if isinstance(r, dict):
+                            target_char = r.get("target") or r.get("character") or r.get("name")
+                            rel_type = r.get("relation") or r.get("type") or r.get("attitude")
+                            tension = r.get("tension") or r.get("conflict") or ""
+                            if target_char in active_set:
+                                active_tensions.append(f"對 {target_char}（{rel_type}{f'：{tension}' if tension else ''}）")
+                        elif isinstance(r, str):
+                            active_tensions.append(r)
+                elif isinstance(rels, dict):
+                    for target_char, rel_desc in rels.items():
+                        if target_char in active_set:
+                            active_tensions.append(f"對 {target_char}：{rel_desc}")
+
                 # 提煉知情範圍 (Knowledge Scope)
                 knowledge = ch.get("initial_knowledge_scope", [])
                 if not isinstance(knowledge, list):
                     knowledge = [str(knowledge)]
 
+                # 若大綱有針對該角色的即時態度/角色描述，加以融合
+                meta = outline_char_meta.get(name, {})
+                public_att = meta.get("attitude") if meta.get("attitude") else f"對待他人：{ch.get('personality', ['冷靜'])[0] if isinstance(ch.get('personality'), list) and ch.get('personality') else '沈穩'}"
+                char_role = meta.get("role") or ch.get("role", "登場人物")
+
                 state_item = {
                     "name": name,
-                    "role": ch.get("role", "登場人物"),
+                    "role": char_role,
                     "faction": ch.get("faction") or ch.get("affiliation") or "中立/獨立",
                     "is_pov": is_pov,
-                    "public_attitude": f"對待他人：{ch.get('personality', ['冷靜'])[0] if isinstance(ch.get('personality'), list) and ch.get('personality') else '沈穩'}",
+                    "public_attitude": public_att,
                     "private_motivation": psychological_summary,
                     "speech_profile_summary": speech_desc,
                     "knowledge_scope": knowledge if knowledge else ["已知自身經歷與當前場景目擊之情報"],
                     "state_source": "character_bible_scoped" if knowledge else "fallback",
                     "current_state_missing": False,
                 }
+                if arc_obligation:
+                    state_item["dynamic_arc_obligation"] = arc_obligation
+                if shift_data:
+                    state_item["internal_shift"] = shift_data.get("internal_shift")
+                    state_item["dramatic_choice"] = shift_data.get("dramatic_choice")
+                if active_tensions:
+                    state_item["relational_tensions"] = active_tensions
                 states.append(state_item)
 
         found_names = {s["name"] for s in states}
         for aname in active_names:
             if aname and aname not in found_names:
+                meta = outline_char_meta.get(aname, {})
                 is_one_off = any(k in aname for k in ("路人", "侍衛", "掌櫃", "小二", "店員", "乘客", "士兵", "隨從", "弟子", "刺客", "管家", "守衛"))
-                role_label = "單次過場角色/路人" if is_one_off else "大綱出場配角"
+                role_label = meta.get("role") or ("單次過場角色/路人" if is_one_off else "大綱出場配角")
+                att_label = meta.get("attitude") or "對待他人：言行專注當前現場互動，依情境做出自然反應"
                 states.append({
                     "name": aname,
                     "role": role_label,
                     "faction": "中立/環境人物",
                     "is_pov": (aname == pov_character),
-                    "public_attitude": "對待他人：言行專注當前現場互動，依情境做出自然反應",
+                    "public_attitude": att_label,
                     "private_motivation": "履行當前場景情節功能與日常生存動機",
                     "speech_profile_summary": "自然簡練，貼合身份",
                     "knowledge_scope": ["僅知當前現場目擊之事"],
@@ -197,19 +302,38 @@ class WriterContextBuilder:
                     lines.append(clean)
         return "\n".join(lines)
 
-    def _format_volume_context(self, vol_outline_context: str) -> str:
+    def _format_volume_context(self, vol_outline_context: str, novel_id: str = "", chapter_index: int = 1) -> str:
         """Keep volume direction, not full faction/outline payloads."""
-        if not vol_outline_context:
+        if not vol_outline_context and not novel_id:
             return ""
         keep = []
-        for line in str(vol_outline_context).splitlines():
-            clean = line.strip()
-            if not clean or clean.startswith("{") or clean.startswith("}"):
-                continue
-            if any(marker in clean for marker in ("當前卷", "前一卷", "後一卷")):
-                keep.append(clean)
-            elif clean.startswith(("標題：", "大綱：")):
-                keep.append(clean)
+        if vol_outline_context:
+            for line in str(vol_outline_context).splitlines():
+                clean = line.strip()
+                if not clean or clean.startswith("{") or clean.startswith("}"):
+                    continue
+                if any(marker in clean for marker in ("當前卷", "前一卷", "後一卷")):
+                    keep.append(clean)
+                elif clean.startswith(("標題：", "大綱：", "卷主題：", "主題：", "核心衝突：", "弧線目標：", "張力焦點：")):
+                    keep.append(clean)
+
+        # 幾何圖譜動態注入卷主題與弧線張力焦點 (Dynamic Geometry Semantic Feed-Forward)
+        graph = _load_geometry_graph_safe(novel_id)
+        if graph:
+            curr_vol = next((v for v in graph.volumes.values() if v.chapter_range and v.chapter_range[0] <= chapter_index <= v.chapter_range[1]), None)
+            if curr_vol and curr_vol.semantic:
+                vol_theme = curr_vol.semantic.get("theme") or curr_vol.semantic.get("volume_theme")
+                vol_conflict = curr_vol.semantic.get("core_conflict") or curr_vol.semantic.get("conflict_core")
+                if vol_theme:
+                    keep.append(f"- 當前卷宏觀主題：{vol_theme}")
+                if vol_conflict:
+                    keep.append(f"- 當前卷核心衝突焦點：{vol_conflict}")
+            curr_arc = next((a for a in graph.arcs.values() if a.chapter_range and a.chapter_range[0] <= chapter_index <= a.chapter_range[1]), None)
+            if curr_arc and curr_arc.semantic:
+                tension_focus = curr_arc.semantic.get("tension_focus") or curr_arc.semantic.get("narrative_goal")
+                if tension_focus:
+                    keep.append(f"- 當前弧線張力焦點：{tension_focus}")
+
         return "\n".join(keep)
 
     def build_scene_beats(self, current_outline: Dict[str, Any]) -> List[str]:
@@ -402,7 +526,9 @@ class WriterContextBuilder:
         pov_char = contract["pov_character"]
 
         # 3. 構建角色狀態與知情邊界
-        char_states = self.build_character_states(current_outline, characters_bible, pov_char)
+        char_states = self.build_character_states(
+            current_outline, characters_bible, pov_char, novel_id=novel_id, chapter_index=chapter_index
+        )
 
         # 4. 構建戲劇拍點
         beats = self.build_scene_beats(current_outline)
@@ -568,13 +694,17 @@ class WriterContextBuilder:
             pov_tag = " [當前 POV 焦點]" if cs["is_pov"] else ""
             lines.append(f"**【{cs['name']}】** ({cs['role']} / 陣營：{cs['faction']}){pov_tag}")
             lines.append(f"  - 內在動機：{cs['private_motivation']}")
+            if cs.get("dynamic_arc_obligation"):
+                lines.append(f"  - 幾何弧線契約：{cs['dynamic_arc_obligation']}")
+            if cs.get("relational_tensions"):
+                lines.append(f"  - 現場關係張力 (Social Matrix)：{'; '.join(cs['relational_tensions'])}")
             lines.append(f"  - 語言人格：{cs['speech_profile_summary']}")
             lines.append(f"  - 知情邊界 (Knowledge Scope)：{', '.join(cs['knowledge_scope'])}")
         lines.append("")
 
         # (D) 相鄰章/卷方向：只保留 handoff 摘要，禁止 raw outline 漂入 Writer。
         adjacent = self._format_adjacent_context(surrounding_plot)
-        volume_direction = self._format_volume_context(vol_outline_context)
+        volume_direction = self._format_volume_context(vol_outline_context, novel_id=novel_id, chapter_index=chapter_index)
         if adjacent or volume_direction:
             lines.append("### 🧭【相鄰章節與卷方向（僅供銜接，不得提前改寫未到章節事件）】")
             if adjacent:
