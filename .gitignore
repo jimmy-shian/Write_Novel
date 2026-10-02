@@ -28,3 +28,8 @@ dist-packages/
 build_work/
 *.spec
 
+
+*.db
+.agents/
+installer.nsi
+

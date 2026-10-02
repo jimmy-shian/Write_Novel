@@ -118,11 +118,8 @@ api_router.add_api_route("/generation-task", api_generation_task, methods=["POST
 def get_static_dir():
     base_frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
     dist_dir = os.path.join(base_frontend_dir, "dist")
-    legacy_static_dir = os.path.join(base_frontend_dir, "static")
     if os.path.exists(dist_dir) and os.path.exists(os.path.join(dist_dir, "index.html")):
         return dist_dir
-    if os.path.exists(legacy_static_dir):
-        return legacy_static_dir
     return None
 
 # --- FASTAPI APPLICATION INSTANCE ---
@@ -145,8 +142,9 @@ static_dir = get_static_dir()
 
 @app.get("/")
 def serve_index():
-    if static_dir:
-        index_path = os.path.join(static_dir, "index.html")
+    current_dir = get_static_dir() or static_dir
+    if current_dir:
+        index_path = os.path.join(current_dir, "index.html")
         if os.path.exists(index_path):
             from fastapi.responses import FileResponse
             return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})

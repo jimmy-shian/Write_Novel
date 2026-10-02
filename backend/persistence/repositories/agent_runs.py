@@ -24,8 +24,6 @@ import re
 _CACHE_LOCK = threading.RLock()
 _AGENT_CONFIGS_CACHE: Optional[Dict[str, dict]] = None
 _AGENT_CONFIGS_DATA_VERSION: Optional[int] = None
-_PROMPT_OVERRIDE_CACHE: Dict[tuple, Optional[str]] = {}
-_PROMPT_OVERRIDE_DATA_VERSION: Optional[int] = None
 
 def get_db_data_version(conn=None) -> int:
     """取得 SQLite 資料庫的 data_version，用於跨連線快取失效檢查"""
@@ -35,54 +33,6 @@ def get_db_data_version(conn=None) -> int:
         return row[0] if row else 0
     except Exception:
         return 0
-
-def save_prompt_override(template_name: str, key: str, value: str):
-    global _PROMPT_OVERRIDE_DATA_VERSION
-    cache_key = (template_name, key)
-    with _CACHE_LOCK:
-        # 寫入去重：若記憶體快取中值完全相同，直接跳過 DB Write
-        if _PROMPT_OVERRIDE_CACHE.get(cache_key) == value:
-            return
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO prompt_overrides (template_name, key, value)
-        VALUES (?, ?, ?)
-        ON CONFLICT(template_name, key) DO UPDATE SET
-            value = excluded.value
-        """,
-        (template_name, key, value)
-    )
-    conn.commit()
-    with _CACHE_LOCK:
-        _PROMPT_OVERRIDE_CACHE[cache_key] = value
-        _PROMPT_OVERRIDE_DATA_VERSION = get_db_data_version(conn)
-
-def get_prompt_override(template_name: str, key: str) -> Optional[str]:
-    global _PROMPT_OVERRIDE_CACHE, _PROMPT_OVERRIDE_DATA_VERSION
-    conn = get_db_connection()
-    current_ver = get_db_data_version(conn)
-    cache_key = (template_name, key)
-
-    with _CACHE_LOCK:
-        if _PROMPT_OVERRIDE_DATA_VERSION == current_ver and cache_key in _PROMPT_OVERRIDE_CACHE:
-            return _PROMPT_OVERRIDE_CACHE[cache_key]
-        if _PROMPT_OVERRIDE_DATA_VERSION != current_ver:
-            _PROMPT_OVERRIDE_CACHE.clear()
-            _PROMPT_OVERRIDE_DATA_VERSION = current_ver
-
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT value FROM prompt_overrides WHERE template_name = ? AND key = ?",
-        (template_name, key)
-    )
-    row = cursor.fetchone()
-    val = row[0] if row else None
-    with _CACHE_LOCK:
-        _PROMPT_OVERRIDE_CACHE[cache_key] = val
-    return val
 
 # --- LAST AGENT RUN TRACKING (WITH WRITE AMPLIFICATION MITIGATION) ---
 
