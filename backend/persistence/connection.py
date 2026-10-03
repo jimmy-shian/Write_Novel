@@ -3,7 +3,8 @@ import sqlite3
 import json
 from datetime import datetime
 import os
-from typing import Optional, Dict, Any, List
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional, Dict, Any, List
 from dotenv import load_dotenv
 
 # 新增 opencc 套件，用於簡體轉繁體
@@ -114,6 +115,8 @@ AGENT_DEFAULTS = {
 
 import threading
 
+ConnectionProvider = Callable[[], sqlite3.Connection]
+
 def _configure_sqlite_connection(conn: sqlite3.Connection):
     """套用 SQLite 引擎保護 SSD 與記憶體集中讀寫 PRAGMA 配置"""
     conn.row_factory = sqlite3.Row
@@ -194,4 +197,23 @@ class ConnectionManager:
 def get_db_connection() -> sqlite3.Connection:
     """取得目前執行緒的 SQLite Persistent Connection"""
     return ConnectionManager.get_connection()
+
+
+@contextmanager
+def transaction(
+    connection: Optional[sqlite3.Connection] = None,
+    provider: Optional[ConnectionProvider] = None,
+) -> Iterator[sqlite3.Connection]:
+    """以明確的 commit/rollback 邊界執行一段 persistence 工作。
+
+    Persistent connections 由 ConnectionManager 擁有；此 context manager
+    只管理交易，不會關閉呼叫者提供的 connection。
+    """
+    conn = connection or (provider or get_db_connection)()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 

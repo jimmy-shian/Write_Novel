@@ -361,7 +361,19 @@ class AutonomousPipelineManager:
 
                 # 實質校驗：確認該階段所需的成品已真正寫入資料庫
                 if verify_fn and not verify_fn():
-                    raise RuntimeError(f"階段 [{stage}] 執行結束，但資料庫實質校驗未通過（未持久化實質資料）。")
+                    diag_suffix = ""
+                    try:
+                        if stage in ("geometry", "macro_semantic", "character_semantic", "cross_relation"):
+                            stats = db.get_geometry_stats(task.novel_id) if hasattr(db, "get_geometry_stats") else {}
+                            diag_suffix = (
+                                f"（幾何診斷：nodes={stats.get('node_count', '?')}/filled={stats.get('filled_nodes', '?')}，"
+                                f"threads={stats.get('thread_count', '?')}/filled={stats.get('filled_threads', '?')}，"
+                                f"edges={stats.get('edge_count', '?')}/filled={stats.get('filled_edges', '?')}，"
+                                f"volumes_filled={stats.get('filled_volumes', '?')}）"
+                            )
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"階段 [{stage}] 執行結束，但資料庫實質校驗未通過（未持久化實質資料）。{diag_suffix}")
 
                 return resp
 

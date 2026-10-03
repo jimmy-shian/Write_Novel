@@ -5,29 +5,31 @@ Stores AI draft suggestions and review checklists for human review before final 
 """
 import uuid
 import json
+import sqlite3
 from typing import Dict, Any, List, Optional
-from backend.persistence.connection import get_db_connection
+from backend.persistence.connection import ConnectionProvider, get_db_connection, transaction
 
 def create_proposal(
     novel_id: str,
     chapter_index: int,
     proposed_text: str,
     original_text: str = "",
-    review_comments: Optional[List[Dict[str, Any]]] = None
+    review_comments: Optional[List[Dict[str, Any]]] = None,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
+    connection_provider: Optional[ConnectionProvider] = None,
 ) -> Dict[str, Any]:
     from backend.common.refusal_filter import assert_not_refusal
     if proposed_text and str(proposed_text).strip():
         assert_not_refusal(str(proposed_text), f"Proposal Chapter {chapter_index}")
 
     proposal_id = f"prop_{uuid.uuid4().hex[:12]}"
-    conn = get_db_connection()
-    cursor = conn.cursor()
     comments_str = json.dumps(review_comments or [], ensure_ascii=False)
-    cursor.execute("""
-        INSERT INTO draft_proposals (id, novel_id, chapter_index, original_text, proposed_text, review_comments_json, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    """, (proposal_id, novel_id, chapter_index, original_text, proposed_text, comments_str))
-    conn.commit()
+    with transaction(connection=connection, provider=connection_provider) as conn:
+        conn.execute("""
+            INSERT INTO draft_proposals (id, novel_id, chapter_index, original_text, proposed_text, review_comments_json, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+        """, (proposal_id, novel_id, chapter_index, original_text, proposed_text, comments_str))
     return {
         "id": proposal_id,
         "novel_id": novel_id,
@@ -99,29 +101,44 @@ def get_proposal(proposal_id: str) -> Optional[Dict[str, Any]]:
         "created_at": str(r["created_at"])
     }
 
-def update_proposal_status(proposal_id: str, status: str) -> bool:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE draft_proposals SET status = ? WHERE id = ?", (status, proposal_id))
-    conn.commit()
-    return cursor.rowcount > 0
+def update_proposal_status(
+    proposal_id: str,
+    status: str,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
+    connection_provider: Optional[ConnectionProvider] = None,
+) -> bool:
+    with transaction(connection=connection, provider=connection_provider) as conn:
+        cursor = conn.execute("UPDATE draft_proposals SET status = ? WHERE id = ?", (status, proposal_id))
+        updated = cursor.rowcount > 0
+    return updated
 
-def update_proposal_content(proposal_id: str, proposed_text: str, review_comments: Optional[List[Dict[str, Any]]] = None) -> bool:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if review_comments is not None:
-        comments_str = json.dumps(review_comments, ensure_ascii=False)
-        cursor.execute("""
-            UPDATE draft_proposals SET proposed_text = ?, review_comments_json = ? WHERE id = ?
-        """, (proposed_text, comments_str, proposal_id))
-    else:
-        cursor.execute("UPDATE draft_proposals SET proposed_text = ? WHERE id = ?", (proposed_text, proposal_id))
-    conn.commit()
-    return cursor.rowcount > 0
+def update_proposal_content(
+    proposal_id: str,
+    proposed_text: str,
+    review_comments: Optional[List[Dict[str, Any]]] = None,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
+    connection_provider: Optional[ConnectionProvider] = None,
+) -> bool:
+    with transaction(connection=connection, provider=connection_provider) as conn:
+        if review_comments is not None:
+            comments_str = json.dumps(review_comments, ensure_ascii=False)
+            cursor = conn.execute("""
+                UPDATE draft_proposals SET proposed_text = ?, review_comments_json = ? WHERE id = ?
+            """, (proposed_text, comments_str, proposal_id))
+        else:
+            cursor = conn.execute("UPDATE draft_proposals SET proposed_text = ? WHERE id = ?", (proposed_text, proposal_id))
+        updated = cursor.rowcount > 0
+    return updated
 
-def delete_proposal(proposal_id: str) -> bool:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM draft_proposals WHERE id = ?", (proposal_id,))
-    conn.commit()
-    return cursor.rowcount > 0
+def delete_proposal(
+    proposal_id: str,
+    *,
+    connection: Optional[sqlite3.Connection] = None,
+    connection_provider: Optional[ConnectionProvider] = None,
+) -> bool:
+    with transaction(connection=connection, provider=connection_provider) as conn:
+        cursor = conn.execute("DELETE FROM draft_proposals WHERE id = ?", (proposal_id,))
+        deleted = cursor.rowcount > 0
+    return deleted

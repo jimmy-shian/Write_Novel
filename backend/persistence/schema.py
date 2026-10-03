@@ -11,6 +11,7 @@ from backend.persistence.connection import (
     _convert_obj_to_traditional,
     _to_traditional,
     get_db_connection,
+    ConnectionProvider,
 )
 try:
     from backend.schemas.agent_json import CHARACTER_BASIC_FIELDS
@@ -118,8 +119,12 @@ def sync_agent_configs_from_env(cursor):
         """, (agent, api_key, base_url, model, temperature, top_p, max_tokens, int(enable_thinking)))
 
 
-def db_init():
-    conn = get_db_connection()
+def db_init(
+    connection: Optional[sqlite3.Connection] = None,
+    connection_provider: Optional[ConnectionProvider] = None,
+):
+    """Initialize the schema using an injected connection when supplied."""
+    conn = connection or (connection_provider or get_db_connection)()
     cursor = conn.cursor()
     
     # 1. Novels table

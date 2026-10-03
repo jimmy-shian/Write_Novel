@@ -878,6 +878,47 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
         else:
             report_lines.append(f"  - ✅ [全卷骨架完整性檢查] 所有 {len(vols)} 卷骨架均已建立，允許進入後續階段。")
     report_lines.append("")
+
+    # 3.5. 敘事幾何與語義填充層（禁咒法師 42330e2b 案例：此段缺失導致 Director 誤判跳往 volume_skeleton）
+    try:
+        has_geo_fn = getattr(db, "has_geometry", None)
+        has_geo = bool(has_geo_fn(novel_id)) if callable(has_geo_fn) else False
+        report_lines.append("【3.5. 敘事幾何與語義填充層】")
+        if not has_geo:
+            report_lines.append("  - 狀態：❌ 未完成 (尚未鋪設敘事幾何骨架)")
+            report_lines.append("  - [下一步建議] 請優先執行 geometry 階段鋪設全書拓撲，再依序填充 macro/character/cross 語義。")
+        else:
+            stats_fn = getattr(db, "get_geometry_stats", None)
+            stats = stats_fn(novel_id) if callable(stats_fn) else {}
+            node_c = int(stats.get("node_count") or 0)
+            filled_n = int(stats.get("filled_nodes") or 0)
+            thread_c = int(stats.get("thread_count") or 0)
+            filled_t = int(stats.get("filled_threads") or 0)
+            edge_c = int(stats.get("edge_count") or 0)
+            filled_e = int(stats.get("filled_edges") or 0)
+            filled_v = int(stats.get("filled_volumes") or 0)
+            report_lines.append(f"  - 幾何骨架：節點 {node_c}（已填充 {filled_n}），線程 {thread_c}（已填充 {filled_t}），邊 {edge_c}（已填充 {filled_e}），篇卷已填充 {filled_v}")
+            graph_loader = getattr(db, "load_geometry_graph", None)
+            graph = graph_loader(novel_id) if callable(graph_loader) else None
+            has_macro = bool(filled_t > 0 or filled_v > 0 or (graph and any(v.semantic for v in graph.volumes.values())))
+            has_char = bool(filled_n > 0 or (graph and any(t.semantic and "character_binding" in t.semantic for t in graph.threads.values())))
+            has_cross = bool(filled_e > 0 or (graph and graph.edges and any(e.semantic for e in graph.edges)))
+            report_lines.append(f"  - 宏觀語義 (macro_semantic)：{'✅ 已填充' if has_macro else '❌ 未填充'}")
+            report_lines.append(f"  - 角色語義 (character_semantic)：{'✅ 已綁定' if has_char else '❌ 未綁定（需將角色聖經綁定至 CHARACTER_ARC/RELATIONSHIP_ARC 並注入 CHARACTER_SHIFT 心境）'}")
+            if edge_c > 0:
+                report_lines.append(f"  - 跨距關聯 (cross_relation)：{'✅ 已注入' if has_cross else '❌ 未注入'}")
+            else:
+                report_lines.append("  - 跨距關聯 (cross_relation)：⚪ 無跨距邊，略過")
+            if not has_macro:
+                report_lines.append("  - [下一步建議] 請優先執行 macro_semantic 階段，勿跳往 volume_skeleton。")
+            elif not has_char:
+                report_lines.append("  - [下一步建議] 請優先執行 character_semantic 階段補齊角色綁定，勿跳往 volume_skeleton。")
+            elif edge_c > 0 and not has_cross:
+                report_lines.append("  - [下一步建議] 請優先執行 cross_relation 階段注入邊因果，勿跳往 volume_skeleton。")
+    except Exception as geo_exc:
+        report_lines.append("【3.5. 敘事幾何與語義填充層】")
+        report_lines.append(f"  - 狀態：⚠️ 幾何狀態檢查異常：{geo_exc}")
+    report_lines.append("")
     
     # 4. 詳細章節大綱 (Stitched Plot)
     plot_data = db.get_stitched_plot(novel_id)

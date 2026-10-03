@@ -9,11 +9,13 @@
 """
 import json
 import os
+import sqlite3
 import tempfile
 
 import pytest
 
-from backend.persistence.connection import ConnectionManager, get_db_connection
+from backend.persistence.connection import ConnectionManager, get_db_connection, transaction
+from backend.persistence.schema import db_init
 from backend.persistence.repositories.agent_runs import (
     save_last_agent_run,
     get_last_agent_run,
@@ -80,6 +82,34 @@ def test_connection_manager_close_all():
     conn2 = ConnectionManager.get_connection()
     assert conn2 is not None
     assert conn2.execute("SELECT 1;").fetchone()[0] == 1
+
+
+def test_transaction_rolls_back_and_does_not_close_injected_connection():
+    """交易邊界應可注入 connection，失敗回滾且保留連線給呼叫者。"""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE items (value TEXT)")
+
+    with pytest.raises(RuntimeError):
+        with transaction(connection=conn) as tx:
+            tx.execute("INSERT INTO items VALUES ('discarded')")
+            raise RuntimeError("force rollback")
+
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+    conn.execute("INSERT INTO items VALUES ('kept')")
+    assert conn.execute("SELECT value FROM items").fetchone()[0] == "kept"
+    conn.close()
+
+
+def test_db_init_accepts_injected_connection():
+    """schema 初始化不應依賴全域 persistent connection。"""
+    conn = sqlite3.connect(":memory:")
+    try:
+        db_init(connection=conn)
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'novels'"
+        ).fetchone() == (1,)
+    finally:
+        conn.close()
 
 
 def test_save_last_agent_run_compaction():
