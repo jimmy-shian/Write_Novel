@@ -640,7 +640,7 @@ def extract_character_basic(characters_data):
             if parsed is None:
                 return characters_data
             return extract_character_basic(parsed)
-        except:
+        except (TypeError, ValueError, json.JSONDecodeError):
             return characters_data
     else:
         return characters_data
@@ -695,7 +695,7 @@ def extract_character_names_list(characters_data):
             if parsed is None:
                 return []
             return extract_character_names_list(parsed)
-        except:
+        except (TypeError, ValueError, json.JSONDecodeError):
             return []
     elif isinstance(characters_data, dict):
         if "characters" in characters_data:
@@ -781,7 +781,7 @@ def mask_worldview_seeds_and_turns(worldview_text):
             if "key_turning_points" in target:
                 target["key_turning_points"] = "此區塊通過審核不需評判"
             return json.dumps(parsed, ensure_ascii=False, indent=2)
-    except:
+    except (TypeError, ValueError, json.JSONDecodeError):
         pass
         
     content = worldview_text

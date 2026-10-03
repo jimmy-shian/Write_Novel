@@ -400,7 +400,7 @@ def merge_incremental_payload(novel_id, target_section, action, payload, extra_p
                         if int(ch.get("chapter_index", 0)) == insert_after:
                             insert_pos = idx + 1
                             break
-                    except:
+                    except (TypeError, ValueError):
                         pass
                         
             new_chaps = payload.get("chapters", payload) if isinstance(payload, dict) else payload
@@ -435,7 +435,7 @@ def merge_incremental_payload(novel_id, target_section, action, payload, extra_p
                                 if int(exist_ch.get("chapter_index", 0)) == c_idx:
                                     chapters[idx].update(ch)
                                     break
-                            except:
+                            except (TypeError, ValueError):
                                 pass
             plot_data["chapters"] = chapters
             return plot_data
@@ -500,7 +500,7 @@ def post_merge_validation(merged_data, target_section, original_data=None):
                     else:
                         try:
                             indices.append(int(vol["volume_index"]))
-                        except:
+                        except (TypeError, ValueError):
                             errors.append(f"Volume at {idx} has non-integer index")
                 if indices:
                     indices.sort()
@@ -587,7 +587,7 @@ def post_merge_validation(merged_data, target_section, original_data=None):
                     else:
                         try:
                             indices.append(int(ch["chapter_index"]))
-                        except:
+                        except (TypeError, ValueError):
                             errors.append(f"Chapter at {idx} has non-integer chapter_index")
                 if indices:
                     indices_sorted = sorted(indices)

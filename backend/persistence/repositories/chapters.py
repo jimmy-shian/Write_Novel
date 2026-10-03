@@ -98,8 +98,9 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
         try:
             from backend.models.parsers import extract_json_block
             parsed_dict = extract_json_block(json_str)
-        except:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse plot outline JSON: {e}")
+            parsed_dict = None
 
     # 判斷是否為篇卷結構 (Volume Array 或 {"volumes": [...]})
     is_volumes_payload = False
@@ -126,8 +127,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                             c_idx = int(ch.get("chapter_index", 0))
                             if c_idx > 0:
                                 all_incoming_chapter_indices.add(c_idx)
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[WARN] Failed to parse/map chapter index in volumes payload: {e}")
         if all_incoming_chapter_indices:
             max_incoming = max(all_incoming_chapter_indices)
             conn = get_db_connection()
@@ -146,8 +147,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                     cursor.execute(
                         "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter > ?",
                         (novel_id, max_incoming))
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Failed to clear out-of-range story_terms for novel {novel_id}: {e}")
         return 1
 
     conn = get_db_connection()
@@ -167,8 +168,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                     "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
                     (novel_id,),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to clear story_terms for novel {novel_id}: {e}")
         
         # The `plot_chapters` table is deprecated. We no longer save plot_json to the database directly.
         # We now strictly rely on `volumes` chapters_outline to persist the story structure.
@@ -199,13 +200,14 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                     c_idx = int(ch.get("chapter_index", 0))
                     if c_idx > 0:
                         all_incoming_chapter_indices.add(c_idx)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Failed to parse/map chapter index {ch.get('chapter_index')}: {e}")
             
             for ch in chapters_list:
                 try:
                     c_idx = int(ch.get("chapter_index", 0))
-                except:
+                except Exception as e:
+                    print(f"[WARN] Failed to parse chapter index {ch.get('chapter_index')}: {e}")
                     c_idx = 0
                 if c_idx > 0:
                     vol_idx = get_chapter_volume_index(vols, c_idx)
@@ -222,8 +224,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                         c_idx = int(ch.get("chapter_index", 0))
                         if c_idx > 0:
                             detail_map[c_idx] = ch
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"[WARN] Failed to parse/map chapter index {ch.get('chapter_index')}: {e}")
                 
                 # 讀取目前卷的骨架（chapters_outline）
                 vol_row = cursor.execute(
@@ -241,7 +243,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                             existing_skeleton = json.loads(existing_outline_str)
                             if not isinstance(existing_skeleton, list):
                                 existing_skeleton = []
-                        except:
+                        except Exception as e:
+                            print(f"[WARN] Failed to parse existing chapters_outline for Vol {vol_idx}: {e}")
                             existing_skeleton = []
                     
                     # 建立骨架的 chapter_index -> skeleton_ch 映射
@@ -251,8 +254,8 @@ def save_plot_chapters(novel_id, outline_json, skip_volume_sync=False, clear_cha
                         try:
                             sk_idx = int(raw_idx)
                             skeleton_map[sk_idx] = sk_ch
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[WARN] Failed to parse skeleton chapter index {raw_idx}: {e}")
                     
                     # 合併：將章節大綱欄位 patch 進骨架（保留骨架欄位）
                     merged_chapters = {}
@@ -401,8 +404,8 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
             summary = delete_chapter_slice(novel_id, int(chapter_index))
             try:
                 summary["auto_terms_deleted"] = delete_terms_by_chapter(novel_id, int(chapter_index))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to delete auto terms for chapter {chapter_index}: {e}")
             try:
                 from backend.persistence.repositories.narrative import (
                     delete_chapter_signatures,
@@ -411,8 +414,8 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
                 nar = delete_chapter_signatures(novel_id, int(chapter_index))
                 nar.update(delete_chapter_audits(novel_id, int(chapter_index)))
                 summary["narrative_cleared"] = nar
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to delete narrative signatures/audits for chapter {chapter_index}: {e}")
             print(f"[Cascade] Chapter {chapter_index} prose cleared, derived data removed: {summary}")
         except Exception as e:
             print(f"[WARN] Failed to cascade-clear derived data for chapter {chapter_index}: {e}")
@@ -433,13 +436,13 @@ def rollback_or_purge_chapter(novel_id: str, chapter_index: int) -> dict:
         cursor.execute("DELETE FROM narrative_audits WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
         try:
             cursor.execute("DELETE FROM chapter_memory WHERE novel_id = ? AND chapter_index = ?", (novel_id, chapter_index))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to purge chapter_memory for chapter {chapter_index}: {e}")
         try:
             from backend.persistence.repositories.temporal_graph import delete_chapter_slice
             delete_chapter_slice(novel_id, int(chapter_index))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to purge temporal graph slice for chapter {chapter_index}: {e}")
 
         rows = cursor.execute(
             "SELECT id, version, content FROM chapters WHERE novel_id = ? AND chapter_index = ? ORDER BY version DESC",
@@ -512,8 +515,8 @@ def insert_plot_chapter(novel_id, insert_after_index, new_chapter, skip_volume_s
                 if int(ch.get("chapter_index", 0)) == int(insert_after_index):
                     insert_pos = idx + 1
                     break
-            except:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to parse chapter index {ch.get('chapter_index')}: {e}")
                 
     if insert_pos == -1:
         new_chapter["chapter_index"] = len(chapters) + 1
@@ -606,8 +609,8 @@ def delete_and_shift_surrounding_chapters(novel_id, target_chapter_index):
                     "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter >= ? AND source_chapter <= ?",
                     (novel_id, start_del, end_del)
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to delete story_terms slice [{start_del}, {end_del}]: {e}")
         except Exception as e:
             print(f"[WARN] Failed to delete graph slice [{start_del}, {end_del}]: {e}")
         try:

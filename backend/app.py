@@ -3,19 +3,20 @@ import sys
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
-    except:
+    except (OSError, ValueError):
         pass
 if hasattr(sys.stderr, 'reconfigure'):
     try:
         sys.stderr.reconfigure(encoding='utf-8')
-    except:
+    except (OSError, ValueError):
         pass
 
 # Set console title to the port number on Windows
 if sys.platform == 'win32':
     try:
         import ctypes
-        port = "8000"  # Default uvicorn port
+        import os
+        port = os.getenv("PORT", "8000")  # Default uvicorn port
         for i, arg in enumerate(sys.argv):
             if arg in ("--port", "-p") and i + 1 < len(sys.argv):
                 port = sys.argv[i + 1]
@@ -151,4 +152,4 @@ def serve_index():
     return {"message": "AI Novel Factory UI files missing"}
 
 if static_dir and os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir), name="static")
+    app.mount("/", StaticFiles(directory=static_dir), name="static")

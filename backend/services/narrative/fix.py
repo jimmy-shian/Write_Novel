@@ -70,8 +70,8 @@ def _synthesize_audits_from_issues(
                 recommendation=f"總監硬性校驗指示：{iss}",
                 action_required=True,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Failed to persist synthesized narrative audit (novel {novel_id}, chapter {chapter_index}): {exc}")
         findings.append({
             "dimension": dim,
             "severity": severity,
@@ -159,8 +159,8 @@ def build_director_user_instruction(
                 prev_text = (prev_row.get("content") or "").strip() if prev_row else ""
                 if prev_text:
                     engine_lines.append(f"【前一章開篇 100 字（本章開篇切入必須與之去重）】：{prev_text[:100]}")
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Failed to inject chapter context into director instruction: {exc}")
 
         # 注入衝突簽名脈絡（若有）
         try:
@@ -171,8 +171,8 @@ def build_director_user_instruction(
                     for s in recent_sigs
                 ]
                 engine_lines.append(f"【近 4 章因果策略簽名】：{'; '.join(sig_summaries)}")
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Failed to inject conflict signature context into director instruction: {exc}")
 
         if not engine_lines:
             return fallback
@@ -210,7 +210,8 @@ def build_director_user_instruction(
         instruction += "\n紅線：小說正文必須100%處於故事世界內部，嚴禁將「沒有制式化的...」「他放棄了慣性手法」等寫作指導語、負向約束語直接寫入故事正文，違者直接駁回！"
 
         return instruction
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] build_director_user_instruction failed, falling back to deterministic template: {exc}")
         return fallback
 
 
@@ -375,7 +376,8 @@ def fix_chapter_from_audits(
             try:
                 if db.resolve_narrative_audit(a["id"]):
                     resolved_ids.append(a["id"])
-            except Exception:
+            except Exception as exc:
+                print(f"[WARN] Failed to resolve narrative audit {a.get('id')}: {exc}")
                 continue
 
     reaudit = None
@@ -385,7 +387,8 @@ def fix_chapter_from_audits(
             try:
                 from backend.services import narrative_memory
                 outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
-            except Exception:
+            except Exception as exc:
+                print(f"[WARN] Failed to load chapter outline before reaudit (novel {novel_id}, chapter {chapter_index}): {exc}")
                 outline = None
 
             # 步驟 4: 基於改寫後的新正文與大綱，重新提取本章衝突簽名並更新帳本！
@@ -479,7 +482,8 @@ def fix_chapter_until_pass(
     try:
         from backend.services import narrative_memory
         outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] Failed to load chapter outline before fix loop (novel {novel_id}, chapter {chapter_index}): {exc}")
         outline = None
 
     split_occurred = False
@@ -601,5 +605,6 @@ def _run_director_check(novel_id: str, chapter_index: int) -> Optional[Dict[str,
             output_content=payload.get("content") or "",
             novel_id=novel_id,
         )
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] Director hard check failed (novel {novel_id}, chapter {chapter_index}): {exc}")
         return None

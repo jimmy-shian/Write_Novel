@@ -135,7 +135,7 @@ def build_director_decision_messages(
         try:
             parsed = _parse_jsonish(raw_worldview_text)
             macro_outline = parsed.get("macro_outline", "") if isinstance(parsed, dict) else ""
-        except:
+        except Exception:
             # 嘗試從文本提取
             if "【整體故事大綱】" in str(raw_worldview_text):
                 parts = str(raw_worldview_text).split("【整體故事大綱】")

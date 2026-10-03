@@ -39,6 +39,23 @@ def _load_geometry_graph_safe(novel_id: str):
 class WriterContextBuilder:
     """負責為 Chapter Writer 構建最小必要且高度情境化的寫作上下文。"""
 
+    def __init__(self):
+        # 單次組裝流程內共用的幾何圖譜（每次 format_writer_prompt_context 開頭重置，跨呼叫不留快取，避免寫入後讀到髒資料）
+        self._shared_graph = None
+        self._shared_graph_novel_id = ""
+
+    def _get_geometry_graph(self, novel_id: str):
+        """同一輪上下文組裝內僅自資料庫載入一次全量幾何圖譜，避免每章重複反序列化累積的節點/邊/線索。"""
+        if not novel_id:
+            return None
+        if getattr(self, "_shared_graph_novel_id", "") == novel_id and getattr(self, "_shared_graph", None) is not None:
+            return self._shared_graph
+        graph = _load_geometry_graph_safe(novel_id)
+        if graph is not None:
+            self._shared_graph_novel_id = novel_id
+            self._shared_graph = graph
+        return graph
+
     def build_scene_contract(
         self,
         current_outline: Dict[str, Any],
@@ -113,7 +130,7 @@ class WriterContextBuilder:
         # 檢索幾何圖譜中的心境位移與線程人物弧線綁定 (Geometry Semantics Feed-Forward)
         char_node_shifts = {}
         thread_arc_bindings = {}
-        graph = _load_geometry_graph_safe(novel_id)
+        graph = self._get_geometry_graph(novel_id)
         if graph:
             for cn in graph.get_chapter_nodes(chapter_index):
                 if isinstance(getattr(cn, "semantic", None), dict):
@@ -318,7 +335,7 @@ class WriterContextBuilder:
                     keep.append(clean)
 
         # 幾何圖譜動態注入卷主題與弧線張力焦點 (Dynamic Geometry Semantic Feed-Forward)
-        graph = _load_geometry_graph_safe(novel_id)
+        graph = self._get_geometry_graph(novel_id)
         if graph:
             curr_vol = next((v for v in graph.volumes.values() if v.chapter_range and v.chapter_range[0] <= chapter_index <= v.chapter_range[1]), None)
             if curr_vol and curr_vol.semantic:
@@ -514,6 +531,9 @@ class WriterContextBuilder:
     ) -> str:
         """將解構後的各元件格式化為乾淨、無 JSON 資料庫污染的寫作指引文字。"""
         current_outline = current_outline or {}
+        # 重置單次組裝共用之幾何圖譜快取，確保本輪一律從資料庫載入最新圖譜
+        self._shared_graph = None
+        self._shared_graph_novel_id = ""
         # 1. 解析角色清單
         char_list = []
         if isinstance(characters_bible, dict):
@@ -760,10 +780,17 @@ class WriterContextBuilder:
             )
             broader_haystack = " ".join(((worldview_text or "")[:8000], narrative_memory_context or ""))
             directly_relevant = [t for t in terms if t.get("term") and t["term"] in chapter_haystack]
-            context_relevant = [
-                t for t in terms
-                if t.get("term") and t["term"] in broader_haystack and t not in directly_relevant
-            ]
+            # 先依術語字串分組再做去除重複，避免對整個累積術語庫進行 O(T²) 的 dict 等值掃描
+            direct_by_term: Dict[str, List[Dict[str, Any]]] = {}
+            for dt in directly_relevant:
+                direct_by_term.setdefault(dt["term"], []).append(dt)
+            context_relevant = []
+            for t in terms:
+                if not (t.get("term") and t["term"] in broader_haystack):
+                    continue
+                same_term_direct = direct_by_term.get(t["term"])
+                if same_term_direct is None or t not in same_term_direct:
+                    context_relevant.append(t)
             selected_terms = (directly_relevant + context_relevant)[:15]
             if not selected_terms:
                 # Prefer hand-curated entries and terms recently updated near this chapter,
@@ -808,6 +835,10 @@ class WriterContextBuilder:
 
         # (H) 風格基調
         lines.append(f"### 🎨【寫作風格基調】\n{custom_style or '文筆洗鍊、節奏緊湊、善用動詞推進、對白富有張力。'}")
+
+        # 組裝完成後清空共用幾何圖譜快取
+        self._shared_graph = None
+        self._shared_graph_novel_id = ""
 
         return "\n".join(lines)
 

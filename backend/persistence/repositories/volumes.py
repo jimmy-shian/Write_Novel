@@ -58,8 +58,8 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
                         "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
                         (novel_id,),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Failed to clear story_terms for novel {novel_id}: {e}")
         for idx, vol in enumerate(volumes_list):
             volume_index = vol.get("volume_index", idx + 1)
             title = _to_traditional(vol.get("title", f"第 {volume_index} 卷"))
@@ -111,7 +111,8 @@ def get_volumes(novel_id):
         d = dict(r)
         try:
             d["parsed_factions"] = json.loads(d["factions"])
-        except:
+        except Exception as e:
+            print(f"[WARN] get_volumes: failed to parse factions for vol {d.get('volume_index')}: {e}")
             d["parsed_factions"] = [d["factions"]] if d["factions"] else []
             
         # 解析適用法則 JSON
@@ -120,14 +121,16 @@ def get_volumes(novel_id):
                 d["parsed_applicable_rules"] = json.loads(d["applicable_rules"])
             else:
                 d["parsed_applicable_rules"] = []
-        except:
+        except Exception as e:
+            print(f"[WARN] get_volumes: failed to parse applicable_rules for vol {d.get('volume_index')}: {e}")
             d["parsed_applicable_rules"] = [d["applicable_rules"]] if d["applicable_rules"] else []
             
         # 解析章節大綱骨架 JSON
         try:
             if d.get("chapters_outline"):
                 d["chapters_outline"] = json.loads(d["chapters_outline"])
-        except:
+        except Exception as e:
+            print(f"[WARN] get_volumes: failed to parse chapters_outline for vol {d.get('volume_index')}: {e}")
             d["chapters_outline"] = None
             
         res.append(d)
@@ -180,8 +183,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
                     cleaned_node_chapters.append(nc)
                 else:
                     print(f"[WARN] update_volume_outline filtered out out-of-bounds chapter {ch_idx_int} for Vol {volume_index} (expected [{start_ch}, {end_ch}])")
-            except:
-                pass
+            except Exception as e:
+                print(f"[WARN] update_volume_outline: invalid chapter_index {ch_idx}: {e}")
         else:
             cleaned_node_chapters.append(nc)
             
@@ -200,8 +203,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
             parsed = json.loads(row["chapters_outline"])
             if isinstance(parsed, list):
                 existing_chapters = [c for c in parsed if start_ch <= int(c.get("chapter_index", 0)) <= end_ch]
-        except:
-            pass
+        except Exception as e:
+            print(f"[WARN] update_volume_outline: failed to parse existing chapters_outline for Vol {volume_index}: {e}")
             
     # 💡 2. 建立 chapter_index -> chapter_obj 的字典緩衝區
     merged_map = {}
@@ -242,7 +245,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
         try:
             p_parsed = json.loads(plot_row["outline_json"])
             all_ch = p_parsed.get("chapters", []) if isinstance(p_parsed, dict) else (p_parsed if isinstance(p_parsed, list) else [])
-        except:
+        except Exception as e:
+            print(f"[WARN] update_volume_outline: failed to parse plot_chapters outline_json: {e}")
             all_ch = []
     
     filtered_ch = []
@@ -505,8 +509,8 @@ def delete_volume(novel_id, volume_index):
                 cursor.execute(
                     "UPDATE story_terms SET updated_chapter = updated_chapter - ? WHERE novel_id = ? AND updated_chapter > ?",
                     (ch_count, novel_id, end_ch))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to cascade story_terms range [{start_ch}, {end_ch}]: {e}")
         except Exception as e:
             print(f"[WARN] Failed to cascade volume chapter range [{start_ch}, {end_ch}] to graph/terms: {e}")
         cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
@@ -691,8 +695,8 @@ def save_single_plot_chapter(novel_id, chapter_index, chapter_outline):
                 chapters[idx] = chapter_outline
                 updated = True
                 break
-        except:
-            pass
+        except Exception as e:
+            print(f"[WARN] save_single_plot_chapter: invalid chapter_index {ch.get('chapter_index')} in existing list: {e}")
             
     if not updated:
         chapters.append(chapter_outline)
@@ -700,9 +704,9 @@ def save_single_plot_chapter(novel_id, chapter_index, chapter_outline):
     # 按 chapter_index 排序
     try:
         chapters.sort(key=lambda x: int(x.get("chapter_index", 0)) if x.get("chapter_index") is not None else 99999)
-    except:
+    except Exception:
         pass
-        
+
     # 調用全量 save_plot_chapters 完成寫入與 volumes 智慧合併
     save_plot_chapters(novel_id, {"chapters": chapters}, skip_volume_sync=False, clear_chapters=False)
 
@@ -743,7 +747,8 @@ def split_and_expand_chapter_outline(
         if isinstance(c_list, str):
             try:
                 c_list = json.loads(c_list)
-            except Exception:
+            except Exception as e:
+                print(f"[WARN] Failed to parse chapters_outline JSON for Vol {v.get('volume_index')}: {e}")
                 c_list = []
         for ch in c_list:
             if isinstance(ch, dict) and int(ch.get("chapter_index", 0)) == chapter_index:
@@ -770,7 +775,8 @@ def split_and_expand_chapter_outline(
     if isinstance(old_target_outline, str):
         try:
             old_target_outline = json.loads(old_target_outline)
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] Failed to parse target volume chapters_outline JSON: {e}")
             old_target_outline = []
     if not isinstance(old_target_outline, list):
         old_target_outline = []
@@ -819,7 +825,8 @@ def split_and_expand_chapter_outline(
             if isinstance(v_outline, str):
                 try:
                     v_outline = json.loads(v_outline)
-                except Exception:
+                except Exception as e:
+                    print(f"[WARN] Failed to parse downstream chapters_outline JSON for Vol {v_idx}: {e}")
                     v_outline = []
             if isinstance(v_outline, list):
                 updated_v_outline = []
@@ -892,7 +899,8 @@ def split_and_expand_chapter_outline(
                     (novel_id, json.dumps(_convert_obj_to_traditional({"chapters": updated_all}), ensure_ascii=False), next_v),
                 )
             except Exception as e:
-                print(f"[WARN] Failed to cascade split to plot_chapters: {e}")
+                print(f"[ERROR] Failed to cascade split to plot_chapters for novel {novel_id}: {e}")
+                raise
 
         # 6. 平移 chapters 表中的已寫正文
         cursor.execute(
@@ -904,8 +912,9 @@ def split_and_expand_chapter_outline(
                 "UPDATE chapters_backup SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
                 (delta, novel_id, chapter_index),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to shift chapters_backup for novel {novel_id}: {e}")
+            raise
 
         # 7. 平移 chapter_memory 表（因有 UNIQUE(novel_id, chapter_index)，採降序逐筆平移防衝突）
         mem_rows = cursor.execute(
@@ -941,7 +950,8 @@ def split_and_expand_chapter_outline(
                 (delta, novel_id, chapter_index),
             )
         except Exception as e:
-            print(f"[WARN] Failed to shift temporal tables: {e}")
+            print(f"[ERROR] Failed to shift temporal tables for novel {novel_id}: {e}")
+            raise
 
         # 9. 平移 story_terms 表
         try:
@@ -953,8 +963,9 @@ def split_and_expand_chapter_outline(
                 "UPDATE story_terms SET updated_chapter = updated_chapter + ? WHERE novel_id = ? AND updated_chapter > ?",
                 (delta, novel_id, chapter_index),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to shift story_terms for novel {novel_id}: {e}")
+            raise
 
         # 10. 平移 narrative_audits 表
         try:
@@ -962,8 +973,9 @@ def split_and_expand_chapter_outline(
                 "UPDATE narrative_audits SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
                 (delta, novel_id, chapter_index),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to shift narrative_audits for novel {novel_id}: {e}")
+            raise
 
         # 11. 平移 arc_summaries 表（採降序以防 UNIQUE 衝突）
         try:
@@ -980,8 +992,9 @@ def split_and_expand_chapter_outline(
                 "UPDATE arc_summaries SET arc_end = arc_end + ? WHERE novel_id = ? AND arc_start <= ? AND arc_end >= ?",
                 (delta, novel_id, chapter_index, chapter_index),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to shift arc_summaries for novel {novel_id}: {e}")
+            raise
 
         # 12. 平移 draft_proposals
         try:
@@ -989,8 +1002,9 @@ def split_and_expand_chapter_outline(
                 "UPDATE draft_proposals SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
                 (delta, novel_id, chapter_index),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Failed to shift draft_proposals for novel {novel_id}: {e}")
+            raise
 
     # 13. 同步幾何圖譜 (GeometryGraph)
     try:

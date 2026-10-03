@@ -56,7 +56,8 @@ def save_chat_message(
                 """,
                 (novel_id, role, _to_traditional(content), _to_traditional(thinking) if thinking else None, message_type)
             )
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] Failed to save chat message for novel {novel_id}: {e}")
             return
         if message_type == 'pipeline':
             # Sliding retention: keep latest 300 pipeline messages per novel
@@ -74,8 +75,8 @@ def save_chat_message(
                     """,
                     (novel_id, novel_id)
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Failed to prune pipeline chat_memory for novel {novel_id}: {e}")
 
 
 def delete_chat_message(novel_id: str, message_id: int) -> bool:

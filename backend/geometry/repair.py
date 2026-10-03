@@ -275,7 +275,10 @@ class GeometryRepairEngine:
         last_node = nodes[-1]
 
         # 新增 2 個過渡/收束中間節點
-        add_count = proposal.detail.get("add_count", 2)
+        try:
+            add_count = min(100, max(1, int(proposal.detail.get("add_count", 2))))
+        except (TypeError, ValueError):
+            add_count = 2
         new_node_ids = []
 
         for i in range(add_count):

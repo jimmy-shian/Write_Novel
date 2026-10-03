@@ -24,7 +24,8 @@ def get_worldview_patches(novel_id):
     if row and row["worldview_patches"]:
         try:
             return json.loads(row["worldview_patches"])
-        except:
+        except Exception as e:
+            print(f"[WARN] Failed to parse worldview_patches for novel {novel_id}: {e}")
             return []
     return []
 
@@ -37,7 +38,8 @@ def add_worldview_patch(novel_id, category, details, source_chapter_index):
         if row and row["worldview_patches"]:
             try:
                 patches = json.loads(row["worldview_patches"])
-            except:
+            except Exception as e:
+                print(f"[WARN] Failed to parse worldview_patches for novel {novel_id}: {e}")
                 patches = []
         patches.append({
             "category": _to_traditional(category),

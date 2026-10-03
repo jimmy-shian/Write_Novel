@@ -32,4 +32,5 @@ build_work/
 *.db
 .agents/
 installer.nsi
+.review/
 

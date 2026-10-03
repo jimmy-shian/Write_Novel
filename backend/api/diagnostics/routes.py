@@ -102,7 +102,7 @@ def api_novel_retrospective(novel_id: str):
                     data = json.loads(chunk[5:].strip())
                     if data.get("type") == "content":
                         text += data.get("delta", "")
-                except:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     pass
         return text.strip()
 

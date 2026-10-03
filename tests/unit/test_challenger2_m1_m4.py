@@ -20,7 +20,11 @@ from fastapi.testclient import TestClient
 from backend import persistence as db
 from backend.app import app, get_static_dir
 from backend.common.refusal_filter import find_meta_narrative_leaks
-from backend.generation.routing.validator import _infer_chapter_index, resolve_generation_task_target
+from backend.generation.routing.validator import (
+    _find_first_missing,
+    _infer_chapter_index,
+    resolve_generation_task_target,
+)
 from backend.generation.routing.schema import GenerationTaskRequest
 from backend.services.autonomous_pipeline import (
     AutonomousPipelineManager,
@@ -172,26 +176,26 @@ def test_infer_chapter_index_db_lookup_with_volumes_and_chapters(novel_factory):
 
 
 def test_infer_chapter_index_argument_combinations():
-    """Adversarial parameter stress test for _infer_chapter_index."""
+    """Adversarial parameter stress test for _find_first_missing (pure helper of _infer_chapter_index)."""
     # Dict chapters with string chapter_index
-    assert _infer_chapter_index([{"chapter_index": "1"}], 3) == 2
+    assert _find_first_missing([{"chapter_index": "1"}], 3) == 2
 
     # Dict chapters with None/missing chapter_index
-    assert _infer_chapter_index([{"bad_key": 1}, {"chapter_index": None}], 2) == 1
+    assert _find_first_missing([{"bad_key": 1}, {"chapter_index": None}], 2) == 1
 
     # Mixed ints and dicts
-    assert _infer_chapter_index([1, {"chapter_index": 2}], 3) == 3
+    assert _find_first_missing([1, {"chapter_index": 2}], 3) == 3
 
     # Out of order chapters
-    assert _infer_chapter_index([4, 1, 3], 4) == 2
+    assert _find_first_missing([4, 1, 3], 4) == 2
 
     # Written chapters exceeding total planned
-    assert _infer_chapter_index([1, 2, 3, 4, 5], 3) is None
+    assert _find_first_missing([1, 2, 3, 4, 5], 3) is None
 
     # Empty inputs and zero/negative total
-    assert _infer_chapter_index([], 0) == 1
-    assert _infer_chapter_index([], -5) == 1
-    assert _infer_chapter_index(None, None) == 1
+    assert _find_first_missing([], 0) == 1
+    assert _find_first_missing([], -5) == 1
+    assert _find_first_missing(None, None) == 1
 
 
 # =============================================================================

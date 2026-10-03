@@ -58,8 +58,8 @@ def get_proposals(novel_id: str, chapter_index: Optional[int] = None, status: Op
         try:
             if r["review_comments_json"]:
                 comments = json.loads(r["review_comments_json"])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse review comments for proposal {r['id']}: {e}")
         result.append({
             "id": r["id"],
             "novel_id": r["novel_id"],
@@ -86,8 +86,8 @@ def get_proposal(proposal_id: str) -> Optional[Dict[str, Any]]:
     try:
         if r["review_comments_json"]:
             comments = json.loads(r["review_comments_json"])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WARN] Failed to parse review comments for proposal {proposal_id}: {e}")
     return {
         "id": r["id"],
         "novel_id": r["novel_id"],

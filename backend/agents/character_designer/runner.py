@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import asyncio
 import json
 import time
 import traceback
@@ -185,7 +184,7 @@ def run_character_designer(novel_id, user_prompt=None, hint=None, mode="generate
                     if isinstance(skeleton_list, str):
                         try:
                             skeleton_list = json.loads(skeleton_list)
-                        except:
+                        except Exception:
                             skeleton_list = []
                     if isinstance(skeleton_list, list):
                         for ch in skeleton_list:

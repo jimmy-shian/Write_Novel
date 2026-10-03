@@ -9,7 +9,7 @@ echo ==============================================
 echo.
 
 rem ---------- 1. Python ----------
-set "PYTHON=C:\Users\Administrator\venv\Scripts\python.exe"
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
 if not exist "%PYTHON%" (
     echo [!] 找不到專用虛擬環境，改用系統 python
     set "PYTHON=python"

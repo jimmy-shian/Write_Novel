@@ -207,8 +207,8 @@ def iter_post_processed_generation_stream(
                 try:
                     if task and getattr(task, "novel_id", None):
                         db.update_pipeline_heartbeat(task.novel_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[WARN] Pipeline heartbeat update failed (novel {getattr(task, 'novel_id', None)}): {exc}")
                 last_heartbeat = now
 
             event = parse_sse_event(chunk)

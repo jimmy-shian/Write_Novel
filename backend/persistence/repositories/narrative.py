@@ -9,7 +9,7 @@ import hashlib
 import json
 import uuid
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.persistence.connection import _to_traditional, get_db_connection
 
@@ -48,7 +48,7 @@ def upsert_setting_system(
         (novel_id, name_trad),
     ).fetchone()
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     if existing:
         sys_id = existing["id"]
         cursor.execute(
@@ -147,7 +147,7 @@ def record_setting_usage(
         return False
 
     updates = ["usage_count = usage_count + 1", "last_used_chapter = ?", "updated_at = ?"]
-    params: List[Any] = [chapter_index, datetime.utcnow().isoformat()]
+    params: List[Any] = [chapter_index, datetime.now(timezone.utc).replace(tzinfo=None).isoformat()]
     if new_state:
         updates.append("current_state = ?")
         params.append(new_state)
@@ -459,8 +459,8 @@ def get_narrative_profile(novel_id: str) -> Dict[str, Any]:
                 merged = dict(DEFAULT_NARRATIVE_PROFILE)
                 merged.update(parsed)
                 return merged
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse narrative_profile for novel {novel_id}: {e}")
             
     # Fallback to genre-inferred profile
     profile = dict(DEFAULT_NARRATIVE_PROFILE)

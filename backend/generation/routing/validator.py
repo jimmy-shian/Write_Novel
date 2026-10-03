@@ -34,7 +34,7 @@ def normalize_generation_task_payload(payload: Any) -> GenerationTaskRequest:
 
 def _find_first_missing(chapters: Any, total: int) -> Optional[int]:
     """Pure helper: first unwritten index in 1..total, None when all written."""
-    if total <= 0:
+    if not isinstance(total, int) or total <= 0:
         return 1
     written = set()
     for chapter in chapters or []:

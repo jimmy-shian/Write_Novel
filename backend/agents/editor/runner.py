@@ -6,7 +6,6 @@ Editor Agent Runner (兩階段評審精修管線)
 若 Reviewer 判定無需修正，則以原稿進行輕微拋光即可。
 """
 
-import asyncio
 import json
 import re
 import time

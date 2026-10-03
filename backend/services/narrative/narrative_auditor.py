@@ -120,8 +120,8 @@ class NarrativeAuditor:
                                         "recommendation": "開篇應避免連續跨章套用相同切入點模式，請更換全新感官、對白或突發行動入局。",
                                         "action_required": True,
                                     }
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[WARN] Opening repetition cross-chapter check failed (novel {novel_id}, chapter {chapter_index}): {exc}")
             return None
 
         # 檢查近期章節（前 1~3 章）開頭是否也有相同套路
@@ -137,8 +137,8 @@ class NarrativeAuditor:
                             consecutive_count += 1
                             prev_examples.append(f"第 {prev_idx} 章（{label}）")
                             break
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Opening pattern history scan failed (novel {novel_id}): {exc}")
 
         if consecutive_count >= 2:
             return {
@@ -228,8 +228,8 @@ class NarrativeAuditor:
                             "recommendation": f"請將「{corrupted}」修正為標準專有名詞「{term_name}」，嚴禁隨意變造字詞。",
                             "action_required": True,
                         }
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Terms compliance check failed (novel {novel_id}): {exc}")
         return None
 
     @classmethod
@@ -270,8 +270,8 @@ class NarrativeAuditor:
                                     "recommendation": f"「{cname}」已於第 {inv_ch} 章陣亡，嚴禁在後續章節復活或直接參與對話。",
                                     "action_required": True,
                                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Temporal fact compliance check failed (novel {novel_id}): {exc}")
         return None
 
     @classmethod
@@ -335,8 +335,8 @@ class NarrativeAuditor:
                             consecutive_count += 1
                             prev_ending_examples.append(f"第 {prev_idx} 章（{label}）")
                             break
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Ending repetition history scan failed (novel {novel_id}): {exc}")
 
         # 若當前命中，且前 3 章已有同類收尾（連續 2 章以上）：升級為 WARNING 並強制修復！
         if consecutive_count >= 2:
@@ -398,8 +398,8 @@ class NarrativeAuditor:
                     "recommendation": "依據物象去重原則，嚴禁跨章節高頻復用單一固化物象或微動作，請更換為符合本章現場環境的新鮮感官描寫。",
                     "action_required": True,
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Cross-chapter motif reuse check failed (novel {novel_id}, chapter {chapter_index}): {exc}")
         return None
 
 
@@ -460,8 +460,8 @@ class NarrativeAuditor:
                     and a.get("chapter_index", 0) >= chapter_index - 3
                     and a.get("chapter_index", 0) < chapter_index
                 ]
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[WARN] Failed to fetch recent voice_integrity audits (novel {novel_id}): {exc}")
 
             is_repeat_offense = len(recent_audits) >= 1
             sev = "warning" if (len(gesture_hits) >= 2 or is_repeat_offense) else "watch"
@@ -544,8 +544,8 @@ class NarrativeAuditor:
                             findings[-1]["recommendation"] += (
                                 "此問題已連續多章未改善，本次必須在正文中補寫具體代價場景。"
                             )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[WARN] Failed to fetch recent ability_constraints audits (novel {novel_id}): {exc}")
 
         # 維度 3b: ability_costs_and_boundaries (生死交鋒無代價與秒殺套路)
         ability_finding = cls._check_ability_costs_and_boundaries(
@@ -718,7 +718,8 @@ def find_explicit_term_alias_hits(novel_id: str, prose_text: str) -> List[Dict[s
         return []
     try:
         terms = db.get_terms(novel_id) or []
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] Failed to load terms for forbidden alias check (novel {novel_id}): {exc}")
         return []
     hits = []
     marker = re.compile(r"(?:禁用別稱|禁止稱作|錯誤稱呼|禁止使用)\s*[：:]\s*([^\n。；;]+)")

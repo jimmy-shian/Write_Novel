@@ -1,8 +1,13 @@
 ﻿import { defineConfig } from 'vite';
+import { loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8000';
+
+  return {
   plugins: [react()],
   base: './',
   resolve: {
@@ -14,7 +19,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },
@@ -23,4 +28,5 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
+  };
 });

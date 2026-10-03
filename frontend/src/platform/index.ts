@@ -3,6 +3,9 @@
  * Decouples platform-specific implementations (Web, Android APK, Desktop).
  */
 
+// 雲端後端預設位址：優先讀取 Vite 環境變數 VITE_CLOUD_API_URL，未設定時退回 Hugging Face Space
+const CLOUD_API_FALLBACK = (import.meta.env.VITE_CLOUD_API_URL as string | undefined)?.trim()?.replace(/\/+$/, '') || 'https://botsz-writenovel.hf.space';
+
 export type PlatformType = 'web' | 'android' | 'desktop';
 
 export interface PlatformCapabilities {
@@ -72,7 +75,7 @@ class PlatformService {
       window.location.hostname.includes('github.io') ||
       window.location.hostname.includes('pages.dev')
     )) {
-      return 'https://botsz-writenovel.hf.space';
+      return CLOUD_API_FALLBACK;
     }
     return '';
   }

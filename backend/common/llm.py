@@ -386,10 +386,10 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                 try:
                     err_json = response.json()
                     error_msg = err_json.get("error", {}).get("message", error_text)
-                except:
+                except Exception:
                     error_msg = error_text
                 raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
-                
+
             res_json = response.json()
             choice = res_json.get("choices", [{}])[0]
             message = choice.get("message", {})
@@ -432,7 +432,7 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
             try:
                 err_json = response.json()
                 error_msg = err_json.get("error", {}).get("message", error_text)
-            except:
+            except Exception:
                 error_msg = error_text
             raise RuntimeError(f"HTTP Error ({response.status_code}): {error_msg}")
             
@@ -585,8 +585,8 @@ def call_llm(agent_name: str, system_prompt: str, user_prompt: str, force_json: 
                     accumulated.append(data.get("delta", ""))
                 elif data.get("type") == "error":
                     print(f"[LLM ERROR] {data.get('message')}")
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[WARN] call_llm failed to parse stream chunk: {exc}")
     return "".join(accumulated)
 
 

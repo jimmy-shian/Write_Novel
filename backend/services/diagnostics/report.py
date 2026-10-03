@@ -248,7 +248,7 @@ def diagnose_volumes_and_skeletons(volumes):
             if isinstance(skeleton_list, str):
                 try:
                     skeleton_list = json.loads(skeleton_list)
-                except:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     skeleton_list = []
             if isinstance(skeleton_list, list):
                 empty_titles = 0
@@ -345,7 +345,7 @@ def diagnose_written_chapters(written_ch, volumes):
                 ch_idx_int = int(ch_idx)
                 if ch_idx_int > expected_chapters_count or ch_idx_int < 1:
                     continue
-            except:
+            except (TypeError, ValueError):
                 continue
         content = ch.get("content") or ""
         is_placeholder = "保底" in content or "占位" in content or len(content.strip()) < 100
@@ -694,7 +694,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
             if isinstance(skeleton_list, str):
                 try:
                     skeleton_list = json.loads(skeleton_list)
-                except:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     skeleton_list = []
             if isinstance(skeleton_list, list):
                 for ch in skeleton_list:
@@ -784,7 +784,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 if isinstance(skeleton_list, str):
                     try:
                         skeleton_list = json.loads(skeleton_list)
-                    except:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         skeleton_list = []
                 # 檢查是否含有有效的骨架標題
                 empty_titles = 0
@@ -842,7 +842,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                     if isinstance(skeleton_list, str):
                         try:
                             skeleton_list = json.loads(skeleton_list)
-                        except:
+                        except (TypeError, ValueError, json.JSONDecodeError):
                             skeleton_list = []
                     if isinstance(skeleton_list, list):
                         for ch in skeleton_list:
@@ -932,7 +932,7 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
                 ch_idx_int = int(ch_idx)
                 if ch_idx_int > expected_chapters_count or ch_idx_int < 1:
                     continue
-            except:
+            except (TypeError, ValueError):
                 continue
         content = ch.get("content") or ""
         is_placeholder = "保底" in content or "占位" in content or len(content.strip()) < 100
@@ -997,4 +997,3 @@ def generate_validation_report(novel_id, current_stage=None, active_volume_index
 
     report_lines.append("=" * 60)
     return "\n".join(report_lines)
-

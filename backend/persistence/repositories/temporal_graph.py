@@ -104,8 +104,8 @@ def get_entities(novel_id: str, entity_type: Optional[str] = None) -> List[Dict[
         try:
             if r["attributes_json"]:
                 attrs = json.loads(r["attributes_json"])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse temporal entity attributes for {r['name']}: {e}")
         result.append({
             "id": r["id"],
             "novel_id": r["novel_id"],

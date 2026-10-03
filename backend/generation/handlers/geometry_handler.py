@@ -65,20 +65,27 @@ def run_geometry_task(task: GenerationTaskRequest, context: Any = None) -> Gener
 
     yield _sse({"type": "thinking", "delta": f"題材 [{genre}] 幾何參數配置就緒：目標章數 {target_chapters} 章，卷數 {volume_count} 卷，複雜度 {complexity.value}...\n"})
 
+    # Keep generator invariants at the configuration boundary.
+    def positive_int(name: str, default: int) -> int:
+        try:
+            return max(1, int(g_preset_params.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
     params = GeometryParams(
         target_chapters=target_chapters,
         volume_count=volume_count,
         chapters_per_volume=chapters_per_vol,
         complexity=complexity,
-        main_thread_count=g_preset_params.get("main_thread_count", 4),
-        subplot_count=g_preset_params.get("subplot_count", 12),
-        character_arc_count=g_preset_params.get("character_arc_count", 8),
-        relationship_arc_count=g_preset_params.get("relationship_arc_count", 6),
-        thematic_thread_count=g_preset_params.get("thematic_thread_count", 4),
+        main_thread_count=positive_int("main_thread_count", 4),
+        subplot_count=positive_int("subplot_count", 12),
+        character_arc_count=positive_int("character_arc_count", 8),
+        relationship_arc_count=positive_int("relationship_arc_count", 6),
+        thematic_thread_count=positive_int("thematic_thread_count", 4),
         cross_thread_ratio=g_preset_params.get("cross_thread_ratio", 0.5),
-        long_distance_chain_count=g_preset_params.get("long_distance_chain_count", 15),
-        convergence_point_count=g_preset_params.get("convergence_point_count", 8),
-        contrast_pair_count=g_preset_params.get("contrast_pair_count", 6),
+        long_distance_chain_count=positive_int("long_distance_chain_count", 15),
+        convergence_point_count=positive_int("convergence_point_count", 8),
+        contrast_pair_count=positive_int("contrast_pair_count", 6),
         seed_for_rng=f"novel_geom_{novel_id}",
     )
 

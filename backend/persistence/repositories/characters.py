@@ -37,7 +37,8 @@ def get_latest_characters(novel_id):
         try:
             from backend.models.parsers import extract_json_block
             data["parsed_data"] = extract_json_block(data["json_data"])
-        except:
+        except Exception as e:
+            print(f"[WARN] Failed to parse character json_data for novel {novel_id}: {e}")
             data["parsed_data"] = {}
         return data
     return None
@@ -240,8 +241,8 @@ def save_characters(novel_id, json_data):
             elif isinstance(parsed, list):
                 parsed = clean_and_deduplicate_characters(parsed)
                 json_str = json.dumps(parsed, ensure_ascii=False)
-        except:
-            pass
+        except Exception as e:
+            print(f"[WARN] Failed to parse/clean character JSON before save for novel {novel_id}: {e}")
         
     conn = get_db_connection()
     with conn:

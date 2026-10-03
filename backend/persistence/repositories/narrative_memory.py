@@ -8,7 +8,8 @@ def _decode_summary(row):
     data = dict(row)
     try:
         data["summary_json"] = json.loads(data.get("summary_json") or "{}")
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] Failed to parse chapter memory summary_json: {e}")
         data["summary_json"] = {}
     return data
 
