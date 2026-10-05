@@ -198,6 +198,38 @@ def test_build_split_chapter_outlines_structure():
     assert not is_chapter_outline_density_overloaded(part1)
 
 
+def test_split_outline_partitions_beats_and_preserves_scoped_fields():
+    """拆章後 beats/任務互斥，且時間線與場景欄位不被覆寫或共享。"""
+    outline = {
+        "chapter_index": 7,
+        "chapter_title": "第 7 章：密令",
+        "chapter_summary": "沿著密令追查真相",
+        "time_setting": "第三日黎明",
+        "scene_setting": {"location": "北城檔案室", "weather": "細雨"},
+        "scene_beats": ["潛入", "發現密令", "遭遇守衛", "帶走證據"],
+        "allocated_tasks": {
+            "turning_points": ["發現密令", "暴露身分"],
+            "must_happen": ["取得密令", "留下線索"],
+            "owner": "主角",
+        },
+    }
+
+    part1, part2 = build_split_chapter_outlines(outline)
+
+    assert part1["scene_beats"] == ["潛入", "發現密令"]
+    assert part2["scene_beats"] == ["遭遇守衛", "帶走證據"]
+    assert set(part1["scene_beats"]).isdisjoint(part2["scene_beats"])
+    assert part1["allocated_tasks"]["turning_points"] == ["發現密令"]
+    assert part2["allocated_tasks"]["turning_points"] == ["暴露身分"]
+    assert part1["allocated_tasks"]["must_happen"] == ["取得密令"]
+    assert part2["allocated_tasks"]["must_happen"] == ["留下線索"]
+    assert part1["allocated_tasks"]["owner"] == part2["allocated_tasks"]["owner"] == "主角"
+    assert part1["time_setting"] == part2["time_setting"] == outline["time_setting"]
+    assert part1["scene_setting"] == part2["scene_setting"] == outline["scene_setting"]
+    assert part1["scene_setting"] is not part2["scene_setting"]
+    assert part1["allocated_tasks"] is not part2["allocated_tasks"]
+
+
 # =========================================================================
 # 3. Dynamic Outline Splitting & Persistence Cascade Tests
 # =========================================================================

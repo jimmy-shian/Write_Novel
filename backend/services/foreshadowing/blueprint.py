@@ -13,6 +13,7 @@
 """
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.services.foreshadowing.chapter_math import get_total_chapter_count, get_volume_chapter_range
@@ -27,6 +28,57 @@ def coerce_int(value, default=0):
         return int(value)
     except Exception:
         return default
+
+
+def foreshadowing_payoff_keywords(seed) -> List[str]:
+    """Extract stable, human-authored payoff keywords from a seed.
+
+    Old string/list-shaped seeds intentionally return an empty list so callers
+    can keep the legacy existence-only behaviour.
+    """
+    if not isinstance(seed, dict):
+        return []
+    fields = (
+        seed.get("name") or seed.get("title") or seed.get("seed_name") or seed.get("伏筆名稱") or seed.get("名稱"),
+        seed.get("description") or seed.get("desc") or seed.get("內容") or seed.get("描述"),
+        seed.get("payoff_hint") or seed.get("payoff") or seed.get("reveal") or seed.get("resolution")
+        or seed.get("callback") or seed.get("回收章節") or seed.get("回收位置"),
+    )
+    keywords = []
+    for value in fields:
+        text = re.sub(r"\s+", "", str(value or "")).lower()
+        if not text:
+            continue
+        keywords.extend(re.findall(r"[a-z0-9]{2,}", text))
+        for run in re.findall(r"[\u4e00-\u9fff]+", text):
+            if 2 <= len(run) <= 8:
+                keywords.append(run)
+            for size in (4, 3, 2):
+                keywords.extend(run[i:i + size] for i in range(len(run) - size + 1))
+    return list(dict.fromkeys(k for k in keywords if len(k) >= 2))
+
+
+def verify_foreshadowing_payoff(seed, content) -> Optional[bool]:
+    """Return whether payoff evidence exists in正文, or ``None`` for legacy seeds."""
+    keywords = foreshadowing_payoff_keywords(seed)
+    if not keywords:
+        return None
+    text = re.sub(r"\s+", "", str(content or "")).lower()
+    if not text:
+        return False
+    # A named seed or an explicit payoff term is sufficient; descriptions
+    # need two hits to avoid accepting incidental common words.
+    values = seed if isinstance(seed, dict) else {}
+    strong = (
+        values.get("name") or values.get("title") or values.get("seed_name") or values.get("伏筆名稱") or values.get("名稱"),
+        values.get("payoff_hint") or values.get("payoff") or values.get("reveal") or values.get("resolution")
+        or values.get("callback") or values.get("回收章節") or values.get("回收位置"),
+    )
+    for value in strong:
+        phrase = re.sub(r"\s+", "", str(value or "")).lower()
+        if len(phrase) >= 2 and phrase in text:
+            return True
+    return sum(1 for keyword in keywords if keyword in text) >= 2
 
 
 def normalize_allocation_pair(pair, total_chapters):

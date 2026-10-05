@@ -38,8 +38,8 @@ from backend.services.narrative.narrative_auditor import NarrativeAuditor
 # 1. Pipeline Halting on Director WAIT_USER / FINISH
 # =============================================================================
 
-def test_pipeline_halted_exception_raised_on_wait_user(novel_factory):
-    novel_id = novel_factory(title="中斷測試小說", genre="奇幻")
+def test_wait_user_is_self_resolved_by_director(novel_factory):
+    novel_id = novel_factory(title="自主裁決測試小說", genre="奇幻")
     manager = AutonomousPipelineManager()
     task = NovelPipelineTask(novel_id=novel_id)
 
@@ -49,20 +49,19 @@ def test_pipeline_halted_exception_raised_on_wait_user(novel_factory):
         "hint": "請先設定宗門勢力範圍",
     }
 
+    verify_calls = iter([False, True])
     with patch.object(manager, "execute_generation_task", return_value=MagicMock(ok=True)), \
          patch("backend.services.autonomous_pipeline.get_director_decision_sync", return_value=mock_decision):
-        with pytest.raises(PipelineHaltedException) as exc_info:
-            manager._execute_stage_with_retry(
-                task=task,
-                stage="worldview",
-                task_type="generate",
-                instruction="設計世界觀",
-                user_prompt="核心設定",
-                verify_fn=lambda: False,
-                max_retries=2,
-            )
-        assert exc_info.value.action == "WAIT_USER"
-        assert "修仙門派勢力邊界" in exc_info.value.reason
+        manager._execute_stage_with_retry(
+            task=task,
+            stage="worldview",
+            task_type="generate",
+            instruction="設計世界觀",
+            user_prompt="核心設定",
+            verify_fn=lambda: next(verify_calls),
+            max_retries=2,
+        )
+    assert task.current_stage != "worldview_wait_user"
 
 
 def test_pipeline_halted_exception_raised_on_finish(novel_factory):
@@ -90,7 +89,7 @@ def test_pipeline_halted_exception_raised_on_finish(novel_factory):
         assert exc_info.value.action == "FINISH"
 
 
-def test_run_autonomous_flow_cleanly_halts_on_wait_user(novel_factory):
+def test_run_autonomous_flow_does_not_enter_wait_user_state(novel_factory):
     novel_id = novel_factory(title="流程暫停測試", genre="玄幻")
     manager = AutonomousPipelineManager()
     task = NovelPipelineTask(novel_id=novel_id)
@@ -115,10 +114,9 @@ def test_run_autonomous_flow_cleanly_halts_on_wait_user(novel_factory):
         manager._run_autonomous_flow(task, initial_prompt="請創作宏大玄幻小說", max_chapters=3)
 
     assert task.is_running is False
-    assert task.current_stage == "worldview_wait_user"
-    assert "⏸️ 等待使用者介入: 世界觀存在嚴重邏輯矛盾" in task.status_message
-    assert len(characters_called) == 0, "Downstream stage 'characters' must not be executed after WAIT_USER!"
-    assert db.get_pipeline_lock_status(novel_id) is None, "Pipeline lock must be released on halt!"
+    assert task.current_stage != "worldview_wait_user"
+    assert "等待使用者介入" not in task.status_message
+    assert db.get_pipeline_lock_status(novel_id) is None, "Pipeline lock must be released after self-resolution!"
 
 
 def test_run_autonomous_flow_cleanly_completes_on_finish(novel_factory):

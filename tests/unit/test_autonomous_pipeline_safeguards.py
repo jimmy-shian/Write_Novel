@@ -14,6 +14,7 @@ from backend.services.autonomous_pipeline import (
     _are_seeds_ready,
     _are_turning_points_ready,
     _are_volumes_ready,
+    _audit_final_volume_lock,
 )
 
 
@@ -146,3 +147,39 @@ def test_autonomous_pipeline_get_status_isolation():
         task_a.is_running = False
         mgr.tasks.clear()
         mgr.tasks.update(saved_tasks)
+
+
+def test_final_volume_lock_reconciles_entities_rules_and_promises(monkeypatch):
+    volumes = [{
+        "volume_index": 1,
+        "applicable_rules": '[{"name": "潮汐法則"}]',
+        "chapters_outline": [{"chapter_index": 1, "promise_keywords": ["弒神"]}],
+    }]
+    monkeypatch.setattr(db, "get_volumes", lambda _novel_id: volumes)
+    monkeypatch.setattr(db, "get_volume_chapter_range", lambda _volumes, _idx: (1, 1))
+    monkeypatch.setattr(db, "get_chapters_latest_range", lambda *_args: [{
+        "chapter_index": 1,
+        "content": "沈青雲在潮汐法則下完成弒神，終局落幕。",
+    }])
+    monkeypatch.setattr(db, "get_entities", lambda _novel_id: [{
+        "name": "沈青雲", "created_chapter": 1,
+    }])
+
+    assert _audit_final_volume_lock("novel") == (True, [])
+
+    monkeypatch.setattr(db, "get_chapters_latest_range", lambda *_args: [{
+        "chapter_index": 1, "content": "終局落幕。",
+    }])
+    passed, issues = _audit_final_volume_lock("novel")
+    assert passed is False
+    assert any("潮汐法則" in issue for issue in issues)
+    assert any("弒神" in issue for issue in issues)
+
+
+def test_final_volume_lock_is_compatible_with_legacy_volume(monkeypatch):
+    monkeypatch.setattr(db, "get_volumes", lambda _novel_id: [{"volume_index": 1}])
+    monkeypatch.setattr(db, "get_volume_chapter_range", lambda _volumes, _idx: (1, 1))
+    monkeypatch.setattr(db, "get_chapters_latest_range", lambda *_args: [])
+    monkeypatch.setattr(db, "get_entities", lambda _novel_id: [])
+
+    assert _audit_final_volume_lock("legacy") == (True, [])

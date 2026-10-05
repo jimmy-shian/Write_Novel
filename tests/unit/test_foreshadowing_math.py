@@ -22,6 +22,8 @@ from backend.services.foreshadowing.blueprint import (
     build_canonical_foreshadowing_task_map,
     apply_canonical_allocated_tasks_to_chapters,
     get_global_foreshadowing_blueprint,
+    foreshadowing_payoff_keywords,
+    verify_foreshadowing_payoff,
 )
 
 
@@ -113,6 +115,18 @@ def test_is_valid_foreshadowing_blueprint():
     # 轉折點超出章節範圍
     bad_turn = {"foreshadowing_allocations": [[1, 5], [2, 8]], "turning_allocations": [3, 99]}
     assert is_valid_foreshadowing_blueprint(bad_turn, 2, 2, 10) is False
+
+
+def test_foreshadowing_payoff_requires_substantive_evidence_and_keeps_legacy_data():
+    seed = {
+        "name": "血印名單",
+        "description": "失蹤者留下的血印名單指向內鬼",
+        "payoff_hint": "在月圓之夜揭露內鬼",
+    }
+    assert "血印名單" in foreshadowing_payoff_keywords(seed)
+    assert verify_foreshadowing_payoff(seed, "月圓之夜，眾人揭露內鬼，血印名單終於攤在桌上。") is True
+    assert verify_foreshadowing_payoff(seed, "眾人平安抵達城門，沒有提到那份名單。") is False
+    assert verify_foreshadowing_payoff("舊版純文字伏筆", "任意舊版正文") is None
 
 
 # --- DB 整合 ---

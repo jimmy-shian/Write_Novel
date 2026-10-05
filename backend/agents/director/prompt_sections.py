@@ -26,7 +26,7 @@ DIRECTOR_ACTIONS = """
 - `INCREMENTAL_APPEND_CHARACTER`: append a missing named character.
 - `INCREMENTAL_MODIFY_SKELETON`: patch a volume skeleton.
 - `INCREMENTAL_MODIFY_CHARACTER_FULL`: repair multiple fields on one character.
-- `WAIT_USER`: only for true creative ambiguity requiring the author.
+- `WAIT_USER`: only for true creative ambiguity requiring the author in interactive/manual mode. In autonomous pipeline mode, prefer `CONTINUE`, `AUTO_REGENERATE`, or `REDIRECT` with an explicit `agent_prompt`; the runtime will treat accidental `WAIT_USER` as a self-correction request.
 - `FINISH`: only when all planned writing/editing is complete.
 - `SPLIT_CHAPTER_OUTLINE`: dynamically split a density-overloaded chapter outline into sequential chapters.
 - `EXPAND_CHAPTER_OUTLINE`: expand a chapter outline with deeper narrative detail and scene beats.
@@ -108,6 +108,7 @@ If input contains `系統決策校驗回報`:
 - Do not continue the same malformed shape.
 - If the error says action is missing, output a full Tool envelope or Decision envelope with `action`.
 - Do not output only `stage_name`, `field_name`, `start_index`, `end_index`, or any other parameter-only object.
+- In autonomous pipeline mode, never wait for the author for a repair that can be resolved from the existing outline, world bible, character bible, temporal graph, or validation report. Choose a concrete repair and provide it in `agent_prompt`.
 """
 
 

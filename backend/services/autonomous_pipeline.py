@@ -24,6 +24,7 @@ from backend.common.config import (
 from backend.schemas.validation import split_consecutive_batches
 from backend.common.refusal_filter import is_refusal_or_disclaimer
 from backend.agents.director.runner import get_director_decision_sync
+from backend.services.foreshadowing.chapter_math import get_volume_chapter_range
 
 
 class PipelineHaltedException(Exception):
@@ -33,6 +34,54 @@ class PipelineHaltedException(Exception):
         self.action = (action or "").upper().strip()
         self.reason = reason or ""
         super().__init__(f"Pipeline halted by Director: {self.action} ({self.reason})")
+
+
+class StageRedirectException(Exception):
+    """Raised when Director or pipeline decides to redirect flow to another stage."""
+
+    def __init__(self, target_stage: str, reason: str = "", agent_prompt: str = ""):
+        self.target_stage = target_stage
+        self.reason = reason
+        self.agent_prompt = agent_prompt
+        super().__init__(f"Stage redirected to {target_stage}: {reason}")
+
+
+class ChapterHaltedException(Exception):
+    """Raised when Director or pipeline decides to halt current chapter (HALT_CHAPTER)."""
+
+    def __init__(self, reason: str = ""):
+        self.reason = reason
+        super().__init__(f"Chapter halted: {reason}")
+
+
+RETRY_POLICY = {
+    "writer": 3,
+    "editor": 3,
+    "final_quality_gate": 2,
+    "graph_extraction": 1,
+}
+
+
+def classify_pipeline_error(err_msg: str) -> str:
+    err = str(err_msg or "").strip()
+    if "EDITOR_MISSING_INPUT" in err or "prose not found for editing" in err or "prose is empty or too short" in err:
+        return "EDITOR_MISSING_INPUT"
+    if any(k in err for k in (
+        "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "Connection refused",
+        "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "API Key"
+    )):
+        return "INFRA_ERROR"
+    if "Empty response" in err or "content 不可為空" in err or "為空" in err:
+        return "EMPTY_OUTPUT"
+    if "長度不足" in err or "too short" in err:
+        return "SHORT_OUTPUT"
+    if "時序" in err or "temporal" in err.lower() or "穿幫" in err or "復活" in err:
+        return "TEMPORAL_ERROR"
+    if "場景地點漂移" in err or "房號" in err or "漂移" in err:
+        return "SCENE_DRIFT"
+    if any(k in err for k in ("世界線", "因果", "矛盾", "大綱", "canon")):
+        return "CANON_ERROR"
+    return "QUALITY_ERROR"
 
 
 class NovelPipelineTask:
@@ -55,6 +104,11 @@ class NovelPipelineTask:
         self.start_time: Optional[str] = None
         self.last_heartbeat: str = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
         self.worker_thread: Optional[threading.Thread] = None
+        # 可觀測性指標
+        self.stage_retry_counts: Dict[str, int] = {}
+        self.stage_redirect_count: int = 0
+        self.last_error_type: Optional[str] = None
+        self.same_error_repeat_count: int = 0
 
     def log(self, message: str, level: str = "info"):
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
@@ -327,6 +381,10 @@ class AutonomousPipelineManager:
             verify_fn = instruction
             instruction = ""
 
+        # 階段型上限：未特別傳入特定 max_retries 時使用 RETRY_POLICY
+        if max_retries == 20 or max_retries is None:
+            max_retries = RETRY_POLICY.get(stage, 3)
+
         last_exc = None
         for attempt in range(1, max_retries + 1):
             if task.stop_requested:
@@ -377,6 +435,8 @@ class AutonomousPipelineManager:
 
                 return resp
 
+            except (StageRedirectException, ChapterHaltedException, PipelineHaltedException):
+                raise
             except Exception as exc:
                 last_exc = exc
                 if stage in ("chapter", "writer") and target and target.get("chapter_index"):
@@ -385,16 +445,86 @@ class AutonomousPipelineManager:
                         task.log(f"🧹 已清除第 {target['chapter_index']} 章未通過或異常之草稿，準備重試...", level="warn")
                     except Exception:
                         pass
+
+                err_clean = str(exc).strip()
+                error_type = classify_pipeline_error(err_clean)
+                ch_idx_for_director = target.get("chapter_index") if isinstance(target, dict) else None
+                vol_idx_for_director = target.get("volume_index") if isinstance(target, dict) else None
+                # 同一錯誤只應在同一 stage、同一章內累計；不能把上一章或另一個
+                # stage 的錯誤串在一起，否則會誤觸發 HUMAN_REVIEW。
+                error_key = f"{stage}:{ch_idx_for_director}:{error_type}"
+
+                # 指標更新
+                task.stage_retry_counts[stage] = task.stage_retry_counts.get(stage, 0) + 1
+                if error_key == task.last_error_type:
+                    task.same_error_repeat_count += 1
+                else:
+                    task.same_error_repeat_count = 1
+                task.last_error_type = error_key
+
+                cur_content = ""
+                if ch_idx_for_director:
+                    try:
+                        cur_ch = db.get_chapter(task.novel_id, ch_idx_for_director)
+                        cur_content = (cur_ch.get("content") or "").strip() if cur_ch else ""
+                    except Exception:
+                        pass
+
+                # 第四階段：EDITOR_MISSING_INPUT 不可重試 Editor，直接導向 Writer
+                if stage == "editor" and error_type == "EDITOR_MISSING_INPUT":
+                    task.stage_redirect_count += 1
+                    task.log(f"🚨 [Editor 缺失正文] 第 {ch_idx_for_director} 章正文缺失或過短，停止 Editor 重試，直接導向 Writer！", level="warn")
+                    retry_log_data = {
+                        "chapter": ch_idx_for_director,
+                        "stage": stage,
+                        "attempt": attempt,
+                        "error_type": error_type,
+                        "director_action": "REDIRECT",
+                        "target_stage": "writer",
+                        "content_length": len(cur_content),
+                        "stage_retry_count": task.stage_retry_counts[stage],
+                        "stage_redirect_count": task.stage_redirect_count,
+                        "same_error_repeat_count": task.same_error_repeat_count,
+                    }
+                    task.log(f"📊 [重試結構化日誌] {json.dumps(retry_log_data, ensure_ascii=False)}", level="warn")
+                    raise StageRedirectException(
+                        target_stage="writer",
+                        reason="Editor 前置檢查失敗：正文不存在或過短，停止 Editor 重試並回到 Writer。",
+                        agent_prompt="正文缺失或過短，請完整撰寫本章故事正文。",
+                    )
+
+                # 同一章同一錯誤連續出現時，記錄並加強下一次 Director 指令，
+                # 不直接轉 HUMAN_REVIEW。自主流水線的人工入口是使用者再次按下
+                # 流水線，而不是在這裡強制中斷；真正的停止仍由 retry 上限控制。
+                if task.same_error_repeat_count >= 2 and error_type != "INFRA_ERROR":
+                    task.log(
+                        f"⚠️ [同一錯誤連續重複 {task.same_error_repeat_count} 次] 階段 [{stage}] "
+                        f"錯誤 [{error_type}]，交由 Director 自主換方案修正，不中斷流水線。",
+                        level="warn",
+                    )
+                    retry_log_data = {
+                        "chapter": ch_idx_for_director,
+                        "stage": stage,
+                        "attempt": attempt,
+                        "error_type": error_type,
+                        "director_action": "FORCE_SELF_CORRECTION",
+                        "target_stage": None,
+                        "content_length": len(cur_content),
+                        "stage_retry_count": task.stage_retry_counts[stage],
+                        "stage_redirect_count": task.stage_redirect_count,
+                        "same_error_repeat_count": task.same_error_repeat_count,
+                    }
+                    task.log(f"📊 [重試結構化日誌] {json.dumps(retry_log_data, ensure_ascii=False)}", level="warn")
+                    instruction = (
+                        f"【Director 強制換方案】同一問題已連續出現 {task.same_error_repeat_count} 次。"
+                        f"請不要重複上一個方案，直接採用另一種可執行修正：{err_clean}。\n"
+                        + (f"原始任務指引：{instruction}" if instruction else "")
+                    )
+
                 if attempt >= max_retries or task.stop_requested:
                     raise last_exc
 
-                # 判斷錯誤類型：基建類（連線/憑證）vs. 內容品質類
-                err_clean = str(exc).strip()
-                is_infra_error = any(k in err_clean for k in (
-                    "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "Connection refused",
-                    "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "API Key"
-                ))
-
+                is_infra_error = (error_type == "INFRA_ERROR")
                 if is_infra_error:
                     # ── 基建類錯誤：跳過 Director LLM 呼叫，直接指數退避重試 ──
                     director_prescription = (
@@ -416,22 +546,20 @@ class AutonomousPipelineManager:
 
                 # ── 內容/品質類錯誤：調用真正的 Director Agent 做智慧決策 ──
                 task.log(
-                    f"🎬 [Director 決策介入] [{stage}] 第 {attempt}/{max_retries} 次產出未達標，"
+                    f"🎬 [Director 決策介入] [{stage}] 第 {attempt}/{max_retries} 次產出未達標（類型: {error_type}），"
                     f"正在調用 Director Agent 進行智慧決策...",
                     level="warn",
                 )
 
-                # 從 target 提取 chapter/volume 索引
-                ch_idx_for_director = target.get("chapter_index") if isinstance(target, dict) else None
-                vol_idx_for_director = target.get("volume_index") if isinstance(target, dict) else None
-
                 director_extra = (
                     f"【自主流程重試上下文 — 第 {attempt}/{max_retries} 次重試】\n"
                     f"階段: {stage}\n"
+                    f"錯誤類型: {error_type}\n"
                     f"錯誤原因: {err_clean}\n"
                     f"原始任務指引: {instruction or '(無)'}\n"
                     f"請以真實使用者身份，根據圖譜引擎、角色聖經、大綱等上下文，"
-                    f"決定如何修正此 agent 的生成，並在 agent_prompt 中給出精確的修正指示。"
+                    f"決定如何修正此 agent 的生成。支援回傳 action: RETRY_SAME_STAGE / REDIRECT / HALT_CHAPTER / WAIT_USER，"
+                    f"並可在 target_stage (如 'writer') 與 agent_prompt 中給出精確指示。"
                 )
 
                 try:
@@ -452,15 +580,75 @@ class AutonomousPipelineManager:
 
                 if decision and isinstance(decision, dict):
                     action = str(decision.get("action") or "").upper().strip()
+                    target_stage = str(decision.get("target_stage") or "").lower().strip()
                     task.log(
-                        f"🎬 [Director 決策結果] action={action}, "
+                        f"🎬 [Director 決策結果] action={action}, target_stage={target_stage or stage}, "
                         f"reason={str(decision.get('reason', '(無)'))[:120]}",
                     )
 
-                    # Director 判斷需要使用者介入或任務已完成 → 提前中止重試
-                    if action in ("WAIT_USER", "FINISH"):
+                    retry_log_data = {
+                        "chapter": ch_idx_for_director,
+                        "stage": stage,
+                        "attempt": attempt,
+                        "error_type": error_type,
+                        "director_action": action,
+                        "target_stage": target_stage or stage,
+                        "content_length": len(cur_content),
+                        "stage_retry_count": task.stage_retry_counts[stage],
+                        "stage_redirect_count": task.stage_redirect_count,
+                        "same_error_repeat_count": task.same_error_repeat_count,
+                    }
+                    task.log(f"📊 [重試結構化日誌] {json.dumps(retry_log_data, ensure_ascii=False)}", level="warn")
+
+                    # 第二階段：HALT_CHAPTER 停止本章並保留草稿
+                    if action == "HALT_CHAPTER":
                         task.log(
-                            f"🛑 [Director 決策中止] Director 判定 {action}，"
+                            f"🛑 [Director 決策中止] Director 判定 HALT_CHAPTER，停止本章流程。原因：{decision.get('reason', '(無)')}",
+                            level="warn",
+                        )
+                        raise ChapterHaltedException(reason=decision.get("reason", "Director HALT_CHAPTER"))
+
+                    # 自主流水線中，Director 本身就是「使用者代理」。
+                    # WAIT_USER 不應把整條任務停在等待真人輸入；把它轉成
+                    # Director 自主裁決後的修正重試。只有 FINISH 仍代表整體完成。
+                    if action == "WAIT_USER":
+                        self_resolve_prompt = (
+                            decision.get("agent_prompt")
+                            or decision.get("hint")
+                            or decision.get("reason")
+                            or "請由總監自行選擇最符合既有世界觀、角色聖經與大綱的方案，完成本階段修正。"
+                        )
+                        task.log(
+                            f"🧠 [Director 自主裁決] 收到 WAIT_USER，改由 Director 自行完成修正，不中斷流水線："
+                            f"{str(decision.get('reason', '(無)'))[:180]}",
+                            level="warn",
+                        )
+                        try:
+                            db.save_chat_message(
+                                task.novel_id,
+                                "director",
+                                f"🧠 **【Director 自主裁決取代 WAIT_USER】**\n"
+                                f"- 階段: {stage}\n"
+                                f"- 原因: {decision.get('reason', '(無)')}\n"
+                                f"- 自主修正: {self_resolve_prompt}",
+                                message_type="director",
+                            )
+                        except Exception:
+                            pass
+                        instruction = (
+                            f"【Director 自主裁決修正指令】\n{self_resolve_prompt}\n"
+                            "不得等待使用者、不得輸出 WAIT_USER；請直接完成可執行的內容修正。\n"
+                            + (f"原始任務指引：{instruction}" if instruction else "")
+                        )
+                        # 若 Director 同時提供合法 target_stage，沿用下面的 REDIRECT
+                        # 路由；否則保持目前 stage 重試。
+                        if target_stage and target_stage != stage:
+                            action = "REDIRECT"
+
+                    # Director 判斷整體任務已完成 → 提前結束重試
+                    if action == "FINISH":
+                        task.log(
+                            f"🛑 [Director 決策中止] Director 判定 FINISH，"
                             f"提前中止重試。原因：{decision.get('reason', '(無)')}",
                             level="warn",
                         )
@@ -468,7 +656,7 @@ class AutonomousPipelineManager:
                             db.save_chat_message(
                                 task.novel_id,
                                 "director",
-                                f"🛑 **【Director 自主決策中止重試】**\n"
+                                f"🛑 **【Director 判定完成，中止重試】**\n"
                                 f"- 階段: {stage}\n"
                                 f"- 決策: {action}\n"
                                 f"- 原因: {decision.get('reason', '(無)')}\n"
@@ -478,6 +666,28 @@ class AutonomousPipelineManager:
                         except Exception:
                             pass
                         raise PipelineHaltedException(action=action, reason=decision.get("reason", ""))
+
+                    # 第二階段：REDIRECT 真正改變 stage
+                    if action == "REDIRECT" or (target_stage and target_stage != stage):
+                        if stage == "editor" and target_stage == "writer":
+                            task.stage_redirect_count += 1
+                            task.log(f"🔀 [Director 路由切換] 結束 Editor 重試，真正重定向至 Writer 階段！原因：{decision.get('reason')}")
+                            raise StageRedirectException(
+                                target_stage="writer",
+                                reason=decision.get("reason", "Director 決定打回 Writer"),
+                                agent_prompt=decision.get("agent_prompt") or decision.get("hint") or "",
+                            )
+                        elif stage == "writer" and target_stage == "editor":
+                            if len(cur_content) >= 1200:
+                                task.stage_redirect_count += 1
+                                task.log(f"🔀 [Director 路由切換] Writer 初稿合格（{len(cur_content)} 字），推進至 Editor 階段")
+                                raise StageRedirectException(
+                                    target_stage="editor",
+                                    reason=decision.get("reason", "初稿合格，推進至 Editor"),
+                                    agent_prompt=decision.get("agent_prompt") or "",
+                                )
+                            else:
+                                task.log("⚠️ Writer 初稿未通過基本長度驗證（< 1200 字），不允許提早 REDIRECT 至 Editor，繼續在 Writer 修正", level="warn")
 
                     # Director 決策動態拆章
                     if action == "SPLIT_CHAPTER_OUTLINE":
@@ -599,9 +809,21 @@ class AutonomousPipelineManager:
                 )
                 if stopped_before_editor:
                     break
+                if vols and self._is_volume_end(vols, ch_idx):
+                    self._reconcile_foreshadowing_debts(task, novel_id, max_chapter=ch_idx)
 
             # (2.8) 卷末零 LLM 伏筆回收對帳：每卷寫完後 Python 快速對帳
             self._reconcile_foreshadowing_debts(task, novel_id)
+
+            finale_ok, finale_issues = _audit_final_volume_lock(novel_id)
+            if not finale_ok:
+                task.current_stage = "completion_locked"
+                task.status_message = "⚠️ 終卷對帳未通過，完成狀態已鎖定。"
+                task.log(
+                    "⚠️ [終卷結局鎖] 零 LLM 對帳未通過：" + "；".join(finale_issues[:8]),
+                    level="warn",
+                )
+                return
 
             self._finalize_completion(task, novel_id)
 
@@ -976,7 +1198,7 @@ class AutonomousPipelineManager:
         written_rows: Dict[int, Dict[str, Any]],
         editor_retry_only: bool,
     ):
-        """步驟 6 內層：單章 Writer → 總監審查 → Editor → 品質閘門 → 圖譜/敘事診斷全流程。
+        """步驟 6 內層：單章狀態機（Writer -> Writer Gate -> Editor -> Final Gate -> Graph）。
 
         回傳 (更新後 vols, stopped_before_editor)；stopped_before_editor 為 True 時呼叫端須中止章節迴圈。
         """
@@ -984,60 +1206,129 @@ class AutonomousPipelineManager:
         curr_vol_idx = db.get_chapter_volume_index(vols, ch_idx) if vols else None
         vols = self._ensure_chapter_volume_skeleton(task, novel_id, vols, ch_idx, curr_vol_idx)
 
-        # (1) 正文寫作 (含 5 次自動重試與驗證)
-        # editor_retry_only 時沿用既有初稿，不重寫、不覆蓋，直接進入總監審查與精修。
-        self._run_writer_for_chapter(task, novel_id, ch_idx, total_target, editor_retry_only, written_rows)
+        # 即使是 Editor-only recovery，也必須先重新跑 Writer Gate。
+        # 否則舊的短稿、拒答稿或時序壞稿可能直接繞過硬性驗收。
+        current_state = "WRITER_GATE" if editor_retry_only else "WRITER"
+        writer_retries = 0
+        max_writer_retries = 3
+        director_eval = {}
 
-        # (1.5) 總監章節品質與時空一致性審查 (Director Quality Gate)
-        director_eval = self._run_director_chapter_gate(task, novel_id, ch_idx, curr_vol_idx)
+        while not task.stop_requested:
+            if current_state == "WRITER":
+                if writer_retries >= max_writer_retries:
+                    task.log(f"🚫 第 {ch_idx} 章 Writer 達到重試上限（{max_writer_retries} 次），停止本章流程並標記 writer_failed", level="error")
+                    try:
+                        db.save_director_review_status(
+                            novel_id=novel_id,
+                            stage_name="writer",
+                            status="writer_failed",
+                            block_name=f"chapter_{ch_idx}",
+                            volume_index=curr_vol_idx,
+                            chapter_index=ch_idx,
+                            reason=f"Writer 階段達到上限 {max_writer_retries} 次未產出合格正文",
+                        )
+                    except Exception:
+                        pass
+                    return vols, False
 
-        # (2) 編輯精修 (含 5 次自動重試與驗證)
-        if task.stop_requested:
-            return vols, True
-        if not self._run_editor_for_chapter(task, novel_id, ch_idx, total_target, curr_vol_idx, director_eval):
-            return vols, False
-        task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
+                writer_retries += 1
+                try:
+                    self._run_writer_for_chapter(task, novel_id, ch_idx, total_target, False, written_rows)
+                    current_state = "WRITER_GATE"
+                except StageRedirectException as redirect_exc:
+                    if redirect_exc.target_stage == "editor":
+                        current_state = "EDITOR"
+                    else:
+                        current_state = "WRITER"
+                except ChapterHaltedException:
+                    task.log(f"🛑 第 {ch_idx} 章 Writer 流程終止（HALT_CHAPTER），保留草稿", level="warn")
+                    return vols, False
 
-        # Final deterministic quality gate after Editor has had a chance to
-        # repair the draft. Retry targeted editing twice; preserve the
-        # final failed status instead of silently calling it fully clean.
-        self._run_final_quality_gate(task, novel_id, ch_idx, curr_vol_idx)
+            elif current_state == "WRITER_GATE":
+                director_eval = self._run_director_chapter_gate(task, novel_id, ch_idx, curr_vol_idx)
+                if director_eval.get("writer_failed") or not director_eval.get("passed", False):
+                    task.log(f"🚫 [Writer Gate 失敗] 第 {ch_idx} 章未通過硬性內容驗收，停止本章流程，不得進入 Editor！", level="error")
+                    return vols, False
+                current_state = "EDITOR"
 
-        # (2.5) 同步提取時序事實與動態圖譜 (Graphiti Temporal Graph)
-        # 同次 LLM 順帶歸一化衝突簽名 + 設定調用（Story Engine 搭便車，零額外呼叫）
-        graph_res: Dict[str, Any] = {}
-        try:
-            task.log(f"🧠 正在為第 {ch_idx} 章同步提取時序記憶圖譜事實...")
-            ch_obj = db.get_chapter(novel_id, ch_idx)
-            ch_text = (ch_obj.get("content") or "") if ch_obj else ""
-            if ch_text and len(ch_text.strip()) > 50:
-                graph_res = ChapterFactExtractor.process_chapter_prose(
-                    novel_id=novel_id,
-                    chapter_index=ch_idx,
-                    chapter_text=ch_text,
-                    agent_name="copilot"
-                ) or {}
-                facts_added = graph_res.get("facts_added", 0)
-                terms_created = graph_res.get("terms_created", 0)
-                terms_updated = graph_res.get("terms_updated", 0)
-                task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實，術語庫新增 {terms_created}/更新 {terms_updated})")
-        except Exception as g_exc:
-            task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
+            elif current_state == "EDITOR":
+                editor_result = self._run_editor_for_chapter(task, novel_id, ch_idx, total_target, curr_vol_idx, director_eval)
+                if editor_result == "REDIRECT_TO_WRITER":
+                    task.log(f"🔀 [狀態機路由] Editor 指示重定向至 Writer，第 {ch_idx} 章重新寫作！", level="warn")
+                    current_state = "WRITER"
+                    continue
+                elif editor_result == "HALT_CHAPTER":
+                    task.log(f"🛑 [狀態機路由] 第 {ch_idx} 章暫停（HALT_CHAPTER），保留草稿並跳出本章", level="warn")
+                    return vols, False
+                elif editor_result == "FAILED":
+                    task.log(f"⚠️ 第 {ch_idx} 章 Editor 精修失敗，已保留 Writer 初稿，略過後續門禁進入下一章", level="warn")
+                    return vols, False
+                else:  # PASS
+                    task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
+                    current_state = "FINAL_GATE"
 
-        # (2.6) 註冊衝突簽名 (Conflict Signature) 與長程敘事因果審計 (Narrative Auditor)
-        try:
-            self._run_narrative_diagnostics(task, novel_id, vols, ch_idx, graph_res, ch_text)
-        except Exception as n_exc:
-            task.log(f"⚠️ 第 {ch_idx} 章長程敘事診斷異常 (安全跳過不阻礙): {n_exc}", level="warn")
+            elif current_state == "FINAL_GATE":
+                final_passed = self._run_final_quality_gate(task, novel_id, ch_idx, curr_vol_idx)
+                if not final_passed:
+                    # 未通過最終品質閘門的正文不得進入長期記憶，避免污染
+                    # temporal graph、術語庫與下一章的上下文。
+                    task.log(
+                        f"🚫 第 {ch_idx} 章 Final Gate 未通過，跳過圖譜抽取並保留人工檢視狀態。",
+                        level="error",
+                    )
+                    return vols, False
+                current_state = "GRAPH_EXTRACTION"
 
-        db.save_chat_message(
-            novel_id,
-            "assistant",
-            f"✍️ **【章節完成進度】** 第 {ch_idx} 章正文已由 Writer 撰寫並經 Editor 潤色精修完成，已成功入庫！\n- 進度：第 {ch_idx}/{total_target} 章 ({task.progress_percent}%)",
-            message_type="pipeline"
-        )
-        # (3) 本地 DB 已寫入，不進行每章雲端 commit 備份以避免空間爆滿
-        time.sleep(0.5)
+            elif current_state == "GRAPH_EXTRACTION":
+                # (2.5) 同步提取時序事實與動態圖譜 (Graphiti Temporal Graph)
+                graph_res: Dict[str, Any] = {}
+                ch_text = ""
+                graph_failed = False
+                try:
+                    task.log(f"🧠 正在為第 {ch_idx} 章同步提取時序記憶圖譜事實...")
+                    ch_obj = db.get_chapter(novel_id, ch_idx)
+                    ch_text = (ch_obj.get("content") or "") if ch_obj else ""
+                    if ch_text and len(ch_text.strip()) > 50:
+                        graph_res = ChapterFactExtractor.process_chapter_prose(
+                            novel_id=novel_id,
+                            chapter_index=ch_idx,
+                            chapter_text=ch_text,
+                            agent_name="copilot",
+                        ) or {}
+                        facts_added = graph_res.get("facts_added", 0)
+                        terms_created = graph_res.get("terms_created", 0)
+                        terms_updated = graph_res.get("terms_updated", 0)
+                        task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實，術語庫新增 {terms_created}/更新 {terms_updated})")
+                except Exception as g_exc:
+                    graph_failed = True
+                    task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
+                    try:
+                        db.save_chat_message(
+                            novel_id,
+                            "assistant",
+                            f"⚠️ 第 {ch_idx} 章正文已完成，但時序記憶尚未同步；後續章節不得假設本章圖譜已更新。",
+                            message_type="pipeline",
+                        )
+                    except Exception as log_exc:
+                        task.log(f"⚠️ 記錄圖譜同步失敗通知時發生異常：{log_exc}", level="warn")
+
+                # (2.6) 註冊衝突簽名與長程敘事因果審計
+                try:
+                    self._run_narrative_diagnostics(task, novel_id, vols, ch_idx, graph_res, ch_text)
+                except Exception as n_exc:
+                    task.log(f"⚠️ 第 {ch_idx} 章長程敘事診斷異常 (安全跳過不阻礙): {n_exc}", level="warn")
+
+                db.save_chat_message(
+                    novel_id,
+                    "assistant",
+                    f"✍️ **【章節完成進度】** 第 {ch_idx} 章正文已由 Writer 撰寫並經 Editor 潤色精修完成，已成功入庫！"
+                    f"\n- 進度：第 {ch_idx}/{total_target} 章 ({task.progress_percent}%)"
+                    f"\n- 時序記憶：{'待同步' if graph_failed else '已同步'}",
+                    message_type="pipeline",
+                )
+                time.sleep(0.5)
+                break
+
         return vols, False
 
     def _ensure_chapter_volume_skeleton(
@@ -1073,7 +1364,7 @@ class AutonomousPipelineManager:
         total_target: int,
         editor_retry_only: bool,
         written_rows: Dict[int, Dict[str, Any]],
-    ):
+    ) -> bool:
         """(1) 正文寫作：沿用既有初稿或呼叫 Writer Agent 撰寫（含自動重試與驗證）。"""
         if editor_retry_only:
             existing_draft = (written_rows.get(ch_idx) or {}).get("content") or ""
@@ -1108,63 +1399,54 @@ class AutonomousPipelineManager:
         try:
             from backend.services.director.tool_registry.evaluator import evaluate_output
             ch_draft = db.get_chapter(novel_id, ch_idx)
-            draft_content = (ch_draft.get("content") or "") if ch_draft else ""
-            if draft_content and len(draft_content.strip()) >= 50:
+            draft_content = (ch_draft.get("content") or "").strip() if ch_draft else ""
+            if not draft_content or len(draft_content) < 50:
+                director_eval = {
+                    "passed": False,
+                    "critical_drift": True,
+                    "issues": ["content 不可為空：正文未生成或長度不足 50 字"],
+                }
+            else:
                 director_eval = evaluate_output(
                     stage_name="writer",
                     output_content=draft_content,
                     novel_id=novel_id,
                     chapter_index=ch_idx,
                 )
-                eval_passed = director_eval.get("passed", False)
-                is_critical = director_eval.get("critical_drift", False)
-                eval_issues = director_eval.get("issues", [])
 
-                # 儲存真實總監評審記錄至 director_reviews 表
+            eval_passed = director_eval.get("passed", False)
+            is_critical = director_eval.get("critical_drift", False)
+            eval_issues = director_eval.get("issues", [])
+
+            hard_writer_issues = [
+                issue for issue in eval_issues
+                if issue.startswith((
+                    "content 不可為空",
+                    "content 長度不足",
+                    "content 含占位或系統標記",
+                    "content 包含 AI 拒答",
+                    "content 包含元敘事",
+                    "【場景地點漂移】",
+                    "【時間連續性矛盾】",
+                    "【開篇定型模板重複】",
+                    "【敘事診斷紅線",
+                ))
+            ]
+
+            if hard_writer_issues and not task.stop_requested:
+                task.log(f"🚨 [總監章節硬性攔截] 第 {ch_idx} 章需先修正：{'; '.join(hard_writer_issues)}。", level="warn")
+                db.save_chat_message(
+                    novel_id,
+                    "director",
+                    f"🚨 **【總監審查打回 - 第 {ch_idx} 章】**\n檢測到背景設定或時空存在嚴重漂移：\n- " + "\n- ".join(eval_issues) + "\n\n正在指示 Writer 重新對齊大綱時空重寫...",
+                    message_type="director"
+                )
+                fix_instruction = (
+                    f"【總監剛性修正指示】：上一版草稿未通過硬性內容驗收：\n"
+                    f"{'; '.join(hard_writer_issues)}\n"
+                    f"請逐項修正，維持已確認的大綱因果與故事事實，重寫第 {ch_idx} 章正文。"
+                )
                 try:
-                    db.save_director_review_status(
-                        novel_id=novel_id,
-                        stage_name="writer",
-                        status="passed" if eval_passed else ("revise" if is_critical else "warning"),
-                        block_name=f"chapter_{ch_idx}",
-                        volume_index=curr_vol_idx,
-                        chapter_index=ch_idx,
-                        reason="; ".join(eval_issues) if eval_issues else "總監校驗通過",
-                        decision_json=director_eval,
-                    )
-                except Exception as d_db_exc:
-                    task.log(f"⚠️ 總監審查記錄持久化異常: {d_db_exc}", level="warn")
-
-                hard_writer_issues = [
-                    issue for issue in eval_issues
-                    if issue.startswith((
-                        "content 不可為空",
-                        "content 長度不足",
-                        "content 含占位或系統標記",
-                        "content 包含 AI 拒答",
-                        "content 包含元敘事",
-                        "【場景地點漂移】",
-                        "【時間連續性矛盾】",
-                        "【開篇定型模板重複】",
-                        "【敘事診斷紅線",
-                    ))
-                ]
-                if hard_writer_issues and not task.stop_requested:
-                    # Hard content/canon errors must be revised before Editor;
-                    # stylistic hits are passed to Editor for targeted repair.
-                    task.log(f"🚨 [總監章節硬性攔截] 第 {ch_idx} 章需先修正：{'; '.join(hard_writer_issues)}。", level="warn")
-                    db.save_chat_message(
-                        novel_id,
-                        "director",
-                        f"🚨 **【總監審查打回 - 第 {ch_idx} 章】**\n檢測到背景設定或時空存在嚴重漂移：\n- " + "\n- ".join(eval_issues) + "\n\n正在指示 Writer 重新對齊大綱時空重寫...",
-                        message_type="director"
-                    )
-                    # 進行定向重寫 (最多重試 2 次)
-                    fix_instruction = (
-                        f"【總監剛性修正指示】：上一版草稿未通過硬性內容驗收：\n"
-                        f"{'; '.join(hard_writer_issues)}\n"
-                        f"請逐項修正，維持已確認的大綱因果與故事事實，重寫第 {ch_idx} 章正文。"
-                    )
                     self._execute_stage_with_retry(
                         task=task,
                         stage="writer",
@@ -1178,26 +1460,73 @@ class AutonomousPipelineManager:
                     )
                     # 重新獲取修復後的內容並再次快速校驗
                     ch_draft = db.get_chapter(novel_id, ch_idx)
-                    draft_content = (ch_draft.get("content") or "") if ch_draft else ""
+                    draft_content = (ch_draft.get("content") or "").strip() if ch_draft else ""
                     director_eval = evaluate_output(
                         stage_name="writer",
                         output_content=draft_content,
                         novel_id=novel_id,
                         chapter_index=ch_idx,
                     )
-                elif eval_issues:
-                    task.log(f"⚠️ [總監審查備註] 第 {ch_idx} 章存在輕微建議或用詞提醒：{'; '.join(eval_issues)}，將交由 Editor 潤色時修訂。")
-                else:
-                    task.log(f"✅ [總監審查通過] 第 {ch_idx} 章背景設定、時空連續性與實體錨點完全合規！")
-                    db.save_chat_message(
-                        novel_id,
-                        "director",
-                        f"🎬 **【總監審查通過 - 第 {ch_idx} 章】**\n- 審查狀態：完全合規\n- 時空一致性：符合大綱要求\n- 實體與術語：無違規漂移",
-                        message_type="director"
+                    eval_passed = director_eval.get("passed", False)
+                    eval_issues = director_eval.get("issues", [])
+                    hard_writer_issues = [
+                        issue for issue in eval_issues
+                        if issue.startswith((
+                            "content 不可為空",
+                            "content 長度不足",
+                            "content 含占位或系統標記",
+                            "content 包含 AI 拒答",
+                            "content 包含元敘事",
+                            "【場景地點漂移】",
+                            "【時間連續性矛盾】",
+                            "【開篇定型模板重複】",
+                            "【敘事診斷紅線",
+                        ))
+                    ]
+                except Exception as fix_exc:
+                    task.log(f"❌ Writer 定向修正失敗：{fix_exc}", level="error")
+                    eval_passed = False
+                    hard_writer_issues.append(f"Writer 重寫失敗：{fix_exc}")
+
+            if hard_writer_issues or not eval_passed:
+                director_eval["passed"] = False
+                director_eval["writer_failed"] = True
+                task.log(f"🚫 [Writer Gate 失敗] 第 {ch_idx} 章 Writer 修正未通過驗收，停止進入 Editor：{'; '.join(hard_writer_issues or eval_issues)}", level="error")
+                try:
+                    db.save_director_review_status(
+                        novel_id=novel_id,
+                        stage_name="writer",
+                        status="writer_failed",
+                        block_name=f"chapter_{ch_idx}",
+                        volume_index=curr_vol_idx,
+                        chapter_index=ch_idx,
+                        reason="; ".join(hard_writer_issues or eval_issues),
+                        decision_json=director_eval,
                     )
+                except Exception as d_db_exc:
+                    task.log(f"⚠️ 總監審查記錄持久化異常: {d_db_exc}", level="warn")
+                return director_eval
+
+            try:
+                db.save_director_review_status(
+                    novel_id=novel_id,
+                    stage_name="writer",
+                    status="passed",
+                    block_name=f"chapter_{ch_idx}",
+                    volume_index=curr_vol_idx,
+                    chapter_index=ch_idx,
+                    reason="; ".join(eval_issues) if eval_issues else "總監校驗通過",
+                    decision_json=director_eval,
+                )
+            except Exception:
+                pass
+            task.log(f"✅ [總監審查通過] 第 {ch_idx} 章背景設定、時空連續性與實體錨點完全合規！")
+            director_eval["passed"] = True
+            director_eval["writer_failed"] = False
+            return director_eval
         except Exception as d_exc:
-            task.log(f"⚠️ 總監章節審查執行異常 (非致命，繼續後續流程): {d_exc}", level="warn")
-        return director_eval
+            task.log(f"⚠️ 總監章節審查異常: {d_exc}", level="warn")
+            return {"passed": False, "writer_failed": True, "error": str(d_exc)}
 
     def _run_editor_for_chapter(
         self,
@@ -1207,8 +1536,18 @@ class AutonomousPipelineManager:
         total_target: int,
         curr_vol_idx: Optional[int],
         director_eval: Dict[str, Any],
-    ) -> bool:
-        """(2) 編輯精修：成功回傳 True；失敗時保留初稿、記錄 failed 並回傳 False。"""
+    ) -> str:
+        """(2) 編輯精修：前置正文檢查，成功回傳 'PASS'；重定向回傳 'REDIRECT_TO_WRITER'；HALT 回傳 'HALT_CHAPTER'；失敗回傳 'FAILED'。"""
+        # 第一階段：先擋掉 Editor 空稿
+        chapter = db.get_latest_chapter(novel_id, ch_idx)
+        content = (chapter.get("content") or "").strip() if chapter else ""
+        if len(content) < 50:
+            task.log(
+                f"🚨 Editor 前置檢查失敗：第 {ch_idx} 章正文不存在或過短（{len(content)} < 50 字），停止 Editor 重試並回到 Writer。",
+                level="warn",
+            )
+            return "REDIRECT_TO_WRITER"
+
         task.current_stage = f"editor_ch{ch_idx}"
         task.status_message = f"🔍 正在由 Editor Agent 精修第 {ch_idx}/{total_target} 章文字與修辭..."
         task.log(f"開始對第 {ch_idx} 章進行潤色與精修...")
@@ -1228,6 +1567,15 @@ class AutonomousPipelineManager:
                 user_prompt=f"精修第 {ch_idx} 章",
                 verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
             )
+            return "PASS"
+        except StageRedirectException as redirect_exc:
+            if redirect_exc.target_stage == "writer":
+                task.log(f"🔀 [Director 路由] Editor 收到重定向指示：回到 Writer 階段（{redirect_exc.reason}）", level="warn")
+                return "REDIRECT_TO_WRITER"
+            raise redirect_exc
+        except ChapterHaltedException as halt_exc:
+            task.log(f"🛑 [Director 路由] Editor 收到章節中止指示：{halt_exc.reason}", level="warn")
+            return "HALT_CHAPTER"
         except Exception as editor_exc:
             # Editor 精修失敗不可中斷整條管線：Writer 初稿已保留，
             # 記一筆 failed 驗收供下次重啟時僅重試 Editor，然後繼續下一章。
@@ -1259,8 +1607,7 @@ class AutonomousPipelineManager:
                 )
             except Exception:
                 pass
-            return False
-        return True
+            return "FAILED"
 
     def _run_final_quality_gate(
         self,
@@ -1291,20 +1638,29 @@ class AutonomousPipelineManager:
                 level="warn",
             )
             from backend.agents.editor.runner import run_editor_agent
-            editor_gen = run_editor_agent(
-                novel_id,
-                ch_idx,
-                edit_instructions=(
-                    "請依下列硬性驗收問題修正正文，必須保留既有事件因果與角色事實；"
-                    "重寫命中句的敘事方式，不可只替換同義詞：\n- "
-                    + "\n- ".join(final_issues[:12])
-                ),
-                stream=False,
-                fix_mode=True,
-            )
-            for _ in editor_gen:
-                pass
-        if final_editor_eval and not final_editor_eval.get("passed"):
+            try:
+                editor_gen = run_editor_agent(
+                    novel_id,
+                    ch_idx,
+                    edit_instructions=(
+                        "請依下列硬性驗收問題修正正文，必須保留既有事件因果與角色事實；"
+                        "重寫命中句的敘事方式，不可只替換同義詞：\n- "
+                        + "\n- ".join(final_issues[:12])
+                    ),
+                    stream=False,
+                    fix_mode=True,
+                )
+                for _ in editor_gen:
+                    pass
+            except Exception as fix_exc:
+                final_editor_eval = {
+                    "passed": False,
+                    "issues": [f"Final Gate 修訂失敗：{fix_exc}"],
+                }
+                task.log(f"⚠️ 第 {ch_idx} 章 Final Gate 修訂呼叫失敗：{fix_exc}", level="warn")
+                break
+        passed = bool(final_editor_eval.get("passed"))
+        if final_editor_eval and not passed:
             remaining = final_editor_eval.get("issues") or []
             task.log(
                 f"🚫 [Editor 後品質閘門未通過] 第 {ch_idx} 章已修訂至上限，保留章節供人工檢視：{'; '.join(remaining[:8])}",
@@ -1323,12 +1679,13 @@ class AutonomousPipelineManager:
             )
         except Exception as eval_save_exc:
             task.log(f"⚠️ Editor 後品質驗收記錄儲存失敗：{eval_save_exc}", level="warn")
-        if final_editor_eval and not final_editor_eval.get("passed"):
+        if final_editor_eval and not passed:
             task.log(
                 f"⚠️ 第 {ch_idx} 章未通過 Editor 後品質驗收；草稿已保留並標記為待人工檢視，流程繼續下一章："
                 + "; ".join((final_editor_eval.get("issues") or [])[:8]),
                 level="error",
             )
+        return passed
 
     def _run_narrative_diagnostics(
         self,
@@ -1541,14 +1898,28 @@ class AutonomousPipelineManager:
             except Exception as fix_exc:
                 task.log(f"⚠️ 第 {ch_idx} 章自動修正異常 (保留原稿繼續): {fix_exc}", level="warn")
 
-    def _reconcile_foreshadowing_debts(self, task: NovelPipelineTask, novel_id: str):
-        """(2.8) 卷末零 LLM 伏筆回收對帳。"""
+    @staticmethod
+    def _is_volume_end(vols: List[Dict[str, Any]], chapter_index: int) -> bool:
+        """Return whether a chapter is the last planned chapter of its volume."""
         try:
-            from backend.services.foreshadowing.blueprint import get_global_foreshadowing_blueprint
+            return any(
+                int(chapter_index) == get_volume_chapter_range(vols, int(volume.get("volume_index") or 0))[1]
+                for volume in vols or []
+            )
+        except Exception:
+            return False
+
+    def _reconcile_foreshadowing_debts(self, task: NovelPipelineTask, novel_id: str, max_chapter: Optional[int] = None):
+        """(2.8) 卷末零 LLM 伏筆回收對帳，並驗證 payoff 的正文證據。"""
+        try:
+            from backend.services.foreshadowing.blueprint import (
+                get_global_foreshadowing_blueprint,
+                verify_foreshadowing_payoff,
+            )
             _blueprint = get_global_foreshadowing_blueprint(novel_id)
             if _blueprint:
                 _alloc = _blueprint.get("foreshadowing_allocations", [])
-                _total_T = _blueprint.get("T", 0)
+                _seeds = db.get_foreshadowing_seeds(novel_id)
                 _chapters_written = set()
                 try:
                     _all_ch = db.get_all_chapters_latest(novel_id)
@@ -1559,13 +1930,20 @@ class AutonomousPipelineManager:
                 except Exception:
                     pass
                 _overdue = []
+                _unverified = []
                 for _idx, _pair in enumerate(_alloc):
                     if isinstance(_pair, (list, tuple)) and len(_pair) >= 2:
                         _plant_ch, _payoff_ch = int(_pair[0]), int(_pair[1])
-                        # 若 payoff 章已寫完但尚無回收紀錄，標記逾期
+                        if max_chapter is not None and _payoff_ch > max_chapter:
+                            continue
                         if _payoff_ch in _chapters_written and _plant_ch in _chapters_written:
-                            # 此處為簡易對帳；未來可細化為實際檢查正文中 FSID 是否出現
-                            pass
+                            _payoff_row = db.get_chapter(novel_id, _payoff_ch)
+                            _seed = _seeds[_idx] if _idx < len(_seeds) else None
+                            _verified = verify_foreshadowing_payoff(
+                                _seed, (_payoff_row or {}).get("content", "")
+                            )
+                            if _verified is False:
+                                _unverified.append(f"FS{_idx+1:03d}(payoff={_payoff_ch})")
                         elif _plant_ch in _chapters_written and _payoff_ch not in _chapters_written:
                             if _payoff_ch <= max(_chapters_written, default=0):
                                 _overdue.append(f"FS{_idx+1:03d}(plant={_plant_ch}, payoff={_payoff_ch})")
@@ -1573,6 +1951,12 @@ class AutonomousPipelineManager:
                     task.log(
                         f"📋 [伏筆對帳] 發現 {len(_overdue)} 條伏筆疑似逾期未收：{', '.join(_overdue[:10])}"
                         + (f"...等共 {len(_overdue)} 條" if len(_overdue) > 10 else ""),
+                        level="warn",
+                    )
+                if _unverified:
+                    task.log(
+                        f"📋 [伏筆實質回收] 發現 {len(_unverified)} 條 payoff 章缺少 seed 關鍵詞證據：{', '.join(_unverified[:10])}"
+                        + (f"...等共 {len(_unverified)} 條" if len(_unverified) > 10 else ""),
                         level="warn",
                     )
         except Exception as _fsh_exc:
@@ -1610,6 +1994,94 @@ class AutonomousPipelineManager:
             db.save_chat_message(novel_id, "assistant", f"⚠️ **【系統通報】** 雲端自主創作任務異常中斷：{err_msg}", message_type="chat")
         except Exception:
             pass
+
+
+# =============================================================================
+# 終卷離線對帳與實質校驗輔助函數
+# =============================================================================
+
+def _iter_finale_keywords(value):
+    """只讀取明確標成完成承諾的欄位，避免把舊章綱敘述誤當硬性條件。"""
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            yield text
+    elif isinstance(value, dict):
+        for key in ("keyword", "name", "title"):
+            if value.get(key):
+                yield from _iter_finale_keywords(value[key])
+        for key in ("keywords", "items"):
+            if isinstance(value.get(key), (list, tuple, set)):
+                for item in value[key]:
+                    yield from _iter_finale_keywords(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_finale_keywords(item)
+
+
+def _audit_final_volume_lock(novel_id: str):
+    """完成前零 LLM 對帳；沒有新欄位的舊資料保持相容並直接通過。"""
+    try:
+        volumes = db.get_volumes(novel_id) or []
+        if not volumes:
+            return True, []
+        final_volume = max(volumes, key=lambda item: int(item.get("volume_index", 0)))
+        volume_index = int(final_volume.get("volume_index", 0))
+        start_ch, end_ch = db.get_volume_chapter_range(volumes, volume_index)
+        chapters = db.get_chapters_latest_range(novel_id, start_ch, end_ch)
+        prose = "\n".join(str(ch.get("content") or "") for ch in chapters)
+        issues = []
+
+        # 終卷新增 temporal entities 必須在終卷正文留下可追溯名稱。
+        for entity in db.get_entities(novel_id) or []:
+            name = str(entity.get("name") or "").strip()
+            created_ch = entity.get("created_chapter")
+            if name and created_ch is not None and int(created_ch) >= start_ch and name not in prose:
+                issues.append(f"新增命名實體「{name}」未在終卷正文出現")
+
+        # 終卷明確新增法則同樣要求正文落名；舊版純文字或空欄位不加新約束。
+        rules = final_volume.get("parsed_applicable_rules")
+        if not rules and final_volume.get("applicable_rules"):
+            raw_rules = final_volume["applicable_rules"]
+            try:
+                rules = json.loads(raw_rules) if isinstance(raw_rules, str) else raw_rules
+            except (TypeError, ValueError):
+                rules = []
+        for rule in rules or []:
+            rule_name = rule.get("name") or rule.get("rule_name") if isinstance(rule, dict) else ""
+            rule_name = str(rule_name or "").strip()
+            if rule_name and rule_name not in prose:
+                issues.append(f"終卷新增法則「{rule_name}」未在正文落實")
+
+        # 只驗證明確的承諾欄位，兼容既有只含 summary/chapters_outline 的資料。
+        outlines = final_volume.get("chapters_outline") or []
+        if isinstance(outlines, str):
+            try:
+                outlines = json.loads(outlines)
+            except (TypeError, ValueError):
+                outlines = []
+        promise_keys = (
+            "promise_keywords", "completion_keywords", "required_keywords",
+            "ending_keywords", "volume_promises",
+        )
+        promises = []
+        for outline in outlines if isinstance(outlines, list) else []:
+            if not isinstance(outline, dict):
+                continue
+            for key in promise_keys:
+                promises.extend(_iter_finale_keywords(outline.get(key)))
+        seen = set()
+        for promise in promises:
+            promise = promise.strip()
+            if promise and promise not in seen:
+                seen.add(promise)
+                if promise not in prose:
+                    issues.append(f"卷承諾關鍵詞「{promise}」未在終卷正文回收")
+
+        return not issues, issues
+    except Exception as exc:
+        # 對帳本身不可讓舊資料或缺欄位造成假完成；錯誤只鎖完成，不呼叫 LLM。
+        return False, [f"對帳資料異常：{exc}"]
 
 
 # =============================================================================
