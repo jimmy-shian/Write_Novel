@@ -70,9 +70,13 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
     """
     chapter_data = db.get_latest_chapter(novel_id, chapter_index)
     if not chapter_data:
-        raise ValueError(f"Chapter {chapter_index} prose not found for editing!")
+        raise ValueError(f"EDITOR_MISSING_INPUT: Chapter {chapter_index} prose not found for editing!")
 
-    original_prose = chapter_data.get("content", "")
+    original_prose = (chapter_data.get("content") or "").strip()
+    if len(original_prose) < 50:
+        raise ValueError(
+            f"EDITOR_MISSING_INPUT: Chapter {chapter_index} prose is empty or too short ({len(original_prose)} < 50 chars) for editing!"
+        )
     current_synopsis = chapter_data.get("synopsis", "")
     outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
 
@@ -195,20 +199,11 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
         return
 
     from backend.common.refusal_filter import (
+        _strip_llm_preamble,
         find_meta_narrative_leaks,
         is_refusal_or_disclaimer,
         sanitize_meta_narrative,
     )
-
-    def _strip_prose_markers(text: str) -> str:
-        cleaned = (text or "").strip()
-        special_markers = ["[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"]
-        for marker in special_markers:
-            if marker in cleaned:
-                idx = cleaned.find(marker)
-                cleaned = cleaned[idx + len(marker):].strip()
-                break
-        return cleaned
 
     # 長度不足自動擴寫補足：初次精修被壓縮至下限以下時，以偏短稿為基底
     # 追加細節補足至 1200 字，而非直接丟棄觸發整條管線重試／中斷。
@@ -217,7 +212,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
     cleaned_text = ""
     if full_text.strip():
         while True:
-            cleaned_text = _strip_prose_markers(full_text)
+            cleaned_text = _strip_llm_preamble(full_text)
 
             if _handle_director_context_request(novel_id, "編輯姬", cleaned_text):
                 yield "data: " + json.dumps({"type": "error", "message": "編輯姬需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
@@ -240,7 +235,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
 
-            candidate_prose = sanitize_meta_narrative(cleaned_text if cleaned_text else full_text)
+            candidate_prose = _strip_llm_preamble(sanitize_meta_narrative(cleaned_text if cleaned_text else full_text))
             # Editing must not turn a complete chapter into a truncated one. Existing short
             # chapters remain editable so they can be repaired incrementally.
             needs_expand = (

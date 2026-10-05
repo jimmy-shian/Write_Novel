@@ -15,6 +15,7 @@ from backend.prompts.common.context import build_relevant_character_context
 RECENT_MEMORY_WINDOW = 5
 ARC_SIZE = 5
 LONG_RANGE_MEMORY_WINDOW = 50
+CHARACTER_RECALL_WINDOW = 30
 PREVIOUS_TAIL_LIMIT = 1200
 
 
@@ -283,6 +284,42 @@ def _merge_character_progress(memories: List[Dict[str, Any]]) -> List[Dict[str, 
                 "latest_relationship_change": item.get("relationship_change", ""),
             }
     return list(seen.values())
+
+
+def get_overdue_character_recalls(
+    novel_id: str,
+    before_chapter: int,
+    window: int = CHARACTER_RECALL_WINDOW,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Return named characters absent for more than ``window`` chapters.
+
+    Only characters recorded in prior chapter memories are eligible. This keeps
+    characters that have never appeared out of the recall list.
+    """
+    target = int(before_chapter)
+    threshold = max(1, int(window))
+    if not novel_id or target <= threshold:
+        return []
+
+    memories = _memory_payload(db.get_chapter_memories(novel_id, 1, target - 1))
+    progress = _merge_character_progress(memories)
+    overdue = []
+    for item in progress:
+        last_seen = item.get("last_seen_chapter")
+        if last_seen is None:
+            continue
+        try:
+            chapters_since = target - int(last_seen)
+        except (TypeError, ValueError):
+            continue
+        if chapters_since > threshold:
+            overdue.append({
+                **item,
+                "chapters_since_last_seen": chapters_since,
+            })
+    overdue.sort(key=lambda item: (-int(item["chapters_since_last_seen"]), str(item.get("name", ""))))
+    return overdue[:max(1, int(limit))]
 
 
 def unresolved_foreshadowing_from_memories(memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

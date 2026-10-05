@@ -402,6 +402,8 @@ VOLUME_APPROVAL_CRITERIA = {
 
 CHAPTER_SKELETON_SCHEMA = {
     "chapter_index": 1,
+    "chapter_type": "normal", # 相容欄位：normal | climax | finale 等章型標記
+    "must_happen": [], # 相容欄位：本章不可遺漏的事件或狀態變化
     "chapter_title": "",
     "chapter_summary": "",
     "scene_function": "setup | escalation | confrontation | discovery | decision | consequence | recovery | transition | payoff", # Story Engine 2.0 場景功能
@@ -438,6 +440,8 @@ CHAPTER_SKELETON_SCHEMA = {
 
 CHAPTER_SKELETON_WITH_ALLOC_SCHEMA = {
     "chapter_index": 1,
+    "chapter_type": "normal", # 相容欄位：normal | climax | finale 等章型標記
+    "must_happen": [], # 相容欄位：本章不可遺漏的事件或狀態變化
     "chapter_title": "",
     "chapter_summary": "",
     "time_setting": "",
@@ -562,7 +566,7 @@ SKELETON_APPROVAL_CRITERIA = {
         },
         "chapter_structure": {
             "required_fields": ["chapter_index", "chapter_title", "chapter_summary", "time_setting", "scene_setting", "characters_active", "emotional_tone", "cliffhanger", "allocated_tasks"],
-            "description": "每章需具備輕量骨架結構，可包含 scene_goal, scene_conflict 與 scene_beats（或 events），供 writer 承接"
+            "description": "每章需具備輕量骨架結構，可包含 scene_goal, scene_conflict、scene_beats（或 events）、chapter_type 與 must_happen，供 writer 承接；chapter_type 與 must_happen 為相容欄位，舊骨架可省略"
         },
         "anti_repetition_and_diversity": {
             "description": "同卷內注重破局模式多樣化，避免連續過場空轉，重大轉折章前置具備動搖或懷疑拍點"

@@ -134,6 +134,25 @@ def _as_skeleton_chapters(parsed: Any) -> List[dict]:
         return parsed
     return []
 
+def _chapter_climax_stats(chapters: List[dict]) -> Dict[str, Any]:
+    """統計卷級骨架中的高潮章，保留舊版只使用 scene_function 的相容性。"""
+    climax_indexes: List[int] = []
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        chapter_type = str(chapter.get("chapter_type") or "").strip().lower()
+        scene_function = str(chapter.get("scene_function") or "").strip().lower()
+        if chapter_type in {"climax", "finale", "高潮", "高潮章", "終局", "終章"} or scene_function in {"climax", "高潮", "終局"}:
+            try:
+                climax_indexes.append(int(chapter.get("chapter_index")))
+            except (TypeError, ValueError):
+                continue
+    return {
+        "total_chapters": len(chapters),
+        "climax_count": len(climax_indexes),
+        "climax_chapter_indexes": sorted(set(climax_indexes)),
+    }
+
 def _validate_volume_skeleton(parsed: Any) -> List[str]:
     issues: List[str] = []
     chapters = _as_skeleton_chapters(parsed)
@@ -154,6 +173,12 @@ def _validate_volume_skeleton(parsed: Any) -> List[str]:
         for field in required:
             if not _non_empty_text(chapter.get(field)):
                 _append_limited_issue(issues, f"chapters[{idx}].{field} 不可為空")
+
+        # 新欄位採 optional 相容驗證，避免舊版骨架因缺欄位被退回。
+        if "chapter_type" in chapter and not _non_empty_text(chapter.get("chapter_type")):
+            _append_limited_issue(issues, f"chapters[{idx}].chapter_type 若提供則不可為空")
+        if "must_happen" in chapter and not isinstance(chapter.get("must_happen"), list):
+            _append_limited_issue(issues, f"chapters[{idx}].must_happen 若提供則必須是陣列")
         try:
             indexes.append(int(chapter.get("chapter_index")))
         except Exception:
@@ -202,6 +227,30 @@ def _content_from_writer_like_output(parsed: Any, output_content: str) -> tuple[
     if "[START_OF_PROSE]" in text:
         text = text.split("[START_OF_PROSE]", 1)[1]
     return text.strip(), {}
+
+
+def _scene_setting_keywords(value: Any) -> set[str]:
+    """從 scene_setting 萃取可在正文首段比對的純文字關鍵詞。"""
+    import re
+
+    if isinstance(value, dict):
+        parts = [_scene_setting_keywords(item) for item in value.values()]
+        return set().union(*parts) if parts else set()
+    if isinstance(value, (list, tuple, set)):
+        parts = [_scene_setting_keywords(item) for item in value]
+        return set().union(*parts) if parts else set()
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return set()
+    keywords: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", text):
+        if re.fullmatch(r"[\u3400-\u9fff]+", token):
+            if len(token) >= 2:
+                keywords.add(token)
+        else:
+            keywords.add(token)
+    return keywords
 
 def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> List[str]:
     issues: List[str] = []
@@ -261,18 +310,57 @@ def _validate_chapter_setting_and_continuity(
     first_paragraph = content.strip().split("\n")[0] if content else ""
     first_500 = content[:500]
 
-    # 1. 地點一致性校驗
+    # 1. 地點一致性校驗（三層判定：房號/強地標為 critical，純氣氛詞為 warning）
     scene_setting = outline.get("scene_setting") or outline.get("location") or ""
     if scene_setting:
         import re
-        room_match = re.search(r'(\d{3,4})\s*[室號房]', scene_setting)
+        scene_text = _text_value(scene_setting)
+
+        # 1.1 優先檢查明確房號、建築編號等強特徵
+        room_match = re.search(r'(\d{3,4})\s*[室號房]', scene_text)
         if room_match:
             expected_room = room_match.group(1)
             actual_rooms = re.findall(r'(\d{3,4})\s*[室號房]', first_500)
-            for r in actual_rooms:
-                if r != expected_room:
-                    issues.append(f"【場景地點漂移】大綱指定房號為「{expected_room}室」，正文開篇卻寫作「{r}室/房」")
-                    break
+            if actual_rooms and expected_room not in actual_rooms:
+                issues.append(f"【場景地點漂移】大綱指定房號為「{expected_room}室」，正文開篇卻寫作「{actual_rooms[0]}室/房」")
+
+        # 1.2 萃取強關鍵詞 vs 氛圍詞
+        STRONG_LOC_SUFFIXES = (
+            "室", "房", "館", "站", "殿", "閣", "峰", "山", "寺", "樓",
+            "莊", "院", "宮", "城", "港", "洞", "林", "谷", "塔", "府",
+            "局", "基地", "大樓", "公司", "辦公室", "會議室", "實驗室",
+            "牢房", "地牢", "酒館", "客棧", "別墅", "公寓", "校園", "學院", "教室", "病房", "醫院"
+        )
+        keywords = _scene_setting_keywords(scene_setting)
+        if keywords:
+            strong_keywords = {
+                kw for kw in keywords
+                if any(kw.endswith(suf) for suf in STRONG_LOC_SUFFIXES) or re.search(r"\d+", kw)
+            }
+            # 如果大綱含有明確地點名稱或強關鍵詞
+            explicit_loc = outline.get("location") if isinstance(outline.get("location"), str) else ""
+            if explicit_loc and len(explicit_loc.strip()) >= 2:
+                strong_keywords.add(explicit_loc.strip())
+
+            if strong_keywords:
+                matched_strong = {kw for kw in strong_keywords if kw in first_500.lower()}
+                # 明確地點完全不符時才判定為 critical
+                if not matched_strong and not any(kw in first_paragraph.lower() for kw in strong_keywords):
+                    issues.append(
+                        f"【場景地點漂移】大綱指定場景核心地點/地標「{', '.join(list(strong_keywords)[:2])}」未在開篇呈現，疑似場景漂移"
+                    )
+            else:
+                # 1.3 沒有強關鍵詞時，長描述或氛圍詞降級為 warning，不得直接硬攔截
+                matched_para = {kw for kw in keywords if kw in first_paragraph.lower()}
+                matched_500 = {kw for kw in keywords if kw in first_500.lower()}
+                if not matched_500:
+                    issues.append(
+                        "【場景氛圍提醒】大綱場景氛圍描繪未在正文開篇呈現，建議潤色時適度補充環境感官描寫"
+                    )
+                elif len(matched_para) / len(keywords) < 0.3:
+                    issues.append(
+                        "【場景細節提醒】大綱場景長描述部分元素未在首段呈現，建議潤色時增強環境細節"
+                    )
 
     # 2. 時間流向與開篇去重校驗
     time_setting = outline.get("time_setting") or ""
@@ -534,6 +622,8 @@ def evaluate_output(
         "focus_fix_plan": focus_fix_plan,
         "criteria_reference": criteria_prompt,
     }
+    if stage_name == "volume_skeleton":
+        result["climax_chapter_stats"] = _chapter_climax_stats(_as_skeleton_chapters(parsed))
     if narrative_audit:
         result["narrative_audit"] = narrative_audit
     return result

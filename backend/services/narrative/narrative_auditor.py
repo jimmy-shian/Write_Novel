@@ -11,7 +11,6 @@ Story Engine 2.0 Narrative Auditor (Director 2.0 敘事推理核心)
 """
 
 import re
-from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend import persistence as db
@@ -43,8 +42,26 @@ def _is_one_character_edit(left: str, right: str) -> bool:
     return edits == 1
 
 
+def _prose_shingles(prose: str, size: int = 4) -> set[str]:
+    """Return normalized character shingles used for cross-chapter comparison."""
+    normalized = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", prose.lower())
+    if len(normalized) < size:
+        return set()
+    return {normalized[offset : offset + size] for offset in range(len(normalized) - size + 1)}
+
+
+def _jaccard_similarity(left: set[str], right: set[str]) -> float:
+    """Return Jaccard similarity for two shingle sets."""
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
 class NarrativeAuditor:
     """提供 Director 2.0 的全面敘事推理與診斷能力。"""
+
+    TEMPLATE_HISTORY_CHAPTERS = 5
+    TEMPLATE_MIN_CHAPTER_FREQUENCY = 2
 
     # 通用 AI 模板化微動作與臉譜化台詞（不綁定特定作品專有名詞）
     GESTURE_REUSE_PATTERNS = [
@@ -175,6 +192,28 @@ class NarrativeAuditor:
         return None
 
     @classmethod
+    def _template_history_frequency(
+        cls, novel_id: str, chapter_index: int
+    ) -> Dict[str, int]:
+        """Count chapters in the recent history containing each reusable template."""
+        frequencies = {label: 0 for _, label in cls.GESTURE_REUSE_PATTERNS}
+        if chapter_index <= 1:
+            return frequencies
+        try:
+            start = max(1, chapter_index - cls.TEMPLATE_HISTORY_CHAPTERS)
+            for previous_index in range(start, chapter_index):
+                previous = db.get_latest_chapter(novel_id, previous_index)
+                previous_text = (previous or {}).get("content", "")
+                if not previous_text:
+                    continue
+                for pattern, label in cls.GESTURE_REUSE_PATTERNS:
+                    if re.search(pattern, previous_text):
+                        frequencies[label] += 1
+        except Exception as exc:
+            print(f"[WARN] Failed to scan template history (novel {novel_id}): {exc}")
+        return frequencies
+
+    @classmethod
     def _check_terms_compliance(cls, novel_id: str, prose_text: str) -> Optional[Dict[str, Any]]:
         """檢查術語庫名詞是否被近義詞隨意替換或未嚴格遵守唯一性。"""
         if not novel_id or not prose_text:
@@ -215,7 +254,7 @@ class NarrativeAuditor:
                 if len(term_name) >= 4 and term_name not in prose_text:
                     prefix = term_name[:2]
                     suffix = term_name[-2:]
-                    pat = rf"{prefix}[\u4e00-\u9fa5]{{1,2}}{suffix}"
+                    pat = rf"{re.escape(prefix)}[\u4e00-\u9fa5]{{1,2}}{re.escape(suffix)}"
                     fuzzy_match = re.search(pat, prose_text)
                     if fuzzy_match and fuzzy_match.group(0) != term_name:
                         corrupted = fuzzy_match.group(0)
@@ -244,32 +283,89 @@ class NarrativeAuditor:
             if not facts:
                 return None
             for f in facts:
-                inv_ch = f.get("invalid_from_chapter")
+                inv_ch_val = f.get("invalid_from_chapter")
+                try:
+                    inv_ch = int(inv_ch_val) if inv_ch_val is not None else None
+                except (ValueError, TypeError):
+                    inv_ch = None
+
+                # 若事實已在先前或當前章節被取代/修正，則不再作為有效死亡約束
+                if inv_ch is not None and chapter_index >= inv_ch:
+                    continue
+
                 stmt = f.get("fact_statement", "")
-                if inv_ch is not None and chapter_index >= inv_ch and stmt:
-                    m = re.search(r"([\u4e00-\u9fa5]{2,6}).*?(?:戰死|身亡|犧牲|隕落|死亡|消散|陣亡|死去|被殺|身死道消|自爆.*?身亡|斬首)", stmt)
-                    if m:
-                        raw_name = m.group(1)
-                        # Strip trailing verbs/prepositions if captured
-                        raw_name = re.sub(r"[在為於被自].*$", "", raw_name).strip()
-                        cleaned_name = re.sub(r"^(?:長老|將軍|隊長|護法|掌門|殿主|教主|舵主|宗主|堂主|老祖|師尊|師父)", "", raw_name).strip()
-                        faction_cleaned = re.sub(r"^.*?(?:教|宗|門|殿|閣|會|幫|府)", "", raw_name).strip()
-                        candidate_names = []
-                        if raw_name:
-                            candidate_names.append(raw_name)
-                        if cleaned_name and len(cleaned_name) >= 2 and cleaned_name not in candidate_names:
-                            candidate_names.append(cleaned_name)
-                        if faction_cleaned and len(faction_cleaned) >= 2 and faction_cleaned not in candidate_names:
-                            candidate_names.append(faction_cleaned)
-                        for cname in candidate_names:
-                            if re.search(rf"{cname}.*?(?:說|道|笑|拍|走|看|拔|站|回|微|現身|出手|狂笑|獰笑|冷笑|殺出|喝道|大喊)", prose_text):
-                                return {
-                                    "dimension": "temporal_graph_compliance",
-                                    "severity": "critical",
-                                    "evidence": f"時序世界線穿幫：已於第 {inv_ch} 章戰死之角色「{cname}」在正文中再次行動或發言。",
-                                    "recommendation": f"「{cname}」已於第 {inv_ch} 章陣亡，嚴禁在後續章節復活或直接參與對話。",
-                                    "action_required": True,
-                                }
+                if not stmt:
+                    continue
+
+                death_kw_pat = r"(?:戰死|身亡|犧牲|隕落|死亡|消散|陣亡|死去|被殺|身死道消|自爆.*?身亡|斬首|灰飛煙滅|被你蒸發|形神俱滅|魂飛魄散)"
+                m_kw = re.search(death_kw_pat, stmt)
+                if not m_kw:
+                    continue
+
+                prefix = stmt[:m_kw.start()].strip()
+                prefix = re.sub(r"[，,。！!\s]+", "", prefix)
+                prefix = re.sub(r"(?:已經?|在.*?|於.*?|被.*?|自.*?|為.*?|慘遭|不幸|最終)$", "", prefix).strip()
+                name_m = re.search(r"([\u4e00-\u9fa5]{2,6})$", prefix)
+                if not name_m:
+                    continue
+
+                raw_name = name_m.group(1)
+                # Strip trailing verbs/prepositions if captured
+                raw_name = re.sub(r"[在為於被自].*$", "", raw_name).strip()
+                cleaned_name = re.sub(
+                    r"^(?:長老|將軍|隊長|護法|掌門|殿主|教主|舵主|宗主|堂主|老祖|師尊|師父)",
+                    "",
+                    raw_name,
+                ).strip()
+                faction_cleaned = re.sub(r"^.*?(?:教|宗|門|殿|閣|會|幫|府)", "", raw_name).strip()
+                candidate_names = []
+                if raw_name and len(raw_name) >= 2:
+                    candidate_names.append(raw_name)
+                if cleaned_name and len(cleaned_name) >= 2 and cleaned_name not in candidate_names:
+                    candidate_names.append(cleaned_name)
+                if faction_cleaned and len(faction_cleaned) >= 2 and faction_cleaned not in candidate_names:
+                    candidate_names.append(faction_cleaned)
+
+                death_ch_val = f.get("valid_from_chapter")
+                try:
+                    death_chapter = int(death_ch_val) if death_ch_val is not None else None
+                except (ValueError, TypeError):
+                    death_chapter = None
+
+                # 只有死亡事件已發生，且當前章節在死亡章之後才檢查復活
+                if death_chapter is not None and chapter_index <= death_chapter:
+                    continue
+
+                # 切割句子以排除回憶、傳聞、悼念等非現場行動
+                sentences = re.split(r"[。！？\n]", prose_text)
+                memory_pattern = re.compile(
+                    r"(?:回想|憶起|想起|記得|傳聞|提及|提起|懷念|追憶|夢見|祭奠|紀念|當年|昔日|死於|墓前|遺物|遺言|生前|在天之靈|魂魄|幻象|幻影)"
+                )
+                action_pattern_template = r"{}.*?(?:說|道|笑|拍|走|看|拔|站|微|現身|出手|狂笑|獰笑|冷笑|殺出|喝道|大喊)"
+
+                for cname in candidate_names:
+                    act_pat = re.compile(action_pattern_template.format(re.escape(cname)))
+                    found_violation = False
+                    for sent in sentences:
+                        s_strip = sent.strip()
+                        if not s_strip or cname not in s_strip:
+                            continue
+                        # 回憶、傳聞、提及死亡角色，不應直接視為角色正在行動
+                        if memory_pattern.search(s_strip):
+                            continue
+                        if act_pat.search(s_strip):
+                            found_violation = True
+                            break
+
+                    if found_violation:
+                        death_ch_desc = f"已於第 {death_chapter} 章" if death_chapter is not None else "已"
+                        return {
+                            "dimension": "temporal_graph_compliance",
+                            "severity": "critical",
+                            "evidence": f"角色「{cname}」{death_ch_desc}死亡，後續正文疑似讓其再次行動或發言。",
+                            "recommendation": f"角色「{cname}」{death_ch_desc}死亡，嚴禁在後續正文中讓其再次行動或直接發言。",
+                            "action_required": True,
+                        }
         except Exception as exc:
             print(f"[WARN] Temporal fact compliance check failed (novel {novel_id}): {exc}")
         return None
@@ -363,7 +459,7 @@ class NarrativeAuditor:
         chapter_index: int,
         prose_text: str,
     ) -> Optional[Dict[str, Any]]:
-        """動態檢查是否有特定非通用短語在相鄰章節高頻復現（物象或微動作去重）。"""
+        """用 character shingles 與 Jaccard similarity 檢查相鄰章節正文重複。"""
         if not prose_text or chapter_index <= 1 or len(prose_text.strip()) < 300:
             return None
 
@@ -373,29 +469,22 @@ class NarrativeAuditor:
                 return None
             prev_text = prev_ch["content"]
 
-            cur_phrases = re.findall(r"[\u4e00-\u9fa5]{3,4}", prose_text)
-            cur_counts = Counter(cur_phrases)
+            current_shingles = _prose_shingles(prose_text)
+            previous_shingles = _prose_shingles(prev_text)
+            shared_count = len(current_shingles & previous_shingles)
+            similarity = _jaccard_similarity(current_shingles, previous_shingles)
 
-            COMMON_STOPWORDS = {
-                "不知不覺", "與此同時", "與此相反", "不可思議", "毫不猶豫",
-                "轉身離去", "搖了搖頭", "深吸一口", "點了點頭", "眉頭微皺",
-                "就在這時", "下一瞬間", "片刻之後", "抬起頭來", "緩緩開口",
-                "與此相關", "顯而易見", "無時無刻", "不由自主", "自言自語",
-                "後續情節", "情節發展", "情節推進", "角色對白", "進度平穩",
-            }
-            repeated_motifs = []
-            for phrase, count in cur_counts.items():
-                if count >= 3 and phrase not in COMMON_STOPWORDS:
-                    prev_cnt = prev_text.count(phrase)
-                    if prev_cnt >= 3:
-                        repeated_motifs.append(f"「{phrase}」（本章 {count} 次，上章 {prev_cnt} 次）")
-
-            if repeated_motifs:
+            # Require both a meaningful absolute overlap and a high ratio. This
+            # avoids flagging short boilerplate shared by otherwise different prose.
+            if shared_count >= 24 and similarity >= 0.50:
                 return {
                     "dimension": "voice_integrity",
                     "severity": "warning",
-                    "evidence": f"偵測到特定物象或口癖短語跨章高頻復用：{', '.join(repeated_motifs[:3])}。",
-                    "recommendation": "依據物象去重原則，嚴禁跨章節高頻復用單一固化物象或微動作，請更換為符合本章現場環境的新鮮感官描寫。",
+                    "evidence": (
+                        f"偵測到相鄰章節正文高度重複："
+                        f"{shared_count} 個共同 4-gram，Jaccard 相似度 {similarity:.0%}。"
+                    ),
+                    "recommendation": "請重寫本章中與前章高度重合的段落，保留情節功能並更換具體敘述、感官物象與句式。",
                     "action_required": True,
                 }
         except Exception as exc:
@@ -445,29 +534,33 @@ class NarrativeAuditor:
         # 維度 1: voice_integrity & gesture_reuse (語言、動作與收尾重複診斷)
         # -----------------------------------------------------------------
         gesture_hits = []
+        gesture_labels = []
         for pat, label in cls.GESTURE_REUSE_PATTERNS:
             matches = re.findall(pat, prose_text)
             if matches:
                 gesture_hits.append(f"{label} (出現 {len(matches)} 次)")
+                gesture_labels.append(label)
+
+        # 先算 shingle 結果，讓模板累犯不再和正文高度重複報告。
+        motif_finding = cls._check_cross_chapter_motif_reuse(novel_id, chapter_index, prose_text)
 
         # 1a. 本章內的模板動作/口癖檢測（含跨章累犯升級）
         if len(gesture_hits) >= 1:
-            recent_audits = []
-            try:
-                recent_audits = [
-                    a for a in (db.get_narrative_audits(novel_id, unresolved_only=True, limit=20) or [])
-                    if a.get("dimension") == "voice_integrity"
-                    and a.get("chapter_index", 0) >= chapter_index - 3
-                    and a.get("chapter_index", 0) < chapter_index
-                ]
-            except Exception as exc:
-                print(f"[WARN] Failed to fetch recent voice_integrity audits (novel {novel_id}): {exc}")
-
-            is_repeat_offense = len(recent_audits) >= 1
+            history_frequency = cls._template_history_frequency(novel_id, chapter_index)
+            repeated_templates = [
+                label for label in gesture_labels
+                if history_frequency.get(label, 0) >= cls.TEMPLATE_MIN_CHAPTER_FREQUENCY
+            ]
+            is_repeat_offense = bool(repeated_templates) and motif_finding is None
             sev = "warning" if (len(gesture_hits) >= 2 or is_repeat_offense) else "watch"
             act_req = len(gesture_hits) >= 3 or (len(gesture_hits) >= 2 and is_repeat_offense)
 
-            note = f"（累犯升級：近 3 章內已有 {len(recent_audits)} 筆同類語言套路觀察）" if is_repeat_offense else ""
+            note = (
+                f"（累犯升級：前 {cls.TEMPLATE_HISTORY_CHAPTERS} 章中，"
+                f"{', '.join(repeated_templates)} 各至少出現 "
+                f"{cls.TEMPLATE_MIN_CHAPTER_FREQUENCY} 章）"
+                if is_repeat_offense else ""
+            )
             findings.append({
                 "dimension": "voice_integrity",
                 "severity": sev,
@@ -482,7 +575,6 @@ class NarrativeAuditor:
             findings.append(ending_finding)
 
         # 1c. 動態跨章物象/短語重複檢測（物象去重原則）
-        motif_finding = cls._check_cross_chapter_motif_reuse(novel_id, chapter_index, prose_text)
         if motif_finding:
             findings.append(motif_finding)
 

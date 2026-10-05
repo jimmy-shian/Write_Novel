@@ -97,20 +97,31 @@ def build_split_chapter_outlines(
     summary = original_outline.get("chapter_summary") or ""
     events = original_outline.get("events") or []
     allocated = copy.deepcopy(original_outline.get("allocated_tasks") or {})
-    plants = allocated.get("foreshadowing_plants") or []
-    payoffs = allocated.get("foreshadowing_payoffs") or []
-    turning_points = allocated.get("turning_points") or []
 
     # 按比例拆分 events
     ev_total = len(events)
     step_ev = max(1, (ev_total + split_count - 1) // split_count) if ev_total > 0 else 0
 
-    # 拆分 plants, payoffs, turning_points
+    # 每個子章都拿到自己的深拷貝，避免後續 writer 修改時互相污染。
     def _chunk(lst):
         k, m = divmod(len(lst), split_count)
-        return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(split_count)]
+        return [
+            copy.deepcopy(lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)])
+            for i in range(split_count)
+        ]
 
-    p_chunks, pay_chunks, tp_chunks = map(_chunk, (plants, payoffs, turning_points))
+    def _split_field(value):
+        return _chunk(value) if isinstance(value, list) else [copy.deepcopy(value) for _ in range(split_count)]
+
+    task_chunks = {
+        key: _split_field(value)
+        for key, value in allocated.items()
+    }
+    beat_chunks = {
+        key: _chunk(value)
+        for key in ("scene_beats", "beats")
+        if isinstance((value := original_outline.get(key)), list)
+    }
 
     sub_outlines = []
     suffix_labels = ["（上）", "（中）", "（下）"] if split_count == 3 else ["（上）", "（下）"]
@@ -126,12 +137,12 @@ def build_split_chapter_outlines(
         sub_outline["chapter_title"] = f"{title}{suffix_labels[i]}"
         part_name = f"第{i + 1}階段"
         sub_outline["chapter_summary"] = f"【{part_name}】{summary}"
-        sub_outline["events"] = sub_events
+        sub_outline["events"] = copy.deepcopy(sub_events)
         sub_outline["allocated_tasks"] = {
-            "foreshadowing_plants": p_chunks[i],
-            "foreshadowing_payoffs": pay_chunks[i],
-            "turning_points": tp_chunks[i],
+            key: chunks[i] for key, chunks in task_chunks.items()
         }
+        for key, chunks in beat_chunks.items():
+            sub_outline[key] = chunks[i]
         if i == 0:
             sub_outline["scene_function"] = original_outline.get("scene_function") or "confrontation"
         elif i == split_count - 1:

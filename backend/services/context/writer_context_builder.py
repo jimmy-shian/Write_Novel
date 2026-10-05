@@ -325,11 +325,20 @@ class WriterContextBuilder:
             return ""
         keep = []
         if vol_outline_context:
+            in_current_volume = False
             for line in str(vol_outline_context).splitlines():
                 clean = line.strip()
-                if not clean or clean.startswith("{") or clean.startswith("}"):
+                if not clean:
                     continue
-                if any(marker in clean for marker in ("當前卷", "前一卷", "後一卷")):
+                if "【當前卷" in clean:
+                    in_current_volume = True
+                    keep.append(clean)
+                elif any(marker in clean for marker in ("【前一卷", "【後一卷")):
+                    in_current_volume = False
+                    keep.append(clean)
+                elif in_current_volume:
+                    # Current-volume JSON is authoritative. Keep its indented
+                    # lines instead of filtering the payload down to its label.
                     keep.append(clean)
                 elif clean.startswith(("標題：", "大綱：", "卷主題：", "主題：", "核心衝突：", "弧線目標：", "張力焦點：")):
                     keep.append(clean)

@@ -8,6 +8,7 @@ Story Engine 2.0 敘事推理系統單元測試：
 - 總監 evaluator 整合
 """
 import json
+from unittest.mock import patch
 
 from backend import persistence as db
 from backend.services.narrative import (
@@ -329,3 +330,82 @@ def test_director_evaluator_integration():
     assert eval_result["narrative_audit"]["chapter_index"] == 1
 
     db.delete_novel(novel_id)
+
+
+def test_cross_chapter_prose_shingle_jaccard_flags_high_overlap():
+    """相鄰章節正文高度重合時，應以 shingle/Jaccard 命中跨章重複。"""
+    from backend.services.narrative.narrative_auditor import NarrativeAuditor
+
+    shared = "林默穿過狹長的石廊，牆上的燭火映出搖晃的影子。"
+    current = (shared * 14) + "他在盡頭停下，聽見門後傳來急促的腳步聲。"
+    previous = (shared * 14) + "他在盡頭停下，發現石門後藏著一條密道。"
+
+    with patch(
+        "backend.services.narrative.narrative_auditor.db.get_latest_chapter",
+        return_value={"content": previous},
+    ):
+        finding = NarrativeAuditor._check_cross_chapter_motif_reuse("novel", 2, current)
+
+    assert finding is not None
+    assert finding["action_required"] is True
+    assert "Jaccard" in finding["evidence"]
+
+
+def test_cross_chapter_prose_shingle_jaccard_ignores_different_prose():
+    """情節與句式不同時，不應因少量常見字詞而誤報。"""
+    from backend.services.narrative.narrative_auditor import NarrativeAuditor
+
+    current = "戰鼓在山谷間炸響，騎兵越過碎石坡，" * 20
+    previous = "雨水沿著屋簷落下，老人在燈下整理泛黃信紙，" * 20
+
+    with patch(
+        "backend.services.narrative.narrative_auditor.db.get_latest_chapter",
+        return_value={"content": previous},
+    ):
+        finding = NarrativeAuditor._check_cross_chapter_motif_reuse("novel", 2, current)
+
+    assert finding is None
+
+
+def test_cross_chapter_prose_shingle_jaccard_skips_short_current_prose():
+    """短正文不進行跨章 shingle 比較。"""
+    from backend.services.narrative.narrative_auditor import NarrativeAuditor
+
+    with patch(
+        "backend.services.narrative.narrative_auditor.db.get_latest_chapter",
+        side_effect=AssertionError("short prose should return before database access"),
+    ):
+        finding = NarrativeAuditor._check_cross_chapter_motif_reuse("novel", 2, "短正文。" * 50)
+
+    assert finding is None
+
+
+def test_template_history_requires_minimum_frequency_across_prior_chapters():
+    """模板累犯須跨至少兩個前置章節，不能只看前一章的 audit。"""
+    from backend.services.narrative.narrative_auditor import NarrativeAuditor
+
+    template = "嘴角微微勾起一抹冷笑"
+    with patch(
+        "backend.services.narrative.narrative_auditor.db.get_latest_chapter",
+        side_effect=lambda _novel, chapter: {"content": template} if chapter in (2, 4) else {"content": "不同描寫"},
+    ):
+        frequencies = NarrativeAuditor._template_history_frequency("novel", 5)
+
+    assert frequencies["嘴角勾起笑意/冷笑"] == 2
+
+
+def test_template_history_does_not_add_cross_chapter_note_when_shingle_hits():
+    """shingle 已命中時，不再附加模板跨章累犯註記。"""
+    from backend.services.narrative.narrative_auditor import NarrativeAuditor
+
+    current = "嘴角微微勾起一抹冷笑。" + ("林默穿過狹長的石廊，牆上的燭火映出搖晃的影子。" * 14)
+    previous = "嘴角微微勾起一抹冷笑。" + ("林默穿過狹長的石廊，牆上的燭火映出搖晃的影子。" * 14)
+    with patch(
+        "backend.services.narrative.narrative_auditor.db.get_latest_chapter",
+        return_value={"content": previous},
+    ), patch("backend.services.narrative.narrative_auditor.db.add_narrative_audit"):
+        result = NarrativeAuditor.audit_chapter_prose("novel", 3, current)
+
+    voice_findings = [f for f in result["findings"] if f["dimension"] == "voice_integrity"]
+    assert any("Jaccard" in f["evidence"] for f in voice_findings)
+    assert not any("累犯升級" in f["evidence"] for f in voice_findings)

@@ -93,7 +93,7 @@ VOLUME_SKELETON_PROMPT = """你好！我們正在規劃本卷的結構化章節�
 """
 
 VOLUME_SKELETON_GUIDELINES = """【結構化骨架規劃指引】
-每章輸出完整的骨架欄位（chapter_index, chapter_title, chapter_summary, scene_function, time_setting, scene_setting, scene_goal, scene_conflict, story_state_before, story_state_after, setting_usage, scene_beats, characters_active, emotional_tone, emotional_requirement, character_state_changes, scene_turn, scene_outcome, cliffhanger, allocated_tasks）。
+每章輸出完整的骨架欄位（chapter_index, chapter_title, chapter_summary, scene_function, time_setting, scene_setting, scene_goal, scene_conflict, story_state_before, story_state_after, setting_usage, scene_beats, characters_active, emotional_tone, emotional_requirement, character_state_changes, scene_turn, scene_outcome, cliffhanger, allocated_tasks）。不得複述本指令、格式說明或 Agent 對話，只輸出要求的內容。
 
 規劃重點：
 1. **因果推進鏈與圖譜承接**：

@@ -171,6 +171,22 @@ def sanitize_meta_narrative(text: str) -> str:
     return result.strip()
 
 
+def _strip_llm_preamble(text: str) -> str:
+    """Remove model wrappers and formatting from the leading prose boundary."""
+    if not isinstance(text, str):
+        return text or ""
+    result = text.strip()
+    for marker in ("[START_OF_PROSE]", "[正文開始]", "【正文開始】", "【正文】", "[正文]", "[PROSE]"):
+        if marker in result:
+            result = result.split(marker, 1)[1].strip()
+            break
+    result = re.sub(r"^```(?:markdown|text)?\s*", "", result, flags=re.IGNORECASE)
+    result = re.sub(r"\s*```$", "", result)
+    result = re.sub(r"^(?:#{1,6}\s*|第\s*\d+\s*章[^\n]*\n+)", "", result, count=1)
+    result = re.sub(r"^(?:【修正輪[^】]*】|\[修正輪[^\]]*\])\s*", "", result)
+    return result.strip()
+
+
 _META_NARRATIVE_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -192,6 +208,9 @@ _META_NARRATIVE_PATTERNS = tuple(
         r"沒有[^，。！？\n]{0,20}(?:與|和)[^，。！？\n]{0,20}的鋪陳",
         r"(?:放棄|摒棄|不再使用)了?所有依賴[^，。！？\n]{0,30}(?:強行破局|慣性手法|套路)",
         r"(?:避免|嚴禁|切忌|不得)(?:使用|出現|依賴)[^，。！？\n]{0,25}(?:套路|慣性手法|模板)",
+        r"這是一部[^。！？\n]{0,30}(?:小說|長篇小說|創作作品)",
+        r"(?:正文精修版本|精修版本)",
+        r"根據您的(?:最高指令|指令|要求)",
     )
 )
 

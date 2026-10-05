@@ -572,6 +572,13 @@ def fix_chapter_until_pass(
             else:
                 _log(f"第 {chapter_index} 章第 {rnd} 輪重審仍為 [{final_action}]，繼續閉環修正...")
 
+    # 未通過的最後版本只能留作草稿，避免被 export 當成可上架正文。
+    if status != "passed":
+        try:
+            db.mark_latest_chapter_dirty(novel_id, chapter_index)
+        except Exception as exc:
+            print(f"[WARN] Failed to mark unfinished chapter dirty: {exc}")
+
     return {
         "status": status,
         "novel_id": novel_id,

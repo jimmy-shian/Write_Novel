@@ -279,10 +279,38 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         payoffs = current_tasks.get("foreshadowing_payoffs") or []
         turns = current_tasks.get("turning_points") or []
         task_lines = []
+        # Canonical allocations store only FS ids. Resolve them back to the
+        # worldbuilding seed so Writer receives meaning, not a bare pointer.
+        seed_by_id = {}
+        try:
+            wb = db.get_latest_worldbuilding(novel_id)
+            worldview = db.parse_worldview_to_json(wb["content"] if wb else "") if wb else {}
+            for idx, seed in enumerate(worldview.get("foreshadowing_seeds", []) or []):
+                if isinstance(seed, dict):
+                    seed_by_id[f"FS{idx + 1:03d}"] = seed
+                    seed_by_id[f"Seed-{idx + 1}"] = seed
+        except Exception as exc:
+            print(f"[ChapterWriter] Foreshadowing seed lookup unavailable: {exc}")
+
+        def describe_seed_ids(items):
+            described = []
+            for seed_id in items:
+                seed = seed_by_id.get(str(seed_id))
+                if not seed:
+                    described.append(seed_id)
+                    continue
+                described.append({
+                    "seed_id": seed_id,
+                    "name": seed.get("name") or seed.get("title") or seed.get("seed_name") or "",
+                    "description": seed.get("description") or seed.get("content") or seed.get("summary") or "",
+                    "payoff_hint": seed.get("payoff_hint") or seed.get("payoff") or seed.get("resolution") or "",
+                })
+            return described
+
         if plants:
-            task_lines.append("本章伏筆埋設：" + json.dumps(plants, ensure_ascii=False))
+            task_lines.append("本章伏筆埋設：" + json.dumps(describe_seed_ids(plants), ensure_ascii=False))
         if payoffs:
-            task_lines.append("本章伏筆回收：" + json.dumps(payoffs, ensure_ascii=False))
+            task_lines.append("本章伏筆回收：" + json.dumps(describe_seed_ids(payoffs), ensure_ascii=False))
         if turns:
             task_lines.append("本章轉折任務：" + json.dumps(turns, ensure_ascii=False))
         if task_lines:
@@ -373,7 +401,6 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             idx = full_text.find(sw)
             if idx != -1:
                 thinking_val = full_text[:idx].strip()
-                prose_val = full_text[idx + len(sw):].strip()
                 break
         if thinking_val and ("<think>" in thinking_val or "</think>" in thinking_val):
             thinking_val = re.sub(r"</?think>", "", thinking_val).strip()
@@ -387,6 +414,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             find_meta_narrative_leaks,
             is_refusal_or_disclaimer,
             sanitize_meta_narrative,
+            _strip_llm_preamble,
         )
         if is_refusal_or_disclaimer(prose_val):
             err_msg = f"第 {chapter_index} 章正文寫作輸出包含 AI 拒答或安全免責聲明，本次拒絕保存成品。"
@@ -394,7 +422,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
             return
 
-        prose_val = sanitize_meta_narrative(prose_val)
+        prose_val = _strip_llm_preamble(sanitize_meta_narrative(prose_val))
         if len(prose_val.strip()) < MIN_CHAPTER_PROSE_LENGTH:
             err_msg = (
                 f"第 {chapter_index} 章正文僅 {len(prose_val.strip())} 字，低於最低完整章節長度 "

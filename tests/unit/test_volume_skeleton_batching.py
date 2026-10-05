@@ -11,6 +11,8 @@ import uuid
 
 from backend import persistence as db
 from backend.agents.volume_skeleton.prompts import build_volume_skeleton_planner_messages
+from backend.agents.volume_skeleton.runner import _build_overdue_character_recall_context
+from backend.services.narrative_memory import get_overdue_character_recalls
 from backend.services.autonomous_pipeline import _are_batch_chapters_ready
 
 
@@ -61,6 +63,40 @@ def test_volume_skeleton_batch_prompt_construction():
     # 驗證包含前文已生成章節脈絡
     assert "第 8 章《倉庫湮滅》" in user_content
     assert "倉庫湮滅" in user_content
+
+
+def test_overdue_character_recall_uses_last_seen_without_replacing_recent_context():
+    novel_id = f"test_recall_{uuid.uuid4()}"
+    db.create_novel(novel_id, "召回測試小說", "玄幻", "熱血")
+    try:
+        db.save_chapter_memory(novel_id, 1, {
+            "chapter_index": 1,
+            "active_characters": [{"name": "蘇輕雪", "state_change": "與主角結盟"}],
+        })
+        db.save_chapter_memory(novel_id, 10, {
+            "chapter_index": 10,
+            "active_characters": [{"name": "林夜", "state_change": "決定反擊"}],
+        })
+        db.save_chapter_memory(novel_id, 39, {
+            "chapter_index": 39,
+            "active_characters": [{"name": "林夜", "state_change": "取得線索"}],
+        })
+
+        recalls = get_overdue_character_recalls(novel_id, before_chapter=41)
+        assert recalls == [{
+            "name": "蘇輕雪",
+            "last_seen_chapter": 1,
+            "latest_state_change": "與主角結盟",
+            "latest_relationship_change": "",
+            "chapters_since_last_seen": 40,
+        }]
+
+        context = _build_overdue_character_recall_context(novel_id, 41)
+        assert "蘇輕雪" in context
+        assert "最後出場第 1 章" in context
+        assert "已間隔 40 章" in context
+    finally:
+        db.delete_novel(novel_id)
 
 
 def test_are_batch_chapters_ready():
@@ -190,4 +226,3 @@ def test_run_volume_skeleton_planner_no_unbound_variable():
 
     finally:
         db.delete_novel(novel_id)
-

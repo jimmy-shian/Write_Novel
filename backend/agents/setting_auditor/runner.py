@@ -5,10 +5,58 @@ Setting Auditor Runner (Story Engine 2.0)
 """
 
 import json
+import re
 from typing import Any, Dict, Optional
 
 from backend import persistence as db
 from backend.services.narrative.setting_registry import SettingRegistry
+
+
+def _scene_setting_coverage(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Check that the chapter prose mentions its planned scene setting."""
+    outline = payload.get("outline") if isinstance(payload.get("outline"), dict) else {}
+    scene = payload.get("scene_setting") or outline.get("scene_setting") or outline.get("location")
+    content = payload.get("content") or payload.get("text") or payload.get("prose") or ""
+    if not scene or not content:
+        return {"passed": True, "matched_keywords": [], "missing_keywords": []}
+
+    explicit = payload.get("scene_setting_keywords") or payload.get("scene_keywords")
+    if not explicit and isinstance(scene, dict):
+        explicit = scene.get("keywords")
+    if isinstance(explicit, str):
+        explicit = [explicit]
+    keywords = [str(item).strip() for item in (explicit or []) if str(item).strip()]
+    auto_keywords = not keywords
+    if not keywords:
+        scene_text = scene if isinstance(scene, str) else " ".join(str(v) for v in scene.values())
+        # Keep this deliberately small: automatic extraction only needs one
+        # stable location phrase, while callers can pass exact keywords.
+        keywords = re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", scene_text)
+        if not keywords:
+            return {"passed": True, "matched_keywords": [], "missing_keywords": []}
+        keywords = sorted(keywords, key=len, reverse=True)[:3]
+        candidates = set(keywords)
+        for term in keywords:
+            if re.fullmatch(r"[\u4e00-\u9fff]+", term):
+                candidates.update(term[i:i + 3] for i in range(max(0, len(term) - 2)))
+        required = sorted(candidates, key=len, reverse=True)
+    else:
+        required = keywords
+
+    if auto_keywords:
+        matched = [keyword for keyword in required if keyword in str(content)]
+        missing = [] if matched else required[:1]
+    else:
+        matched = [keyword for keyword in required if keyword in str(content)]
+        missing = [keyword for keyword in required if keyword not in str(content)]
+    return {
+        "passed": not missing,
+        "matched_keywords": matched,
+        "missing_keywords": missing,
+        "issues": [] if not missing else [
+            f"正文未覆蓋指定場景關鍵詞：{', '.join(missing)}"
+        ],
+    }
 
 
 def run_setting_audit(
@@ -57,14 +105,19 @@ def run_setting_audit(
         # 正文生成後，登錄設定使用
         ch_idx = (payload or {}).get("chapter_index", 1)
         used_settings = (payload or {}).get("setting_usage", [])
+        record_usage = getattr(SettingRegistry, "record_setting_usage", SettingRegistry.record_system_usage)
         for s_name in used_settings:
-            SettingRegistry.record_setting_usage(novel_id, s_name, ch_idx)
+            record_usage(novel_id, s_name, ch_idx)
 
+        scene_audit = _scene_setting_coverage(payload or {})
         return {
             "audit_type": "chapter",
-            "passed": True,
+            "passed": scene_audit["passed"],
             "chapter_index": ch_idx,
             "updated_settings": used_settings,
+            "matched_keywords": scene_audit.get("matched_keywords", []),
+            "missing_keywords": scene_audit.get("missing_keywords", []),
+            "issues": scene_audit.get("issues", []),
         }
 
     return {"passed": True, "audit_type": audit_type}

@@ -197,6 +197,7 @@ def test_fix_loop_stops_at_max_rounds(monkeypatch):
     assert len(res["rounds"]) == 2
     assert state["calls"] == 2
     assert res["final_action"] == "REVISE"
+    assert db.get_latest_chapter(novel_id, 1)["is_dirty"] == 1
 
     db.delete_novel(novel_id)
 
@@ -502,4 +503,4 @@ def test_editor_targeted_rewriter_prompt_structure_in_fix_mode():
     assert "李斯特嘴角勾起一抹冷笑" in user_text
     assert "必須整句刪除重寫" in user_text
     # System 提示詞含修正輪特別禁令
-    assert "禁用模板庫零容忍" in msgs[0]["content"]
+    assert "禁用模板庫零容忍" in msgs[0]["content"]

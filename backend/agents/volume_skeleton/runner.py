@@ -6,6 +6,7 @@ from functools import partial
 
 from backend import persistence as db
 from backend.services import diagnostics
+from backend.services import narrative_memory
 import backend.services.director.context as director_context
 from backend.common.llm import call_llm_stream
 from backend.common.config import (
@@ -84,6 +85,25 @@ def _build_nearby_skeleton_context(volume, batch_indexes):
         return ""
     nearby.sort(key=lambda item: int(item.get("chapter_index", 0)))
     return "\n【同卷鄰近既有骨架（只供銜接，不要重寫這些章）】\n" + json.dumps(nearby, ensure_ascii=False, indent=2) + "\n"
+
+
+def _build_overdue_character_recall_context(novel_id, before_chapter):
+    """Format long-absent named characters for skeleton planning."""
+    overdue = narrative_memory.get_overdue_character_recalls(novel_id, before_chapter)
+    if not overdue:
+        return ""
+    lines = [
+        "【超過 30 章未出場的既有角色召回清單】",
+        "以下角色曾在正文出場，但已超過 30 章未出場。請只在本卷主線、衝突或角色弧線合理時安排自然召回，不得為了湊數硬塞；若召回，請在 characters_active 與 scene_beats 明確落地。",
+    ]
+    for item in overdue:
+        lines.append(
+            f"- {item['name']}：最後出場第 {item['last_seen_chapter']} 章，"
+            f"已間隔 {item['chapters_since_last_seen']} 章；"
+            f"最近狀態：{item.get('latest_state_change') or '未記錄'}；"
+            f"最近關係變化：{item.get('latest_relationship_change') or '未記錄'}"
+        )
+    return "\n" + "\n".join(lines) + "\n"
 
 
 _PLACEHOLDER_SETTING_MARKERS = ("待設定", "未設定", "待補", "依劇情決定", "暫定名稱", "placeholder", "tbd")
@@ -504,6 +524,7 @@ def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream
             }, ensure_ascii=False, indent=2)
             + "\n"
         )
+        batch_surrounding += _build_overdue_character_recall_context(novel_id, batch_start)
 
         batch_prompt = (
             f"【本次後端骨架分批生成任務】\n"
@@ -765,6 +786,7 @@ def _build_segment_shared_context(novel_id, volume_index, batch_indexes):
         }, ensure_ascii=False, indent=2)
         + "\n"
     )
+    base_surrounding_context += _build_overdue_character_recall_context(novel_id, min(batch_indexes))
 
     surrounding_context = base_surrounding_context + _build_nearby_skeleton_context(current_vol, batch_indexes)
 
@@ -1126,4 +1148,3 @@ def _collect_volume_skeleton_chapters(novel_id):
         if isinstance(ch_list, list):
             skeleton_chapters.extend(ch_list)
     return _normalize_chapter_list(skeleton_chapters)
-
