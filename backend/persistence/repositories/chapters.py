@@ -422,6 +422,27 @@ def save_chapter(novel_id, chapter_index, content, synopsis=None, thinking=None,
     return next_version
 
 
+def mark_latest_chapter_dirty(novel_id, chapter_index, is_dirty=True):
+    """Mark the latest saved chapter version as publishable or draft-only."""
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE chapters
+            SET is_dirty = ?
+            WHERE id = (
+                SELECT id FROM chapters
+                WHERE novel_id = ? AND chapter_index = ?
+                ORDER BY version DESC
+                LIMIT 1
+            )
+            """,
+            (1 if is_dirty else 0, novel_id, chapter_index),
+        )
+        return cursor.rowcount > 0
+
+
 def rollback_or_purge_chapter(novel_id: str, chapter_index: int) -> dict:
     """
     Rolls back chapter to the latest clean (non-refusal) prior version.

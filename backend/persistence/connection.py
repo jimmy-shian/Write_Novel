@@ -14,18 +14,23 @@ try:
     # 進行安全自我檢測，防止 Windows 環境下 opencc 造成中文字串編碼損毀 (Mojibake)
     if _s2t_converter.convert("測試") != "測試":
         _s2t_converter = None
+
 except Exception:
     # 若套件未安裝或載入失敗，fallback 為 identity function
     _s2t_converter = None
+
+# OpenCC preserves both valid Traditional variants. Normalize the two forms
+# used by this project so search, term checks, and exported prose agree.
+_TRADITIONAL_VARIANTS = str.maketrans({"着": "著", "裏": "裡"})
 
 def _to_traditional(text):
     """將傳入的文字從簡體轉換為繁體。若非字串或轉換器不可用，直接回傳原值。"""
     if isinstance(text, str) and _s2t_converter:
         try:
-            return _s2t_converter.convert(text)
+            return _s2t_converter.convert(text).translate(_TRADITIONAL_VARIANTS)
         except Exception:
-            return text
-    return text
+            return text.translate(_TRADITIONAL_VARIANTS)
+    return text.translate(_TRADITIONAL_VARIANTS) if isinstance(text, str) else text
 
 def _convert_obj_to_traditional(obj):
     """遞迴將物件內所有字串轉換為繁體（用於 dict/list 結構）。"""

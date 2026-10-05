@@ -19,7 +19,12 @@ def api_export_novel(novel_id: str, format: str = "txt"):
     char = db.get_latest_characters(novel_id)
     plot_data = db.get_stitched_plot(novel_id)
     plot = {"parsed_data": plot_data} if plot_data else None
-    chapters = db.get_all_chapters_latest(novel_id)
+    # Dirty versions are unfinished drafts and must not be exported by default.
+    chapters = [
+        chapter
+        for chapter in db.get_all_chapters_latest(novel_id)
+        if not chapter.get("is_dirty")
+    ]
 
     title = novel.get("title", "未命名小說")
     genre = novel.get("genre", "未分類")
