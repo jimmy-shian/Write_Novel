@@ -513,6 +513,7 @@ def db_init(
             novel_id TEXT NOT NULL,
             name TEXT NOT NULL,
             entity_type TEXT NOT NULL,
+            life_status TEXT,
             summary TEXT,
             attributes_json TEXT,
             created_chapter INTEGER DEFAULT 1,
@@ -520,6 +521,12 @@ def db_init(
             FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
         )
         """)
+        try:
+            cols = [r[1] for r in cursor.execute("PRAGMA table_info(temporal_entities)").fetchall()]
+            if "life_status" not in cols:
+                cursor.execute("ALTER TABLE temporal_entities ADD COLUMN life_status TEXT")
+        except Exception as e:
+            print(f"[WARN] Failed to migrate temporal entity life_status: {e}")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entities_novel_name ON temporal_entities(novel_id, name)")
 
         cursor.execute("""

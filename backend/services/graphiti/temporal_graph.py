@@ -20,11 +20,17 @@ class TemporalGraphService:
                 ent["id"],
                 name=ent["name"],
                 entity_type=ent["entity_type"],
+                life_status=ent.get("life_status"),
                 summary=ent["summary"],
                 attributes=ent.get("attributes", {})
             )
         
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
+        dead_names = {
+            ent["name"].strip().lower()
+            for ent in entities
+            if ent.get("life_status") == "dead" and ent.get("name")
+        }
         for fact in facts:
             u = fact.get("source_entity_id") or "global"
             v = fact.get("target_entity_id") or "global"
@@ -33,7 +39,9 @@ class TemporalGraphService:
                 key=fact["id"],
                 statement=fact["fact_statement"],
                 relation=fact.get("relation_type", "relates_to"),
-                valid_from=fact["valid_from_chapter"]
+                valid_from=fact["valid_from_chapter"],
+                source_life_status="dead" if fact.get("source_name", "").strip().lower() in dead_names else None,
+                target_life_status="dead" if fact.get("target_name", "").strip().lower() in dead_names else None,
             )
         return G
 
@@ -45,8 +53,20 @@ class TemporalGraphService:
     ) -> List[Dict[str, Any]]:
         """Retrieves facts active at at_chapter, optionally filtered by relevant entity names."""
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
+        status_by_name = {
+            ent["name"].strip().lower(): ent.get("life_status")
+            for ent in db.get_entities(novel_id)
+            if ent.get("name")
+        }
         if not entity_names:
-            return facts
+            return [
+                {
+                    **fact,
+                    "source_life_status": status_by_name.get((fact.get("source_name") or "").strip().lower()),
+                    "target_life_status": status_by_name.get((fact.get("target_name") or "").strip().lower()),
+                }
+                for fact in facts
+            ]
         
         clean_names = {n.strip().lower() for n in entity_names if n and n.strip()}
         if not clean_names:
@@ -59,6 +79,9 @@ class TemporalGraphService:
             stmt = (fact.get("fact_statement") or "").lower()
             # If source, target, or statement mentions the entity
             if src in clean_names or tgt in clean_names or any(name in stmt for name in clean_names):
+                fact = dict(fact)
+                fact["source_life_status"] = status_by_name.get(src)
+                fact["target_life_status"] = status_by_name.get(tgt)
                 filtered.append(fact)
         return filtered
 
@@ -117,6 +140,8 @@ class TemporalGraphService:
                 tgt = f.get("target_name")
                 rel = f.get("relation_type")
                 stmt = f.get("fact_statement") or f.get("stmt") or ""
+                if (f.get("source_life_status") == "dead" or f.get("target_life_status") == "dead"):
+                    stmt = f"[死亡狀態優先] {stmt}"
                 from_ch = f.get("valid_from_chapter") or f.get("from_ch") or 1
                 if src and tgt and rel:
                     lines.append(f"  - [第 {from_ch} 章起生效] {src} --({rel})--> {tgt}：{stmt}")

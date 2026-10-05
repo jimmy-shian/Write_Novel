@@ -20,6 +20,7 @@ EXTRACTION_SYSTEM_PROMPT = """你是一位精通長篇小說故事設定與動�
     {
       "name": "實體名稱",
       "entity_type": "character|item|location|faction|concept",
+      "life_status": "alive|dead|unknown (角色或生物目前生死狀態，非角色填 unknown)",
       "summary": "當前最新狀態簡述",
       "attributes": {"key": "value"}
     }
@@ -108,41 +109,55 @@ class ChapterFactExtractor:
             f"- [ID:{f['id']}] {f.get('fact_statement', '')}" for f in existing_facts[:20]
         ])
 
-        user_prompt = f"""【當前已有之生效事實清單 (供比對是否作廢)】:
-{existing_facts_desc or '（目前尚無舊事實）'}
-
-【第 {chapter_index} 章正文內容】:
-{chapter_text[:4000]}
-
-請分析上述正文，提取新事實並指出被作廢的舊事實。"""
+        chunk_size = 4000
+        chunks = [chapter_text[i:i + chunk_size] for i in range(0, len(chapter_text), chunk_size)]
+        aggregate = {
+            "entities": [],
+            "new_facts": [],
+            "invalidated_fact_ids_or_statements": [],
+            "conflict_signature": {},
+            "setting_usage": [],
+            "terms": [],
+        }
 
         used_fallback = False
         fallback_reason = ""
         try:
-            raw_response = call_llm(
-                agent_name=agent_name,
-                system_prompt=EXTRACTION_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                force_json=True,
-            )
-            if not raw_response or not raw_response.strip():
-                raise ValueError("LLM returned empty response")
-            # 1) 先試原生 JSON（相容開啟 response_format 的模型）
-            try:
-                data = json.loads(raw_response)
-            except Exception:
-                # 2) 相容 ```json ... ``` / <think> / 前後贅字（gemini-web/pro 常見）
-                data = extract_json_block(raw_response)
-            if not isinstance(data, dict):
-                raise ValueError(f"Parsed JSON is not a dict: {type(data).__name__}")
-            if "entities" not in data and "new_facts" not in data:
-                raise ValueError(f"Parsed JSON missing keys: {list(data.keys())[:5]}")
-            data.setdefault("entities", [])
-            data.setdefault("new_facts", [])
-            data.setdefault("invalidated_fact_ids_or_statements", [])
-            data.setdefault("conflict_signature", {})
-            data.setdefault("setting_usage", [])
-            data.setdefault("terms", [])
+            for chunk_index, chunk in enumerate(chunks, start=1):
+                user_prompt = f"""【當前已有之生效事實清單 (供比對是否作廢)】:
+{existing_facts_desc or '（目前尚無舊事實）'}
+
+【第 {chapter_index} 章正文，第 {chunk_index}/{len(chunks)} 段】:
+{chunk}
+
+請只分析這一段正文，提取其中的新事實、實體狀態與被作廢的舊事實。"""
+                raw_response = call_llm(
+                    agent_name=agent_name,
+                    system_prompt=EXTRACTION_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    force_json=True,
+                )
+                if not raw_response or not raw_response.strip():
+                    raise ValueError(f"LLM returned empty response for chunk {chunk_index}")
+                try:
+                    data = json.loads(raw_response)
+                except Exception:
+                    data = extract_json_block(raw_response)
+                if not isinstance(data, dict):
+                    raise ValueError(f"Parsed JSON is not a dict: {type(data).__name__}")
+                if "entities" not in data and "new_facts" not in data:
+                    raise ValueError(f"Parsed JSON missing keys: {list(data.keys())[:5]}")
+                aggregate["entities"].extend(data.get("entities") or [])
+                aggregate["new_facts"].extend(data.get("new_facts") or [])
+                aggregate["invalidated_fact_ids_or_statements"].extend(
+                    data.get("invalidated_fact_ids_or_statements") or []
+                )
+                for key in ("conflict_signature",):
+                    if isinstance(data.get(key), dict):
+                        aggregate[key].update({k: v for k, v in data[key].items() if v})
+                for key in ("setting_usage", "terms"):
+                    aggregate[key].extend(data.get(key) or [])
+            data = aggregate
         except Exception as e:
             # Fallback for mock or failure（保留舊行為，但加上可觀測性）
             print(f"[Graphiti Extractor] Chapter {chapter_index} LLM parse failed, using fallback. Reason: {e}")
@@ -210,6 +225,7 @@ class ChapterFactExtractor:
                     entity_type=etype,
                     summary=ent.get("summary", ""),
                     attributes=ent.get("attributes"),
+                    life_status=(ent.get("life_status") or "").strip().lower() or None,
                     chapter_index=chapter_index
                 )
                 entity_id_map[name] = res["id"]

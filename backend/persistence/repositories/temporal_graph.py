@@ -50,33 +50,38 @@ def upsert_entity(
     entity_type: str,
     summary: str = "",
     attributes: Optional[Dict[str, Any]] = None,
-    chapter_index: int = 1
+    chapter_index: int = 1,
+    life_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, attributes_json FROM temporal_entities WHERE novel_id = ? AND name = ?", (novel_id, name))
+    cursor.execute("SELECT id, life_status, attributes_json FROM temporal_entities WHERE novel_id = ? AND name = ?", (novel_id, name))
     row = cursor.fetchone()
     attr_str = json.dumps(attributes or {}, ensure_ascii=False)
+    normalized_status = life_status if life_status in {"alive", "dead", "unknown"} else None
+    if row and normalized_status is None:
+        normalized_status = row["life_status"]
     
     if row:
         ent_id = row["id"]
         cursor.execute("""
             UPDATE temporal_entities
-            SET entity_type = ?, summary = ?, attributes_json = ?, updated_chapter = ?
+            SET entity_type = ?, life_status = COALESCE(?, life_status), summary = ?, attributes_json = ?, updated_chapter = ?
             WHERE id = ?
-        """, (entity_type, summary, attr_str, chapter_index, ent_id))
+        """, (entity_type, normalized_status, summary, attr_str, chapter_index, ent_id))
     else:
         ent_id = f"ent_{uuid.uuid4().hex[:12]}"
         cursor.execute("""
-            INSERT INTO temporal_entities (id, novel_id, name, entity_type, summary, attributes_json, created_chapter, updated_chapter)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ent_id, novel_id, name, entity_type, summary, attr_str, chapter_index, chapter_index))
+            INSERT INTO temporal_entities (id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ent_id, novel_id, name, entity_type, normalized_status, summary, attr_str, chapter_index, chapter_index))
     conn.commit()
     return {
         "id": ent_id,
         "novel_id": novel_id,
         "name": name,
         "entity_type": entity_type,
+        "life_status": normalized_status,
         "summary": summary,
         "attributes": attributes or {},
         "updated_chapter": chapter_index
@@ -87,13 +92,13 @@ def get_entities(novel_id: str, entity_type: Optional[str] = None) -> List[Dict[
     cursor = conn.cursor()
     if entity_type:
         cursor.execute("""
-            SELECT id, novel_id, name, entity_type, summary, attributes_json, created_chapter, updated_chapter
+            SELECT id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter
             FROM temporal_entities WHERE novel_id = ? AND entity_type = ?
             ORDER BY name ASC
         """, (novel_id, entity_type))
     else:
         cursor.execute("""
-            SELECT id, novel_id, name, entity_type, summary, attributes_json, created_chapter, updated_chapter
+            SELECT id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter
             FROM temporal_entities WHERE novel_id = ?
             ORDER BY entity_type ASC, name ASC
         """, (novel_id,))
@@ -111,6 +116,7 @@ def get_entities(novel_id: str, entity_type: Optional[str] = None) -> List[Dict[
             "novel_id": r["novel_id"],
             "name": r["name"],
             "entity_type": r["entity_type"],
+            "life_status": r["life_status"],
             "summary": r["summary"],
             "attributes": attrs,
             "created_chapter": r["created_chapter"],
