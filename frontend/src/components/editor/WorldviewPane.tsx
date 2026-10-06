@@ -1600,6 +1600,8 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
     );
   }
 
+  const cardWb: any = parsedWorldview || {};
+
   return (
     <div
       className="worldview-pane-container"
@@ -1702,7 +1704,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                   )}
                 </div>
 
-                {parsedWorldview ? (
+                {cardWb ? (
                   <>
                     {/* Card 1: Theme & Main Conflict */}
                     <div className="worldview-section-card" id="wb-card-theme">
@@ -1719,8 +1721,8 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                           if (isEditingTheme) {
                             handleSaveThemeConflict(editTheme, editConflict);
                           } else {
-                            setEditTheme(parsedWorldview.theme || '');
-                            setEditConflict(parsedWorldview.main_conflict || '');
+                            setEditTheme(cardWb.theme || '');
+                            setEditConflict(cardWb.main_conflict || '');
                             setIsEditingTheme(true);
                           }
                         }}
@@ -1774,12 +1776,12 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       <>
                         <div className="worldview-sub-item">
                           <span className="worldview-sub-title">核心主題 (Theme)</span>
-                          <p className="worldview-sub-desc">{parsedWorldview.theme || '尚未設定核心主題'}</p>
+                          <p className="worldview-sub-desc">{cardWb.theme || '尚未設定核心主題'}</p>
                         </div>
                         <div className="worldview-sub-item">
                           <span className="worldview-sub-title">核心對抗與主要矛盾 (Main Conflict)</span>
                           <p className="worldview-sub-desc">
-                            {parsedWorldview.main_conflict || '尚未設定主要對抗矛盾'}
+                            {cardWb.main_conflict || '尚未設定主要對抗矛盾'}
                           </p>
                         </div>
                       </>
@@ -1801,7 +1803,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                           if (isEditingWorldviewText) {
                             handleSaveWorldviewField(editWorldviewText);
                           } else {
-                            setEditWorldviewText(parsedWorldview.worldview || '');
+                            setEditWorldviewText(cardWb.worldview || '');
                             setIsEditingWorldviewText(true);
                           }
                         }}
@@ -1844,7 +1846,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       </div>
                     ) : (
                       <div className="worldview-card-body">
-                        {parsedWorldview.worldview || '尚未填寫世界觀體系設定'}
+                        {cardWb.worldview || '尚未填寫世界觀體系設定'}
                       </div>
                     )}
                   </div>
@@ -1864,7 +1866,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                           if (isEditingMacroOutline) {
                             handleSaveMacroOutline(editMacroOutline);
                           } else {
-                            setEditMacroOutline(parsedWorldview.macro_outline || '');
+                            setEditMacroOutline(cardWb.macro_outline || '');
                             setIsEditingMacroOutline(true);
                           }
                         }}
@@ -1907,7 +1909,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       </div>
                     ) : (
                       <div className="worldview-card-body">
-                        {parsedWorldview.macro_outline || '尚未填寫全書宏觀主線大綱'}
+                        {cardWb.macro_outline || '尚未填寫全書宏觀主線大綱'}
                       </div>
                     )}
                   </div>
@@ -1917,7 +1919,7 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                     <div className="worldview-card-header">
                       <h4 className="worldview-card-title">
                         <IconBookOpen size={16} className="text-accent" />
-                        多幕戲劇弧線架構 {Array.isArray(parsedWorldview.multi_act_structure) && `(${parsedWorldview.multi_act_structure.length} 幕)`}
+                        多幕戲劇弧線架構 {Array.isArray(cardWb.multi_act_structure) && `(${cardWb.multi_act_structure.length} 幕)`}
                       </h4>
                       <div className="flex items-center gap-2">
                         <Button
@@ -1931,9 +1933,9 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                         </Button>
                       </div>
                     </div>
-                    {Array.isArray(parsedWorldview.multi_act_structure) && parsedWorldview.multi_act_structure.length > 0 ? (
+                    {Array.isArray(cardWb.multi_act_structure) && cardWb.multi_act_structure.length > 0 ? (
                       <div className="worldview-grid-cards">
-                        {parsedWorldview.multi_act_structure.map((act: any, aIdx: number) => {
+                        {cardWb.multi_act_structure.map((act: any, aIdx: number) => {
                           const actTitle = typeof act === 'string' ? `第 ${aIdx + 1} 幕` : act.title || act.act_name || `第 ${aIdx + 1} 幕`;
                           const actContent = typeof act === 'string' ? act : act.content || act.description || '';
                           const isEditingAct = editingActIndex === aIdx;
@@ -2021,12 +2023,12 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       <div className="flex items-center gap-2">
                         <h4 className="worldview-card-title">
                           <IconSparkles size={16} className="text-accent" />
-                          全書核心重大轉折點 {Array.isArray(parsedWorldview.key_turning_points) && `(${parsedWorldview.key_turning_points.length})`}
+                          全書核心重大轉折點 {Array.isArray(cardWb.key_turning_points) && `(${cardWb.key_turning_points.length})`}
                         </h4>
-                        {Array.isArray(parsedWorldview.key_turning_points) && (
+                        {Array.isArray(cardWb.key_turning_points) && (
                           <span className="text-muted text-xs font-mono">
-                            顯示 {Math.min(visibleTpCount, parsedWorldview.key_turning_points.length)} / 共{' '}
-                            {parsedWorldview.key_turning_points.length} 處
+                            顯示 {Math.min(visibleTpCount, cardWb.key_turning_points.length)} / 共{' '}
+                            {cardWb.key_turning_points.length} 處
                           </span>
                         )}
                       </div>
@@ -2051,10 +2053,10 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       </div>
                     </div>
 
-                    {Array.isArray(parsedWorldview.key_turning_points) && parsedWorldview.key_turning_points.length > 0 ? (
+                    {Array.isArray(cardWb.key_turning_points) && cardWb.key_turning_points.length > 0 ? (
                       <div className="worldview-scroll-viewport">
                         <div className="worldview-grid-cards">
-                          {parsedWorldview.key_turning_points
+                          {cardWb.key_turning_points
                             .slice(0, visibleTpCount)
                             .map((tp: any, tpIdx: number) => {
                               const isEditing = editingTpIndex === tpIdx;
@@ -2178,14 +2180,14 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                         </div>
                         {/* Auto-scroll Sentinel */}
                         <div ref={tpSentinelRef} className="lazy-sentinel" />
-                        {visibleTpCount < parsedWorldview.key_turning_points.length && (
+                        {visibleTpCount < cardWb.key_turning_points.length && (
                           <div className="lazy-load-action-bar">
                             <Button
                               size="sm"
                               variant="secondary"
                               onClick={() =>
                                 setVisibleTpCount((prev) =>
-                                  Math.min(prev + 8, parsedWorldview.key_turning_points.length)
+                                  Math.min(prev + 8, cardWb.key_turning_points.length)
                                 )
                               }
                             >
@@ -2205,12 +2207,12 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       <div className="flex items-center gap-2">
                         <h4 className="worldview-card-title">
                           <IconBookOpen size={16} className="text-accent" />
-                          全書深層伏筆種子庫 {Array.isArray(parsedWorldview.foreshadowing_seeds) && `(${parsedWorldview.foreshadowing_seeds.length})`}
+                          全書深層伏筆種子庫 {Array.isArray(cardWb.foreshadowing_seeds) && `(${cardWb.foreshadowing_seeds.length})`}
                         </h4>
-                        {Array.isArray(parsedWorldview.foreshadowing_seeds) && (
+                        {Array.isArray(cardWb.foreshadowing_seeds) && (
                           <span className="text-muted text-xs font-mono">
-                            顯示 {Math.min(visibleSeedCount, parsedWorldview.foreshadowing_seeds.length)} / 共{' '}
-                            {parsedWorldview.foreshadowing_seeds.length} 個
+                            顯示 {Math.min(visibleSeedCount, cardWb.foreshadowing_seeds.length)} / 共{' '}
+                            {cardWb.foreshadowing_seeds.length} 個
                           </span>
                         )}
                       </div>
@@ -2235,10 +2237,10 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                       </div>
                     </div>
 
-                    {Array.isArray(parsedWorldview.foreshadowing_seeds) && parsedWorldview.foreshadowing_seeds.length > 0 ? (
+                    {Array.isArray(cardWb.foreshadowing_seeds) && cardWb.foreshadowing_seeds.length > 0 ? (
                       <div className="worldview-scroll-viewport">
                         <div className="worldview-grid-cards">
-                          {parsedWorldview.foreshadowing_seeds
+                          {cardWb.foreshadowing_seeds
                             .slice(0, visibleSeedCount)
                             .map((seed: any, sIdx: number) => {
                               const isEditing = editingSeedIndex === sIdx;
@@ -2392,14 +2394,14 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                         </div>
                         {/* Auto-scroll Sentinel */}
                         <div ref={seedSentinelRef} className="lazy-sentinel" />
-                        {visibleSeedCount < parsedWorldview.foreshadowing_seeds.length && (
+                        {visibleSeedCount < cardWb.foreshadowing_seeds.length && (
                           <div className="lazy-load-action-bar">
                             <Button
                               size="sm"
                               variant="secondary"
                               onClick={() =>
                                 setVisibleSeedCount((prev) =>
-                                  Math.min(prev + 8, parsedWorldview.foreshadowing_seeds.length)
+                                  Math.min(prev + 8, cardWb.foreshadowing_seeds.length)
                                 )
                               }
                             >
@@ -2424,9 +2426,29 @@ export const WorldviewPane: React.FC<WorldviewPaneProps> = ({
                 <div className="empty-blueprint-guide">
                   <IconBookOpen size={24} className="text-muted" />
                   <p>目前尚未生成世界觀設定。</p>
-                  <span className="text-xs text-muted">
-                    可在右側 AI 導演面板選擇【世界觀構建】流水線生成，或切換為純文字直接編輯輸入。
+                  <span className="text-xs text-muted mb-3">
+                    可在右側 AI 導演面板選擇【世界觀構建】流水線生成，或點擊下方按鈕手動建立空白框架後直接編輯。
                   </span>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => {
+                      const emptyStructure = {
+                        theme: '',
+                        main_conflict: '',
+                        worldview: '',
+                        macro_outline: '',
+                        multi_act_structure: [],
+                        key_turning_points: [],
+                        foreshadowing_seeds: [],
+                      };
+                      setWbText(JSON.stringify(emptyStructure, null, 2));
+                      onLog?.('已手動建立空白世界觀框架，可在卡片模式下編輯各欄位');
+                    }}
+                  >
+                    <IconPlus size={14} />
+                    <span>手動建立世界觀框架</span>
+                  </Button>
                 </div>
               )}
             </div>
