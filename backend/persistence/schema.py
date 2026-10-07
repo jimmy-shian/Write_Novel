@@ -757,6 +757,27 @@ def db_init(
         )
         """)
 
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS narrative_planning_blueprints (
+            novel_id TEXT PRIMARY KEY,
+            blueprint_json TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'planning_blueprint',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS narrative_entity_bindings (
+            novel_id TEXT NOT NULL,
+            binding_id TEXT NOT NULL,
+            binding_json TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (novel_id, binding_id),
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create temporal_graph / story extension tables: {e}")

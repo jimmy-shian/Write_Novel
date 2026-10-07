@@ -26,5 +26,6 @@ from backend.persistence.repositories.chat_memory import *
 from backend.persistence.repositories.preferences import *
 from backend.persistence.repositories.narrative import *
 from backend.persistence.repositories.geometry import *
+from backend.persistence.repositories.planning import *
 
 

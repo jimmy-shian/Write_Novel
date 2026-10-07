@@ -10,6 +10,9 @@ duplicated across agents.py and diagnostics.py.
 MIN_FORESHADOWING_SEEDS = 150
 MIN_KEY_TURNING_POINTS = 150
 
+# --- Character constraints ---
+MIN_CHARACTER_COUNT = 15
+
 # --- Volume constraints ---
 MIN_VOLUME_COUNT = 10
 MAX_VOLUME_COUNT = 20

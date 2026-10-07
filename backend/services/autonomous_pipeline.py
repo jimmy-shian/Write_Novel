@@ -346,6 +346,9 @@ class AutonomousPipelineManager:
                     t.log("使用者請求全域中止雲端任務", level="warn")
                 return {"status": "stopping", "success": True, "message": f"已對所有 {len(running_tasks)} 本正在生成的小說發送中止請求"}
 
+    def execute_generation_task(self, payload: Dict[str, Any]) -> Any:
+        return execute_generation_task(payload)
+
     def _execute_stage_with_retry(
         self,
         task: NovelPipelineTask,
@@ -757,6 +760,10 @@ class AutonomousPipelineManager:
             if task.stop_requested: return
             self._phase_worldview(task, novel_id, initial_prompt)
 
+            # 1.5 拓樸先行：長篇規模、動態多幕與初始因果藍圖
+            if task.stop_requested: return
+            self._phase_narrative_scale_and_blueprint(task, novel_id)
+
             # 2. 檢查並生成主要角色設定（陣營梯隊導向群像：各陣營 5-10 人，全書至少 15+ 位）
             if task.stop_requested: return
             self._phase_characters(task, novel_id, initial_prompt)
@@ -872,6 +879,30 @@ class AutonomousPipelineManager:
         except Exception as sa_exc:
             task.log(f"⚠️ Setting Audit A 執行異常 (非致命): {sa_exc}", level="warn")
 
+    def _phase_narrative_scale_and_blueprint(self, task: NovelPipelineTask, novel_id: str):
+        """步驟 1.5：長篇規格與動態多幕架構 + 初始敘事拓樸藍圖 (Topological-First Blueprint)"""
+        planning_blueprint = db.get_planning_blueprint(novel_id) if hasattr(db, "get_planning_blueprint") else None
+        if not planning_blueprint or planning_blueprint.get("state") != "planning_blueprint":
+            task.current_stage = "planning_blueprint"
+            task.progress_percent = 12
+            task.status_message = "正在建構全書長篇規格、動態多幕與初始敘事拓樸藍圖..."
+            task.log("開始構建拓樸先行藍圖 (Planning Blueprint & Dynamic Acts)...")
+            from backend.generation.modules.blueprint_planner import generate_planning_blueprint
+            bp = generate_planning_blueprint(novel_id)
+            from backend.generation.core.gates import evaluate_stage_rigid_gate
+            blueprint_gate = evaluate_stage_rigid_gate("planning_blueprint", novel_id)
+            if not blueprint_gate.passed:
+                raise RuntimeError("規劃拓樸藍圖驗收未通過：" + "；".join(blueprint_gate.defects))
+            task.log(f"✅ 初始敘事拓樸藍圖已建立並持久化（{len(bp.nodes)} 個里程碑節點、{len(bp.threads)} 條敘事線、{len(bp.edges)} 條因果邊）！")
+            db.save_chat_message(
+                novel_id,
+                "assistant",
+                f"🗺️ **【系統進度】** 全書初始敘事拓樸藍圖（Planning Blueprint）已建立！涵蓋 {bp.scale_spec.act_count} 幕架構與 {len(bp.nodes)} 個里程碑節點，奠定宏觀因果骨架。",
+                message_type="pipeline",
+            )
+        else:
+            task.log("初始敘事拓樸藍圖已就緒，跳過生成。")
+
     def _phase_characters(self, task: NovelPipelineTask, novel_id: str, initial_prompt: str):
         """步驟 2：檢查並分段生成主要角色設定（陣營梯隊導向群像）。"""
         if not _are_characters_ready(novel_id, min_count=15):
@@ -930,6 +961,14 @@ class AutonomousPipelineManager:
             db.save_chat_message(novel_id, "assistant", f"🎭 **【系統進度】** 全書核心關鍵轉折點已分段組合規劃就緒（{MIN_KEY_TURNING_POINTS}+ 條，與伏筆閉環聯動）！", message_type="pipeline")
         else:
             task.log(f"全書關鍵轉折點已就緒（>= {MIN_KEY_TURNING_POINTS} 條），跳過生成。")
+
+        # 3.5 實體與伏筆拓樸硬綁定 (Entity & Foreshadowing ID Binding)
+        try:
+            from backend.generation.modules.entity_binder import bind_entities_and_foreshadowings
+            bindings = bind_entities_and_foreshadowings(novel_id)
+            task.log(f"🔗 [實體拓樸綁定] 已成功將 {len(bindings)} 條伏筆種子綁定至角色、陣營與幕次節點，並持久化！")
+        except Exception as bind_err:
+            task.log(f"⚠️ [實體拓樸綁定提示] 略過：{bind_err}")
 
     def _phase_volumes(self, task: NovelPipelineTask, novel_id: str) -> List[Dict[str, Any]]:
         """步驟 4：檢查並規劃分卷結構，回傳分卷列表（無分卷時 raise RuntimeError）。"""

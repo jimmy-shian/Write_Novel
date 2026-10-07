@@ -7,6 +7,8 @@ from typing import Dict, Optional
 
 STAGE_ORDER = [
     "worldview",
+    "narrative_scale",
+    "planning_blueprint",
     "characters",
     "foreshadowing",
     "volumes",
@@ -31,6 +33,8 @@ STAGE_ALIASES = {
     "director": "evaluate",
     "geom": "geometry",
     "story_geometry": "geometry",
+    "scale": "narrative_scale",
+    "blueprint": "planning_blueprint",
     "macro": "macro_semantic",
     "cross": "cross_relation",
 }
@@ -56,6 +60,8 @@ TASK_TYPE_ALIASES = {
 
 STAGE_TO_AGENT_NAME = {
     "worldview": "architect",
+    "narrative_scale": "architect",
+    "planning_blueprint": "architect",
     "characters": "character",
     "foreshadowing": "architect",
     "geometry": "geometry",
@@ -80,6 +86,8 @@ DEFAULT_STAGE_BY_TASK_TYPE = {
 
 DEFAULT_SCOPE_BY_STAGE = {
     "worldview": "global",
+    "narrative_scale": "global",
+    "planning_blueprint": "global",
     "characters": "global",
     "foreshadowing": "global",
     "geometry": "global",

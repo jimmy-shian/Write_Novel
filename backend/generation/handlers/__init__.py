@@ -51,6 +51,7 @@ from .volumes_handler import run_volumes_task
 from .volume_skeleton_handler import run_volume_skeleton_task
 from .worldview_handler import run_worldview_task
 from .writer_handler import run_writer_task
+from .planning_handler import run_narrative_scale_task, run_planning_blueprint_task
 
 HANDLER_REGISTRY = {
     "worldview": run_worldview_task,
@@ -65,6 +66,8 @@ HANDLER_REGISTRY = {
     "writer": run_writer_task,
     "editor": run_editor_task,
     "evaluate": run_director_task,
+    "narrative_scale": run_narrative_scale_task,
+    "planning_blueprint": run_planning_blueprint_task,
 }
 
 

@@ -197,6 +197,35 @@ def _build_plot_bundle(task: GenerationTaskRequest, volumes: List[Dict[str, Any]
     return {"mode": mode, "data": bundle}
 
 
+def _build_topology_bundle(task: GenerationTaskRequest) -> Dict[str, Any]:
+    """Return a bounded topology contract for the current agent task.
+
+    The planning blueprint and formal graph are separate sources. The former
+    explains long-form intent; the latter supplies chapter obligations. Only
+    compact metadata is injected here so agents do not receive the whole graph.
+    """
+    blueprint = db.get_planning_blueprint(task.novel_id) if hasattr(db, "get_planning_blueprint") else None
+    bindings = db.get_entity_bindings(task.novel_id) if hasattr(db, "get_entity_bindings") else []
+    scale = blueprint.get("scale_spec", {}) if isinstance(blueprint, dict) else {}
+    nodes = blueprint.get("nodes", {}) if isinstance(blueprint, dict) else {}
+    edges = blueprint.get("edges", []) if isinstance(blueprint, dict) else []
+    threads = blueprint.get("threads", {}) if isinstance(blueprint, dict) else {}
+    return {
+        "planning_blueprint": {
+            "state": blueprint.get("state") if isinstance(blueprint, dict) else None,
+            "act_count": scale.get("act_count", 0) if isinstance(scale, dict) else 0,
+            "volume_count": scale.get("total_volumes", 0) if isinstance(scale, dict) else 0,
+            "chapter_count": scale.get("total_chapters", 0) if isinstance(scale, dict) else 0,
+            "nodes": list(nodes.values())[:8] if isinstance(nodes, dict) else [],
+            "edge_count": len(edges) if isinstance(edges, list) else 0,
+            "thread_count": len(threads) if isinstance(threads, dict) else 0,
+        },
+        "entity_bindings": bindings[:12],
+        "binding_count": len(bindings),
+        "formal_geometry": db.get_geometry_stats(task.novel_id) if hasattr(db, "get_geometry_stats") else {},
+    }
+
+
 def build_generation_context(task: GenerationTaskRequest) -> Dict[str, Any]:
     """Build backend-side context for the unified generation-task API."""
     wb = db.get_latest_worldbuilding(task.novel_id)
@@ -254,6 +283,7 @@ def build_generation_context(task: GenerationTaskRequest) -> Dict[str, Any]:
         "worldview": _build_worldview_bundle(task, worldview_text),
         "characters": _build_character_bundle(task, characters_source),
         "plot": _build_plot_bundle(task, volumes, plot_data),
+        "topology": _build_topology_bundle(task),
         "narrative_memory": memory_bundle,
         "geometry": geometry_bundle,
     }

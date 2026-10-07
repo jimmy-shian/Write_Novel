@@ -88,6 +88,7 @@ def delete_novel(novel_id):
         "director_reviews", "chapter_memory", "arc_summaries",
         "geometry_nodes", "geometry_edges", "geometry_threads",
         "geometry_volumes", "geometry_arcs", "geometry_metadata",
+        "narrative_planning_blueprints", "narrative_entity_bindings",
     ]
     for table in cascade_tables:
         try:
@@ -103,6 +104,7 @@ def _clear_geometry_tables(cursor, novel_id):
     for table in (
         "geometry_nodes", "geometry_edges", "geometry_threads",
         "geometry_volumes", "geometry_arcs", "geometry_metadata",
+        "narrative_planning_blueprints", "narrative_entity_bindings",
     ):
         try:
             cursor.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
@@ -157,8 +159,17 @@ def reset_novel_content(novel_id, scopes=None):
             pass
         # 世界觀清空後，由其提煉的伏筆藍圖已成孤兒，一併清除避免殘留顯示
         _clear_foreshadowing_blueprint(cursor, novel_id)
+        for table in ("narrative_planning_blueprints", "narrative_entity_bindings"):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
+            except sqlite3.OperationalError:
+                pass
     if "characters" in effective:
         cursor.execute("DELETE FROM characters WHERE novel_id = ?", (novel_id,))
+        try:
+            cursor.execute("DELETE FROM narrative_entity_bindings WHERE novel_id = ?", (novel_id,))
+        except sqlite3.OperationalError:
+            pass
     if "plot" in effective:
         cursor.execute("DELETE FROM plot_chapters WHERE novel_id = ?", (novel_id,))
         cursor.execute("DELETE FROM volumes WHERE novel_id = ?", (novel_id,))
@@ -170,6 +181,11 @@ def reset_novel_content(novel_id, scopes=None):
         # 否則前端幾何畫布仍顯示舊樹（本次回報的主 bug）。
         _clear_geometry_tables(cursor, novel_id)
         _clear_foreshadowing_blueprint(cursor, novel_id)
+        for table in ("narrative_planning_blueprints", "narrative_entity_bindings"):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
+            except sqlite3.OperationalError:
+                pass
     if "chapters" in effective:
         cursor.execute("DELETE FROM chapters WHERE novel_id = ?", (novel_id,))
         # 模組化關聯：正文整批清除時連動清除衍生的時序圖譜與自動術語，以及長程衝突簽名與審查記錄；
@@ -186,6 +202,11 @@ def reset_novel_content(novel_id, scopes=None):
         # 同時清除 per-chapter 衍生：草稿提案、章節記憶、段落摘要、導演審查、伏筆藍圖。
         _clear_geometry_tables(cursor, novel_id)
         _clear_foreshadowing_blueprint(cursor, novel_id)
+        for table in ("narrative_planning_blueprints", "narrative_entity_bindings"):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
+            except sqlite3.OperationalError:
+                pass
         for table in (
             "draft_proposals", "chapter_memory", "arc_summaries", "director_reviews",
         ):
