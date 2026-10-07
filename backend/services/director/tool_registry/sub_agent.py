@@ -6,8 +6,9 @@ from typing import Dict, Any
 from backend.common.llm import call_llm_stream
 from backend.common.utils import StreamAccumulator
 from backend.models.parsers import extract_json_block
+from backend.common.config import RETRY_MULTIPLIER
 
-MAX_RETRIES = 10
+MAX_RETRIES = 10 * RETRY_MULTIPLIER
 
 class SubAgentGenerator:
     """包裝子代理人執行的生成器，以便外部獲取最終解析結果"""
@@ -36,7 +37,7 @@ def invoke_sub_agent(
 ):
     """
     [Tool 1] 總監呼叫其他代理人
-    支援自動 retry，最大 10 次，若格式錯誤則退回重新呼叫
+    支援自動 retry，預設最多 100 次，若格式錯誤或端點暫時失敗則退回重新呼叫
     """
     def _run():
         from backend.agents.director.prompts import build_director_sub_agent_messages

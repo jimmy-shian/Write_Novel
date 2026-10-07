@@ -17,6 +17,7 @@ from backend.common import llm
 call_llm_stream = llm.call_llm_stream
 from backend.common.utils import StreamAccumulator
 from backend.schemas.constraints import load_retrospective_gold_rules
+from backend.common.config import MIN_COMPLETE_CHAPTER_LENGTH, RETRY_MULTIPLIER
 from backend.agents.editor.prompts import (
     build_editor_agent_messages,
     build_length_expand_messages,
@@ -24,10 +25,10 @@ from backend.agents.editor.prompts import (
     build_targeted_rewriter_messages,
 )
 
-# 完整章節最低長度（與 Writer / 總監 evaluator 共用同一硬底線）
-_MIN_COMPLETE_CHAPTER_LEN = 1200
+# 完整章節最低長度；Writer 底稿不套用此門檻。
+_MIN_COMPLETE_CHAPTER_LEN = MIN_COMPLETE_CHAPTER_LENGTH
 # 初次精修被壓縮至下限以下時，自動擴寫補足的最大重試次數
-_MAX_LENGTH_EXPAND_RETRIES = 2
+_MAX_LENGTH_EXPAND_RETRIES = 2 * RETRY_MULTIPLIER
 from backend.services import narrative_memory
 from backend.agents.shared.context_requests import _handle_director_context_request
 from backend.models.parsers import extract_json_block
@@ -205,8 +206,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
         sanitize_meta_narrative,
     )
 
-    # 長度不足自動擴寫補足：初次精修被壓縮至下限以下時，以偏短稿為基底
-    # 追加細節補足至 1200 字，而非直接丟棄觸發整條管線重試／中斷。
+    # 短 Writer 底稿經第一次精修後，仍不足完整篇幅就由 Editor 追加描寫補足。
     expand_attempt = 0
     final_prose = None
     cleaned_text = ""
@@ -239,8 +239,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             # Editing must not turn a complete chapter into a truncated one. Existing short
             # chapters remain editable so they can be repaired incrementally.
             needs_expand = (
-                len(original_prose.strip()) >= _MIN_COMPLETE_CHAPTER_LEN
-                and len(candidate_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN
+                len(candidate_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN
                 and finish_reason != "length"
                 and expand_attempt < _MAX_LENGTH_EXPAND_RETRIES
             )
@@ -303,7 +302,7 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
         # 擴寫重試耗盡仍不足：保留既有護欄行為（丟棄並保留原稿，交由上層重試／通報）
         if final_prose is None:
             return
-        if len(original_prose.strip()) >= _MIN_COMPLETE_CHAPTER_LEN and len(final_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN:
+        if len(final_prose.strip()) < _MIN_COMPLETE_CHAPTER_LEN:
             err_msg = f"第 {chapter_index} 章編輯稿僅 {len(final_prose.strip())} 字，低於完整章節最低長度 {_MIN_COMPLETE_CHAPTER_LEN} 字（已自動擴寫 {expand_attempt} 次）；已保留原稿。"
             yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"

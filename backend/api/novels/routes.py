@@ -7,6 +7,7 @@ import uuid
 import json
 
 from backend import persistence as db
+from backend.common.config import PROGRAMMATIC_ADJUST_RETRIES
 
 router = APIRouter()
 
@@ -276,7 +277,7 @@ def api_get_pipeline_prompt(novel_id: str):
 @router.post("/novels/{novel_id}/characters/adjust")
 def api_adjust_character(novel_id: str, payload: CharacterAdjustRequest):
     import time
-    for attempt in range(3):
+    for attempt in range(PROGRAMMATIC_ADJUST_RETRIES):
         try:
             char_data = db.get_latest_characters(novel_id)
             if not char_data:
@@ -295,12 +296,15 @@ def api_adjust_character(novel_id: str, payload: CharacterAdjustRequest):
             print(f"[Programmatic Adjust Retry] Character edit attempt {attempt + 1} failed: {e}")
             time.sleep(1)
 
-    raise HTTPException(status_code=500, detail="Failed to adjust character JSON programmatically after 3 attempts")
+    raise HTTPException(
+        status_code=500,
+        detail=f"Failed to adjust character JSON programmatically after {PROGRAMMATIC_ADJUST_RETRIES} attempts",
+    )
 
 @router.post("/novels/{novel_id}/volumes/adjust")
 def api_adjust_volume(novel_id: str, payload: VolumeAdjustRequest):
     import time
-    for attempt in range(3):
+    for attempt in range(PROGRAMMATIC_ADJUST_RETRIES):
         try:
             vols = db.get_volumes(novel_id)
             target = next((v for v in vols if v["volume_index"] == payload.volume_index), None)
@@ -316,4 +320,7 @@ def api_adjust_volume(novel_id: str, payload: VolumeAdjustRequest):
             print(f"[Programmatic Adjust Retry] Volume edit attempt {attempt + 1} failed: {e}")
             time.sleep(1)
 
-    raise HTTPException(status_code=500, detail="Failed to adjust volume JSON programmatically after 3 attempts")
+    raise HTTPException(
+        status_code=500,
+        detail=f"Failed to adjust volume JSON programmatically after {PROGRAMMATIC_ADJUST_RETRIES} attempts",
+    )

@@ -183,3 +183,37 @@ def test_final_volume_lock_is_compatible_with_legacy_volume(monkeypatch):
     monkeypatch.setattr(db, "get_entities", lambda _novel_id: [])
 
     assert _audit_final_volume_lock("legacy") == (True, [])
+
+
+def test_final_quality_gate_retries_after_editor_no_change(novel_factory, monkeypatch):
+    """Final Gate 的單次 no_change 不得中止後續返修。"""
+    from backend.services.autonomous_pipeline import AutonomousPipelineManager, NovelPipelineTask
+    import backend.services.director.tool_registry.evaluator as evaluator
+
+    nid = novel_factory(title="Final Gate 重試測試")
+    original = "原始正文。" * 80
+    revised = "補入冷雨敲窗與潮濕石牆氣味後的修訂正文。" * 80
+    db.save_chapter(nid, 1, original)
+
+    def fake_evaluate_output(**_kwargs):
+        if db.get_chapter(nid, 1)["content"] == original:
+            return {"passed": False, "issues": ["【場景氛圍提醒】需要補入感官描寫"]}
+        return {"passed": True, "issues": []}
+
+    editor_calls = []
+
+    def fake_editor(_novel_id, _chapter_index, **_kwargs):
+        editor_calls.append(True)
+        if len(editor_calls) == 2:
+            db.save_chapter(nid, 1, revised)
+        yield 'data: {"type":"done"}\n\n'
+
+    monkeypatch.setattr(evaluator, "evaluate_output", fake_evaluate_output)
+    monkeypatch.setattr("backend.agents.editor.runner.run_editor_agent", fake_editor)
+
+    task = NovelPipelineTask(nid, "Final Gate 重試測試")
+    passed = AutonomousPipelineManager()._run_final_quality_gate(task, nid, 1, None)
+
+    assert passed is True
+    assert len(editor_calls) == 2
+    assert db.get_chapter(nid, 1)["content"] == revised

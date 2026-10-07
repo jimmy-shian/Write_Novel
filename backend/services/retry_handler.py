@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 格式錯誤重試處理機制
-最大重試次數: 10 次
+預設最大重試次數：基準值 10 次 × 共用重試倍率
 支援: progressive backoff, incremental prompt refinement, escalation to Director
 """
 
@@ -13,8 +13,9 @@ from typing import Any, Callable, Dict, Generator, Optional
 from backend.common.llm import call_llm_stream
 from backend.common.utils import StreamAccumulator
 from backend.models.parsers import extract_json_block
+from backend.common.config import RETRY_MULTIPLIER
 
-MAX_RETRIES = 10
+MAX_RETRIES = 10 * RETRY_MULTIPLIER
 BASE_BACKOFF = 1.0
 
 

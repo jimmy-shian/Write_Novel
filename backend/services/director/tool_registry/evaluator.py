@@ -3,6 +3,7 @@ import json
 from typing import List, Dict, Any, Optional
 
 from backend import persistence as db
+from backend.common.config import MIN_COMPLETE_CHAPTER_LENGTH, MIN_WRITER_DRAFT_LENGTH
 from backend.schemas.agent_json import APPROVAL_CRITERIA_REGISTRY, format_criteria_for_prompt
 from backend.schemas.validation import (
     foreshadowing_quantity_error,
@@ -255,8 +256,8 @@ def _scene_setting_keywords(value: Any) -> set[str]:
 def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> List[str]:
     issues: List[str] = []
     content, data = _content_from_writer_like_output(parsed, output_content)
-    # Writer and Editor share the same hard floor used by generation and save guards.
-    min_len = 1200
+    # Writer is checked as an editable story draft; Editor owns the complete-chapter floor.
+    min_len = MIN_WRITER_DRAFT_LENGTH if stage_name == "writer" else MIN_COMPLETE_CHAPTER_LENGTH
 
     if not content:
         issues.append("content 不可為空")

@@ -21,8 +21,8 @@ def test_classify_pipeline_error_categories():
     assert classify_pipeline_error("【場景地點漂移】大綱指定房號為 101") == "SCENE_DRIFT"
 
 
-def test_editor_missing_prose_does_not_retry_20_times():
-    """Editor 找不到正文時，不能重試 20 次，應直接觸發 StageRedirectException 導向 writer"""
+def test_editor_missing_prose_does_not_retry_stage_limit():
+    """Editor 找不到正文時，應直接觸發 StageRedirectException 導向 writer"""
     svc = AutonomousPipelineManager()
     task = NovelPipelineTask(novel_id="test_novel")
 
@@ -39,7 +39,7 @@ def test_editor_missing_prose_does_not_retry_20_times():
                 director_eval={},
             )
             assert res == "REDIRECT_TO_WRITER"
-            # 確認沒有進行 20 次重試
+            # 前置輸入缺失不屬於可透過重送解決的端點錯誤，因此不重試
             assert task.stage_retry_counts.get("editor", 0) == 0
 
 
@@ -118,8 +118,8 @@ def test_retry_policy_limits_retries_per_stage():
     svc = AutonomousPipelineManager()
     task = NovelPipelineTask(novel_id="test_novel")
 
-    assert RETRY_POLICY["writer"] == 3
-    assert RETRY_POLICY["editor"] == 3
+    assert RETRY_POLICY["writer"] == 30
+    assert RETRY_POLICY["editor"] == 30
 
     attempts_made = 0
 
@@ -137,5 +137,5 @@ def test_retry_policy_limits_retries_per_stage():
                     target={"chapter_index": 1},
                 )
 
-    # 應只執行 3 次（符合 RETRY_POLICY["writer"]），而非 20 次
-    assert attempts_made == 3
+    # 應執行 30 次（符合 RETRY_POLICY["writer"]）
+    assert attempts_made == RETRY_POLICY["writer"]

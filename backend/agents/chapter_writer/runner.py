@@ -10,6 +10,7 @@ from backend.services import diagnostics
 import backend.services.director.context as director_context
 from backend.common import llm
 call_llm_stream = llm.call_llm_stream
+from backend.common.config import MIN_WRITER_DRAFT_LENGTH
 from backend.common.utils import deep_merge_dict, StreamAccumulator
 from backend.prompts.common.context import (
     compact_json_data,
@@ -51,8 +52,8 @@ from backend.agents.incremental.prompts import (
 
 from backend.agents.shared.context_requests import _handle_director_context_request
 
-# Hard floor to catch truncated model responses before synopsis/memory persistence.
-MIN_CHAPTER_PROSE_LENGTH = 1200
+# Writer stores an editable story draft; the complete-chapter floor is enforced after Editor.
+MIN_CHAPTER_PROSE_LENGTH = MIN_WRITER_DRAFT_LENGTH
 
 GENERIC_ACTIVE_CHARACTER_MARKERS = (
     "主角",
@@ -425,7 +426,7 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         prose_val = _strip_llm_preamble(sanitize_meta_narrative(prose_val))
         if len(prose_val.strip()) < MIN_CHAPTER_PROSE_LENGTH:
             err_msg = (
-                f"第 {chapter_index} 章正文僅 {len(prose_val.strip())} 字，低於最低完整章節長度 "
+                f"第 {chapter_index} 章 Writer 底稿僅 {len(prose_val.strip())} 字，低於最低可編輯長度 "
                 f"{MIN_CHAPTER_PROSE_LENGTH} 字；疑似生成中斷，未保存，請重新生成。"
             )
             db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")

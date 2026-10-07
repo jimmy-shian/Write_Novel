@@ -69,7 +69,7 @@ def build_targeted_rewriter_messages(
     system_prompt += build_agent_context_contract(
         "Targeted Rewriter / 定向正文精修",
         "- 原始正文。\n- Reviewer 結構化品質診斷報告。\n- 時序動態事實、設定邊界約束與編輯指令。",
-        "職責邊界限制：專注於語句潤色、語法流暢、口癖剔除與文風調理，嚴禁推翻因果結構、篡改大綱核心事件或變更人物抉擇；針對被標記之段落進行局部修補，未標記段落原樣保留，輸出精修後的完整繁體中文正文。",
+        "職責邊界限制：將 Writer 劇情底稿擴寫為完整、有畫面感的小說正文；補足環境感官、人物外貌與衣著、動態表情、肢體動作、心理反應、對白節奏及場景氛圍。嚴禁推翻因果結構、篡改大綱核心事件或變更人物抉擇；輸出精修後的完整繁體中文正文。",
         "直接輸出精修後正文，不要輸出評語、引言、註解或 JSON。",
         allow_context_request=False,
     )
@@ -99,7 +99,7 @@ def build_targeted_rewriter_messages(
 【第 {chapter_index} 章原始正文】
 {original_prose}
 
-請直接輸出修訂後的完整小說正文：
+請將劇情底稿擴寫精修為完整小說正文，補足必要的場景、人物與動態描寫；不得刪漏底稿中的關鍵事件。直接輸出修訂後的完整小說正文：
 """
     else:
         report_text = json.dumps(diagnostic_report, ensure_ascii=False, indent=2)
@@ -115,7 +115,7 @@ def build_targeted_rewriter_messages(
 【第 {chapter_index} 章原始正文】
 {original_prose}
 
-請直接輸出修訂後的完整小說正文：
+請將劇情底稿擴寫精修為完整小說正文，補足必要的場景、人物與動態描寫；不得刪漏底稿中的關鍵事件。直接輸出修訂後的完整小說正文：
 """
     return [
         {"role": "system", "content": system_prompt},
@@ -181,7 +181,7 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
     system_prompt += build_agent_context_contract(
         "Editor / 正文編輯",
         "- 指定章節的原始正文。\n- 精修指示或總監修改重點。\n- 本章場景目標、術語表、時序動態事實、衝突防重複與設定運作邊界。",
-        "只潤色、修補與提升指定章節正文文學美感；嚴格維持動態世界線事實、設定代價邊界與情節推進因果。",
+        "將 Writer 劇情底稿擴寫成完整、有畫面感的小說正文；補足環境感官、人物外貌與衣著、動態表情、肢體動作、心理反應、對白節奏及場景氛圍。嚴格維持動態世界線事實、設定代價邊界與情節推進因果。",
         "直接輸出精修後完整繁體中文正文；不要輸出評語、引言、註解、JSON、世界觀修改或角色設定修改。",
         allow_context_request=False,
     )
@@ -194,7 +194,7 @@ def build_editor_agent_messages(chapter_index, edit_instructions, original_prose
 【待精修的第 {chapter_index} 章原始正文】
 {original_prose}
 
-請直接輸出拋光後的完整正文：
+請將 Writer 底稿擴寫精修為完整小說正文，補足必要的場景、人物與動態描寫；必須保留底稿中的關鍵事件與因果。直接輸出完整正文：
 """
     return [
         {"role": "system", "content": system_prompt},
