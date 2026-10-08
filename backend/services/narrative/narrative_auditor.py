@@ -289,10 +289,6 @@ class NarrativeAuditor:
                 except (ValueError, TypeError):
                     inv_ch = None
 
-                # 若事實已在先前或當前章節被取代/修正，則不再作為有效死亡約束
-                if inv_ch is not None and chapter_index >= inv_ch:
-                    continue
-
                 stmt = f.get("fact_statement", "")
                 if not stmt:
                     continue
@@ -332,9 +328,14 @@ class NarrativeAuditor:
                 except (ValueError, TypeError):
                     death_chapter = None
 
-                # 只有死亡事件已發生，且當前章節在死亡章之後才檢查復活
-                if death_chapter is not None and chapter_index <= death_chapter:
-                    continue
+                # 判定角色死亡/失效生效章節：若有 invalid_from_chapter 則自該章起生效，否則自 valid_from_chapter 後生效
+                if inv_ch is not None:
+                    death_chapter = inv_ch
+                    if chapter_index < death_chapter:
+                        continue
+                elif death_chapter is not None:
+                    if chapter_index <= death_chapter:
+                        continue
 
                 # 切割句子以排除回憶、傳聞、悼念等非現場行動
                 sentences = re.split(r"[。！？\n]", prose_text)

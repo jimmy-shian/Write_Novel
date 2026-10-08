@@ -128,9 +128,9 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
         raise ValueError(f"EDITOR_MISSING_INPUT: Chapter {chapter_index} prose not found for editing!")
 
     original_prose = (chapter_data.get("content") or "").strip()
-    if len(original_prose) < 50:
+    if not original_prose:
         raise ValueError(
-            f"EDITOR_MISSING_INPUT: Chapter {chapter_index} prose is empty or too short ({len(original_prose)} < 50 chars) for editing!"
+            f"EDITOR_MISSING_INPUT: Chapter {chapter_index} prose is empty for editing!"
         )
     current_synopsis = chapter_data.get("synopsis", "")
     outline = narrative_memory.get_chapter_outline(novel_id, chapter_index)
