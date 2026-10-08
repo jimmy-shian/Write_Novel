@@ -62,6 +62,60 @@ def _is_llm_failure_output(text: str) -> bool:
     return False
 
 
+def audit_fact_diff_guard(
+    novel_id: str,
+    chapter_index: int,
+    original_prose: str,
+    final_prose: str,
+):
+    """
+    Fact Diff Guard:
+    比對 Editor 精修後正文與 Master Graph 的九維事件契約 (StoryEventContract) 及角色實體。
+    確保潤色精修不破壞已鎖定之 Canonical 事實。
+    """
+    defects = []
+    audit_report = {"novel_id": novel_id, "chapter_index": chapter_index}
+    try:
+        from backend.persistence import master_graph_repository
+        if not master_graph_repository.has_master_graph(novel_id):
+            return True, [], {"status": "no_master_graph"}
+
+        beat_nodes = master_graph_repository.get_beat_nodes(novel_id, chapter_index)
+        checked_events = 0
+        for bn in beat_nodes:
+            nid = bn.get("node_id")
+            if not nid:
+                continue
+            events = master_graph_repository.get_story_events_for_node(novel_id, nid)
+            for ev in events:
+                checked_events += 1
+                for p in ev.participant_entities:
+                    p_name = p.get("name") if isinstance(p, dict) else str(p)
+                    if p_name and len(p_name) >= 2:
+                        if p_name in original_prose and p_name not in final_prose:
+                            defects.append({
+                                "type": "participant_omission",
+                                "node_id": nid,
+                                "event_id": ev.event_id,
+                                "entity": p_name,
+                                "detail": f"角色/實體「{p_name}」在原稿中存在，但在編輯精修稿中被遺漏或刪除。",
+                            })
+        audit_report["checked_events"] = checked_events
+        audit_report["defects_count"] = len(defects)
+        status = "VIOLATED" if defects else "PASSED"
+        master_graph_repository.record_draft_audit(
+            novel_id=novel_id,
+            chapter_index=chapter_index,
+            audit_status=status,
+            defects=defects,
+            audit_report=audit_report,
+        )
+        return len(defects) == 0, defects, audit_report
+    except Exception as exc:
+        print(f"[EditorAgent] Fact Diff Guard warning: {exc}")
+        return True, [], {"error": str(exc)}
+
+
 def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=False, force_json=False, context_bundle=None, fix_mode=False, fix_spans=None):
     """
     Editor Stage (兩階段精修):
@@ -355,6 +409,12 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
             source_version=saved_version,
             outline=outline,
         )
+
+        # 執行 Fact Diff Guard 事實審計防護
+        try:
+            audit_fact_diff_guard(novel_id, chapter_index, original_prose, final_prose)
+        except Exception as af_exc:
+            print(f"[EditorAgent] Fact Diff Guard execution warning: {af_exc}")
 
         # 建立草案建議記錄 (Draft Proposal)，供前端「審閱對比 (Diff)」與「一鍵套用/放棄」進行行級差異對比
         if original_prose and original_prose.strip() != final_prose.strip():

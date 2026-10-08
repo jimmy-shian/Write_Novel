@@ -89,6 +89,10 @@ def delete_novel(novel_id):
         "geometry_nodes", "geometry_edges", "geometry_threads",
         "geometry_volumes", "geometry_arcs", "geometry_metadata",
         "narrative_planning_blueprints", "narrative_entity_bindings",
+        # Master Graph Architecture Tables (Milestone 3)
+        "MASTER_GRAPH_NODES", "MASTER_GRAPH_EDGES", "STORY_EVENT_ENTITIES",
+        "NODE_CHAPTER_BEATS", "NODE_THREAD_MEMBERSHIPS",
+        "pipeline_task_checkpoints", "chapter_draft_audits",
     ]
     for table in cascade_tables:
         try:

@@ -317,6 +317,32 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         if task_lines:
             clue_payoff_details = "\n".join(task_lines)
 
+    # Master Graph 投射與防劇透護盾 (Spoiler Wall) 整合
+    try:
+        from backend.persistence import master_graph_repository
+        from backend.generation.director.master_graph_service import MasterGraphService
+        if master_graph_repository.has_master_graph(novel_id):
+            graph = master_graph_repository.load_master_graph(novel_id)
+            beat_nodes = master_graph_repository.get_beat_nodes(novel_id, chapter_index)
+            if graph and beat_nodes:
+                projected_beats = []
+                for bn in beat_nodes:
+                    nid = bn.get("node_id")
+                    if nid and nid in graph.nodes:
+                        proj = MasterGraphService.project_node_context(graph, nid, target_agent="chapter_writer")
+                        projected_beats.append({
+                            "node_id": nid,
+                            "structural_role": bn.get("structural_role"),
+                            "planning_status": bn.get("planning_status"),
+                            "foreshadowing_tasks": proj.get("foreshadowing_tasks", []),
+                            "upstream_causal_context": proj.get("upstream_causal_context", []),
+                        })
+                if projected_beats:
+                    mg_text = "\n【Master Graph 拍點目標與防劇透線索 (嚴格遵守)】\n" + json.dumps(projected_beats, ensure_ascii=False, indent=2)
+                    clue_payoff_details = (clue_payoff_details + "\n" + mg_text) if clue_payoff_details else mg_text
+    except Exception as mg_exc:
+        print(f"[ChapterWriter] Master Graph projection warning: {mg_exc}")
+
     # In the final 10% only, surface unresolved planted seeds as a convergence check.
     # They are advisory canon context; current chapter allocations remain authoritative.
     try:
@@ -468,6 +494,19 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
             source_version=saved_version,
             outline=current_outline,
         )
+        # 標記 Master Graph 對應節點為 REALIZED
+        try:
+            from backend.persistence import master_graph_repository
+            from backend.geometry.models import RealizationStatus
+            beat_nodes = master_graph_repository.get_beat_nodes(novel_id, chapter_index)
+            if beat_nodes:
+                for bn in beat_nodes:
+                    nid = bn.get("node_id")
+                    if nid:
+                        master_graph_repository.update_node_realization_status(novel_id, nid, RealizationStatus.REALIZED)
+        except Exception as rel_exc:
+            print(f"[ChapterWriter] Update node realization status warning: {rel_exc}")
+
         db.save_last_agent_run(novel_id, "writer", json.dumps(messages, ensure_ascii=False, indent=2), full_text)
         db.save_chat_message(novel_id, "assistant", f"第 {chapter_index} 章正文寫作完成！", message_type="pipeline")
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"

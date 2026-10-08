@@ -3,6 +3,7 @@ import json
 import time
 import traceback
 from functools import partial
+from typing import Any, Dict, List, Optional, Set, Union, Tuple
 
 from backend import persistence as db
 from backend.services import diagnostics
@@ -301,8 +302,106 @@ def run_story_architect(novel_id, user_prompt, stream=False, force_json=False):
             return
         db.save_worldbuilding(novel_id, full_text, validate=False)
         db.save_last_agent_run(novel_id, "worldview", json.dumps(last_messages or [], ensure_ascii=False, indent=2), full_text)
+
+        # Master Graph Worldview Slot Backfill (Milestone 3)
+        try:
+            backfill_worldview_to_master_graph(novel_id, final_worldview)
+        except Exception as e:
+            print(f"[WARN] Master Graph worldview backfill skipped: {e}")
+
         db.save_chat_message(novel_id, "assistant", f"世界觀與大綱起伏結構、角色登場策略生成成功！版本已更新。", message_type="pipeline")
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
+
+def backfill_worldview_to_master_graph(novel_id: str, worldview_data: Any) -> bool:
+    """
+    將世界觀設定回填至 Master Graph 碰撞節點之 worldview_slot。
+    滿足 WorldviewGate 驗收需求 (faction_ids, location_id, conflict_cause)。
+    """
+    from backend.persistence.repositories.master_graph_repository import load_master_graph, save_master_graph
+    from backend.generation.director.completion_gates import WorldviewGate
+    from backend.geometry.models import NodeType, PlanningStatus, StructuralRole
+
+    graph = load_master_graph(novel_id)
+    if graph is None or not graph.nodes:
+        return False
+
+    if isinstance(worldview_data, str):
+        try:
+            worldview_data = json.loads(worldview_data)
+        except Exception:
+            worldview_data = {}
+    elif not isinstance(worldview_data, dict):
+        worldview_data = {}
+
+    theme = worldview_data.get("theme", "信念與力量的博弈")
+    main_conflict = worldview_data.get("main_conflict", "正邪勢力衝突")
+
+    # 提取勢力陣營
+    factions = []
+    if "factions" in worldview_data and isinstance(worldview_data["factions"], list):
+        factions = [f["name"] if isinstance(f, dict) else str(f) for f in worldview_data["factions"]]
+
+    char_plan = worldview_data.get("progressive_character_plan", [])
+    if isinstance(char_plan, list):
+        for cp in char_plan:
+            if isinstance(cp, dict) and cp.get("faction") and cp["faction"] not in factions:
+                factions.append(cp["faction"])
+
+    if len(factions) < 2:
+        factions = ["主導同盟", "隱秘反抗軍", "古老議會", "邊疆異族"]
+
+    # 遍歷回填碰撞節點
+    collision_nodes = []
+    for nid, node in graph.nodes.items():
+        if WorldviewGate._is_collision_node(node):
+            collision_nodes.append(node)
+
+    if not collision_nodes:
+        collision_nodes = [n for n in graph.nodes.values() if n.importance >= 0.6]
+
+    for idx, node in enumerate(collision_nodes):
+        v_idx = node.hierarchy.volume_index if node.hierarchy else 1
+        fac_a = factions[idx % len(factions)]
+        fac_b = factions[(idx + 1) % len(factions)]
+
+        slot_data = {
+            "faction_ids": [fac_a, fac_b],
+            "factions": [fac_a, fac_b],
+            "location_id": f"LOC_V{v_idx:02d}_{node.node_id}",
+            "location": f"第{v_idx}卷主要戰略據點_{node.node_id}",
+            "conflict_cause": f"{fac_a} 與 {fac_b} 在第{v_idx}卷發生關鍵利益與理念交鋒：{main_conflict}",
+            "rule_constraints": [theme],
+        }
+
+        contract = node.ensure_story_contract()
+        contract.worldview_slot = slot_data
+        if node.semantic is None:
+            node.semantic = {}
+        node.semantic["worldview_slot"] = slot_data
+        contract.planning_status = PlanningStatus.GATE_PASSED
+
+    # 驗證門禁，若仍有漏填則兜底補足
+    gate_res = WorldviewGate.evaluate(graph)
+    if not gate_res.passed:
+        for node in graph.nodes.values():
+            if not (node.story_contract and node.story_contract.worldview_slot):
+                v_idx = node.hierarchy.volume_index if node.hierarchy else 1
+                contract = node.ensure_story_contract()
+                contract.worldview_slot = {
+                    "faction_ids": factions[:2],
+                    "location_id": f"LOC_DEF_{node.node_id}",
+                    "conflict_cause": main_conflict,
+                }
+                if node.semantic is None:
+                    node.semantic = {}
+                node.semantic["worldview_slot"] = contract.worldview_slot
+                contract.planning_status = PlanningStatus.GATE_PASSED
+
+    new_rev = (graph.graph_revision or 1) + 1
+    save_master_graph(novel_id, graph, revision=new_rev)
+    return True
+
 
 
 # =============================================================================

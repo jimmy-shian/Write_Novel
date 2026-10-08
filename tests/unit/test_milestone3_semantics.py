@@ -11,6 +11,7 @@ Milestone 3 Unit Tests: Semantic Topology Stage Activation & Feed-Forward
 """
 
 import json
+from unittest.mock import patch
 import pytest
 
 from backend import persistence as db
@@ -114,6 +115,8 @@ def test_stage_registry_and_detect_current_stage_progression(novel_factory, monk
     # 1. 驗證 STAGE_ORDER 排序
     expected_order = [
         "worldview",
+        "narrative_scale",
+        "planning_blueprint",
         "characters",
         "foreshadowing",
         "volumes",
@@ -207,7 +210,7 @@ def test_autonomous_pipeline_wiring_executes_semantic_stages(novel_factory):
 
     executed_stages = []
 
-    def mock_execute_stage(task, stage, task_type="generate", instruction="", user_prompt="", verify_fn=None, target=None):
+    def mock_execute_stage(task, stage, task_type="generate", instruction="", user_prompt="", verify_fn=None, target=None, **kwargs):
         executed_stages.append({
             "stage": stage,
             "progress": task.progress_percent,
@@ -237,9 +240,8 @@ def test_autonomous_pipeline_wiring_executes_semantic_stages(novel_factory):
             # 停止後續
             task.stop_requested = True
 
-    manager._execute_stage_with_retry = mock_execute_stage
-
-    manager._run_autonomous_flow(task, initial_prompt="測試執行", max_chapters=5)
+    with patch.object(manager, "_execute_stage_with_retry", side_effect=mock_execute_stage):
+        manager._run_autonomous_flow(task, initial_prompt="測試執行", max_chapters=5)
 
     stages_called = [s["stage"] for s in executed_stages]
     # 幾何之後必須緊跟三個語義階段

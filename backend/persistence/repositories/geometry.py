@@ -52,7 +52,15 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
         if hasattr(graph, "params") and graph.params is not None:
             params_dict = asdict(graph.params)
         elif isinstance(graph, dict) and "params" in graph:
-            params_dict = graph["params"]
+            params_dict = dict(graph["params"])
+
+        revision_val = 1
+        if hasattr(graph, "graph_revision"):
+            revision_val = getattr(graph, "graph_revision", 1)
+        elif isinstance(graph, dict) and "graph_revision" in graph:
+            revision_val = graph.get("graph_revision", 1)
+
+        params_dict["_graph_revision"] = int(revision_val)
 
         cursor.execute(
             "INSERT OR REPLACE INTO geometry_metadata (novel_id, params_json) VALUES (?, ?)",
@@ -70,6 +78,10 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
         nodes_data = []
         for n in nodes_iterable:
             if isinstance(n, GeometryNode):
+                # 確保契約與多線歸屬同步至 metadata_json
+                n.ensure_story_contract()
+                if "thread_memberships" not in n.metadata:
+                    n.metadata["thread_memberships"] = list(n.thread_memberships)
                 h = n.hierarchy
                 nodes_data.append((
                     n.node_id,
@@ -89,6 +101,9 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
                 h = n.get("hierarchy", {}) or {}
                 cw = n.get("chapter_window", (1, 1)) or (1, 1)
                 s_role = n.get("structural_role", "")
+                meta_copy = dict(n.get("metadata") or {})
+                if n.get("thread_memberships") and "thread_memberships" not in meta_copy:
+                    meta_copy["thread_memberships"] = list(n.get("thread_memberships"))
                 nodes_data.append((
                     n.get("node_id"),
                     novel_id,
@@ -101,7 +116,7 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
                     n.get("primary_thread"),
                     n.get("importance", 0.5),
                     json.dumps(n.get("semantic"), ensure_ascii=False) if n.get("semantic") is not None else None,
-                    json.dumps(n.get("metadata"), ensure_ascii=False) if n.get("metadata") else None,
+                    json.dumps(meta_copy, ensure_ascii=False) if meta_copy else None,
                 ))
 
         if nodes_data:
@@ -215,8 +230,12 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
             vols_iterable = list(v_val.values()) if isinstance(v_val, dict) else v_val
 
         vols_data = []
+        seen_vol_ids = set()
         for v in vols_iterable:
             if isinstance(v, VolumeContainer):
+                if not v.volume_id or v.volume_id in seen_vol_ids:
+                    continue
+                seen_vol_ids.add(v.volume_id)
                 vols_data.append((
                     v.volume_id,
                     novel_id,
@@ -227,9 +246,13 @@ def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any
                     json.dumps(v.semantic, ensure_ascii=False) if v.semantic is not None else None,
                 ))
             elif isinstance(v, dict):
+                vol_id = v.get("volume_id")
+                if not vol_id or vol_id in seen_vol_ids:
+                    continue
+                seen_vol_ids.add(vol_id)
                 cr = v.get("chapter_range", (1, 1)) or (1, 1)
                 vols_data.append((
-                    v.get("volume_id"),
+                    vol_id,
                     novel_id,
                     v.get("volume_index", 1),
                     cr[0] if isinstance(cr, (list, tuple)) and len(cr) > 0 else v.get("chapter_start", 1),
@@ -308,7 +331,14 @@ def load_geometry_graph(novel_id: str) -> Optional[GeometryGraph]:
 
     # 1. 讀取 Metadata / Params
     meta_row = cursor.execute("SELECT params_json FROM geometry_metadata WHERE novel_id = ?", (novel_id,)).fetchone()
-    params_dict = json.loads(meta_row["params_json"]) if meta_row and meta_row["params_json"] else {}
+    raw_meta = json.loads(meta_row["params_json"]) if meta_row and meta_row["params_json"] else {}
+    graph_revision = 1
+    if isinstance(raw_meta, dict):
+        graph_revision = int(raw_meta.pop("_graph_revision", raw_meta.pop("graph_revision", 1)))
+        params_dict = raw_meta
+    else:
+        params_dict = {}
+
     if "complexity" in params_dict and isinstance(params_dict["complexity"], str):
         try:
             params_dict["complexity"] = GeometryComplexity(params_dict["complexity"])
@@ -322,6 +352,7 @@ def load_geometry_graph(novel_id: str) -> Optional[GeometryGraph]:
 
     params = GeometryParams(**params_dict)
     graph = GeometryGraph(params)
+    graph.graph_revision = graph_revision
 
     # 2. 讀取 Nodes
     node_rows = cursor.execute(

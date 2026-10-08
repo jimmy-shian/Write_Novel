@@ -19,6 +19,7 @@ from backend.services.narrative.fix import (
 @pytest.fixture(autouse=True)
 def _mock_director_llm(monkeypatch):
     """所有測試一律 mock 總監 LLM：不外呼，並記錄收到的 user_prompt 供斷言。"""
+    import json
     import backend.common.llm as llm_mod
     captured = {"prompts": []}
 
@@ -26,7 +27,29 @@ def _mock_director_llm(monkeypatch):
         captured["prompts"].append({"system": system_prompt, "user": user_prompt})
         return "請把模板化動作換成角色獨特微動作，並為破局補上實質代價。"
 
+    def fake_call_llm_stream(agent_name, messages, **kwargs):
+        sys_msg = ""
+        user_msg = ""
+        for m in messages:
+            if m.get("role") == "system":
+                sys_msg = m.get("content", "")
+            elif m.get("role") == "user":
+                user_msg = m.get("content", "")
+        captured["prompts"].append({"system": sys_msg, "user": user_msg})
+
+        decision_data = {
+            "action": "CONTINUE",
+            "target": "writer",
+            "agent_prompt": "請把模板化動作換成角色獨特微動作，並為破局補上實質代價。",
+            "hint": "請把模板化動作換成角色獨特微動作，並為破局補上實質代價。",
+            "reason": "審核通過，定點手術修正。",
+        }
+        yield "data: " + json.dumps({"type": "content", "delta": json.dumps(decision_data, ensure_ascii=False)}, ensure_ascii=False) + "\n\n"
+        yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+
     monkeypatch.setattr(llm_mod, "call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_mod, "call_llm_stream", fake_call_llm_stream)
+    monkeypatch.setattr("backend.agents.director.runner.call_llm_stream", fake_call_llm_stream)
     yield captured
 
 
@@ -260,6 +283,8 @@ def test_director_instruction_falls_back_offline(_mock_director_llm, monkeypatch
     def boom(*a, **kw):
         raise RuntimeError("LLM offline")
     monkeypatch.setattr(llm_mod, "call_llm", boom)
+    monkeypatch.setattr(llm_mod, "call_llm_stream", boom)
+    monkeypatch.setattr("backend.agents.director.runner.call_llm_stream", boom)
 
     targets = [{
         "dimension": "voice_integrity",

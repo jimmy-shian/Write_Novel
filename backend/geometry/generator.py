@@ -5,11 +5,12 @@
 核心職責：
 1. 完全不依賴 LLM，純粹以程式演算法 + 敘事結構 Motif 生成完整、高複雜度、長距離關聯的故事骨架。
 2. 根據 GeometryParams（規模、題材密度、線程數量等），一次性產生全書的：
-   - 層級容器（Volumes -> Arcs -> Sequences）
-   - 章節事件節點（GeometryNode，semantic=None）
-   - 線程骨架（GeometryThread，包含角色弧線、副線、主線）
+   - 層級容器（Volumes -> Arcs -> Sequences，保證 10+ 卷）
+   - 章節事件節點（GeometryNode，掛載 NodeStoryContract 與多線程歸屬）
+   - 線程骨架（GeometryThread，包含 6 主線 TM01-TM06、18 支線 TS01-TS18 共 24 條全線程）
    - 結構 Motif 邊（長距離回收、分岔合流、交織、匯聚、情節角色耦合、主題對比）
-3. 輸出符合 Geometry-First 標準的完整 GeometryGraph。
+3. 嚴格強制因果邊 (CAUSES, ENABLES, ESCALATES) 為有向無環圖 (DAG，cycle_count == 0)。
+4. 輸出符合 Geometry-First 與 Master Graph 標準的完整 GeometryGraph。
 """
 
 from __future__ import annotations
@@ -20,7 +21,9 @@ from typing import Dict, List, Optional, Tuple
 
 from backend.geometry.models import (
     ArcContainer,
+    CAUSAL_EDGE_TYPES,
     EdgeType,
+    ForeshadowingDemand,
     GeometryComplexity,
     GeometryEdge,
     GeometryGraph,
@@ -28,6 +31,10 @@ from backend.geometry.models import (
     GeometryParams,
     GeometryThread,
     NodeHierarchy,
+    NodeStoryContract,
+    NodeType,
+    PlanningStatus,
+    RealizationStatus,
     SequenceContainer,
     StructuralRole,
     ThreadType,
@@ -39,15 +46,16 @@ from backend.geometry.motifs import MotifApplicator
 class GeometryGenerator:
     """
     純程式碼幾何生成器。
-    一次性為全書（例如 800 章）生成無語義內容但具備高度拓撲結構的空骨架圖。
+    一次性為全書（例如 300-800 章）生成無語義內容但具備高度拓撲結構與故事合約的空骨架圖。
     """
 
     def __init__(self, params: GeometryParams):
         self.params = params
 
         # 隨機數種子保證可重現性
-        if params.seed_for_rng:
-            seed_int = int(hashlib.md5(params.seed_for_rng.encode("utf-8")).hexdigest(), 16) % (2**32)
+        if params.seed_for_rng is not None:
+            seed_str = str(params.seed_for_rng)
+            seed_int = int(hashlib.md5(seed_str.encode("utf-8")).hexdigest(), 16) % (2**32)
             self.rng = random.Random(seed_int)
         else:
             self.rng = random.Random()
@@ -74,25 +82,46 @@ class GeometryGenerator:
         # 5. 保證全圖連通性（消除孤立節點）
         self._ensure_connectivity(graph)
 
+        # 6. 強制因果約束邊拓撲無環性 (DAG Invariant)
+        self._enforce_causal_dag_ordering(graph)
+
+        # 7. 掛接所有節點的 NodeStoryContract
+        graph.ensure_story_contracts()
+
+        # 8. 嚴格驗證因果 DAG 無環不變量
+        cycle_errors = graph.validate_causal_dag()
+        if cycle_errors:
+            raise ValueError(f"GeometryGenerator DAG invariant violation: {cycle_errors}")
+
         return graph
 
     def _build_hierarchy(self, graph: GeometryGraph) -> None:
         """
         構建篇卷、弧線、序列的層級劃分。
+        保證預設或未指定時生成 10+ 卷，若傳入自定義 volume_count 則精確尊重。
         """
         target_chapters = self.params.target_chapters
-        chapters_per_vol = max(1, self.params.chapters_per_volume)
         volume_count = self.params.volume_count
 
         if volume_count <= 0:
-            volume_count = max(1, target_chapters // chapters_per_vol)
+            volume_count = max(10, target_chapters // max(1, self.params.chapters_per_volume))
+
+        # 若指定的 chapters_per_volume 偏大會導致提前終止無法生成指定卷數，自適應章節跨度
+        if volume_count > 0 and self.params.chapters_per_volume * volume_count > target_chapters:
+            chapters_per_vol = max(1, target_chapters // volume_count)
+        else:
+            chapters_per_vol = max(1, self.params.chapters_per_volume)
 
         global_arc_idx = 1
         global_seq_idx = 1
 
         for v_idx in range(1, volume_count + 1):
             v_start = (v_idx - 1) * chapters_per_vol + 1
-            v_end = min(v_idx * chapters_per_vol, target_chapters) if v_idx == volume_count else v_idx * chapters_per_vol
+            if v_idx == volume_count:
+                v_end = target_chapters
+            else:
+                v_end = min(v_idx * chapters_per_vol, target_chapters)
+
             if v_start > target_chapters:
                 break
             if v_end > target_chapters:
@@ -101,9 +130,10 @@ class GeometryGenerator:
             vol_id = f"V{v_idx:02d}"
             vol_arc_ids: List[str] = []
 
-            # 每個 Volume 分割為 3 到 4 個 Arc（通常對應 起、承/激化、轉/危機、合/收束）
-            arcs_in_vol = 4 if (v_end - v_start + 1) >= 20 else 3
-            ch_span = max(1, (v_end - v_start + 1) // arcs_in_vol)
+            # 每個 Volume 分割為 3 到 4 個 Arc
+            vol_span = v_end - v_start + 1
+            arcs_in_vol = 4 if vol_span >= 20 else max(1, min(3, vol_span))
+            ch_span = max(1, vol_span // arcs_in_vol)
 
             for a_sub_idx in range(1, arcs_in_vol + 1):
                 a_start = v_start + (a_sub_idx - 1) * ch_span
@@ -116,8 +146,9 @@ class GeometryGenerator:
                 vol_arc_ids.append(arc_id)
 
                 # 每個 Arc 包含 2 到 3 個 Sequence
-                seq_count = 2 if (a_end - a_start + 1) < 8 else 3
-                s_span = max(1, (a_end - a_start + 1) // seq_count)
+                arc_span = a_end - a_start + 1
+                seq_count = 2 if arc_span < 8 else 3
+                s_span = max(1, arc_span // seq_count)
 
                 for s_sub_idx in range(1, seq_count + 1):
                     s_start = a_start + (s_sub_idx - 1) * s_span
@@ -158,9 +189,8 @@ class GeometryGenerator:
 
     def _build_nodes(self, graph: GeometryGraph) -> None:
         """
-        根據密度配置為每一章產生具備 structural_role 的空幾何節點。
+        根據密度配置為每一章產生具備 structural_role 與 NodeStoryContract 的幾何節點。
         """
-        # 依複雜度決定每章節點基準數量
         complexity_density = {
             GeometryComplexity.SPARSE: 1.5,
             GeometryComplexity.STANDARD: 2.2,
@@ -186,7 +216,6 @@ class GeometryGenerator:
             )
 
             for ch in range(s_start, s_end + 1):
-                # 決定該章產生的節點數
                 count = int(nodes_per_chapter) + (1 if self.rng.random() < (nodes_per_chapter % 1) else 0)
                 count = max(1, count)
 
@@ -194,25 +223,64 @@ class GeometryGenerator:
                     node_id = f"G{node_counter:04d}"
                     node_counter += 1
 
-                    # 依節點在 Sequence/Arc 裡的位置賦予預設結構角色
                     role = self._determine_structural_role(ch, beat_idx, count, s_start, s_end, a_idx)
 
-                    # 重要度判定：弧末或卷末高潮點重要度較高
                     is_climax = (ch == s_end and a_idx in (3, 4))
                     importance = 0.85 if is_climax else round(self.rng.uniform(0.4, 0.7), 2)
+
+                    # 判定 node_type
+                    if is_climax or role in (StructuralRole.PAYOFF, StructuralRole.CONVERGE):
+                        node_type = NodeType.CRISIS
+                    elif role in (StructuralRole.OPEN_THREAD, StructuralRole.TRANSITION):
+                        node_type = NodeType.FACTION_COLLISION
+                    elif role in (StructuralRole.REVISIT, StructuralRole.ECHO):
+                        node_type = NodeType.SECRET_REVEAL
+                    elif role in (StructuralRole.CHARACTER_SHIFT, StructuralRole.RELATIONSHIP_CHANGE):
+                        node_type = NodeType.TRANSFORMATION
+                    else:
+                        node_type = NodeType.DEVELOPMENT
+
+                    # 判定 foreshadowing_demand
+                    if role == StructuralRole.OPEN_THREAD or (v_idx <= 3 and beat_idx == 0):
+                        foreshadowing_demand = ForeshadowingDemand.REQUIRES_PLANT
+                    elif role in (StructuralRole.REVISIT, StructuralRole.BRANCH):
+                        foreshadowing_demand = ForeshadowingDemand.TURN_SITE
+                    elif role in (StructuralRole.PAYOFF, StructuralRole.CLOSE) or (v_idx >= 8 and is_climax):
+                        foreshadowing_demand = ForeshadowingDemand.MUST_PAYOFF
+                    else:
+                        foreshadowing_demand = ForeshadowingDemand.NONE
+
+                    # 建立 NodeStoryContract
+                    story_contract = NodeStoryContract(
+                        node_id=node_id,
+                        volume_index=v_idx,
+                        arc_index=a_idx,
+                        thread_memberships=[],
+                        structural_role=role,
+                        node_type=node_type,
+                        foreshadowing_demand=foreshadowing_demand,
+                        planning_status=PlanningStatus.DRAFT,
+                        realization_status=RealizationStatus.PENDING,
+                        graph_revision=1,
+                    )
 
                     node = GeometryNode(
                         node_id=node_id,
                         hierarchy=hierarchy,
                         chapter_window=(ch, ch),
                         structural_role=role,
-                        primary_thread="",  # 在 _build_threads 綁定
+                        primary_thread="",  # 在 _build_threads 中綁定
                         importance=importance,
                         semantic=None,
                         metadata={
                             "beat_index": beat_idx,
                             "is_climax_candidate": is_climax,
+                            "thread_memberships": [],
                         },
+                        thread_memberships=[],
+                        node_type=node_type,
+                        foreshadowing_demand=foreshadowing_demand,
+                        story_contract=story_contract,
                     )
 
                     graph.add_node(node)
@@ -238,7 +306,6 @@ class GeometryGenerator:
                 return StructuralRole.PAYOFF
             return StructuralRole.CONVERGE
 
-        # 中間節點角色分佈
         mid_rand = self.rng.random()
         if mid_rand < 0.35:
             return StructuralRole.DEVELOP
@@ -256,10 +323,13 @@ class GeometryGenerator:
     def _build_threads(self, graph: GeometryGraph) -> None:
         """
         為幾何圖構建貫穿全書或特定弧線的線程（Thread Skeletons）。
-        線程只定義 node sequence 與 structural skeleton，不包含語義。
+        支援獨立前綴編號（TM01-06, TS01-18），註冊多線程歸屬至 node_story_contract。
         """
         target_chapters = self.params.target_chapters
-        all_nodes = sorted(graph.nodes.values(), key=lambda n: (n.chapter_window[0], n.node_id))
+        all_nodes = sorted(
+            graph.nodes.values(),
+            key=lambda n: (n.chapter_window[0], n.metadata.get("beat_index", 0), n.node_id)
+        )
         if not all_nodes:
             return
 
@@ -271,70 +341,73 @@ class GeometryGenerator:
             (ThreadType.THEMATIC, self.params.thematic_thread_count, "TT"),
         ]
 
-        thread_counter = 1
-
         for t_type, count, prefix in thread_specs:
-            for _ in range(count):
-                thread_id = f"{prefix}{thread_counter:02d}"
-                thread_counter += 1
+            for idx in range(1, count + 1):
+                thread_id = f"{prefix}{idx:02d}"
 
-                # 決定線程覆蓋的章節跨度
                 if t_type == ThreadType.MAIN:
-                    # 主線通常貫穿全書 70%~100%
                     t_start = 1
                     t_end = target_chapters
                 elif t_type == ThreadType.THEMATIC:
-                    # 主題線跨越全書多個關鍵轉折
                     t_start = 1
                     t_end = target_chapters
                 elif t_type == ThreadType.CHARACTER_ARC:
-                    # 角色弧線跨越 2 到 8 卷
                     v_span = self.rng.randint(2, max(3, len(graph.volumes)))
                     v_start_idx = self.rng.randint(1, max(1, len(graph.volumes) - v_span + 1))
                     t_start = (v_start_idx - 1) * self.params.chapters_per_volume + 1
                     t_end = min(target_chapters, (v_start_idx + v_span - 1) * self.params.chapters_per_volume)
                 else:
-                    # 副線或關係線，較局部或中程
                     span_ch = self.rng.randint(15, max(30, target_chapters // 4))
                     t_start = self.rng.randint(1, max(1, target_chapters - span_ch))
                     t_end = min(target_chapters, t_start + span_ch)
 
-                # 從跨度內篩選節點加入線程
                 candidate_nodes = [
                     n for n in all_nodes
                     if t_start <= n.chapter_window[0] <= t_end
                 ]
 
-                # 採樣節點形成線程序列
                 sample_step = max(2, len(candidate_nodes) // self.rng.randint(6, 18))
                 selected_nodes = candidate_nodes[::sample_step]
 
                 if len(selected_nodes) < 3:
                     selected_nodes = candidate_nodes[:min(5, len(candidate_nodes))]
 
+                # 確保節點依嚴格時序升序排列
+                selected_nodes.sort(
+                    key=lambda n: (n.chapter_window[0], n.metadata.get("beat_index", 0), n.node_id)
+                )
+
                 node_seq: List[str] = []
                 structural_skeleton: List[StructuralRole] = []
 
-                for idx, node in enumerate(selected_nodes):
+                for s_idx, node in enumerate(selected_nodes):
                     node_seq.append(node.node_id)
 
-                    # 若節點尚未指派 primary_thread，或是主線，則指派
+                    # 註冊多線程歸屬
+                    if thread_id not in node.thread_memberships:
+                        node.thread_memberships.append(thread_id)
+                    if node.story_contract and thread_id not in node.story_contract.thread_memberships:
+                        node.story_contract.thread_memberships.append(thread_id)
+                    node.metadata["thread_memberships"] = list(node.thread_memberships)
+
+                    # 向後相容 primary_thread
                     if not node.primary_thread or t_type == ThreadType.MAIN:
                         node.primary_thread = thread_id
+                        if node.story_contract:
+                            node.story_contract.primary_thread = thread_id
 
-                    # 設定線程骨架的預期角色進展
-                    if idx == 0:
+                    if s_idx == 0:
                         s_role = StructuralRole.OPEN_THREAD
-                    elif idx == len(selected_nodes) - 1:
+                    elif s_idx == len(selected_nodes) - 1:
                         s_role = StructuralRole.PAYOFF if t_type in (ThreadType.MAIN, ThreadType.SUBPLOT) else StructuralRole.CLOSE
-                    elif idx == len(selected_nodes) - 2 and t_type in (ThreadType.MAIN, ThreadType.SUBPLOT):
+                    elif s_idx == len(selected_nodes) - 2 and t_type in (ThreadType.MAIN, ThreadType.SUBPLOT):
                         s_role = StructuralRole.CONVERGE
                     else:
                         s_role = node.structural_role
 
                     structural_skeleton.append(s_role)
 
-                # 線程內部相鄰節點建立時序推進邊 (CAUSES / ENABLES)
+                # 線程內部時序因果推進邊 (CAUSES / ENABLES)
                 for i in range(len(selected_nodes) - 1):
                     src = selected_nodes[i]
                     tgt = selected_nodes[i + 1]
@@ -360,16 +433,30 @@ class GeometryGenerator:
                 )
                 graph.add_thread(geometry_thread)
 
+        # 保證全圖 100% 節點皆擁有至少一個線程歸屬
+        main_thread_ids = [f"TM{i:02d}" for i in range(1, self.params.main_thread_count + 1)] if self.params.main_thread_count > 0 else ["TM01"]
+        for node in all_nodes:
+            if not node.thread_memberships:
+                t_idx = (node.chapter_window[0] % len(main_thread_ids))
+                assigned_tid = main_thread_ids[t_idx]
+                node.thread_memberships.append(assigned_tid)
+                node.primary_thread = assigned_tid
+                if node.story_contract:
+                    node.story_contract.thread_memberships.append(assigned_tid)
+                    node.story_contract.primary_thread = assigned_tid
+                node.metadata["thread_memberships"] = list(node.thread_memberships)
+
     def _ensure_connectivity(self, graph: GeometryGraph) -> None:
         """
         確保全圖無完全孤立的節點。
-        若節點既無 incoming 也無 outgoing，連至相鄰章節的節點。
         """
-        all_nodes = sorted(graph.nodes.values(), key=lambda n: (n.chapter_window[0], n.node_id))
+        all_nodes = sorted(
+            graph.nodes.values(),
+            key=lambda n: (n.chapter_window[0], n.metadata.get("beat_index", 0), n.node_id)
+        )
         for idx, node in enumerate(all_nodes):
             edges = graph.get_edges_for_node(node.node_id, direction="both")
             if not edges:
-                # 連接至前一個節點
                 if idx > 0:
                     prev_node = all_nodes[idx - 1]
                     dist = abs(node.chapter_window[0] - prev_node.chapter_window[0])
@@ -381,7 +468,6 @@ class GeometryGenerator:
                         distance=dist,
                         metadata={"auto_connected": True},
                     ))
-                # 若還有下一個節點，也建立後續連線
                 if idx < len(all_nodes) - 1:
                     next_node = all_nodes[idx + 1]
                     dist = abs(next_node.chapter_window[0] - node.chapter_window[0])
@@ -393,3 +479,44 @@ class GeometryGenerator:
                         distance=dist,
                         metadata={"auto_connected": True},
                     ))
+
+    def _enforce_causal_dag_ordering(self, graph: GeometryGraph) -> None:
+        """
+        強制規範全圖因果約束邊 (CAUSES, ENABLES, ESCALATES) 遵循嚴格敘事拓撲順序。
+        1. 移除無效或端點缺失的邊。
+        2. 移除任何自環邊 (source == target)。
+        3. 若因果約束邊逆向 (source > target)，反轉其方向使其順應敘事因果推進。
+        4. 消除完全重複的平行邊。
+        保證圖論數學層面 100% 無環 (cycle_count == 0)。
+        """
+        def node_order(nid: str) -> Tuple[int, int, str]:
+            n = graph.nodes.get(nid)
+            if not n:
+                return (0, 0, nid)
+            beat = n.metadata.get("beat_index", 0) if n.metadata else 0
+            return (n.chapter_window[0], beat, n.node_id)
+
+        seen_edges = set()
+        clean_edges: List[GeometryEdge] = []
+
+        for edge in graph.edges:
+            if edge.source not in graph.nodes or edge.target not in graph.nodes:
+                continue
+            if edge.source == edge.target:
+                continue
+
+            if edge.edge_type in CAUSAL_EDGE_TYPES:
+                order_src = node_order(edge.source)
+                order_tgt = node_order(edge.target)
+                if order_src > order_tgt:
+                    edge.source, edge.target = edge.target, edge.source
+                    n_s = graph.nodes[edge.source]
+                    n_t = graph.nodes[edge.target]
+                    edge.distance = abs(n_t.chapter_window[0] - n_s.chapter_window[0])
+
+            edge_key = (edge.source, edge.target, edge.edge_type)
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                clean_edges.append(edge)
+
+        graph.edges = clean_edges

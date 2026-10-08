@@ -34,10 +34,15 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.geometry.models import (
     EdgeType,
+    ForeshadowingDemand,
     GeometryEdge,
     GeometryGraph,
     GeometryNode,
     NodeHierarchy,
+    NodeStoryContract,
+    NodeType,
+    PlanningStatus,
+    RealizationStatus,
     RepairOperation,
     RepairProposal,
     StructuralRole,
@@ -130,6 +135,21 @@ class GeometryRepairEngine:
     def __init__(self, graph: GeometryGraph):
         self.graph = graph
 
+    def _restore_from_snapshot(self, snapshot: GeometryGraph) -> None:
+        """
+        原子回滾：將 self.graph 的內部狀態完全重置回快照。
+        同時保留原 graph 的物件實例引用，確保 caller 持有的物件同步恢復。
+        """
+        self.graph.nodes = snapshot.nodes
+        self.graph.edges = snapshot.edges
+        self.graph.threads = snapshot.threads
+        self.graph.volumes = snapshot.volumes
+        self.graph.arcs = snapshot.arcs
+        self.graph.sequences = snapshot.sequences
+        self.graph.graph_revision = snapshot.graph_revision
+        self.graph.story_contracts = snapshot.story_contracts
+        self.graph.params = snapshot.params
+
     def execute_repair(
         self,
         proposal: RepairProposal,
@@ -139,8 +159,10 @@ class GeometryRepairEngine:
         """
         執行修復提案：
         1. 嚴格驗證門禁條件
-        2. 根據 operation 派發至對應拓撲操作
-        3. 維持圖譜約束與指針合法性
+        2. 快照備份當前圖譜以支援原子回滾
+        3. 根據 operation 派發至對應拓撲操作
+        4. 維持圖譜約束與指針合法性
+        5. 驗證 DAG 無環並遞增版本號；若檢測到環或失敗則乾淨回滾
         """
         # 1. 門禁判定
         passed, reason = GeometryRepairGatekeeper.verify_condition(condition, gatekeeper_context)
@@ -152,28 +174,62 @@ class GeometryRepairEngine:
                 message=f"修復請求遭駁回：{reason}。請改走 evaluate_output / supplement_content 重寫。",
             )
 
-        # 2. 派發操作
-        if proposal.operation == RepairOperation.SPLIT:
-            return self._op_split(proposal, condition)
-        elif proposal.operation == RepairOperation.EXPAND:
-            return self._op_expand(proposal, condition)
-        elif proposal.operation == RepairOperation.INSERT:
-            return self._op_insert(proposal, condition)
-        elif proposal.operation == RepairOperation.COMPRESS:
-            return self._op_compress(proposal, condition)
-        else:
+        # 2. 建立原子快照 (Snapshot before mutation)
+        snapshot = copy.deepcopy(self.graph)
+
+        # 3. 派發操作 (異常防護)
+        try:
+            if proposal.operation == RepairOperation.SPLIT:
+                res = self._op_split(proposal, condition)
+            elif proposal.operation == RepairOperation.EXPAND:
+                res = self._op_expand(proposal, condition)
+            elif proposal.operation == RepairOperation.INSERT:
+                res = self._op_insert(proposal, condition)
+            elif proposal.operation == RepairOperation.COMPRESS:
+                res = self._op_compress(proposal, condition)
+            else:
+                return GeometryRepairResult(
+                    success=False,
+                    operation=proposal.operation,
+                    condition=condition,
+                    message=f"不支援的修復操作：{proposal.operation}",
+                )
+        except Exception as e:
+            self._restore_from_snapshot(snapshot)
             return GeometryRepairResult(
                 success=False,
                 operation=proposal.operation,
                 condition=condition,
-                message=f"不支援的修復操作：{proposal.operation}",
+                message=f"修復操作執行異常，已原子回滾: {str(e)}",
             )
+
+        # 4. 若操作自身標記失敗，回滾並返回
+        if not res.success:
+            self._restore_from_snapshot(snapshot)
+            return res
+
+        # 5. 驗證修復後未產生因果有向環
+        cycle_errors = self.graph.validate_causal_dag()
+        if cycle_errors:
+            self._restore_from_snapshot(snapshot)
+            return GeometryRepairResult(
+                success=False,
+                operation=proposal.operation,
+                condition=condition,
+                message=f"修復造成因果有向環路違規，操作已拒絕: {cycle_errors}",
+            )
+
+        # 6. 成功後遞增圖版本號並確保故事契約完整
+        self.graph.graph_revision += 1
+        self.graph.ensure_story_contracts()
+
+        return res
 
     def _op_split(self, proposal: RepairProposal, condition: GeometryRepairCondition) -> GeometryRepairResult:
         """
         SPLIT (1 -> 2/3):
         將 1 個過載的節點拆分成 2 個或 3 個連續節點。
-        繼承層級與 primary_thread，重新分發 incoming/outgoing 邊。
+        繼承層級、primary_thread 與多線程歸屬，重新分發 incoming/outgoing 邊。
         """
         if not proposal.target_nodes:
             return GeometryRepairResult(success=False, operation=RepairOperation.SPLIT, condition=condition, message="未指定目標節點")
@@ -192,10 +248,26 @@ class GeometryRepairEngine:
         new_node_ids = []
         new_nodes = []
 
+        threads = list(original_node.thread_memberships) if original_node.thread_memberships else ([original_node.primary_thread] if original_node.primary_thread else [])
+
         # 建立拆分後的新節點
         for i in range(split_count):
             sub_id = f"{target_node_id}_{chr(ord('A') + i)}"
             sub_role = original_node.structural_role if i == split_count - 1 else StructuralRole.DEVELOP
+
+            sub_contract = NodeStoryContract(
+                node_id=sub_id,
+                volume_index=original_node.hierarchy.volume_index if original_node.hierarchy else 1,
+                arc_index=original_node.hierarchy.arc_index if original_node.hierarchy else 1,
+                thread_memberships=list(threads),
+                structural_role=sub_role,
+                node_type=original_node.node_type if hasattr(original_node, "node_type") else NodeType.DEVELOPMENT,
+                foreshadowing_demand=original_node.foreshadowing_demand if hasattr(original_node, "foreshadowing_demand") else ForeshadowingDemand.NONE,
+                planning_status=original_node.planning_status if hasattr(original_node, "planning_status") else PlanningStatus.DRAFT,
+                realization_status=original_node.realization_status if hasattr(original_node, "realization_status") else RealizationStatus.PENDING,
+                graph_revision=self.graph.graph_revision + 1,
+            )
+
             sub_node = GeometryNode(
                 node_id=sub_id,
                 hierarchy=copy.deepcopy(original_node.hierarchy),
@@ -207,7 +279,12 @@ class GeometryRepairEngine:
                 metadata={
                     "split_from": target_node_id,
                     "split_sub_index": i,
+                    "thread_memberships": list(threads),
                 },
+                thread_memberships=list(threads),
+                node_type=sub_contract.node_type,
+                foreshadowing_demand=sub_contract.foreshadowing_demand,
+                story_contract=sub_contract,
             )
             self.graph.add_node(sub_node)
             new_node_ids.append(sub_id)
@@ -243,7 +320,8 @@ class GeometryRepairEngine:
                     base_role = thread.structural_skeleton[idx]
                     thread.structural_skeleton[idx:idx + 1] = [StructuralRole.DEVELOP] * (split_count - 1) + [base_role]
 
-        # 移除原節點
+        # 移除原節點與其舊契約
+        self.graph.story_contracts.pop(target_node_id, None)
         del self.graph.nodes[target_node_id]
 
         return GeometryRepairResult(
@@ -274,25 +352,45 @@ class GeometryRepairEngine:
         first_node = nodes[0]
         last_node = nodes[-1]
 
-        # 新增 2 個過渡/收束中間節點
         try:
             add_count = min(100, max(1, int(proposal.detail.get("add_count", 2))))
         except (TypeError, ValueError):
             add_count = 2
         new_node_ids = []
 
+        threads = list(first_node.thread_memberships) if first_node.thread_memberships else ([first_node.primary_thread] if first_node.primary_thread else [])
+
         for i in range(add_count):
             new_id = f"G_EXP_{first_node.node_id}_{i+1}"
             ch_mid = (first_node.chapter_window[0] + last_node.chapter_window[1]) // 2
+            sub_role = StructuralRole.CONVERGE if i == 0 else StructuralRole.ESCALATE
+
+            exp_contract = NodeStoryContract(
+                node_id=new_id,
+                volume_index=first_node.hierarchy.volume_index if first_node.hierarchy else 1,
+                arc_index=first_node.hierarchy.arc_index if first_node.hierarchy else 1,
+                thread_memberships=list(threads),
+                structural_role=sub_role,
+                node_type=NodeType.CRISIS if i == 0 else NodeType.DEVELOPMENT,
+                foreshadowing_demand=ForeshadowingDemand.NONE,
+                planning_status=PlanningStatus.DRAFT,
+                realization_status=RealizationStatus.PENDING,
+                graph_revision=self.graph.graph_revision + 1,
+            )
+
             new_node = GeometryNode(
                 node_id=new_id,
                 hierarchy=copy.deepcopy(first_node.hierarchy),
                 chapter_window=(ch_mid, ch_mid),
-                structural_role=StructuralRole.CONVERGE if i == 0 else StructuralRole.ESCALATE,
+                structural_role=sub_role,
                 primary_thread=first_node.primary_thread,
                 importance=0.8,
                 semantic=None,
-                metadata={"expanded_node": True},
+                metadata={"expanded_node": True, "thread_memberships": list(threads)},
+                thread_memberships=list(threads),
+                node_type=exp_contract.node_type,
+                foreshadowing_demand=exp_contract.foreshadowing_demand,
+                story_contract=exp_contract,
             )
             self.graph.add_node(new_node)
             new_node_ids.append(new_id)
@@ -348,6 +446,21 @@ class GeometryRepairEngine:
         insert_chapter = node_a.chapter_window[1] + 1 if is_new_chapter else node_a.chapter_window[1]
 
         bridge_id = f"G_BRIDGE_{node_a.node_id}_{node_b.node_id}"
+        threads = list(node_a.thread_memberships) if node_a.thread_memberships else ([node_a.primary_thread] if node_a.primary_thread else [])
+
+        bridge_contract = NodeStoryContract(
+            node_id=bridge_id,
+            volume_index=node_a.hierarchy.volume_index if node_a.hierarchy else 1,
+            arc_index=node_a.hierarchy.arc_index if node_a.hierarchy else 1,
+            thread_memberships=list(threads),
+            structural_role=StructuralRole.DEVELOP,
+            node_type=NodeType.DEVELOPMENT,
+            foreshadowing_demand=ForeshadowingDemand.NONE,
+            planning_status=PlanningStatus.DRAFT,
+            realization_status=RealizationStatus.PENDING,
+            graph_revision=self.graph.graph_revision + 1,
+        )
+
         bridge_node = GeometryNode(
             node_id=bridge_id,
             hierarchy=copy.deepcopy(node_a.hierarchy),
@@ -356,7 +469,15 @@ class GeometryRepairEngine:
             primary_thread=node_a.primary_thread,
             importance=0.6,
             semantic=None,
-            metadata={"is_bridge_node": True, "bridge_between": [after_node_id, before_node_id]},
+            metadata={
+                "is_bridge_node": True,
+                "bridge_between": [after_node_id, before_node_id],
+                "thread_memberships": list(threads),
+            },
+            thread_memberships=list(threads),
+            node_type=bridge_contract.node_type,
+            foreshadowing_demand=bridge_contract.foreshadowing_demand,
+            story_contract=bridge_contract,
         )
         self.graph.add_node(bridge_node)
 
@@ -425,12 +546,22 @@ class GeometryRepairEngine:
         )
         node_a.metadata["compressed_from"] = [targets[0], targets[1]]
 
+        # 合併線程歸屬
+        threads_a = list(node_a.thread_memberships) if node_a.thread_memberships else ([node_a.primary_thread] if node_a.primary_thread else [])
+        threads_b = list(node_b.thread_memberships) if node_b.thread_memberships else ([node_b.primary_thread] if node_b.primary_thread else [])
+        union_threads = list(dict.fromkeys(threads_a + threads_b))
+        node_a.thread_memberships = union_threads
+        node_a.metadata["thread_memberships"] = list(union_threads)
+        if node_a.story_contract:
+            node_a.story_contract.thread_memberships = list(union_threads)
+
         # 移除連線與節點
         self.graph.edges = [
             e for e in self.graph.edges
             if not (e.source == node_a.node_id and e.target == node_a.node_id)
             and e.source != node_b.node_id and e.target != node_b.node_id
         ]
+        self.graph.story_contracts.pop(node_b.node_id, None)
         del self.graph.nodes[node_b.node_id]
 
         return GeometryRepairResult(

@@ -3,6 +3,7 @@ import json
 import time
 import traceback
 from functools import partial
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from backend import persistence as db
 from backend.services import diagnostics
@@ -87,6 +88,75 @@ _split_consecutive_batches = split_consecutive_batches
 _extract_chapters_in_range = extract_chapters_in_range
 
 from backend.agents.shared.context_requests import _handle_director_context_request
+
+
+def backfill_volume_outlines_to_master_graph(novel_id: str, volumes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    將篇卷大綱 (Volume Outlines) 映射回填至 Master Graph。
+    - 不改變 Master Graph 原有的 9 維故事事件契約與因果拓撲。
+    - 將各卷的標題、大綱、章節範圍等宏觀邊界對齊並注入 VolumeContainer 與對應節點。
+    """
+    try:
+        from backend.persistence import master_graph_repository
+        graph = master_graph_repository.load_master_graph(novel_id)
+        if not graph:
+            return {"mapped_volumes": 0, "status": "no_master_graph"}
+
+        mapped_count = 0
+        updated_nodes = 0
+        cum_start = 1
+        for vol in volumes:
+            if not isinstance(vol, dict):
+                continue
+            v_idx = int(vol.get("volume_index", 1))
+            ch_count = int(vol.get("chapter_count", 0)) or 40
+            v_start = int(vol.get("start_chapter") or cum_start)
+            v_end = int(vol.get("end_chapter") or (v_start + ch_count - 1))
+            cum_start = v_end + 1
+
+            vol_id = f"V{v_idx:02d}"
+            vol_container = graph.volumes.get(v_idx) or graph.volumes.get(vol_id)
+            if not vol_container:
+                from backend.geometry.models import VolumeContainer
+                vol_container = VolumeContainer(
+                    volume_id=vol_id,
+                    volume_index=v_idx,
+                    chapter_range=(v_start, v_end),
+                    title=str(vol.get("title", f"第 {v_idx} 卷")),
+                    summary=str(vol.get("summary", "")),
+                )
+                graph.volumes[vol_id] = vol_container
+            else:
+                vol_container.title = str(vol.get("title", vol_container.title))
+                vol_container.summary = str(vol.get("summary", vol_container.summary))
+                vol_container.start_chapter = v_start
+                vol_container.end_chapter = v_end
+                graph.volumes[vol_id] = vol_container
+
+            mapped_count += 1
+
+            for nid, node in graph.nodes.items():
+                node_vol = node.hierarchy.volume_index if node.hierarchy else 1
+                if node_vol == v_idx:
+                    if node.metadata is None:
+                        node.metadata = {}
+                    node.metadata["volume_title"] = vol_container.title
+                    node.metadata["volume_summary"] = vol_container.summary
+                    contract = node.story_contract or graph.story_contracts.get(nid)
+                    if contract:
+                        contract.volume_index = v_idx
+                    updated_nodes += 1
+
+        master_graph_repository.save_master_graph(novel_id, graph)
+        return {
+            "mapped_volumes": mapped_count,
+            "updated_nodes": updated_nodes,
+            "status": "success",
+        }
+    except Exception as exc:
+        print(f"[WARN] Failed to backfill volume outlines to master graph: {exc}")
+        return {"mapped_volumes": 0, "error": str(exc)}
+
 
 def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", target_vol_idx=None, stream=False, force_json=False):
     """
@@ -280,6 +350,10 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
             # 即時持久化至 DB（第一批時清空舊下游骨架，後續批次累加追加）
             is_first_batch = (batch_idx == 1 and len(existing_vols) == 0)
             db.save_volumes(novel_id, accumulated_vols, clear_downstream=is_first_batch)
+            try:
+                backfill_volume_outlines_to_master_graph(novel_id, accumulated_vols)
+            except Exception as e:
+                print(f"[WARN] Failed to backfill volumes to master graph: {e}")
 
             yield "data: " + json.dumps({
                 "type": "status",
@@ -367,6 +441,10 @@ def run_volumes_planner(novel_id, user_prompt=None, hint=None, mode="generate", 
                 return
 
             db.save_volumes(novel_id, adjusted_vols, clear_downstream=False, target_vol_idx=target_vol_idx)
+            try:
+                backfill_volume_outlines_to_master_graph(novel_id, adjusted_vols)
+            except Exception as e:
+                print(f"[WARN] Failed to backfill patch volumes to master graph: {e}")
             try:
                 db.precompute_global_foreshadowing(novel_id)
             except Exception as e:

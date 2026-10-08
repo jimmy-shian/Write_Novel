@@ -778,6 +778,13 @@ def db_init(
         )
         """)
 
+        # 15. Master Graph Single Source of Truth & Pipeline Tables (Milestone 3)
+        try:
+            from backend.persistence.repositories.master_graph_repository import init_master_graph_tables
+            init_master_graph_tables(conn)
+        except Exception as e:
+            print(f"[WARN] Failed to create master graph tables: {e}")
+
         conn.commit()
     except Exception as e:
         print(f"[WARN] Failed to create temporal_graph / story extension tables: {e}")

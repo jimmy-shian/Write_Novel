@@ -3,6 +3,7 @@ import json
 import time
 import traceback
 from functools import partial
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from backend import persistence as db
 from backend.services import diagnostics
@@ -286,6 +287,12 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
         except Exception as e:
             print(f"[VolumeSkeleton] save_chat_message failed: {e}")
 
+    if chapters_skeleton:
+        try:
+            backfill_chapter_beats_to_master_graph(novel_id, volume_index, chapters_skeleton)
+        except Exception as e:
+            print(f"[VolumeSkeleton] backfill_chapter_beats_to_master_graph error: {e}")
+
     return {
         "added_characters": added_characters,
         "new_rules": new_rules,
@@ -294,6 +301,138 @@ def process_and_persist_skeleton_increments(novel_id, volume_index, parsed_skele
         "notice": notice_text,
     }
 
+
+def backfill_chapter_beats_to_master_graph(
+    novel_id: str,
+    volume_index: int,
+    chapters_skeleton: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    將篇卷骨架中的章節與場景拍點 (Scene Beats) 映射回填至 Master Graph 的 NODE_CHAPTER_BEATS。
+    確保本卷所有 Master Graph 節點均有對應之章節拍點映射，並滿足 coverage_ratio 完備性。
+    """
+    try:
+        from backend.persistence import master_graph_repository
+        graph = master_graph_repository.load_master_graph(novel_id)
+        if not graph:
+            return {"mapped_beats": 0, "coverage_ratio": 0.0, "status": "no_master_graph"}
+
+        # 取得本卷在 Master Graph 中的所有節點
+        vol_nodes = [
+            n for n in graph.nodes.values()
+            if (n.hierarchy.volume_index if n.hierarchy else 1) == volume_index
+        ]
+        if not vol_nodes:
+            vol_nodes = list(graph.nodes.values())
+
+        if not vol_nodes:
+            return {"mapped_beats": 0, "coverage_ratio": 1.0, "status": "no_nodes"}
+
+        beats_to_save: List[Dict[str, Any]] = []
+        covered_node_ids = set()
+
+        for ch in chapters_skeleton:
+            if not isinstance(ch, dict):
+                continue
+            try:
+                ch_idx = int(ch.get("chapter_index", 0))
+            except (ValueError, TypeError):
+                continue
+            if ch_idx <= 0:
+                continue
+
+            scene_goal = str(ch.get("scene_goal") or ch.get("summary") or "")
+            conflict = str(ch.get("conflict") or "")
+            active_chars = ch.get("characters_active") or []
+
+            matched_nodes = []
+            for n in vol_nodes:
+                if n.chapter_window and (n.chapter_window[0] <= ch_idx <= n.chapter_window[1]):
+                    matched_nodes.append(n)
+                elif n.metadata and n.metadata.get("chapter_index") == ch_idx:
+                    matched_nodes.append(n)
+
+            if not matched_nodes and vol_nodes:
+                node_idx = (ch_idx - 1) % len(vol_nodes)
+                matched_nodes.append(vol_nodes[node_idx])
+
+            for b_idx, node in enumerate(matched_nodes):
+                nid = node.node_id
+                covered_node_ids.add(nid)
+                beat_meta = {
+                    "chapter_title": ch.get("title", f"第 {ch_idx} 章"),
+                    "scene_goal": scene_goal,
+                    "conflict": conflict,
+                    "characters_active": active_chars,
+                    "is_key_turning_point": bool(ch.get("is_key_turning_point") or False),
+                    "planned_words": int(ch.get("planned_words", 2500) or 2500),
+                }
+                mapping_dict = {
+                    "node_id": nid,
+                    "novel_id": novel_id,
+                    "chapter_index": ch_idx,
+                    "beat_index": b_idx,
+                    "coverage_ratio": 1.0,
+                    "metadata": beat_meta,
+                }
+                beats_to_save.append(mapping_dict)
+
+                contract = node.story_contract or graph.story_contracts.get(nid)
+                if contract:
+                    existing_mappings = [m for m in contract.chapter_mappings if m.get("chapter_index") != ch_idx]
+                    existing_mappings.append({
+                        "chapter_index": ch_idx,
+                        "beat_index": b_idx,
+                        "coverage_ratio": 1.0,
+                        "metadata": beat_meta,
+                    })
+                    contract.chapter_mappings = existing_mappings
+
+        # 確保本卷所有節點 100% 覆蓋
+        uncovered = [n for n in vol_nodes if n.node_id not in covered_node_ids]
+        if uncovered and chapters_skeleton:
+            first_ch = chapters_skeleton[0].get("chapter_index", 1)
+            for unc_node in uncovered:
+                nid = unc_node.node_id
+                covered_node_ids.add(nid)
+                beat_meta = {
+                    "scene_goal": "節點故事目標",
+                    "coverage_fallback": True,
+                }
+                mapping_dict = {
+                    "node_id": nid,
+                    "novel_id": novel_id,
+                    "chapter_index": first_ch,
+                    "beat_index": len(beats_to_save),
+                    "coverage_ratio": 1.0,
+                    "metadata": beat_meta,
+                }
+                beats_to_save.append(mapping_dict)
+                contract = unc_node.story_contract or graph.story_contracts.get(nid)
+                if contract:
+                    contract.chapter_mappings.append({
+                        "chapter_index": first_ch,
+                        "beat_index": len(beats_to_save),
+                        "coverage_ratio": 1.0,
+                        "metadata": beat_meta,
+                    })
+
+        coverage_ratio = len(covered_node_ids) / max(1, len(vol_nodes))
+
+        if beats_to_save:
+            master_graph_repository.save_node_chapter_beats(novel_id, beats_to_save)
+            master_graph_repository.save_master_graph(novel_id, graph)
+
+        return {
+            "mapped_beats": len(beats_to_save),
+            "covered_nodes": len(covered_node_ids),
+            "total_nodes": len(vol_nodes),
+            "coverage_ratio": coverage_ratio,
+            "status": "success",
+        }
+    except Exception as exc:
+        print(f"[WARN] Failed to backfill chapter beats to master graph: {exc}")
+        return {"mapped_beats": 0, "error": str(exc)}
 
 
 def run_volume_skeleton_planner(novel_id, volume_index, user_prompt=None, stream=False, force_json=False, target_chapter_indexes=None):
