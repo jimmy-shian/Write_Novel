@@ -49,7 +49,7 @@ export const Modal: React.FC<ModalProps> = ({
           <div className="modal-header">
             <div>
               <h3 className="modal-title">{title}</h3>
-              {subtitle && <div className="text-xs text-[var(--text-muted)] mt-0.5">{subtitle}</div>}
+              {subtitle && <div className="modal-subtitle">{subtitle}</div>}
             </div>
             <button
               type="button"

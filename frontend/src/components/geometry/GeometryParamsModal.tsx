@@ -56,10 +56,10 @@ export const GeometryParamsModal: React.FC<GeometryParamsModalProps> = ({
       onClose={onClose}
       title="敘事幾何拓撲參數設定"
       subtitle="手動微調長篇小說幾何骨架、線程密度與長距伏筆約束配置"
-      size="md"
+      maxWidth="md"
       footer={
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose} disabled={isLoading}>
+        <div className="modal-footer-actions">
+          <Button variant="ghost" onClick={onClose} disabled={isLoading}>
             取消
           </Button>
           <Button variant="primary" onClick={handleSubmit} isLoading={isLoading}>
@@ -68,104 +68,116 @@ export const GeometryParamsModal: React.FC<GeometryParamsModalProps> = ({
         </div>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[var(--text-muted)] mb-1">目標全書章數：</label>
+      <form onSubmit={handleSubmit} className="geometry-params-form">
+        <div className="form-row">
+          <div className="form-group flex-1">
+            <label className="form-label">目標全書章數</label>
             <input
               type="number"
               min={10}
               max={3000}
-              className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+              className="form-input"
               value={targetChapters}
               onChange={(e) => setTargetChapters(Number(e.target.value))}
             />
           </div>
 
-          <div>
-            <label className="block text-[var(--text-muted)] mb-1">規劃總篇卷數：</label>
+          <div className="form-group flex-1">
+            <label className="form-label">規劃總篇卷數</label>
             <input
               type="number"
               min={1}
               max={60}
-              className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+              className="form-input"
               value={volumeCount}
               onChange={(e) => setVolumeCount(Number(e.target.value))}
             />
           </div>
         </div>
 
-        <div>
-          <label className="block text-[var(--text-muted)] mb-1">幾何複雜度 (Complexity)：</label>
-          <div className="grid grid-cols-2 gap-2">
+        <div className="form-group">
+          <label className="form-label">幾何複雜度 (Complexity)</label>
+          <div className="preset-tags-list geometry-complexity-list">
             {COMPLEXITY_LEVELS.map((lvl) => (
               <button
                 key={lvl.id}
                 type="button"
-                className={`p-2.5 rounded border text-left transition-all ${
-                  complexity === lvl.id
-                    ? 'border-[var(--accent)] bg-[var(--accent-subtle)]'
-                    : 'border-[var(--border)] bg-[var(--surface-subtle)] hover:border-[var(--accent)]'
-                }`}
+                className={`preset-tag-btn geometry-complexity-btn ${complexity === lvl.id ? 'active' : ''}`}
                 onClick={() => setComplexity(lvl.id)}
+                title={lvl.desc}
               >
-                <div className="font-semibold text-xs text-[var(--text-primary)]">{lvl.label}</div>
-                <div className="text-[11px] text-[var(--text-muted)]">{lvl.desc}</div>
+                <span className="complexity-label">{lvl.label}</span>
+                <span className="complexity-desc">{lvl.desc}</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="border-t border-[var(--border-subtle)] pt-3">
-          <span className="block font-semibold mb-2 text-[var(--text-primary)]">線程數量配置 (Thread Counts)</span>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[var(--text-muted)] mb-1">主要線程 (Main Threads):</label>
+        <div className="form-group">
+          <label className="form-label">線程數量配置 (Thread Counts)</label>
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label className="form-label">主要線程 (Main Threads)</label>
               <input
                 type="number"
                 min={1}
                 max={12}
-                className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+                className="form-input"
                 value={mainThreadCount}
                 onChange={(e) => setMainThreadCount(Number(e.target.value))}
               />
             </div>
 
-            <div>
-              <label className="block text-[var(--text-muted)] mb-1">次要支線 (Subplots):</label>
+            <div className="form-group flex-1">
+              <label className="form-label">次要支線 (Subplots)</label>
               <input
                 type="number"
                 min={1}
                 max={30}
-                className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+                className="form-input"
                 value={subplotCount}
                 onChange={(e) => setSubplotCount(Number(e.target.value))}
               />
             </div>
-
-            <div>
-              <label className="block text-[var(--text-muted)] mb-1">角色成長弧 (Character Arcs):</label>
+          </div>
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label className="form-label">角色成長弧 (Character Arcs)</label>
               <input
                 type="number"
                 min={1}
                 max={20}
-                className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+                className="form-input"
                 value={characterArcCount}
                 onChange={(e) => setCharacterArcCount(Number(e.target.value))}
               />
             </div>
 
-            <div>
-              <label className="block text-[var(--text-muted)] mb-1">人際關係線 (Relationship Arcs):</label>
+            <div className="form-group flex-1">
+              <label className="form-label">人際關係線 (Relationship Arcs)</label>
               <input
                 type="number"
                 min={1}
                 max={16}
-                className="w-full p-2 rounded bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text-primary)]"
+                className="form-input"
                 value={relationshipArcCount}
                 onChange={(e) => setRelationshipArcCount(Number(e.target.value))}
               />
             </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label className="form-label">主題線 (Thematic Threads)</label>
+              <input
+                type="number"
+                min={0}
+                max={12}
+                className="form-input"
+                value={thematicThreadCount}
+                onChange={(e) => setThematicThreadCount(Number(e.target.value))}
+              />
+            </div>
+            <div className="form-group flex-1" aria-hidden="true" />
           </div>
         </div>
       </form>

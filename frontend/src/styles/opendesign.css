@@ -1791,6 +1791,76 @@ html, body {
   color: var(--text-primary);
 }
 
+.modal-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Geometry Params Modal (manual planning, no Tailwind in this project) */
+.flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.geometry-params-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.geometry-complexity-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.geometry-complexity-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 10px;
+  line-height: 1.5;
+}
+
+.geometry-complexity-btn .complexity-label {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.geometry-complexity-btn .complexity-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* 選中態：淡底高亮（與 terms-quick-preset-btn.active 同 pattern）。
+   不可沿用 .preset-tag-btn.active 的實心 accent 底——淺色主題 accent 近黑，
+   大卡片會變成一塊黑，且說明字對比不足。 */
+.preset-tag-btn.geometry-complexity-btn.active {
+  background-color: var(--accent-subtle);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preset-tag-btn.geometry-complexity-btn.active .complexity-label {
+  color: var(--accent);
+}
+
+.preset-tag-btn.geometry-complexity-btn.active .complexity-desc {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 560px) {
+  .geometry-complexity-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 .modal-body {
   flex: 1;
   overflow-y: auto;
