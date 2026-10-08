@@ -963,6 +963,7 @@ class AutonomousPipelineManager:
                 task_type="generate",
                 instruction=f"[BATCH: foreshadowing_seeds] 請為全書埋設貫穿全局的重大懸念與分卷伏筆（目標累加至 {MIN_FORESHADOWING_SEEDS}+ 條）",
                 user_prompt="設計核心主線伏筆",
+                extra_body={"target_field": "foreshadowing_seeds"},
                 verify_fn=lambda: _are_seeds_ready(novel_id, min_count=MIN_FORESHADOWING_SEEDS),
             )
             task.log(f"✅ 伏筆網絡已編織完成（{MIN_FORESHADOWING_SEEDS}+ 條）！")
@@ -982,6 +983,7 @@ class AutonomousPipelineManager:
                 task_type="generate",
                 instruction=f"[BATCH: key_turning_points] 請為全書規劃核心關鍵轉折點與重大逆轉事件，呼應並引爆伏筆網絡（目標累加至 {MIN_KEY_TURNING_POINTS}+ 條）",
                 user_prompt="設計核心關鍵轉折點",
+                extra_body={"target_field": "key_turning_points"},
                 verify_fn=lambda: _are_turning_points_ready(novel_id, min_count=MIN_KEY_TURNING_POINTS),
             )
             task.log(f"✅ 關鍵轉折點已規劃完成（{MIN_KEY_TURNING_POINTS}+ 條）！")

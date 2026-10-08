@@ -326,7 +326,12 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
     }
     
     if config["enable_thinking"]:
-        payload_base["chat_template_kwargs"] = {"enable_thinking": True}
+        # Structured generation must produce a user-facing JSON body. Some
+        # OpenAI-compatible adapters expose only the reasoning channel when
+        # thinking and JSON mode are combined, leaving message.content empty.
+        payload_base["chat_template_kwargs"] = {
+            "enable_thinking": bool(config["enable_thinking"]) and not force_json
+        }
 
     if force_json and "gpt-oss" not in actual_model_string:
         payload_base["response_format"] = {"type": "json_object"}
@@ -476,8 +481,9 @@ def call_llm_stream(agent_name, messages, custom_payload_overrides=None, stream=
                         "type": "thinking",
                         "delta": reasoning
                     }, ensure_ascii=False) + "\n\n"
-                    continue
-                    
+                    # A delta may carry both channels. Do not discard its actual
+                    # completion content after forwarding the reasoning chunk.
+
                 if content:
                     has_yielded_anything = True
                     
@@ -588,5 +594,3 @@ def call_llm(agent_name: str, system_prompt: str, user_prompt: str, force_json: 
             except Exception as exc:
                 print(f"[WARN] call_llm failed to parse stream chunk: {exc}")
     return "".join(accumulated)
-
-
