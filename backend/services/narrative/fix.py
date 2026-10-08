@@ -17,7 +17,6 @@ WATCH 為觀察級，僅靠下一章寫作上下文約束，不需動用 Editor�
 from typing import Any, Dict, List, Optional
 
 from backend import persistence as db
-from backend.common.llm import call_llm
 from backend.services.narrative.narrative_auditor import NarrativeAuditor
 
 # 審計判決視為「通過」的集合：PASS=健全、NO_ACTION_REQUIRED=安靜呼吸章、
@@ -177,23 +176,36 @@ def build_director_user_instruction(
         if not engine_lines:
             return fallback
 
-        system_prompt = (
-            "你是小說創作流水線的總監（Director）。敘事引擎（Narrative Auditor）已完成離線診斷，"
-            "你的任務是把引擎的診斷與建議，轉寫成一段給 Writer 與 Editor 的「修正指令」："
-            "具體、可執行、逐點說明情節因果與內文要怎麼改，輸出必須包含：\n"
-            "1.【禁用原文逐條】：列出必須刪除替換的套路句與段落位置。\n"
-            "2.【位置與替換方向】：說明開篇、結尾、微動作或對白之替換方式。\n"
-            "3.【策略與代價重寫要求】：若涉及因果問題，說明新的破局手段與支付代價。\n"
-            "4.【建設性引導】：提供具體可操作的正面角色行動與明確代價支付（如體能消耗、資源耗竭、情報代價），引導情節自然收斂至故事目標。\n"
-            "5.【紅線】：不得改變本章核心大綱主旨、人物立場與伏筆走向。\n"
-            "只輸出指令本文本身（繁體中文），不要 JSON、不要標題、不要客套話。"
-        )
         user_prompt = (
             f"第 {chapter_index} 章敘事引擎診斷與建議如下：\n"
             + "\n".join(engine_lines)
-            + "\n\n請據此產生給 Writer 與 Editor 的 user 修正指令（600 字內，逐點列改法）。"
+            + "\n\n請依據本書世界觀、角色 Bible、本章大綱、前後章連續性與目前正文，"
+            "產生給 Writer 與 Editor 的逐點修正指令。agent_prompt 必須具體指出要改的位置、角色可採取的行動與驗收方式；"
+            "保留本章事件因果、人物立場與伏筆走向。請提供非空 agent_prompt，不要只回覆 CONTINUE 或重述診斷。"
         )
-        instruction = (call_llm("copilot", system_prompt, user_prompt) or "").strip()
+        from backend.agents.director.runner import get_director_decision_sync
+        volume_index = None
+        try:
+            volume_index = db.get_chapter_volume_index(db.get_volumes(novel_id), chapter_index)
+        except Exception:
+            pass
+        decision = get_director_decision_sync(
+            novel_id=novel_id,
+            current_stage="writer",
+            user_prompt=user_prompt,
+            chapter_index=chapter_index,
+            volume_index=volume_index,
+            extra_context=(
+                "【敘事引擎與前輪驗收證據】\n"
+                + "\n".join(engine_lines)
+                + "\n\n請在完整正文、世界觀、角色 Bible 與本章大綱脈絡下制定修正方向。"
+            ),
+        )
+        instruction = str(
+            (decision or {}).get("agent_prompt")
+            or (decision or {}).get("hint")
+            or ""
+        ).strip()
         if not instruction:
             return fallback
 

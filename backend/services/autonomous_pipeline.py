@@ -480,6 +480,30 @@ class AutonomousPipelineManager:
                 if stage == "editor" and error_type == "EDITOR_MISSING_INPUT":
                     task.stage_redirect_count += 1
                     task.log(f"🚨 [Editor 缺失正文] 第 {ch_idx_for_director} 章正文缺失或過短，停止 Editor 重試，直接導向 Writer！", level="warn")
+                    missing_input_prompt = "正文缺失或過短，請完整撰寫本章故事正文。"
+                    try:
+                        decision = get_director_decision_sync(
+                            novel_id=task.novel_id,
+                            current_stage="writer",
+                            user_prompt=(
+                                f"第 {ch_idx_for_director} 章 Editor 前置檢查發現正文缺失或過短。"
+                                "請依本書世界觀、相關角色 Bible、本章大綱及前後章脈絡，"
+                                "提出 Writer 可直接執行的完整正文補寫方向，確保不新增設定矛盾。"
+                            ),
+                            chapter_index=ch_idx_for_director,
+                            volume_index=vol_idx_for_director,
+                            extra_context=(
+                                f"Editor 缺稿錯誤：{err_clean}\n"
+                                f"目前資料庫正文長度：{len(cur_content)} 字。"
+                            ),
+                        )
+                        if decision:
+                            missing_input_prompt = str(
+                                decision.get("agent_prompt") or decision.get("hint") or missing_input_prompt
+                            ).strip()
+                        task.log(f"🎬 [Director 缺稿修正方向] 第 {ch_idx_for_director} 章：{missing_input_prompt[:400]}")
+                    except Exception as director_exc:
+                        task.log(f"⚠️ Editor 缺稿時 Director 診斷失敗，使用明確 Writer 補稿指示：{director_exc}", level="warn")
                     retry_log_data = {
                         "chapter": ch_idx_for_director,
                         "stage": stage,
@@ -496,7 +520,7 @@ class AutonomousPipelineManager:
                     raise StageRedirectException(
                         target_stage="writer",
                         reason="Editor 前置檢查失敗：正文不存在或過短，停止 Editor 重試並回到 Writer。",
-                        agent_prompt="正文缺失或過短，請完整撰寫本章故事正文。",
+                        agent_prompt=missing_input_prompt,
                     )
 
                 # 同一章同一錯誤連續出現時，記錄並加強下一次 Director 指令，
@@ -1252,14 +1276,20 @@ class AutonomousPipelineManager:
         # 否則舊的短稿、拒答稿或時序壞稿可能直接繞過硬性驗收。
         current_state = "WRITER_GATE" if editor_retry_only else "WRITER"
         writer_retries = 0
-        # 外層 Writer 嘗試也使用 10 倍重試倍率；此上限涵蓋生成例外與 Writer Gate 未通過。
+        # 外層 Writer 嘗試維持原有倍率上限；每輪均攜帶 Director 定向修正指示。
         max_writer_retries = 3 * RETRY_MULTIPLIER
         director_eval = {}
+        writer_repair_instruction = ""
+        last_writer_failure = ""
 
         while not task.stop_requested:
             if current_state == "WRITER":
                 if writer_retries >= max_writer_retries:
-                    task.log(f"🚫 第 {ch_idx} 章 Writer 達到重試上限（{max_writer_retries} 次），停止本章流程並標記 writer_failed", level="error")
+                    failure_reason = last_writer_failure or "; ".join(director_eval.get("issues") or []) or "Writer 未產出可驗收正文"
+                    task.log(
+                        f"🚫 第 {ch_idx} 章 Writer 已完成 {writer_retries} 輪定向修正仍未通過，標記 writer_failed：{failure_reason}",
+                        level="error",
+                    )
                     try:
                         db.save_director_review_status(
                             novel_id=novel_id,
@@ -1268,7 +1298,8 @@ class AutonomousPipelineManager:
                             block_name=f"chapter_{ch_idx}",
                             volume_index=curr_vol_idx,
                             chapter_index=ch_idx,
-                            reason=f"Writer 階段達到上限 {max_writer_retries} 次未產出合格正文",
+                            reason=f"Writer 定向修正達到上限 {max_writer_retries} 輪：{failure_reason}",
+                            decision_json=director_eval or {"error": failure_reason},
                         )
                     except Exception:
                         pass
@@ -1276,7 +1307,10 @@ class AutonomousPipelineManager:
 
                 writer_retries += 1
                 try:
-                    self._run_writer_for_chapter(task, novel_id, ch_idx, total_target, False, written_rows)
+                    self._run_writer_for_chapter(
+                        task, novel_id, ch_idx, total_target, False, written_rows,
+                        repair_instruction=writer_repair_instruction,
+                    )
                     current_state = "WRITER_GATE"
                 except StageRedirectException as redirect_exc:
                     if redirect_exc.target_stage == "editor":
@@ -1289,8 +1323,13 @@ class AutonomousPipelineManager:
                 except PipelineHaltedException:
                     raise
                 except Exception as writer_exc:
+                    last_writer_failure = str(writer_exc)
+                    writer_repair_instruction = (
+                        "上一輪 Writer 生成或存檔失敗，請依錯誤原因採用不同生成方式，並確認產出完整正文且確實寫入章節資料：\n"
+                        + last_writer_failure
+                    )
                     task.log(
-                        f"⚠️ 第 {ch_idx} 章 Writer 本輪呼叫失敗（外層第 {writer_retries}/{max_writer_retries} 次）：{writer_exc}；將重新執行 Writer。",
+                        f"⚠️ 第 {ch_idx} 章 Writer 本輪呼叫失敗（定向輪次 {writer_retries}/{max_writer_retries}）：{writer_exc}；將重新執行 Writer。",
                         level="warn",
                     )
                     current_state = "WRITER"
@@ -1298,9 +1337,11 @@ class AutonomousPipelineManager:
             elif current_state == "WRITER_GATE":
                 director_eval = self._run_director_chapter_gate(task, novel_id, ch_idx, curr_vol_idx)
                 if director_eval.get("writer_failed") or not director_eval.get("passed", False):
+                    writer_repair_instruction = str(director_eval.get("repair_instruction") or "")
+                    last_writer_failure = "; ".join(director_eval.get("issues") or []) or "Writer Gate 未通過"
                     task.log(
                         f"🚫 [Writer Gate 失敗] 第 {ch_idx} 章未通過驗收，不進入 Editor；"
-                        f"將回到 Writer 重寫（外層第 {writer_retries}/{max_writer_retries} 次）。",
+                        f"將帶著 Director 定向指示回到 Writer（第 {writer_retries}/{max_writer_retries} 輪）：{last_writer_failure}",
                         level="error",
                     )
                     current_state = "WRITER"
@@ -1420,6 +1461,7 @@ class AutonomousPipelineManager:
         total_target: int,
         editor_retry_only: bool,
         written_rows: Dict[int, Dict[str, Any]],
+        repair_instruction: str = "",
     ) -> bool:
         """(1) 正文寫作：沿用既有初稿或呼叫 Writer Agent 撰寫（含自動重試與驗證）。"""
         if editor_retry_only:
@@ -1431,15 +1473,20 @@ class AutonomousPipelineManager:
             task.status_message = f"✍️ 正在由 Writer Agent 撰寫第 {ch_idx}/{total_target} 章正文..."
             task.log(f"開始撰寫第 {ch_idx} 章正文...")
 
+            writer_instruction = (
+                f"【Writer Gate 定向修正】\n{repair_instruction}\n\n"
+                if repair_instruction else ""
+            ) + f"請根據大綱撰寫第 {ch_idx} 章可供 Editor 擴寫的劇情底稿，確保事件因果、角色行動與關鍵對白完整；環境、衣著、表情與感官細節由 Editor 擴寫"
             self._execute_stage_with_retry(
                 task=task,
                 stage="writer",
                 task_type="generate",
                 scope="chapter",
                 target={"chapter_index": ch_idx},
-                instruction=f"請根據大綱撰寫第 {ch_idx} 章可供 Editor 擴寫的劇情底稿，確保事件因果、角色行動與關鍵對白完整；環境、衣著、表情與感官細節由 Editor 擴寫",
+                instruction=writer_instruction,
                 user_prompt=f"撰寫第 {ch_idx} 章",
                 verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
+                max_retries=3,
             )
             task.log(f"第 {ch_idx} 章初稿撰寫完成！")
 
@@ -1491,17 +1538,60 @@ class AutonomousPipelineManager:
 
             if hard_writer_issues and not task.stop_requested:
                 task.log(f"🚨 [總監章節硬性攔截] 第 {ch_idx} 章需先修正：{'; '.join(hard_writer_issues)}。", level="warn")
+                director_prompt = ""
+                try:
+                    director_decision = get_director_decision_sync(
+                        novel_id=novel_id,
+                        current_stage="writer",
+                        user_prompt=(
+                            f"審查第 {ch_idx} 章 Writer 初稿。Python 硬性驗收已指出："
+                            + "；".join(hard_writer_issues)
+                            + "。請查閱完整世界觀、相關角色 Bible、本章及前後章大綱、正文和連續性資料，"
+                            "給 Writer 可直接執行、逐項對應缺陷的修正指示。不得只重述錯誤，也不得改動已確立的角色動機或事件因果。"
+                        ),
+                        chapter_index=ch_idx,
+                        volume_index=curr_vol_idx,
+                        extra_context=(
+                            "【Python 驗收事實，必須逐項消除】\n- "
+                            + "\n- ".join(hard_writer_issues)
+                            + f"\n\n【目前正文】\n{draft_content[:24000]}"
+                        ),
+                    )
+                    if director_decision:
+                        director_prompt = str(
+                            director_decision.get("agent_prompt")
+                            or director_decision.get("hint")
+                            or ""
+                        ).strip()
+                        if director_prompt:
+                            task.log(f"🎬 [Director Writer 修正方向] 第 {ch_idx} 章：{director_prompt[:500]}")
+                except Exception as director_exc:
+                    task.log(f"⚠️ Writer Gate Director 診斷失敗，採用明確驗收修正指示：{director_exc}", level="warn")
+
                 db.save_chat_message(
                     novel_id,
                     "director",
-                    f"🚨 **【總監審查打回 - 第 {ch_idx} 章】**\n檢測到背景設定或時空存在嚴重漂移：\n- " + "\n- ".join(eval_issues) + "\n\n正在指示 Writer 重新對齊大綱時空重寫...",
+                    f"🚨 **【總監審查打回 - 第 {ch_idx} 章】**\n硬性驗收缺陷：\n- " + "\n- ".join(hard_writer_issues)
+                    + (f"\n\nDirector 修正方向：\n{director_prompt}" if director_prompt else ""),
                     message_type="director"
                 )
                 fix_instruction = (
-                    f"【總監剛性修正指示】：上一版草稿未通過硬性內容驗收：\n"
-                    f"{'; '.join(hard_writer_issues)}\n"
-                    f"請逐項修正，維持已確認的大綱因果與故事事實，重寫第 {ch_idx} 章正文。"
+                    f"【總監剛性修正指示】\nPython 驗收缺陷：\n- "
+                    + "\n- ".join(hard_writer_issues)
+                    + "\n"
+                    + (f"\n【Director 根據世界觀、角色 Bible 與大綱給出的修正方向】\n{director_prompt}\n" if director_prompt else "")
+                    + "\n請依每項缺陷實際改寫正文，維持已確認的世界觀、角色動機、事件因果與大綱。"
                 )
+                scene_places = []
+                for issue in hard_writer_issues:
+                    if issue.startswith("【場景地點漂移】") and "「" in issue and "」" in issue:
+                        scene_places.append(issue.split("「", 1)[1].split("」", 1)[0])
+                if scene_places:
+                    fix_instruction += (
+                        "\n【場景地點明確修正】請在正文第一段前 500 字內，逐字寫出大綱指定地標："
+                        + "、".join(dict.fromkeys(scene_places))
+                        + "。並用角色當下看見、聽見或觸及的細節自然帶出，不能只在提示或章名中出現。"
+                    )
                 try:
                     self._execute_stage_with_retry(
                         task=task,
@@ -1512,7 +1602,7 @@ class AutonomousPipelineManager:
                         instruction=fix_instruction,
                         user_prompt=f"修正時空漂移重寫第 {ch_idx} 章",
                         verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
-                        max_retries=FINAL_QUALITY_GATE_RETRIES,
+                        max_retries=1,
                     )
                     # 重新獲取修復後的內容並再次快速校驗
                     ch_draft = db.get_chapter(novel_id, ch_idx)
@@ -1543,12 +1633,14 @@ class AutonomousPipelineManager:
                     task.log(f"❌ Writer 定向修正失敗：{fix_exc}", level="error")
                     eval_passed = False
                     hard_writer_issues.append(f"Writer 重寫失敗：{fix_exc}")
+                    director_eval["repair_instruction"] = fix_instruction
 
             # Writer gate owns structural/continuity blockers. Descriptive and stylistic
             # findings remain attached for Editor, whose job is to turn the draft into prose.
             if hard_writer_issues:
                 director_eval["passed"] = False
                 director_eval["writer_failed"] = True
+                director_eval["repair_instruction"] = fix_instruction if 'fix_instruction' in locals() else "；".join(hard_writer_issues)
                 task.log(f"🚫 [Writer Gate 失敗] 第 {ch_idx} 章 Writer 修正未通過驗收，停止進入 Editor：{'; '.join(hard_writer_issues or eval_issues)}", level="error")
                 try:
                     db.save_director_review_status(
@@ -1700,9 +1792,44 @@ class AutonomousPipelineManager:
             )
             from backend.agents.editor.runner import run_editor_agent
             try:
+                director_prompt = ""
+                try:
+                    director_decision = get_director_decision_sync(
+                        novel_id=novel_id,
+                        current_stage="editor",
+                        user_prompt=(
+                            f"審查第 {ch_idx} 章 Editor 後正文。Python Final Gate 已指出："
+                            + "；".join(final_issues[:12])
+                            + "。請結合本書世界觀、相關角色 Bible、本章大綱與正文，"
+                            "在 agent_prompt 中提出逐項可執行的修訂方向，指出應改的位置與做法，"
+                            "維持角色動機、因果與大綱事件。"
+                        ),
+                        chapter_index=ch_idx,
+                        volume_index=curr_vol_idx,
+                        extra_context=(
+                            "【Python Final Gate 缺陷】\n- "
+                            + "\n- ".join(final_issues[:12])
+                            + f"\n\n【目前正文】\n{final_content[:24000]}"
+                        ),
+                    )
+                    if director_decision:
+                        director_prompt = str(
+                            director_decision.get("agent_prompt")
+                            or director_decision.get("hint")
+                            or ""
+                        ).strip()
+                    if director_prompt:
+                        task.log(f"🎬 [Director Final Gate 修正方向] 第 {ch_idx} 章：{director_prompt[:500]}")
+                    else:
+                        task.log(f"⚠️ 第 {ch_idx} 章 Final Gate Director 未提供 agent_prompt，改用明確缺陷指令。", level="warn")
+                except Exception as director_exc:
+                    task.log(f"⚠️ 第 {ch_idx} 章 Final Gate Director 診斷失敗：{director_exc}；改用明確缺陷指令。", level="warn")
+
                 repair_lines = [
                     "【總監驗收返修工單】請直接修改正文並逐項消除以下缺陷；不要只回覆處理方式。保留事件因果、角色事實與大綱，不得新增矛盾情節。"
                 ]
+                if director_prompt:
+                    repair_lines.append(f"【Director 依本書設定與本章脈絡給出的修正方向】\n{director_prompt}")
                 if repair_failures:
                     repair_lines.append(
                         "【前次返修未生效】前次輸出未被採用，原因如下："
@@ -1711,9 +1838,22 @@ class AutonomousPipelineManager:
                     )
                 for issue in final_issues[:12]:
                     if "場景氛圍提醒" in issue:
+                        scene_anchor = ""
+                        try:
+                            from backend.services import narrative_memory
+                            chapter_outline = narrative_memory.get_chapter_outline(novel_id, ch_idx) or {}
+                            scene_anchor = str(
+                                chapter_outline.get("scene_setting")
+                                or chapter_outline.get("location")
+                                or ""
+                            ).strip()
+                        except Exception:
+                            pass
                         directive = (
-                            "依本章大綱與場景上下文，在正文開篇前 500 字內實際補入具體環境感官描寫"
+                            (f"場景錨點為「{scene_anchor}」。" if scene_anchor else "依本章大綱的場景錨點，")
+                            + "在正文開篇前 500 字內實際補入具體環境感官描寫"
                             "（例如光線、聲音、氣味、溫度或觸感，選擇符合場景者），讓讀者能形成場景畫面；"
+                            "第一段須明確讓讀者辨認場景錨點，並讓感官細節由角色正在做的事自然帶出；"
                             "不要只改同義詞，也不要把說明寫在正文之外。"
                         )
                     elif "場景細節提醒" in issue:
@@ -1758,7 +1898,7 @@ class AutonomousPipelineManager:
                 after_chapter = db.get_latest_chapter(novel_id, ch_idx) or {}
                 after_content = (after_chapter.get("content") or "").strip()
                 if not after_content or after_content == before_content:
-                    raise RuntimeError("Editor 已完成呼叫，但章節正文沒有更新")
+                    raise RuntimeError("Editor 已完成呼叫，但章節正文沒有更新；停止重送相同修訂工單")
             except Exception as fix_exc:
                 failure_text = f"Final Gate 修訂失敗：{fix_exc}"
                 repair_failures.append(failure_text)
@@ -1768,6 +1908,8 @@ class AutonomousPipelineManager:
                 final_editor_eval["passed"] = False
                 final_editor_eval["issues"] = list(final_issues[:12]) + [failure_text]
                 task.log(f"⚠️ 第 {ch_idx} 章 Final Gate 修訂呼叫失敗：{fix_exc}", level="warn")
+                if "停止重送相同修訂工單" in str(fix_exc):
+                    break
                 continue
         passed = bool(final_editor_eval.get("passed"))
         if final_editor_eval and not passed:

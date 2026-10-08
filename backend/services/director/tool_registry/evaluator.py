@@ -317,6 +317,21 @@ def _validate_chapter_setting_and_continuity(
         import re
         scene_text = _text_value(scene_setting)
 
+        # scene_setting 常把主場景與鄰接目的地寫成一整句，例如
+        #「地下黑市貨運專列與通往議會大廈的地下卸貨站」。
+        # 只把第一個場景錨點當成開篇必須命中的地點，不能要求整句逐字出現。
+        if isinstance(scene_setting, dict):
+            scene_anchor = scene_setting.get("location") or scene_setting.get("place") or scene_text
+        elif isinstance(scene_setting, str):
+            scene_parts = [
+                part.strip()
+                for part in re.split(r"[，,；;。]|以及|與|及|並且|通往|通向|連接到|連往", scene_setting)
+                if part.strip()
+            ]
+            scene_anchor = scene_parts[0] if scene_parts else scene_setting
+        else:
+            scene_anchor = scene_setting
+
         # 1.1 優先檢查明確房號、建築編號等強特徵
         room_match = re.search(r'(\d{3,4})\s*[室號房]', scene_text)
         if room_match:
@@ -332,7 +347,7 @@ def _validate_chapter_setting_and_continuity(
             "局", "基地", "大樓", "公司", "辦公室", "會議室", "實驗室",
             "牢房", "地牢", "酒館", "客棧", "別墅", "公寓", "校園", "學院", "教室", "病房", "醫院"
         )
-        keywords = _scene_setting_keywords(scene_setting)
+        keywords = _scene_setting_keywords(scene_anchor)
         if keywords:
             strong_keywords = {
                 kw for kw in keywords
@@ -351,17 +366,29 @@ def _validate_chapter_setting_and_continuity(
                         f"【場景地點漂移】大綱指定場景核心地點/地標「{', '.join(list(strong_keywords)[:2])}」未在開篇呈現，疑似場景漂移"
                     )
             else:
-                # 1.3 沒有強關鍵詞時，長描述或氛圍詞降級為 warning，不得直接硬攔截
-                matched_para = {kw for kw in keywords if kw in first_paragraph.lower()}
-                matched_500 = {kw for kw in keywords if kw in first_500.lower()}
-                if not matched_500:
-                    issues.append(
-                        "【場景氛圍提醒】大綱場景氛圍描繪未在正文開篇呈現，建議潤色時適度補充環境感官描寫"
-                    )
-                elif len(matched_para) / len(keywords) < 0.3:
-                    issues.append(
-                        "【場景細節提醒】大綱場景長描述部分元素未在首段呈現，建議潤色時增強環境細節"
-                    )
+                # 主場景錨點已出現在開篇時，鄰接地點、目的地或附加氛圍不應造成退回。
+                matched_anchor = {kw for kw in keywords if kw in first_500.lower()}
+                if not matched_anchor:
+                    # 無法辨識明確地標時，才用完整描述檢查氛圍提示。
+                    if isinstance(scene_setting, str):
+                        scene_parts = [
+                            part.strip()
+                            for part in re.split(r"[，,；;。]|以及|與|及|並且|通往|通向|連接到|連往", scene_setting)
+                            if part.strip()
+                        ]
+                    else:
+                        scene_parts = [scene_setting]
+                    all_keywords = set().union(*(_scene_setting_keywords(part) for part in scene_parts)) if scene_parts else set()
+                    matched_all = {kw for kw in all_keywords if kw in first_500.lower()}
+                    matched_para = {kw for kw in all_keywords if kw in first_paragraph.lower()}
+                    if not matched_all:
+                        issues.append(
+                            "【場景氛圍提醒】大綱場景氛圍描繪未在正文開篇呈現，建議潤色時適度補充環境感官描寫"
+                        )
+                    elif all_keywords and len(matched_para) / len(all_keywords) < 0.3:
+                        issues.append(
+                            "【場景細節提醒】大綱場景長描述部分元素未在首段呈現，建議潤色時增強環境細節"
+                        )
 
     # 2. 時間流向與開篇去重校驗
     time_setting = outline.get("time_setting") or ""
@@ -611,8 +638,14 @@ def evaluate_output(
             "actionable_directive": f"【P2 語句與節奏調理】：潤色詞句與呼吸節奏。\n問題：{p2_issues[0]}\n方針：由 Editor 優化語法調理，增強文學質感與流暢度。",
         }
 
+    # Atmosphere/detail suggestions are advisory: they may improve prose, but
+    # should never hold an otherwise valid chapter in a rewrite loop.
+    blocking_issues = [
+        issue for issue in issues
+        if not issue.startswith(("【場景氛圍提醒】", "【場景細節提醒】"))
+    ]
     result = {
-        "passed": len(issues) == 0,
+        "passed": len(blocking_issues) == 0,
         "critical_drift": has_critical_drift,
         "action": "REVISE" if (has_critical_drift or p0_issues or p1_issues) else ("PASS" if len(issues) == 0 else "WARNING"),
         "message": "通過" if len(issues) == 0 else "; ".join(issues),
