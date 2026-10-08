@@ -1,5 +1,13 @@
 name: Build & Release Packages
 
+# 架構對應（SSOT）：
+# - 前端：React 18 + Vite + TS，`frontend/vite.config.ts (base: './')`，產物 `frontend/dist/`（有版控）。
+# - 後端：`backend/app.py get_static_dir()` 掛載 `frontend/dist`；GitHub Pages 版則由
+#   `frontend/src/platform/index.ts` 在 github.io 下指向雲端後端（VITE_CLOUD_API_URL / 內建 fallback）。
+# - 本地打包 SSOT 是 `build_app.py`：web dist -> PyInstaller sidecar（含 dist）-> electron-builder；
+#   APK 用已版控的 `frontend/android/app/mykey.keystore (mykey/123456)` 簽名（見 android/app/build.gradle）。
+# - 版本 SSOT 是根目錄 `version.json`（前端 version.ts / electron 由 build_app.py 同步）。
+
 on:
   push:
     branches:
@@ -11,6 +19,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # GitHub Pages 靜態前端在 github.io 上運行時的雲端後端位址。
+  # 未設定 Repository Variable 時，platform/index.ts 內建 fallback 生效，不會破壞建置。
+  VITE_CLOUD_API_URL: ${{ vars.VITE_CLOUD_API_URL }}
+
 jobs:
   test-and-build-web:
     name: Run Tests & Build Web Assets
@@ -19,6 +36,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
+          # *.png / *.ico / *.db 走 Git LFS（見 .gitattributes），APK/Electron 資源需要完整檔
           lfs: true
 
       - name: Verify Tag Matches version.json (SSOT)
@@ -46,11 +64,21 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build Web Dist
+      - name: Build Web Dist (single source for all downstream jobs)
         run: |
           cd frontend
           npm ci
           npm run build
+          # 與 build_app.py::build_web_dist 相同的 SSOT 閘門：一定要有 dist/index.html
+          test -f dist/index.html || (echo "::error::frontend/dist/index.html 缺失，前端建置失敗" && exit 1)
+
+      - name: Upload Web Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install Python Dependencies
         run: |
@@ -98,12 +126,18 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Frontend & Sync Capacitor
+      - name: Download Web Dist (single source, do not rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: frontend/dist
+
+      - name: Sync Capacitor (needs node_modules for `npx cap`, no rebuild)
         run: |
           cd frontend
           npm ci
-          npm run build
           npx cap sync android
+          test -f android/app/src/main/assets/public/index.html || (echo "::error::Capacitor 同步後缺失 assets/public/index.html" && exit 1)
 
       - name: Make Gradlew Executable
         run: |
@@ -113,10 +147,14 @@ jobs:
         run: |
           cd frontend/android
           ./gradlew assembleRelease --no-daemon
+        # 簽名設定：android/app/build.gradle signingConfigs.release 指向已版控的
+        # mykey.keystore (mykey/123456)，與 build_app.py::ensure_keystore 同一組 SSOT，
+        # 因此這裡不需要額外 keystore 步驟，產物即為簽名版。
 
-      - name: Collect and Rename APK
+      - name: Collect and Rename APK (name matches build_app.py SSOT)
         run: |
           mkdir -p dist-packages
+          test -f frontend/android/app/build/outputs/apk/release/app-release.apk || (echo "::error::找不到 app-release.apk" && exit 1)
           cp frontend/android/app/build/outputs/apk/release/app-release.apk dist-packages/AI_Novel_Factory_signed.apk
 
       - name: Upload Signed APK Artifact
@@ -150,13 +188,31 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
-          pip install pyinstaller uvicorn fastapi opencc pydantic pillow
+          # 注意：需求是 requirements.txt 的 opencc-python-reimplemented（純 Python），
+          # 不要裝 `opencc`（C 擴充，在 Windows runner 上編譯易失敗）。
+          pip install pyinstaller pillow
+
+      - name: Download Web Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: frontend/dist
+
+      - name: Install Frontend Dependencies (required by build_app.py rebuild)
+        # 關鍵修正：build_app.py 內部一定會重跑 `npm run build`（build_web_dist），
+        # 之前此 job 缺少 frontend `npm ci`，在乾淨 runner 上必定失敗。
+        run: |
+          cd frontend
+          npm ci
 
       - name: Build Electron Portable (Frontend + Backend Sidecar + Shell)
+        # 版本號由 build_app.py::sync_electron_version 自 version.json (SSOT) 同步，
+        # 產物命名 AI_Novel_Factory_<version>_Electron_Portable.exe
         run: |
           python build_app.py --target electron
 
@@ -166,3 +222,21 @@ jobs:
           name: AI_Novel_Factory_Electron_Portable
           path: dist-packages/AI_Novel_Factory_*_Electron_Portable.exe
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release (tags only)
+    needs: [build-android-apk, build-windows-electron]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Release Assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
