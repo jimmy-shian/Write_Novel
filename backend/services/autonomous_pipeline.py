@@ -75,8 +75,9 @@ def classify_pipeline_error(err_msg: str) -> str:
     if "EDITOR_MISSING_INPUT" in err or "prose not found for editing" in err or "prose is empty or too short" in err:
         return "EDITOR_MISSING_INPUT"
     if any(k in err for k in (
-        "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "Connection refused",
-        "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "API Key"
+        "拒答", "免責聲明", "UNAUTHENTICATED", "Unauthorized", "401", "502", "503", "Connection refused",
+        "Cookie 是否過期", "Read timed out", "TimeoutError", "連線被拒", "連線失敗", "fetch failed", "API Key",
+        "HTTP Error", "API 調用失敗", "LLM 調用失敗"
     )):
         return "INFRA_ERROR"
     if "Empty response" in err or "content 不可為空" in err or "為空" in err:
@@ -1003,8 +1004,8 @@ class AutonomousPipelineManager:
             wb = db.get_latest_worldbuilding(novel_id)
             if wb:
                 res = backfill_worldview_to_master_graph(novel_id, wb["content"])
-                if res.get("status") == "success":
-                    task.log(f"🌍 [Master Graph 回填] 已成功回填世界觀至 {res.get('filled_nodes', 0)} 個碰撞節點，通過 WorldviewGate！")
+                if res is True or (isinstance(res, dict) and res.get("status") == "success"):
+                    task.log(f"🌍 [Master Graph 回填] 已成功回填世界觀至 Master Graph 碰撞節點，通過 WorldviewGate！")
         except Exception as e:
             task.log(f"⚠️ [Master Graph 世界觀回填警告] {e}", level="warn")
 
@@ -1059,8 +1060,8 @@ class AutonomousPipelineManager:
             if char_data:
                 chars_json = char_data.get("json_data") or char_data.get("parsed_data")
                 res = backfill_characters_to_master_graph(novel_id, chars_json)
-                if res.get("status") == "success":
-                    task.log(f"👥 [Master Graph 回填] 已成功回填角色至 {res.get('assigned_slots', 0)} 個節點槽位，通過 CharacterGate！")
+                if res is True or (isinstance(res, dict) and res.get("status") == "success"):
+                    task.log(f"👥 [Master Graph 回填] 已成功回填角色至 Master Graph 節點槽位，通過 CharacterGate！")
         except Exception as e:
             task.log(f"⚠️ [Master Graph 角色回填警告] {e}", level="warn")
 
@@ -1124,8 +1125,8 @@ class AutonomousPipelineManager:
                     seeds=wb_dict.get("foreshadowing_seeds", []),
                     turns=wb_dict.get("key_turning_points", []),
                 )
-                if res.get("status") == "success":
-                    task.log(f"🎭 [Master Graph 回填] 已成功回填 {res.get('assigned_events', 0)} 個九維故事事件與伏筆任務，通過 TwistGate & ForeshadowingGate！")
+                if res is True or (isinstance(res, dict) and res.get("status") == "success"):
+                    task.log(f"🎭 [Master Graph 回填] 已成功回填九維故事事件與伏筆任務，通過 TwistGate & ForeshadowingGate！")
         except Exception as e:
             task.log(f"⚠️ [Master Graph 伏筆回填警告] {e}", level="warn")
 

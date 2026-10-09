@@ -187,6 +187,13 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
                 yield chunk
             batch_text = acc.content
 
+            if acc.error:
+                error_message = f"伏筆種子批次 {batch_idx} LLM 調用失敗：{acc.error}"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
+
             if _handle_director_context_request(novel_id, "伏筆與轉折編織師", batch_text):
                 yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
@@ -272,6 +279,13 @@ def run_foreshadowing_orchestrator(novel_id, user_prompt=None, target_field=None
             for chunk in acc:
                 yield chunk
             batch_text = acc.content
+
+            if acc.error:
+                error_message = f"關鍵轉折點批次 {batch_idx} LLM 調用失敗：{acc.error}"
+                db.save_chat_message(novel_id, "assistant", error_message, message_type="pipeline")
+                yield "data: " + json.dumps({"type": "error", "message": error_message}, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+                return
 
             if _handle_director_context_request(novel_id, "伏筆與轉折編織師", batch_text):
                 yield "data: " + json.dumps({"type": "error", "message": "伏筆與轉折編織師需要總監補充上下文，本次不保存成品。"}, ensure_ascii=False) + "\n\n"
