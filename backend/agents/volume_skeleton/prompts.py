@@ -243,6 +243,8 @@ def build_volume_skeleton_planner_messages(
 【每章細緻元素契約指引 (Chapter Element Contract)】
 - 本階段即為章節之完整元素鎖定！請將該章所需之所有元素細緻規劃，讓後續 Writer 僅需按計畫填入故事，不再依賴後期自由膨脹：
 - 時空與場景：time_setting 明確標註具體時間點或時段；scene_setting 描寫具體場景空間與環境特徵、光影氣氛，嚴禁模糊籠統。
+- 機器時間契約：每章必須輸出 timeline_anchor，至少包含 story_day（相對故事日整數）、time_of_day、sequence；若故事有明確曆法，再填 date（YYYY-MM-DD）。story_day/sequence 必須承接前章單調遞增，禁止用「承接前章」代替。
+- 命運事件契約：若本章安排角色死亡、復活、失蹤後回歸或其他生命狀態改變，必須放入 planned_events，欄位至少包含 event_id、event_type、character、description、sequence。Writer 與 Graphiti 不得自行新增或改寫生命事件。
 - 出場角色與知情邊界：characters_active 列出本章真正活躍出場的角色名單（包含核心主角、常駐配角，乃至於路人甲、乙、丙等功能性過場角色）。
   *【細緻角色層次規劃（含路人與單次/常駐標註）】：
     - 請細緻規劃每位出場角色是屬於「核心主角」、「常駐/重複出現配角」，或是「單次過場角色/路人甲乙丙」（如特定掌櫃、守衛、信使、群眾代表等）。
@@ -266,10 +268,12 @@ def build_volume_skeleton_planner_messages(
   "chapter_title": "本章主旨標題（依故事簡介與情節自命，體現文學質感）",
   "chapter_summary": "本章核心事件概括，交代人物行動、核心阻礙與衝突推進成果。",
   "time_setting": "具體時間點或時間跨度",
+  "timeline_anchor": {{"story_day": 1, "time_of_day": "afternoon", "sequence": 1, "date": null}},
   "scene_setting": "具體場景空間、物理環境與氛圍特質",
   "events": [
     {{"scene_index": 1, "location": "場景空間", "characters": ["出場人物名"], "content": "行動推進 -> 遭遇阻礙/反制 -> 達成結果"}}
   ],
+  "planned_events": [],
   "characters_active": ["主要出場角色名", "特定配角或路人甲(標註功能)"],
   "emotional_tone": "情境氛圍基調",
   "emotional_requirement": "本章情感要求或留白（若有）",
@@ -387,7 +391,9 @@ def build_volume_skeleton_completion_messages(
       "chapter_title": "章節標題",
       "chapter_summary": "本章概要",
       "time_setting": "時間設定",
+      "timeline_anchor": {{"story_day": 1, "time_of_day": "afternoon", "sequence": 1, "date": null}},
       "scene_setting": "主要場景",
+      "planned_events": [],
       "scene_goal": "核心目標",
       "scene_conflict": "阻礙與衝突",
       "scene_beats": [{{"beat_index": 1, "beat_type": "setup", "description": "行動與結果", "involved_characters": []}}],
@@ -439,8 +445,10 @@ def build_incremental_skeleton_messages(worldview_text, volume_index, existing_s
                 "chapter_title": "可省略未修改欄位",
                 "chapter_summary": "可省略未修改欄位",
                 "time_setting": "可省略未修改欄位",
+                "timeline_anchor": "若修改時間，回傳完整的結構化時間錨點",
                 "scene_setting": "可省略未修改欄位",
                 "events": "若修改事件，回傳完整的新 events 陣列",
+                "planned_events": "若修改角色命運，回傳完整的新 planned_events 陣列",
                 "characters_active": "可省略未修改欄位",
                 "emotional_tone": "可省略未修改欄位",
                 "cliffhanger": "可省略未修改欄位",

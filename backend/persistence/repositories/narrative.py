@@ -275,9 +275,21 @@ def add_narrative_audit(
     recommendation: str,
     action_required: bool = False,
 ) -> Dict[str, Any]:
-    """新增一條總監敘事診斷紀錄"""
+    """新增一條總監敘事診斷紀錄；相同未結問題採冪等寫入。"""
     conn = get_db_connection()
     cursor = conn.cursor()
+    normalized_severity = str(severity or "warning").lower()
+    existing = cursor.execute(
+        """
+        SELECT * FROM narrative_audits
+        WHERE novel_id = ? AND chapter_index = ? AND dimension = ?
+          AND severity = ? AND evidence = ? AND resolved = 0
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (novel_id, chapter_index, dimension, normalized_severity, evidence),
+    ).fetchone()
+    if existing:
+        return dict(existing)
     audit_id = f"naud_{uuid.uuid4().hex[:12]}"
     cursor.execute(
         """
@@ -286,7 +298,7 @@ def add_narrative_audit(
             recommendation, action_required, resolved
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
-        (audit_id, novel_id, chapter_index, dimension, severity.lower(), evidence, recommendation, 1 if action_required else 0),
+        (audit_id, novel_id, chapter_index, dimension, normalized_severity, evidence, recommendation, 1 if action_required else 0),
     )
     conn.commit()
     row = cursor.execute("SELECT * FROM narrative_audits WHERE id = ?", (audit_id,)).fetchone()

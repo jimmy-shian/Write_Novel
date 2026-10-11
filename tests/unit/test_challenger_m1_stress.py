@@ -540,6 +540,11 @@ def test_autonomous_pipeline_halts_during_writer_chapter_loop(novel_factory):
             chapters_attempted.append(ch_idx)
             if ch_idx == 2:
                 raise PipelineHaltedException(action="WAIT_USER", reason="第 2 章戰鬥邏輯崩潰，需作者干預指導")
+            db.save_chapter(
+                task.novel_id,
+                ch_idx,
+                "第 {} 章完整正文。".format(ch_idx) + "這是一段供 Writer Gate 驗證的測試內容。" * 80,
+            )
         return MagicMock(ok=True)
 
     with patch.object(manager, "_execute_stage_with_retry", side_effect=fake_execute_stage), \

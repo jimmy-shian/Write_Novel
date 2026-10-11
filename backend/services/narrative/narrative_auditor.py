@@ -273,100 +273,27 @@ class NarrativeAuditor:
 
     @classmethod
     def _check_temporal_fact_compliance(
-        cls, novel_id: str, chapter_index: int, prose_text: str
+        cls, novel_id: str, chapter_index: int, prose_text: str, outline: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """檢查正文是否違反時序記憶圖譜事實（如陣亡角色復活、已破壞物品復現）。"""
+        """以 Story Canon 檢查命運契約，不從任意 fact 文字猜測死者姓名。
+
+        Graphiti facts are observational evidence and may contain轉述、隱喻或
+        他人之死；它們不能取代已發生事件與本章劇情契約。
+        """
         if not novel_id or not prose_text:
             return None
         try:
-            facts = db.get_all_facts(novel_id)
-            if not facts:
-                return None
-            for f in facts:
-                inv_ch_val = f.get("invalid_from_chapter")
-                try:
-                    inv_ch = int(inv_ch_val) if inv_ch_val is not None else None
-                except (ValueError, TypeError):
-                    inv_ch = None
-
-                stmt = f.get("fact_statement", "")
-                if not stmt:
-                    continue
-
-                death_kw_pat = r"(?:戰死|身亡|犧牲|隕落|死亡|消散|陣亡|死去|被殺|身死道消|自爆.*?身亡|斬首|灰飛煙滅|被你蒸發|形神俱滅|魂飛魄散)"
-                m_kw = re.search(death_kw_pat, stmt)
-                if not m_kw:
-                    continue
-
-                prefix = stmt[:m_kw.start()].strip()
-                prefix = re.sub(r"[，,。！!\s]+", "", prefix)
-                prefix = re.sub(r"(?:已經?|在.*?|於.*?|被.*?|自.*?|為.*?|慘遭|不幸|最終)$", "", prefix).strip()
-                name_m = re.search(r"([\u4e00-\u9fa5]{2,6})$", prefix)
-                if not name_m:
-                    continue
-
-                raw_name = name_m.group(1)
-                # Strip trailing verbs/prepositions if captured
-                raw_name = re.sub(r"[在為於被自].*$", "", raw_name).strip()
-                cleaned_name = re.sub(
-                    r"^(?:長老|將軍|隊長|護法|掌門|殿主|教主|舵主|宗主|堂主|老祖|師尊|師父)",
-                    "",
-                    raw_name,
-                ).strip()
-                faction_cleaned = re.sub(r"^.*?(?:教|宗|門|殿|閣|會|幫|府)", "", raw_name).strip()
-                candidate_names = []
-                if raw_name and len(raw_name) >= 2:
-                    candidate_names.append(raw_name)
-                if cleaned_name and len(cleaned_name) >= 2 and cleaned_name not in candidate_names:
-                    candidate_names.append(cleaned_name)
-                if faction_cleaned and len(faction_cleaned) >= 2 and faction_cleaned not in candidate_names:
-                    candidate_names.append(faction_cleaned)
-
-                death_ch_val = f.get("valid_from_chapter")
-                try:
-                    death_chapter = int(death_ch_val) if death_ch_val is not None else None
-                except (ValueError, TypeError):
-                    death_chapter = None
-
-                # 判定角色死亡/失效生效章節：若有 invalid_from_chapter 則自該章起生效，否則自 valid_from_chapter 後生效
-                if inv_ch is not None:
-                    death_chapter = inv_ch
-                    if chapter_index < death_chapter:
-                        continue
-                elif death_chapter is not None:
-                    if chapter_index <= death_chapter:
-                        continue
-
-                # 切割句子以排除回憶、傳聞、悼念等非現場行動
-                sentences = re.split(r"[。！？\n]", prose_text)
-                memory_pattern = re.compile(
-                    r"(?:回想|憶起|想起|記得|傳聞|提及|提起|懷念|追憶|夢見|祭奠|紀念|當年|昔日|死於|墓前|遺物|遺言|生前|在天之靈|魂魄|幻象|幻影)"
-                )
-                action_pattern_template = r"{}.*?(?:說|道|笑|拍|走|看|拔|站|微|現身|出手|狂笑|獰笑|冷笑|殺出|喝道|大喊)"
-
-                for cname in candidate_names:
-                    act_pat = re.compile(action_pattern_template.format(re.escape(cname)))
-                    found_violation = False
-                    for sent in sentences:
-                        s_strip = sent.strip()
-                        if not s_strip or cname not in s_strip:
-                            continue
-                        # 回憶、傳聞、提及死亡角色，不應直接視為角色正在行動
-                        if memory_pattern.search(s_strip):
-                            continue
-                        if act_pat.search(s_strip):
-                            found_violation = True
-                            break
-
-                    if found_violation:
-                        death_ch_desc = f"已於第 {death_chapter} 章" if death_chapter is not None else "已"
-                        return {
-                            "dimension": "temporal_graph_compliance",
-                            "severity": "critical",
-                            "evidence": f"角色「{cname}」{death_ch_desc}死亡，後續正文疑似讓其再次行動或發言。",
-                            "recommendation": f"角色「{cname}」{death_ch_desc}死亡，嚴禁在後續正文中讓其再次行動或直接發言。",
-                            "action_required": True,
-                        }
+            from backend.services.narrative.story_canon import validate_life_contract
+            issues = validate_life_contract(novel_id, chapter_index, outline or {}, prose_text)
+            if issues:
+                issue = issues[0]
+                return {
+                    "dimension": "temporal_graph_compliance",
+                    "severity": issue.get("severity", "critical"),
+                    "evidence": issue.get("evidence", "Story Canon 命運契約未通過"),
+                    "recommendation": issue.get("recommendation", "請依本章劇情契約修正角色命運連續性。"),
+                    "action_required": True,
+                }
         except Exception as exc:
             print(f"[WARN] Temporal fact compliance check failed (novel {novel_id}): {exc}")
         return None
@@ -653,7 +580,9 @@ class NarrativeAuditor:
             findings.append(terms_finding)
 
         # 維度 6: temporal_graph_compliance (時序事實世界線穿幫檢測)
-        temporal_finding = cls._check_temporal_fact_compliance(novel_id, chapter_index, prose_text)
+        temporal_finding = cls._check_temporal_fact_compliance(
+            novel_id, chapter_index, prose_text, outline=outline
+        )
         if temporal_finding:
             findings.append(temporal_finding)
 

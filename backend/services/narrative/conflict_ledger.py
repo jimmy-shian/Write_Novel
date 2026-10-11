@@ -326,13 +326,37 @@ class ConflictLedger:
         current_chapter: int,
     ) -> str:
         max_ch = max(0, current_chapter - 1) if current_chapter and current_chapter > 1 else 0
-        recent = db.get_conflict_signatures(novel_id, limit=4, max_chapter=max_ch if max_ch > 0 else None) if max_ch > 0 else []
-        if not recent:
+        history = db.get_conflict_signatures(
+            novel_id, limit=500, max_chapter=max_ch if max_ch > 0 else None
+        ) if max_ch > 0 else []
+        if not history:
             return ""
 
+        # Keep the recent window for immediate continuity, then add older
+        # representatives by causal shape.  This prevents a long novel from
+        # forgetting a repeated pattern merely because it fell out of the last
+        # four rows.
+        recent = history[:4]
+        selected = list(recent)
+        seen_shapes = {
+            (str(item.get("pressure_type") or ""), str(item.get("protagonist_strategy") or ""), str(item.get("outcome") or ""))
+            for item in recent
+        }
+        for item in history[4:]:
+            shape = (
+                str(item.get("pressure_type") or ""),
+                str(item.get("protagonist_strategy") or ""),
+                str(item.get("outcome") or ""),
+            )
+            if shape not in seen_shapes:
+                selected.append(item)
+                seen_shapes.add(shape)
+            if len(selected) >= 10:
+                break
+
         lines = ["### ⚠️【長程衝突因果防重複指引 (Conflict Novelty Guard)】"]
-        lines.append("- **近幾次已使用之衝突與破局模式**（本章請主動避開相同因果公式）：")
-        for r in recent:
+        lines.append("- **全程帳本中已使用之衝突與破局模式**（近四次優先，另含較早的不同因果形狀）：")
+        for r in selected:
             c_range = f"第 {r['chapter_start']}-{r['chapter_end']} 章" if r['chapter_start'] != r['chapter_end'] else f"第 {r['chapter_start']} 章"
             cost_str = f"，付出了代價「{r['cost']}」" if r.get("cost") and r["cost"] not in ("無", "none") else "（零代價反殺）"
             lines.append(f"  * {c_range}：{r.get('initiator', '敵人')}發起【{r.get('pressure_type', '施壓')}】 -> 主角採取【{r.get('protagonist_strategy', '應對')}】 -> 結果【{r.get('outcome', '解決')}】{cost_str}")

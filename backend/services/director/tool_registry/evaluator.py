@@ -556,6 +556,33 @@ def evaluate_output(
                 if outline:
                     break
 
+            # Structured time is authoritative when present. Legacy free text
+            # remains advisory and is handled by existing heuristics below.
+            try:
+                from backend.services.narrative.story_canon import normalize_timeline_anchor, compare_timeline_anchors
+                current_anchor = normalize_timeline_anchor((outline or {}).get("timeline_anchor"), ch_idx)
+                if current_anchor and ch_idx > 1:
+                    previous_outline = None
+                    for volume in vols:
+                        raw = volume.get("chapters_outline") or []
+                        if isinstance(raw, str):
+                            try:
+                                raw = json.loads(raw)
+                            except Exception:
+                                raw = []
+                        for item in raw if isinstance(raw, list) else []:
+                            if isinstance(item, dict) and int(item.get("chapter_index") or 0) == ch_idx - 1:
+                                previous_outline = item
+                                break
+                        if previous_outline:
+                            break
+                    previous_anchor = normalize_timeline_anchor((previous_outline or {}).get("timeline_anchor"), ch_idx - 1)
+                    time_error = compare_timeline_anchors(previous_anchor, current_anchor)
+                    if time_error:
+                        issues.append(f"【時序倒流矛盾】{time_error}")
+            except Exception:
+                pass
+
             # 進行時空與連續性設定校驗 (Setting Continuity Check)
             setting_issues = _validate_chapter_setting_and_continuity(content, outline, novel_id, ch_idx)
             issues.extend(setting_issues)

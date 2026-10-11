@@ -22,6 +22,65 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
     """
     target_vol_idx: 若指定（patch 模式），則只 upsert 該卷，其餘卷保留不被刪除。
     """
+    # Normalize the entire schedule before any row is replaced.  This covers
+    # bulk/import paths that do not go through update_volume_outline.
+    from backend.services.narrative.story_canon import (
+        ensure_timeline_anchors,
+        iter_outline_chapters,
+        normalize_timeline_anchor,
+        validate_timeline,
+    )
+    existing_for_patch = get_volumes(novel_id) if target_vol_idx is not None else []
+    normalized_volumes = []
+    previous_anchor = None
+    if existing_for_patch:
+        prior_chapters = [
+            chapter
+            for volume in existing_for_patch
+            if int(volume.get("volume_index") or 0) < int(target_vol_idx)
+            for chapter in iter_outline_chapters([volume])
+        ]
+        if prior_chapters:
+            prior = prior_chapters[-1]
+            previous_anchor = normalize_timeline_anchor(
+                prior.get("timeline_anchor"),
+                int(prior.get("chapter_index") or prior.get("chapter") or 0),
+            )
+    for raw_volume in volumes_list or []:
+        volume = dict(raw_volume)
+        raw_outline = volume.get("chapters_outline") or []
+        if isinstance(raw_outline, str):
+            try:
+                raw_outline = json.loads(raw_outline)
+            except Exception:
+                raw_outline = []
+        chapters = raw_outline if isinstance(raw_outline, list) else []
+        chapters = ensure_timeline_anchors(chapters, previous_anchor=previous_anchor)
+        if chapters:
+            previous_anchor = chapters[-1].get("timeline_anchor") or previous_anchor
+        volume["chapters_outline"] = chapters
+        normalized_volumes.append(volume)
+    candidate_for_validation = normalized_volumes
+    if target_vol_idx is not None and existing_for_patch:
+        replacement_by_index = {
+            int(volume.get("volume_index") or 0): volume
+            for volume in normalized_volumes
+        }
+        candidate_for_validation = []
+        seen_indices = set()
+        for existing in existing_for_patch:
+            volume_index = int(existing.get("volume_index") or 0)
+            candidate = replacement_by_index.get(volume_index, existing)
+            candidate_for_validation.append(candidate)
+            seen_indices.add(volume_index)
+        candidate_for_validation.extend(
+            volume for volume in normalized_volumes
+            if int(volume.get("volume_index") or 0) not in seen_indices
+        )
+    if validate_timeline(candidate_for_validation):
+        raise ValueError("章節時間線驗證失敗，拒絕整批卷綱落庫")
+    volumes_list = normalized_volumes
+
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
@@ -53,6 +112,7 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
                 cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
                 cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
                 cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+                cursor.execute("DELETE FROM story_events WHERE novel_id = ?", (novel_id,))
                 try:
                     cursor.execute(
                         "DELETE FROM story_terms WHERE novel_id = ? AND source_chapter IS NOT NULL",
@@ -95,6 +155,31 @@ def save_volumes(novel_id, volumes_list, clear_downstream=False, target_vol_idx=
                 "INSERT OR REPLACE INTO volumes (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules, chapters_outline) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (novel_id, volume_index, title, summary, factions, is_dirty, chapter_count, time_timeline, sequence_context, applicable_rules, chapters_outline_str)
+            )
+        # Bulk outline replacement is authoritative for planned events.  Keep
+        # occurred/observed history, but remove planned rows no longer present.
+        if target_vol_idx is None:
+            cursor.execute("DELETE FROM story_events WHERE novel_id = ? AND status = 'planned'", (novel_id,))
+            from backend.persistence.repositories.story_events import sync_planned_story_events
+            all_chapters = [
+                chapter
+                for volume in volumes_list
+                for chapter in (volume.get("chapters_outline") or [])
+                if isinstance(chapter, dict)
+            ]
+            sync_planned_story_events(novel_id, all_chapters, conn=conn)
+        else:
+            from backend.persistence.repositories.story_events import sync_planned_story_events
+            sync_planned_story_events(
+                novel_id,
+                [
+                    chapter
+                    for volume in volumes_list
+                    if int(volume.get("volume_index") or 0) == int(target_vol_idx)
+                    for chapter in (volume.get("chapters_outline") or [])
+                    if isinstance(chapter, dict)
+                ],
+                conn=conn,
             )
     
     try:
@@ -230,9 +315,6 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     merged_chapters = list(merged_map.values())
     merged_chapters.sort(key=lambda x: int(x.get("chapter_index", 0)))
     
-    # 💡 4. 將融合後完整的章節池同步回寫至 volumes 表與 plot_chapters 主表（原子交易）
-    chapters_json = json.dumps(_convert_obj_to_traditional(merged_chapters), ensure_ascii=False)
-    
     # 💡 5. 同步將融合後的完整列表縫合回 master plot_chapters 大綱主表
     # 直接在同一個連線中安全讀取主表最末版本，避免併發鎖定
     plot_row = cursor.execute(
@@ -252,6 +334,49 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
     filtered_ch = []
     v_rows = cursor.execute("SELECT * FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC", (novel_id,)).fetchall()
     vols = [dict(vr) for vr in v_rows]
+
+    # 章節骨架落庫前補上可比較的 deterministic timeline anchor。已有
+    # 結構化時間不改寫，缺少者以 story_day/sequence 補齊。
+    from backend.services.narrative.story_canon import (
+        ensure_timeline_anchors,
+        iter_outline_chapters,
+        normalize_timeline_anchor,
+        validate_timeline,
+    )
+    previous_chapters = [
+        ch for ch in iter_outline_chapters(vols)
+        if int(ch.get("chapter_index") or 0) < int(start_ch)
+    ]
+    previous_anchor = None
+    if previous_chapters:
+        previous_anchor = normalize_timeline_anchor(
+            previous_chapters[-1].get("timeline_anchor"),
+            int(previous_chapters[-1].get("chapter_index") or 0),
+        )
+    merged_chapters = ensure_timeline_anchors(merged_chapters, previous_anchor=previous_anchor)
+
+    # Build the candidate full outline before touching either persistence table.
+    # A numeric/date regression is a flow error and must reject the whole patch.
+    candidate_volumes = []
+    for raw_volume in vols:
+        candidate = dict(raw_volume)
+        if int(candidate.get("volume_index") or 0) == int(volume_index):
+            candidate["chapters_outline"] = merged_chapters
+        else:
+            raw_outline = candidate.get("chapters_outline") or []
+            if isinstance(raw_outline, str):
+                try:
+                    raw_outline = json.loads(raw_outline)
+                except Exception:
+                    raw_outline = []
+            candidate["chapters_outline"] = raw_outline if isinstance(raw_outline, list) else []
+        candidate_volumes.append(candidate)
+    timeline_issues = validate_timeline(candidate_volumes)
+    if timeline_issues:
+        raise ValueError(f"章節時間線驗證失敗，拒絕落庫：{timeline_issues[:3]}")
+
+    # 💡 4. 將融合後完整的章節池同步回寫至 volumes 表與 plot_chapters 主表（原子交易）
+    chapters_json = json.dumps(_convert_obj_to_traditional(merged_chapters), ensure_ascii=False)
     
     for c in all_ch:
         ch_idx = c.get("chapter_index")
@@ -281,6 +406,8 @@ def update_volume_outline(novel_id, volume_index, node_chapters):
             "INSERT INTO plot_chapters (novel_id, outline_json, version, is_dirty) VALUES (?, ?, ?, 0)",
             (novel_id, json.dumps({"chapters": filtered_ch}, ensure_ascii=False), next_v)
         )
+        from backend.persistence.repositories.story_events import sync_planned_story_events
+        sync_planned_story_events(novel_id, merged_chapters, conn=conn)
         conn.commit()
 
 
@@ -476,6 +603,14 @@ def delete_volume(novel_id, volume_index):
             cursor.execute(
                 "DELETE FROM temporal_episodes WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ?",
                 (novel_id, start_ch, end_ch))
+            # The deleted chapters no longer exist as published evidence.  Do
+            # not leave occurred/observed events pointing at them; planned
+            # events are rebuilt from the surviving outlines below.
+            cursor.execute(
+                "DELETE FROM story_events WHERE novel_id = ? AND chapter_index >= ? AND chapter_index <= ? "
+                "AND status IN ('occurred', 'observed')",
+                (novel_id, start_ch, end_ch),
+            )
             cursor.execute(
                 "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter >= ? AND created_chapter <= ? AND updated_chapter >= ? AND updated_chapter <= ?",
                 (novel_id, start_ch, end_ch, start_ch, end_ch))
@@ -494,10 +629,18 @@ def delete_volume(novel_id, volume_index):
                 "UPDATE temporal_episodes SET chapter_index = chapter_index - ? WHERE novel_id = ? AND chapter_index > ?",
                 (ch_count, novel_id, end_ch))
             cursor.execute(
+                "UPDATE story_events SET chapter_index = chapter_index - ? "
+                "WHERE novel_id = ? AND chapter_index > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
                 "UPDATE temporal_entities SET created_chapter = created_chapter - ? WHERE novel_id = ? AND created_chapter > ?",
                 (ch_count, novel_id, end_ch))
             cursor.execute(
                 "UPDATE temporal_entities SET updated_chapter = updated_chapter - ? WHERE novel_id = ? AND updated_chapter > ?",
+                (ch_count, novel_id, end_ch))
+            cursor.execute(
+                "UPDATE temporal_entities SET life_status_chapter = life_status_chapter - ? "
+                "WHERE novel_id = ? AND life_status_chapter IS NOT NULL AND life_status_chapter > ?",
                 (ch_count, novel_id, end_ch))
             try:
                 cursor.execute(
@@ -512,7 +655,9 @@ def delete_volume(novel_id, volume_index):
             except Exception as e:
                 print(f"[WARN] Failed to cascade story_terms range [{start_ch}, {end_ch}]: {e}")
         except Exception as e:
-            print(f"[WARN] Failed to cascade volume chapter range [{start_ch}, {end_ch}] to graph/terms: {e}")
+            raise RuntimeError(
+                f"Failed to cascade volume chapter range [{start_ch}, {end_ch}] to graph/terms"
+            ) from e
         cursor.execute("DELETE FROM arc_summaries WHERE novel_id = ? AND ((arc_start >= ? AND arc_start <= ?) OR (arc_end >= ? AND arc_end <= ?))", (novel_id, start_ch, end_ch, start_ch, end_ch))
         cursor.execute("UPDATE arc_summaries SET arc_start = arc_start - ?, arc_end = arc_end - ? WHERE novel_id = ? AND arc_start > ?", (ch_count, ch_count, novel_id, end_ch))
         
@@ -541,6 +686,23 @@ def delete_volume(novel_id, volume_index):
                     )
             except Exception as e:
                 print(f"[ERROR] Failed to update plot chapters: {e}")
+
+        # Reconcile planned event IDs after chapter indexes have shifted.
+        # Occurred history remains immutable; only the outline projection is
+        # rebuilt from the surviving volume outlines.
+        from backend.persistence.repositories.story_events import sync_planned_story_events
+        surviving_chapters = []
+        for row in cursor.execute(
+            "SELECT chapters_outline FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
+            (novel_id,),
+        ).fetchall():
+            try:
+                parsed_outline = json.loads(row["chapters_outline"] or "[]")
+            except Exception as exc:
+                raise RuntimeError("Failed to parse surviving volume outline for event resync") from exc
+            if isinstance(parsed_outline, list):
+                surviving_chapters.extend(item for item in parsed_outline if isinstance(item, dict))
+        sync_planned_story_events(novel_id, surviving_chapters, conn=conn)
     
     try:
         precompute_global_foreshadowing(novel_id)
@@ -949,6 +1111,16 @@ def split_and_expand_chapter_outline(
                 "UPDATE temporal_entities SET updated_chapter = updated_chapter + ? WHERE novel_id = ? AND updated_chapter > ?",
                 (delta, novel_id, chapter_index),
             )
+            cursor.execute(
+                "UPDATE temporal_entities SET life_status_chapter = life_status_chapter + ? "
+                "WHERE novel_id = ? AND life_status_chapter IS NOT NULL AND life_status_chapter > ?",
+                (delta, novel_id, chapter_index),
+            )
+            cursor.execute(
+                "UPDATE story_events SET chapter_index = chapter_index + ? "
+                "WHERE novel_id = ? AND chapter_index > ?",
+                (delta, novel_id, chapter_index),
+            )
         except Exception as e:
             print(f"[ERROR] Failed to shift temporal tables for novel {novel_id}: {e}")
             raise
@@ -1005,6 +1177,22 @@ def split_and_expand_chapter_outline(
         except Exception as e:
             print(f"[ERROR] Failed to shift draft_proposals for novel {novel_id}: {e}")
             raise
+
+        # Split operations also alter chapter indexes.  Rebuild the planned
+        # event projection after the shift while preserving occurred history.
+        from backend.persistence.repositories.story_events import sync_planned_story_events
+        split_chapters_all = []
+        for row in cursor.execute(
+            "SELECT chapters_outline FROM volumes WHERE novel_id = ? ORDER BY volume_index ASC",
+            (novel_id,),
+        ).fetchall():
+            try:
+                parsed_outline = json.loads(row["chapters_outline"] or "[]")
+            except Exception as exc:
+                raise RuntimeError("Failed to parse split volume outline for event resync") from exc
+            if isinstance(parsed_outline, list):
+                split_chapters_all.extend(item for item in parsed_outline if isinstance(item, dict))
+        sync_planned_story_events(novel_id, split_chapters_all, conn=conn)
 
     # 13. 同步幾何圖譜 (GeometryGraph)
     try:

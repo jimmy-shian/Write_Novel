@@ -869,9 +869,11 @@ class AutonomousPipelineManager:
 
             # 6. 逐章撰寫與精修 (智慧接續未完成之章節)
             vols, total_target, written_rows, written_indices = self._prepare_chapter_pipeline(task, novel_id)
+            flow_blocked = False
             for ch_idx in range(1, total_target + 1):
                 if task.stop_requested:
                     task.log(f"任務已安全停止於第 {ch_idx - 1} 章", level="warn")
+                    flow_blocked = True
                     break
 
                 task.current_chapter = ch_idx
@@ -894,9 +896,16 @@ class AutonomousPipelineManager:
                     task, novel_id, vols, ch_idx, total_target, written_rows, editor_retry_only
                 )
                 if stopped_before_editor:
+                    flow_blocked = True
                     break
                 if vols and self._is_volume_end(vols, ch_idx):
                     self._reconcile_foreshadowing_debts(task, novel_id, max_chapter=ch_idx)
+
+            if flow_blocked or task.stop_requested:
+                task.current_stage = "awaiting_retry"
+                task.status_message = "⏸️ 章節流程未完成，已停止並等待下次重試。"
+                task.log("⏸️ 本次未完成全部章節，跳過終卷對帳與完成收尾；請先重試被阻塞章節。", level="warn")
+                return
 
             # (2.8) 卷末零 LLM 伏筆回收對帳：每卷寫完後 Python 快速對帳
             self._reconcile_foreshadowing_debts(task, novel_id)
@@ -1454,7 +1463,7 @@ class AutonomousPipelineManager:
     ):
         """步驟 6 內層：單章狀態機（Writer -> Writer Gate -> Editor -> Final Gate -> Graph）。
 
-        回傳 (更新後 vols, stopped_before_editor)；stopped_before_editor 為 True 時呼叫端須中止章節迴圈。
+        回傳 (更新後 vols, stopped_before_editor)；True 表示本章未完成，呼叫端必須停止本次管線。
         """
         # 確保該章所屬的卷具備骨架
         curr_vol_idx = db.get_chapter_volume_index(vols, ch_idx) if vols else None
@@ -1491,7 +1500,11 @@ class AutonomousPipelineManager:
                         )
                     except Exception:
                         pass
-                    return vols, False
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception:
+                        pass
+                    return vols, True
 
                 writer_retries += 1
                 try:
@@ -1507,7 +1520,7 @@ class AutonomousPipelineManager:
                         current_state = "WRITER"
                 except ChapterHaltedException:
                     task.log(f"🛑 第 {ch_idx} 章 Writer 流程終止（HALT_CHAPTER），保留草稿", level="warn")
-                    return vols, False
+                    return vols, True
                 except PipelineHaltedException:
                     raise
                 except Exception as writer_exc:
@@ -1544,10 +1557,18 @@ class AutonomousPipelineManager:
                     continue
                 elif editor_result == "HALT_CHAPTER":
                     task.log(f"🛑 [狀態機路由] 第 {ch_idx} 章暫停（HALT_CHAPTER），保留草稿並跳出本章", level="warn")
-                    return vols, False
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception:
+                        pass
+                    return vols, True
                 elif editor_result == "FAILED":
-                    task.log(f"⚠️ 第 {ch_idx} 章 Editor 精修失敗，已保留 Writer 初稿，略過後續門禁進入下一章", level="warn")
-                    return vols, False
+                    task.log(f"🚫 第 {ch_idx} 章 Editor 精修失敗，已保留 Writer 初稿；停止本次管線，待下次僅重試 Editor", level="error")
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception:
+                        pass
+                    return vols, True
                 else:  # PASS
                     task.log(f"✅ 第 {ch_idx} 章精修完成並已存入資料庫！")
                     current_state = "FINAL_GATE"
@@ -1561,7 +1582,28 @@ class AutonomousPipelineManager:
                         f"🚫 第 {ch_idx} 章 Final Gate 未通過，跳過圖譜抽取並保留人工檢視狀態。",
                         level="error",
                     )
-                    return vols, False
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception:
+                        pass
+                    return vols, True
+                # Final Gate is the publication boundary.  Only now may the
+                # chapter contract turn planned life events into occurred
+                # canon; Writer/Editor/Graphiti remain non-authoritative.
+                try:
+                    from backend.services.narrative.story_canon import advance_story_canon_for_chapter
+                    canon_commit = advance_story_canon_for_chapter(novel_id, ch_idx)
+                    if canon_commit.get("issues"):
+                        task.log(
+                            f"🚫 第 {ch_idx} 章命運事件提交未通過，停止圖譜抽取：{canon_commit['issues']}",
+                            level="error",
+                        )
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                        return vols, True
+                except Exception as canon_exc:
+                    task.log(f"🚫 第 {ch_idx} 章 Story Canon 提交失敗，停止後續流程：{canon_exc}", level="error")
+                    db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    return vols, True
                 current_state = "GRAPH_EXTRACTION"
 
             elif current_state == "GRAPH_EXTRACTION":
@@ -1573,6 +1615,8 @@ class AutonomousPipelineManager:
                     task.log(f"🧠 正在為第 {ch_idx} 章同步提取時序記憶圖譜事實...")
                     ch_obj = db.get_chapter(novel_id, ch_idx)
                     ch_text = (ch_obj.get("content") or "") if ch_obj else ""
+                    if not ch_text or len(ch_text.strip()) <= 50:
+                        raise RuntimeError("Final Gate 後找不到可抽取的完整正文")
                     if ch_text and len(ch_text.strip()) > 50:
                         graph_res = ChapterFactExtractor.process_chapter_prose(
                             novel_id=novel_id,
@@ -1584,9 +1628,28 @@ class AutonomousPipelineManager:
                         terms_created = graph_res.get("terms_created", 0)
                         terms_updated = graph_res.get("terms_updated", 0)
                         task.log(f"✅ 第 {ch_idx} 章時序記憶抽取完成 (新增 {facts_added} 條世界線動態事實，術語庫新增 {terms_created}/更新 {terms_updated})")
+                        if graph_res.get("used_fallback") or graph_res.get("status") == "fallback":
+                            raise RuntimeError(
+                                "Graphiti 抽取使用 fallback，未形成可驗證的觀測資料"
+                                + (f": {graph_res.get('fallback_reason')}" if graph_res.get("fallback_reason") else "")
+                            )
                 except Exception as g_exc:
                     graph_failed = True
-                    task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常 (安全跳過不阻礙後續寫作): {g_exc}", level="warn")
+                    task.log(f"⚠️ 第 {ch_idx} 章時序記憶提取異常，停止本章避免後續 Writer 使用不完整上下文：{g_exc}", level="error")
+                    try:
+                        from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+                        from backend.persistence.repositories.story_terms import delete_terms_by_chapter
+                        cleanup = delete_chapter_slice(novel_id, int(ch_idx))
+                        cleanup["auto_terms_deleted"] = delete_terms_by_chapter(novel_id, int(ch_idx))
+                        task.log(
+                            f"🧹 已清除第 {ch_idx} 章不完整的圖譜觀測切片：{cleanup}",
+                            level="warn",
+                        )
+                    except Exception as cleanup_exc:
+                        task.log(
+                            f"⚠️ 第 {ch_idx} 章圖譜失敗後清理不完整：{cleanup_exc}",
+                            level="error",
+                        )
                     try:
                         db.save_chat_message(
                             novel_id,
@@ -1597,11 +1660,85 @@ class AutonomousPipelineManager:
                     except Exception as log_exc:
                         task.log(f"⚠️ 記錄圖譜同步失敗通知時發生異常：{log_exc}", level="warn")
 
+                if graph_failed:
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception as dirty_exc:
+                        task.log(f"⚠️ 第 {ch_idx} 章標記待重試失敗：{dirty_exc}", level="warn")
+                    return vols, True
+
                 # (2.6) 註冊衝突簽名與長程敘事因果審計
                 try:
-                    self._run_narrative_diagnostics(task, novel_id, vols, ch_idx, graph_res, ch_text)
+                    diagnostics_ok = self._run_narrative_diagnostics(
+                        task, novel_id, vols, ch_idx, graph_res, ch_text
+                    )
                 except Exception as n_exc:
-                    task.log(f"⚠️ 第 {ch_idx} 章長程敘事診斷異常 (安全跳過不阻礙): {n_exc}", level="warn")
+                    diagnostics_ok = False
+                    task.log(f"⚠️ 第 {ch_idx} 章長程敘事診斷異常，停止本章避免污染後續上下文：{n_exc}", level="error")
+                if diagnostics_ok is False:
+                    try:
+                        from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+                        from backend.persistence.repositories.story_terms import delete_terms_by_chapter
+                        cleanup = delete_chapter_slice(novel_id, int(ch_idx))
+                        cleanup["auto_terms_deleted"] = delete_terms_by_chapter(novel_id, int(ch_idx))
+                        task.log(
+                            f"🧹 第 {ch_idx} 章診斷未通過，已清除未通過版本的圖譜觀測切片：{cleanup}",
+                            level="warn",
+                        )
+                    except Exception as cleanup_exc:
+                        task.log(
+                            f"⚠️ 第 {ch_idx} 章診斷失敗後清理圖譜不完整：{cleanup_exc}",
+                            level="error",
+                        )
+                    try:
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                    except Exception as dirty_exc:
+                        task.log(f"⚠️ 第 {ch_idx} 章標記敘事診斷待重試失敗：{dirty_exc}", level="warn")
+                    task.log(
+                        f"🚫 第 {ch_idx} 章敘事診斷未形成通過態，停止進入下一章。"
+                        "殘留審計必須先完成閉環，避免錯誤上下文繼續擴散。",
+                        level="error",
+                    )
+                    return vols, True
+
+                # Narrative fix loop may have created a newer Editor version
+                # after the first Graphiti pass.  Re-read and re-extract so
+                # long-term memory describes the published candidate, not the
+                # pre-fix draft.  The extractor clears only observation rows,
+                # preserving planned canonical events.
+                latest_after_diagnostics = db.get_chapter(novel_id, ch_idx) or {}
+                latest_text = (latest_after_diagnostics.get("content") or "").strip()
+                if latest_text and latest_text != ch_text.strip():
+                    try:
+                        task.log(f"🔄 第 {ch_idx} 章診斷修稿後重新同步 Graphiti 觀測資料...")
+                        refreshed_graph = ChapterFactExtractor.process_chapter_prose(
+                            novel_id=novel_id,
+                            chapter_index=ch_idx,
+                            chapter_text=latest_text,
+                            agent_name="copilot",
+                        ) or {}
+                        if refreshed_graph.get("used_fallback") or refreshed_graph.get("status") == "fallback":
+                            raise RuntimeError(
+                                "修稿後 Graphiti 抽取使用 fallback，未形成可驗證的觀測資料"
+                                + (f": {refreshed_graph.get('fallback_reason')}" if refreshed_graph.get("fallback_reason") else "")
+                            )
+                        ch_text = latest_text
+                        graph_res.clear()
+                        graph_res.update(refreshed_graph)
+                    except Exception as refresh_exc:
+                        task.log(
+                            f"🚫 第 {ch_idx} 章修稿後圖譜重同步失敗，停止進入下一章：{refresh_exc}",
+                            level="error",
+                        )
+                        try:
+                            from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+                            from backend.persistence.repositories.story_terms import delete_terms_by_chapter
+                            delete_chapter_slice(novel_id, int(ch_idx))
+                            delete_terms_by_chapter(novel_id, int(ch_idx))
+                        except Exception as cleanup_exc:
+                            task.log(f"⚠️ 修稿後圖譜重同步失敗清理不完整：{cleanup_exc}", level="error")
+                        db.mark_latest_chapter_dirty(novel_id, ch_idx)
+                        return vols, True
 
                 db.save_chat_message(
                     novel_id,
@@ -1917,12 +2054,11 @@ class AutonomousPipelineManager:
             task.log(f"🛑 [Director 路由] Editor 收到章節中止指示：{halt_exc.reason}", level="warn")
             return "HALT_CHAPTER"
         except Exception as editor_exc:
-            # Editor 精修失敗不可中斷整條管線：Writer 初稿已保留，
-            # 記一筆 failed 驗收供下次重啟時僅重試 Editor，然後繼續下一章。
+            # Writer 初稿保留供下次恢復，但本次不得越過未完成章節。
             task.log(
                 f"⚠️ 第 {ch_idx} 章精修失敗（已達重試上限）：{editor_exc}；"
-                f"已保留 Writer 初稿，下次重啟將僅重試 Editor，流程繼續下一章...",
-                level="warn",
+                f"已保留 Writer 初稿，下次重啟將僅重試 Editor，本次管線停止。",
+                level="error",
             )
             try:
                 db.save_director_review_status(
@@ -1942,7 +2078,7 @@ class AutonomousPipelineManager:
                     novel_id,
                     "assistant",
                     f"⚠️ **【章節精修失敗通報】** 第 {ch_idx} 章 Writer 初稿已保留，"
-                    f"Editor 精修失敗原因：{editor_exc}。下次啟動將自動僅重試 Editor，流程已繼續下一章。",
+                    f"Editor 精修失敗原因：{editor_exc}。下次啟動將自動僅重試 Editor，本次管線已停止。",
                     message_type="pipeline",
                 )
             except Exception:
@@ -2119,7 +2255,7 @@ class AutonomousPipelineManager:
             task.log(f"⚠️ Editor 後品質驗收記錄儲存失敗：{eval_save_exc}", level="warn")
         if final_editor_eval and not passed:
             task.log(
-                f"⚠️ 第 {ch_idx} 章未通過 Editor 後品質驗收；草稿已保留並標記為待人工檢視，流程繼續下一章："
+                f"🚫 第 {ch_idx} 章未通過 Editor 後品質驗收；草稿已保留並標記為待重試，本次管線停止："
                 + "; ".join((final_editor_eval.get("issues") or [])[:8]),
                 level="error",
             )
@@ -2296,6 +2432,7 @@ class AutonomousPipelineManager:
         # 直到 Narrative Auditor 判決進入通過態（PASS/WATCH/安靜章）
         # 或觸發安全上限（預設 3 輪，防止無人值守無限燒 LLM 配額）；
         # 達上限的殘留診斷保留給看板處置與下一章上下文約束，不阻礙流水線。
+        diagnostics_ok = True
         if audit_res.get("overall_action") in ("REVISE", "CRITICAL") and not task.stop_requested:
             try:
                 from backend.services.narrative.fix import fix_chapter_until_pass as _auto_fix_loop
@@ -2318,6 +2455,7 @@ class AutonomousPipelineManager:
                         f"最終判決: [{reaudit.get('overall_action', '?')}]）",
                         level="warn",
                     )
+                    diagnostics_ok = False
                 else:
                     task.log(
                         f"⚠️ 第 {ch_idx} 章閉環修正達安全上限仍為 "
@@ -2326,6 +2464,7 @@ class AutonomousPipelineManager:
                         "其餘待看板處置與下一章約束",
                         level="warn",
                     )
+                    diagnostics_ok = False
                 # 修正後正文已變：刷新本章文字供後續圖譜/日誌使用
                 try:
                     _fixed_row = db.get_chapter(novel_id, ch_idx)
@@ -2334,7 +2473,18 @@ class AutonomousPipelineManager:
                 except Exception:
                     pass
             except Exception as fix_exc:
-                task.log(f"⚠️ 第 {ch_idx} 章自動修正異常 (保留原稿繼續): {fix_exc}", level="warn")
+                diagnostics_ok = False
+                task.log(f"⚠️ 第 {ch_idx} 章自動修正異常，保留原稿並停止流程：{fix_exc}", level="error")
+
+        try:
+            unresolved = db.get_narrative_audits(
+                novel_id, chapter_index=ch_idx, unresolved_only=True, limit=200
+            ) or []
+            if any(str(item.get("severity") or "").lower() == "critical" for item in unresolved):
+                diagnostics_ok = False
+        except Exception:
+            diagnostics_ok = False
+        return diagnostics_ok
 
     @staticmethod
     def _is_volume_end(vols: List[Dict[str, Any]], chapter_index: int) -> bool:

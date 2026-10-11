@@ -9,6 +9,20 @@ from typing import Dict, Any, List, Optional
 from backend.persistence.connection import get_db_connection
 
 def save_episode(novel_id: str, chapter_index: int, summary: str = "", content_hash: str = "") -> Dict[str, Any]:
+    existing = get_db_connection().execute(
+        "SELECT id, novel_id, chapter_index, content_hash, summary "
+        "FROM temporal_episodes WHERE novel_id = ? AND chapter_index = ? AND content_hash = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (novel_id, int(chapter_index), content_hash),
+    ).fetchone()
+    if existing:
+        return {
+            "id": existing["id"],
+            "novel_id": existing["novel_id"],
+            "chapter_index": existing["chapter_index"],
+            "content_hash": existing["content_hash"],
+            "summary": existing["summary"],
+        }
     episode_id = f"ep_{uuid.uuid4().hex[:12]}"
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -52,36 +66,65 @@ def upsert_entity(
     attributes: Optional[Dict[str, Any]] = None,
     chapter_index: int = 1,
     life_status: Optional[str] = None,
+    source: str = "authoritative",
+    conn=None,
 ) -> Dict[str, Any]:
-    conn = get_db_connection()
+    owns_connection = conn is None
+    if owns_connection:
+        conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, life_status, attributes_json FROM temporal_entities WHERE novel_id = ? AND name = ?", (novel_id, name))
+    cursor.execute(
+        "SELECT id, life_status, life_status_source, life_status_chapter, attributes_json "
+        "FROM temporal_entities WHERE novel_id = ? AND name = ?",
+        (novel_id, name),
+    )
     row = cursor.fetchone()
     attr_str = json.dumps(attributes or {}, ensure_ascii=False)
-    normalized_status = life_status if life_status in {"alive", "dead", "unknown"} else None
+    # Graph extraction is observational. It may create an unknown entity, but it
+    # cannot rewrite a planned or already-established life state.
+    observational = str(source or "").lower() in {"extractor", "llm", "graphiti"}
+    normalized_status = None if observational else (life_status if life_status in {"alive", "dead", "unknown"} else None)
     if row and normalized_status is None:
         normalized_status = row["life_status"]
+    status_source = row["life_status_source"] if row else "unknown"
+    status_chapter = row["life_status_chapter"] if row else None
+    if not observational and life_status in {"alive", "dead", "unknown"}:
+        status_source = str(source or "authoritative")
+        status_chapter = int(chapter_index or 0)
     
     if row:
         ent_id = row["id"]
+        # Observation refreshes descriptions, but never advances the canonical
+        # fate timestamp.  Otherwise a dead character observed in chapter 300
+        # would look as if it first became dead in chapter 300.
         cursor.execute("""
             UPDATE temporal_entities
-            SET entity_type = ?, life_status = COALESCE(?, life_status), summary = ?, attributes_json = ?, updated_chapter = ?
+            SET entity_type = ?, life_status = COALESCE(?, life_status),
+                life_status_source = COALESCE(?, life_status_source),
+                life_status_chapter = COALESCE(?, life_status_chapter),
+                summary = ?, attributes_json = ?, updated_chapter = ?
             WHERE id = ?
-        """, (entity_type, normalized_status, summary, attr_str, chapter_index, ent_id))
+        """, (entity_type, normalized_status, status_source, status_chapter,
+               summary, attr_str, chapter_index, ent_id))
     else:
         ent_id = f"ent_{uuid.uuid4().hex[:12]}"
         cursor.execute("""
-            INSERT INTO temporal_entities (id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ent_id, novel_id, name, entity_type, normalized_status, summary, attr_str, chapter_index, chapter_index))
-    conn.commit()
+            INSERT INTO temporal_entities
+            (id, novel_id, name, entity_type, life_status, life_status_source,
+             life_status_chapter, summary, attributes_json, created_chapter, updated_chapter)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ent_id, novel_id, name, entity_type, normalized_status, status_source,
+               status_chapter, summary, attr_str, chapter_index, chapter_index))
+    if owns_connection:
+        conn.commit()
     return {
         "id": ent_id,
         "novel_id": novel_id,
         "name": name,
         "entity_type": entity_type,
         "life_status": normalized_status,
+        "life_status_source": status_source,
+        "life_status_chapter": status_chapter,
         "summary": summary,
         "attributes": attributes or {},
         "updated_chapter": chapter_index
@@ -92,13 +135,15 @@ def get_entities(novel_id: str, entity_type: Optional[str] = None) -> List[Dict[
     cursor = conn.cursor()
     if entity_type:
         cursor.execute("""
-            SELECT id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter
+            SELECT id, novel_id, name, entity_type, life_status, life_status_source,
+                   life_status_chapter, summary, attributes_json, created_chapter, updated_chapter
             FROM temporal_entities WHERE novel_id = ? AND entity_type = ?
             ORDER BY name ASC
         """, (novel_id, entity_type))
     else:
         cursor.execute("""
-            SELECT id, novel_id, name, entity_type, life_status, summary, attributes_json, created_chapter, updated_chapter
+            SELECT id, novel_id, name, entity_type, life_status, life_status_source,
+                   life_status_chapter, summary, attributes_json, created_chapter, updated_chapter
             FROM temporal_entities WHERE novel_id = ?
             ORDER BY entity_type ASC, name ASC
         """, (novel_id,))
@@ -117,12 +162,73 @@ def get_entities(novel_id: str, entity_type: Optional[str] = None) -> List[Dict[
             "name": r["name"],
             "entity_type": r["entity_type"],
             "life_status": r["life_status"],
+        "life_status_source": r["life_status_source"],
+        "life_status_chapter": r["life_status_chapter"],
             "summary": r["summary"],
             "attributes": attrs,
             "created_chapter": r["created_chapter"],
             "updated_chapter": r["updated_chapter"]
         })
     return result
+
+
+def apply_authorized_life_transition(
+    novel_id: str,
+    name: str,
+    life_status: str,
+    chapter_index: int,
+    event_type: str,
+    reason: str = "",
+    conn=None,
+) -> Dict[str, Any]:
+    """Apply a planned death/revival event explicitly.
+
+    This is the only normal mutation path that can change an established life
+    state. The caller must supply the matching plot event type, so Graphiti
+    extraction cannot accidentally create a resurrection.
+    """
+    desired = str(life_status or "").lower().strip()
+    kind = str(event_type or "").lower().strip()
+    if desired not in {"alive", "dead"}:
+        raise ValueError("life_status must be alive or dead")
+    if desired == "dead" and kind not in {"death", "dead", "kill"}:
+        raise ValueError("death transition requires a death event")
+    if desired == "alive" and kind not in {"resurrection", "revival", "revive"}:
+        raise ValueError("alive transition requires a resurrection event")
+
+    owns_connection = conn is None
+    conn = conn or get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT id, entity_type, attributes_json, life_status FROM temporal_entities WHERE novel_id = ? AND name = ?",
+        (novel_id, name),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Unknown entity: {name}")
+    current = row["life_status"]
+    if current == desired:
+        return {"name": name, "life_status": desired, "chapter_index": chapter_index, "unchanged": True}
+    if current == "dead" and desired == "alive" and kind not in {"resurrection", "revival", "revive"}:
+        raise ValueError("dead entity requires an explicit resurrection event")
+    attrs = {}
+    try:
+        attrs = json.loads(row["attributes_json"] or "{}")
+    except Exception:
+        attrs = {}
+    history = attrs.get("life_events") if isinstance(attrs, dict) else None
+    if not isinstance(history, list):
+        history = []
+    history.append({"event_type": kind, "chapter_index": int(chapter_index), "reason": reason})
+    attrs["life_events"] = history
+    cursor.execute(
+        "UPDATE temporal_entities SET life_status = ?, life_status_source = ?, "
+        "life_status_chapter = ?, attributes_json = ?, updated_chapter = ? WHERE id = ?",
+        (desired, "story_event", int(chapter_index), json.dumps(attrs, ensure_ascii=False),
+         int(chapter_index), row["id"]),
+    )
+    if owns_connection:
+        conn.commit()
+    return {"name": name, "life_status": desired, "chapter_index": chapter_index, "event_type": kind}
 
 def add_fact(
     novel_id: str,
@@ -133,9 +239,32 @@ def add_fact(
     relation_type: Optional[str] = None,
     episode_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    fact_id = f"fact_{uuid.uuid4().hex[:12]}"
     conn = get_db_connection()
     cursor = conn.cursor()
+    existing = cursor.execute(
+        "SELECT * FROM temporal_facts WHERE novel_id = ? AND valid_from_chapter = ? "
+        "AND fact_statement = ? AND COALESCE(source_entity_id, '') = COALESCE(?, '') "
+        "AND COALESCE(target_entity_id, '') = COALESCE(?, '') "
+        "AND COALESCE(relation_type, '') = COALESCE(?, '') "
+        "AND COALESCE(episode_id, '') = COALESCE(?, '') LIMIT 1",
+        (novel_id, int(valid_from_chapter), fact_statement, source_entity_id,
+         target_entity_id, relation_type, episode_id),
+    ).fetchone()
+    if existing:
+        return {
+            "id": existing["id"],
+            "novel_id": existing["novel_id"],
+            "fact_statement": existing["fact_statement"],
+            "valid_from_chapter": existing["valid_from_chapter"],
+            "invalid_from_chapter": existing["invalid_from_chapter"],
+            "is_active": bool(existing["is_active"]),
+            "source_entity_id": existing["source_entity_id"],
+            "target_entity_id": existing["target_entity_id"],
+            "relation_type": existing["relation_type"],
+            "episode_id": existing["episode_id"],
+            "deduplicated": True,
+        }
+    fact_id = f"fact_{uuid.uuid4().hex[:12]}"
     cursor.execute("""
         INSERT INTO temporal_facts (
             id, novel_id, source_entity_id, target_entity_id, relation_type,
@@ -284,6 +413,12 @@ def delete_chapter_slice(novel_id: str, chapter_index: int) -> Dict[str, int]:
     )
     episodes_deleted = cursor.rowcount
     cursor.execute(
+        "DELETE FROM story_events WHERE novel_id = ? AND chapter_index = ? "
+        "AND status IN ('occurred', 'observed')",
+        (novel_id, chapter_index),
+    )
+    events_deleted = cursor.rowcount
+    cursor.execute(
         "DELETE FROM temporal_entities WHERE novel_id = ? AND created_chapter = ? AND updated_chapter = ?",
         (novel_id, chapter_index, chapter_index),
     )
@@ -298,6 +433,7 @@ def delete_chapter_slice(novel_id: str, chapter_index: int) -> Dict[str, int]:
     return {
         "facts_deleted": facts_deleted,
         "episodes_deleted": episodes_deleted,
+        "events_deleted": events_deleted,
         "entities_deleted": entities_deleted,
         "facts_reactivated": facts_reactivated,
     }
@@ -311,12 +447,18 @@ def clear_novel_graph(novel_id: str) -> Dict[str, int]:
     facts_deleted = cursor.rowcount
     cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
     episodes_deleted = cursor.rowcount
+    cursor.execute(
+        "DELETE FROM story_events WHERE novel_id = ? AND status IN ('occurred', 'observed')",
+        (novel_id,),
+    )
+    events_deleted = cursor.rowcount
     cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
     entities_deleted = cursor.rowcount
     conn.commit()
     return {
         "facts_deleted": facts_deleted,
         "episodes_deleted": episodes_deleted,
+        "events_deleted": events_deleted,
         "entities_deleted": entities_deleted,
     }
 
@@ -343,6 +485,16 @@ def shift_graph_chapters(novel_id: str, after_chapter: int, delta: int) -> Dict[
     )
     episodes_shifted = cursor.rowcount
     cursor.execute(
+        "UPDATE story_events SET chapter_index = chapter_index + ? WHERE novel_id = ? AND chapter_index > ?",
+        (delta, novel_id, after_chapter),
+    )
+    events_shifted = cursor.rowcount
+    cursor.execute(
+        "UPDATE temporal_entities SET life_status_chapter = life_status_chapter + ? "
+        "WHERE novel_id = ? AND life_status_chapter IS NOT NULL AND life_status_chapter > ?",
+        (delta, novel_id, after_chapter),
+    )
+    cursor.execute(
         "UPDATE temporal_entities SET created_chapter = created_chapter + ? WHERE novel_id = ? AND created_chapter > ?",
         (delta, novel_id, after_chapter),
     )
@@ -357,6 +509,7 @@ def shift_graph_chapters(novel_id: str, after_chapter: int, delta: int) -> Dict[
         "facts_valid_shifted": valid_shifted,
         "facts_invalid_shifted": invalid_shifted,
         "episodes_shifted": episodes_shifted,
+        "events_shifted": events_shifted,
         "entities_created_shifted": created_shifted,
         "entities_updated_shifted": updated_shifted,
     }

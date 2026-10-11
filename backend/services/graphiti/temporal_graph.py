@@ -15,21 +15,24 @@ class TemporalGraphService:
         """Constructs a NetworkX MultiDiGraph representing the world state at a specific chapter."""
         G = nx.MultiDiGraph()
         entities = db.get_entities(novel_id)
+        from backend.services.narrative.story_canon import get_life_status_at_chapter
+        status_by_name = get_life_status_at_chapter(novel_id, at_chapter)
         for ent in entities:
+            state = status_by_name.get(ent.get("name") or "")
             G.add_node(
                 ent["id"],
                 name=ent["name"],
                 entity_type=ent["entity_type"],
-                life_status=ent.get("life_status"),
+                life_status=(state.get("life_status") if state else None),
                 summary=ent["summary"],
                 attributes=ent.get("attributes", {})
             )
         
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
         dead_names = {
-            ent["name"].strip().lower()
-            for ent in entities
-            if ent.get("life_status") == "dead" and ent.get("name")
+            name.strip().lower()
+            for name, state in status_by_name.items()
+            if state.get("life_status") == "dead" and name
         }
         for fact in facts:
             u = fact.get("source_entity_id") or "global"
@@ -53,10 +56,11 @@ class TemporalGraphService:
     ) -> List[Dict[str, Any]]:
         """Retrieves facts active at at_chapter, optionally filtered by relevant entity names."""
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
+        from backend.services.narrative.story_canon import get_life_status_at_chapter
         status_by_name = {
-            ent["name"].strip().lower(): ent.get("life_status")
-            for ent in db.get_entities(novel_id)
-            if ent.get("name")
+            name.strip().lower(): state.get("life_status")
+            for name, state in get_life_status_at_chapter(novel_id, at_chapter).items()
+            if name
         }
         if not entity_names:
             return [

@@ -9,6 +9,8 @@ import json
 
 from backend import persistence as db
 from backend.services.autonomous_pipeline import (
+    AutonomousPipelineManager,
+    NovelPipelineTask,
     _is_worldview_ready,
     _are_characters_ready,
     _are_seeds_ready,
@@ -16,6 +18,42 @@ from backend.services.autonomous_pipeline import (
     _are_volumes_ready,
     _audit_final_volume_lock,
 )
+
+
+def test_editor_failure_stops_current_pipeline_before_next_chapter(novel_factory, monkeypatch):
+    novel_id = novel_factory(title="Editor 失敗停止")
+    manager = AutonomousPipelineManager()
+    task = NovelPipelineTask(novel_id, "Editor 失敗停止")
+    monkeypatch.setattr(manager, "_ensure_chapter_volume_skeleton", lambda *args: [])
+    monkeypatch.setattr(manager, "_run_writer_for_chapter", lambda *args, **kwargs: True)
+    monkeypatch.setattr(manager, "_run_director_chapter_gate", lambda *args: {"passed": True})
+    monkeypatch.setattr(manager, "_run_editor_for_chapter", lambda *args: "FAILED")
+    monkeypatch.setattr(db, "mark_latest_chapter_dirty", lambda *_args, **_kwargs: None)
+
+    _volumes, stopped = manager._write_single_chapter(
+        task, novel_id, [], 1, 2, {}, False
+    )
+
+    assert stopped is True
+    assert task.current_chapter == 0
+
+
+def test_final_gate_failure_stops_current_pipeline_before_graphiti(novel_factory, monkeypatch):
+    novel_id = novel_factory(title="Final Gate 失敗停止")
+    manager = AutonomousPipelineManager()
+    task = NovelPipelineTask(novel_id, "Final Gate 失敗停止")
+    monkeypatch.setattr(manager, "_ensure_chapter_volume_skeleton", lambda *args: [])
+    monkeypatch.setattr(manager, "_run_writer_for_chapter", lambda *args, **kwargs: True)
+    monkeypatch.setattr(manager, "_run_director_chapter_gate", lambda *args: {"passed": True})
+    monkeypatch.setattr(manager, "_run_editor_for_chapter", lambda *args: "PASS")
+    monkeypatch.setattr(manager, "_run_final_quality_gate", lambda *args: False)
+    monkeypatch.setattr(db, "mark_latest_chapter_dirty", lambda *_args, **_kwargs: None)
+
+    _volumes, stopped = manager._write_single_chapter(
+        task, novel_id, [], 1, 2, {}, False
+    )
+
+    assert stopped is True
 
 
 def test_validation_helpers_with_empty_and_substantive_data(novel_factory):

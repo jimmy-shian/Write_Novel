@@ -20,6 +20,7 @@ from backend.persistence.repositories.pipeline_locks import *
 from backend.persistence.repositories.characters import *
 from backend.persistence.repositories.foreshadowing import *
 from backend.persistence.repositories.temporal_graph import *
+from backend.persistence.repositories.story_events import *
 from backend.persistence.repositories.story_terms import *
 from backend.persistence.repositories.draft_proposals import *
 from backend.persistence.repositories.chat_memory import *

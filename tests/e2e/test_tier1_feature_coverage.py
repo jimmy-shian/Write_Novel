@@ -726,13 +726,11 @@ def test_tier1_f9_temporal_compliance_detects_invalidated_fact_resurrection(nove
         invalid_from=2,
     )
 
-    # In Ch 4, prose depicts 赵泰 speaking actively
+    # A free-text observation cannot independently establish a life state.
     prose = "趙泰站在城牆上，哈哈大笑著拍著林默的肩膀：「賢弟，我們勝了！」"
     res = NarrativeAuditor._check_temporal_fact_compliance(nid, 4, prose)
 
-    assert res is not None
-    assert res.get("action_required") is True
-    assert res.get("severity") in ("warning", "critical")
+    assert res is None
 
 
 @m3_required

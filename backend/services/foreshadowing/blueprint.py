@@ -385,6 +385,18 @@ def repair_foreshadowing_allocations(novel_id, volume_index=None):
             all_chapters.extend(canonical_list)
             touched += 1
 
+        # Even a tooling-only outline rewrite must pass through the same
+        # canonical event projection.  This keeps planned life events aligned
+        # when a chapter patch is written outside the normal skeleton runner.
+        if all_chapters:
+            from backend.services.narrative.story_canon import validate_timeline
+            existing_volumes = [dict(item) for item in rows]
+            timeline_issues = validate_timeline(existing_volumes)
+            if timeline_issues:
+                raise ValueError(f"foreshadowing allocation cannot bypass timeline gate: {timeline_issues[:3]}")
+            from backend.persistence.repositories.story_events import sync_planned_story_events
+            sync_planned_story_events(novel_id, all_chapters, conn=conn)
+
         if volume_index is None and all_chapters:
             all_chapters.sort(key=lambda item: int(item.get("chapter_index", 0)))
             row_max = cursor.execute(

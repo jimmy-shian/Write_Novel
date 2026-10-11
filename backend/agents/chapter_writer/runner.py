@@ -39,6 +39,7 @@ from backend.agents.volume_skeleton.prompts import (
 )
 from backend.agents.chapter_writer.prompts import build_chapter_writer_messages
 from backend.services import narrative_memory
+from backend.services.narrative.story_canon import validate_life_contract
 from backend.agents.editor.prompts import build_editor_agent_messages
 from backend.agents.copilot.prompts import build_copilot_chat_messages, simplify_plot_data_for_copilot
 from backend.agents.director.prompts import (
@@ -471,6 +472,17 @@ def run_chapter_writer(novel_id, chapter_index, custom_style="Classic Modernism"
         if term_alias_hits:
             hit_text = "、".join(f"「{hit['forbidden_alias']}」應使用正式名稱「{hit['canonical_term']}」" for hit in term_alias_hits[:5])
             err_msg = f"第 {chapter_index} 章術語一致性檢查未通過：{hit_text}。正文未保存，請修正後重試。"
+            db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
+        canon_issues = validate_life_contract(novel_id, chapter_index, current_outline, prose_val)
+        if canon_issues:
+            err_msg = "第 {} 章故事契約未通過：{}".format(
+                chapter_index,
+                "；".join(issue.get("recommendation", "角色命運與既定事實衝突") for issue in canon_issues[:3]),
+            )
             db.save_chat_message(novel_id, "assistant", err_msg, message_type="pipeline")
             yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"

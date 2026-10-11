@@ -81,7 +81,7 @@ def delete_novel(novel_id):
     # Explicitly cascade delete from all child tables to guarantee 100% clean-up
     cascade_tables = [
         "setting_systems", "conflict_signatures", "narrative_audits",
-        "temporal_facts", "temporal_episodes", "temporal_entities",
+        "temporal_facts", "temporal_episodes", "temporal_entities", "story_events",
         "story_terms", "draft_proposals", "foreshadowing_blueprints",
         "worldbuilding", "characters", "plot_chapters", "volumes",
         "chapters", "chat_memory", "pipeline_locks",
@@ -197,6 +197,10 @@ def reset_novel_content(novel_id, scopes=None):
         cursor.execute("DELETE FROM temporal_facts WHERE novel_id = ?", (novel_id,))
         cursor.execute("DELETE FROM temporal_episodes WHERE novel_id = ?", (novel_id,))
         cursor.execute("DELETE FROM temporal_entities WHERE novel_id = ?", (novel_id,))
+        try:
+            cursor.execute("DELETE FROM story_events WHERE novel_id = ?", (novel_id,))
+        except sqlite3.OperationalError:
+            pass
         try:
             cursor.execute("DELETE FROM conflict_signatures WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM narrative_audits WHERE novel_id = ?", (novel_id,))

@@ -14,6 +14,11 @@ from backend import persistence as db
 from backend.services.narrative.conflict_ledger import ConflictLedger
 from backend.services.narrative.narrative_auditor import NarrativeAuditor
 from backend.services.narrative.setting_registry import SettingRegistry
+from backend.services.narrative.story_canon import (
+    ensure_timeline_anchors,
+    iter_outline_chapters,
+    validate_timeline,
+)
 
 
 def _iter_setting_names(su: Any):
@@ -256,4 +261,83 @@ def backfill_novel_narrative(
         "total_systems": total_systems,
         "total_signatures": total_sigs,
         "total_audits": total_audits,
+    }
+
+
+def backfill_story_canon(novel_id: str, apply: bool = False) -> Dict[str, Any]:
+    """Audit and optionally fill legacy timeline/event canon without rewriting prose."""
+    volumes = db.get_volumes(novel_id) or []
+    before_issues = validate_timeline(volumes)
+    chapters_before = iter_outline_chapters(volumes)
+    scheduled = 0
+    event_count = 0
+    previous_anchor = None
+    updated_volumes = []
+
+    for volume in sorted(volumes, key=lambda item: int(item.get("volume_index") or 0)):
+        raw = volume.get("chapters_outline") or []
+        if isinstance(raw, str):
+            try:
+                import json
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        chapters = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+        if not chapters:
+            continue
+        normalized = ensure_timeline_anchors(chapters, previous_anchor=previous_anchor)
+        volume_scheduled = sum(
+            1
+            for old, new in zip(
+                sorted(chapters, key=lambda c: int(c.get("chapter_index") or 0)),
+                normalized,
+            )
+            if old.get("timeline_anchor") != new.get("timeline_anchor")
+        )
+        scheduled += volume_scheduled
+        previous_anchor = normalized[-1].get("timeline_anchor")
+        if apply and volume_scheduled:
+            db.update_volume_outline(novel_id, int(volume.get("volume_index") or 0), normalized)
+            updated_volumes.append(int(volume.get("volume_index") or 0))
+        try:
+            from backend.persistence.repositories.story_events import sync_planned_story_events
+            if apply:
+                event_count += sync_planned_story_events(novel_id, normalized)
+            else:
+                # Dry-run must be side-effect free.  Count candidate events
+                # without creating rows or changing the canon.
+                for item in normalized:
+                    for key in ("planned_events", "story_events", "life_events", "character_events", "events"):
+                        values = item.get(key)
+                        if isinstance(values, list):
+                            event_count += sum(
+                                1 for event in values
+                                if isinstance(event, dict) and (event.get("event_type") or event.get("type"))
+                            )
+        except Exception:
+            pass
+
+    after_volumes = db.get_volumes(novel_id) if apply else volumes
+    after_issues = validate_timeline(after_volumes)
+    statuses = [
+        {"name": item.get("name"), "life_status": item.get("life_status"), "updated_chapter": item.get("updated_chapter")}
+        for item in db.get_entities(novel_id)
+        if item.get("entity_type") == "character" and item.get("life_status")
+    ]
+    observed_events = []
+    try:
+        observed_events = db.get_story_events(novel_id, status="occurred")
+    except Exception:
+        pass
+    return {
+        "novel_id": novel_id,
+        "apply": bool(apply),
+        "chapters_scanned": len(chapters_before),
+        "timeline_anchors_added": scheduled,
+        "planned_events_synced": event_count,
+        "timeline_issues_before": before_issues,
+        "timeline_issues_after": after_issues,
+        "updated_volumes": updated_volumes,
+        "character_life_statuses": statuses,
+        "occurred_events": observed_events,
     }

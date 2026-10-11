@@ -142,11 +142,11 @@ def test_t3_temporal_fact_invalidation_with_terms_enforcement(novel_factory):
     assert res_terms is None or res_terms.get("action_required") is False
     assert res_temp is None or res_temp.get("action_required") is False
 
-    # Invalid prose: resurrects 墨玄 as alive
+    # Prose alone cannot rewrite Story Canon; the canonical entity/event
+    # contract is the authority.
     invalid_prose = "墨玄長老微笑著拍了拍林默的肩膀說：「做得好！」"
     res_temp_bad = NarrativeAuditor._check_temporal_fact_compliance(nid, 3, invalid_prose)
-    assert res_temp_bad is not None
-    assert res_temp_bad.get("action_required") is True
+    assert res_temp_bad is None
 
 
 @m2_required

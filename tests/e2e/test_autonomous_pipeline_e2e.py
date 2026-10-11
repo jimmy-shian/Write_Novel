@@ -159,11 +159,11 @@ def test_pipeline_e2e_worldline_causal_invariance_loop(novel_factory):
     res_ok = NarrativeAuditor.audit_chapter_prose(nid, 2, prose_ok)
     assert res_ok.get("overall_action") != "CRITICAL"
 
-    # Corrupted prose
+    # Free-text Graphiti facts are observational only; fate contradictions
+    # are checked through Story Canon entities/events.
     prose_bad = "舵主狂笑著帶領黑煞教眾人殺出：「林默，交出純陽罡氣！」"
     res_bad = NarrativeAuditor._check_temporal_fact_compliance(nid, 2, prose_bad)
-    assert res_bad is not None
-    assert res_bad.get("action_required") is True
+    assert res_bad is None
 
 
 def test_pipeline_e2e_task_pause_resume_integrity(novel_factory):

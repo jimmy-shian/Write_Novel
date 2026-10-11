@@ -252,6 +252,7 @@ class SettingRegistry:
         novel_id: str,
         active_setting_names: Optional[List[str]] = None,
         max_systems: int = 3,
+        context_text: str = "",
     ) -> str:
         """
         為 Chapter Writer 提取最相關的設定系統機制與邊界（嚴格控制 Token 預算）。
@@ -260,17 +261,32 @@ class SettingRegistry:
         if not all_systems:
             return ""
 
-        target_set = set(active_setting_names or [])
-        selected = []
+        target_set = {str(item).strip().lower() for item in (active_setting_names or []) if str(item).strip()}
+        context_lower = str(context_text or "").lower()
+        scored = []
 
         # 優先匹配本章指明的設定
+        for position, system in enumerate(all_systems):
+            name = str(system.get("name") or "").strip()
+            name_lower = name.lower()
+            score = 0
+            if any(ts in name_lower or name_lower in ts for ts in target_set):
+                score += 1000
+            if name_lower and name_lower in context_lower:
+                score += 500
+            score += min(int(system.get("usage_count") or 0), 20)
+            last_used = int(system.get("last_used_chapter") or 0)
+            if last_used:
+                score += max(0, 50 - abs(last_used - 1))
+            scored.append((score, -position, system))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        limit = max(1, int(max_systems or 3))
         if target_set:
-            for s in all_systems:
-                if any(ts in s["name"] or s["name"] in ts for ts in target_set):
-                    selected.append(s)
+            # An explicit chapter scope is a whitelist.  Do not fill the
+            # remaining token budget with unrelated setting systems.
+            selected = [item[2] for item in scored if item[0] >= 1000 and item[2].get("name")][:limit]
         else:
-            # 未指明時補充前 max_systems 個通用核心設定
-            selected = all_systems[:max_systems]
+            selected = [item[2] for item in scored[:limit] if item[2].get("name")]
 
         if not selected:
             return ""

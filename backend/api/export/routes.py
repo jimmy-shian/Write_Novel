@@ -19,6 +19,42 @@ def api_export_novel(novel_id: str, format: str = "txt"):
     char = db.get_latest_characters(novel_id)
     plot_data = db.get_stitched_plot(novel_id)
     plot = {"parsed_data": plot_data} if plot_data else None
+    # Export is a publication boundary. A dirty chapter is insufficient as the
+    # only safety signal because unresolved critical audits may belong to a clean
+    # version. Refuse the whole export and expose the exact blocking chapters.
+    unresolved_critical = []
+    try:
+        for audit in db.get_narrative_audits(novel_id, unresolved_only=True, limit=5000) or []:
+            if str(audit.get("severity", "")).lower() == "critical":
+                unresolved_critical.append({
+                    "chapter_index": audit.get("chapter_index"),
+                    "dimension": audit.get("dimension"),
+                    "evidence": audit.get("evidence"),
+                })
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"無法確認敘事審計狀態，禁止匯出：{exc}")
+    try:
+        from backend.services.narrative.story_canon import validate_publication_canon
+        canon_issues = validate_publication_canon(novel_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"無法確認 Story Canon 狀態，禁止匯出：{exc}")
+    unresolved_critical.extend(
+        {
+            "chapter_index": issue.get("chapter_index"),
+            "dimension": issue.get("dimension"),
+            "evidence": issue.get("evidence"),
+        }
+        for issue in canon_issues
+        if str(issue.get("severity") or "").lower() == "critical"
+    )
+    if unresolved_critical:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "存在未結 critical 敘事審計，禁止匯出。",
+                "blocking_audits": unresolved_critical[:100],
+            },
+        )
     # Dirty versions are unfinished drafts and must not be exported by default.
     chapters = [
         chapter

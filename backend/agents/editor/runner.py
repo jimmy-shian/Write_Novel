@@ -391,6 +391,23 @@ def run_editor_agent(novel_id, chapter_index, edit_instructions=None, stream=Fal
                 yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
                 return
 
+        # Editor is another prose write path.  It must honor the same chapter
+        # fate contract as Writer, otherwise a polishing pass could resurrect
+        # a canonical dead character or erase an authorized transition.
+        try:
+            from backend.services.narrative.story_canon import validate_life_contract
+            canon_issues = validate_life_contract(novel_id, chapter_index, outline, final_prose)
+        except Exception as canon_exc:
+            canon_issues = [{"severity": "critical", "evidence": str(canon_exc)}]
+        if canon_issues:
+            err_msg = "第 {} 章編輯稿故事契約未通過：{}，已保留原稿。".format(
+                chapter_index,
+                "；".join(issue.get("recommendation", "角色命運與既定事實衝突") for issue in canon_issues[:3]),
+            )
+            yield "data: " + json.dumps({"type": "error", "message": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            return
+
         memory_summary = narrative_memory.build_chapter_memory_summary(
             novel_id,
             chapter_index,

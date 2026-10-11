@@ -33,6 +33,13 @@ EXTRACTION_SYSTEM_PROMPT = """你是一位精通長篇小說故事設定與動�
       "fact_statement": "清楚簡要的事實陳述 (例如: 蕭炎在第5章獲得青蓮地心火)"
     }
   ],
+  "events": [
+    {
+      "event_type": "death|resurrection|reveal|arrival|departure|other",
+      "character": "涉及人物（可選）",
+      "description": "本章實際發生的事件"
+    }
+  ],
   "invalidated_fact_ids_or_statements": [
     "被本章劇情推翻、作廢或改變的舊事實敘述"
   ],
@@ -96,14 +103,6 @@ class ChapterFactExtractor:
 
         content_hash = hashlib.sha256(chapter_text.encode("utf-8")).hexdigest()[:16]
         
-        # Save episode
-        episode = db.save_episode(
-            novel_id=novel_id,
-            chapter_index=chapter_index,
-            summary=f"Chapter {chapter_index} prose",
-            content_hash=content_hash
-        )
-
         existing_facts = active_facts or db.get_facts_at_chapter(novel_id, chapter_index)
         existing_facts_desc = "\n".join([
             f"- [ID:{f['id']}] {f.get('fact_statement', '')}" for f in existing_facts[:20]
@@ -114,6 +113,7 @@ class ChapterFactExtractor:
         aggregate = {
             "entities": [],
             "new_facts": [],
+            "events": [],
             "invalidated_fact_ids_or_statements": [],
             "conflict_signature": {},
             "setting_usage": [],
@@ -149,6 +149,7 @@ class ChapterFactExtractor:
                     raise ValueError(f"Parsed JSON missing keys: {list(data.keys())[:5]}")
                 aggregate["entities"].extend(data.get("entities") or [])
                 aggregate["new_facts"].extend(data.get("new_facts") or [])
+                aggregate["events"].extend(data.get("events") or [])
                 aggregate["invalidated_fact_ids_or_statements"].extend(
                     data.get("invalidated_fact_ids_or_statements") or []
                 )
@@ -174,12 +175,60 @@ class ChapterFactExtractor:
                     "fact_statement": f"第 {chapter_index} 章順利完成寫作與推進。"
                 }],
                 "invalidated_fact_ids_or_statements": []
+                ,"events": []
             }
+
+        # 抽取失敗時不得寫入 fallback 事實、事件或 episode。
+        # 由上層 pipeline 將此結果視為本章未完成，保留重試或人工處理機會。
+        if used_fallback:
+            return {
+                "episode_id": None,
+                "entities_updated": 0,
+                "facts_added": 0,
+                "occurred_events": 0,
+                "terms_created": 0,
+                "terms_updated": 0,
+                "terms_kept_manual": 0,
+                "conflict_signature": {},
+                "setting_usage": [],
+                "status": "fallback",
+                "used_fallback": True,
+                "fallback_reason": fallback_reason,
+            }
+
+        # 重跑同一章前，清掉上一輪的觀測切片；預定事件保留，避免
+        # Graphiti 抽取結果覆寫 canonical story contract。
+        try:
+            from backend.persistence.repositories.temporal_graph import delete_chapter_slice
+            from backend.persistence.repositories.story_terms import delete_terms_by_chapter
+            delete_chapter_slice(novel_id, int(chapter_index))
+            delete_terms_by_chapter(novel_id, int(chapter_index))
+        except Exception as clear_exc:
+            raise RuntimeError(
+                f"Unable to clear previous observation slice for chapter {chapter_index}"
+            ) from clear_exc
+
+        episode = db.save_episode(
+            novel_id=novel_id,
+            chapter_index=chapter_index,
+            summary=f"Chapter {chapter_index} prose",
+            content_hash=content_hash
+        )
 
         # 0. 歸一化 Story Engine 2.0 衝突簽名（LLM 枚舉值優先，非法值直接丟棄
         #    交給離線啟發式兜底；此處絕不拋錯）
         conflict_signature: Dict[str, Any] = {}
         setting_usage: List[str] = []
+        occurred_events = 0
+        try:
+            for event in data.get("events") or []:
+                if isinstance(event, dict) and (event.get("event_type") or event.get("type")):
+                    db.upsert_story_event(novel_id, chapter_index, event, status="occurred", source="graphiti_observation")
+                    occurred_events += 1
+        except Exception as event_exc:
+            raise RuntimeError(
+                f"Unable to persist observed events for chapter {chapter_index}"
+            ) from event_exc
         try:
             from backend.services.narrative.conflict_ledger import ConflictLedger as _CL
             _raw_sig = data.get("conflict_signature") or {}
@@ -226,7 +275,8 @@ class ChapterFactExtractor:
                     summary=ent.get("summary", ""),
                     attributes=ent.get("attributes"),
                     life_status=(ent.get("life_status") or "").strip().lower() or None,
-                    chapter_index=chapter_index
+                    chapter_index=chapter_index,
+                    source="extractor",
                 )
                 entity_id_map[name] = res["id"]
 
@@ -323,6 +373,7 @@ class ChapterFactExtractor:
             "episode_id": episode["id"],
             "entities_updated": len(entity_id_map),
             "facts_added": len(added_facts),
+            "occurred_events": occurred_events,
             "terms_created": terms_created,
             "terms_updated": terms_updated,
             "terms_kept_manual": terms_kept_manual,

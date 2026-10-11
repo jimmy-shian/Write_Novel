@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from backend import persistence as db
 from backend.common.utils import normalize_outlines
 from backend.prompts.common.context import build_relevant_character_context
+from backend.services.context.editor_writing_skill import format_editor_writing_skill_context
 
 
 RECENT_MEMORY_WINDOW = 5
@@ -559,6 +560,7 @@ def build_editor_context_packet(novel_id: str, chapter_index: int, original_pros
         "chapter_index": chapter_index,
         "scene_goals": scene_goals,
         "previous_chapter_tail": previous_tail,
+        "editor_writing_skill": format_editor_writing_skill_context(),
         "character_emotional_and_relationship_history": _build_character_history(novel_id, target),
         "story_terms": [
             {"term": t.get("term"), "definition": t.get("definition"), "notes": t.get("notes", "")}

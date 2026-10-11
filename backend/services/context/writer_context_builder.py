@@ -24,6 +24,7 @@ from backend.services.graphiti.temporal_graph import TemporalGraphService
 from backend.services.narrative.conflict_ledger import ConflictLedger
 from backend.services.narrative.setting_registry import SettingRegistry
 from backend.services.director.context_compiler import GeometryContextCompiler
+from backend.services.narrative.story_canon import build_canon_context, build_chapter_contract
 
 
 def _load_geometry_graph_safe(novel_id: str):
@@ -550,6 +551,36 @@ class WriterContextBuilder:
         elif isinstance(characters_bible, list):
             char_list = characters_bible
 
+        terms_list = []
+        try:
+            all_terms = get_terms(novel_id)
+            source_text = " ".join(
+                [
+                    json.dumps(current_outline, ensure_ascii=False),
+                    str(surrounding_plot or ""),
+                    str(clue_payoff_details or ""),
+                ]
+            )
+            active_names = current_outline.get("characters_active", []) if isinstance(current_outline, dict) else []
+            source_text += " " + json.dumps(active_names, ensure_ascii=False)
+            matched_terms = [term for term in all_terms if term.get("term") and term.get("term") in source_text]
+            matched_ids = {id(term) for term in matched_terms}
+            # Terms with a recent chapter provenance are the deterministic
+            # fallback when the outline uses a synonym instead of the glossary
+            # spelling.  This keeps the glossary useful without dumping it.
+            recent_terms = sorted(
+                [term for term in all_terms if id(term) not in matched_ids],
+                key=lambda term: (
+                    abs(int(term.get("updated_chapter") or term.get("source_chapter") or 0) - int(chapter_index or 0)),
+                    str(term.get("term") or ""),
+                ),
+            )
+            terms_list = (matched_terms + recent_terms)[:20]
+        except Exception as terms_exc:
+            raise RuntimeError(
+                f"Writer context cannot load story terms for chapter {chapter_index}"
+            ) from terms_exc
+
         # 2. 構建場景契約
         contract = self.build_scene_contract(current_outline, char_list, chapter_index)
         pov_char = contract["pov_character"]
@@ -614,6 +645,17 @@ class WriterContextBuilder:
         lines.append(f"- **核心阻礙衝突 (Conflict)**：{contract['conflict']}")
         lines.append(f"- **轉折點 (Turn)**：{contract['turn']}")
         lines.append(f"- **實質狀態位移 (Meaningful State Change)**：{contract.get('state_after', contract['outcome'])}")
+        lines.append("")
+
+        # (A1) Story Canon：規劃事件與已確立狀態優先於 LLM 自由抽取。
+        try:
+            from backend.services.narrative.story_canon import get_authoritative_life_statuses
+            _entity_statuses = get_authoritative_life_statuses(novel_id, max(0, int(chapter_index) - 1))
+        except Exception as canon_exc:
+            raise RuntimeError(
+                f"Writer context cannot load Story Canon for chapter {chapter_index}"
+            ) from canon_exc
+        lines.append(build_canon_context(current_outline, chapter_index, _entity_statuses))
         lines.append("")
 
         if fix_mode:
@@ -712,10 +754,50 @@ class WriterContextBuilder:
 
         # (B2) 世界觀設定運作機制與絕對邊界約束 (Setting Boundaries)
         setting_names = current_outline.get("setting_usage", []) if isinstance(current_outline, dict) else []
-        setting_block = SettingRegistry.get_scoped_context_for_writer(novel_id, setting_names)
+        setting_context_text = " ".join(
+            [json.dumps(current_outline, ensure_ascii=False), str(surrounding_plot or ""), str(clue_payoff_details or "")]
+        )
+        setting_block = SettingRegistry.get_scoped_context_for_writer(
+            novel_id, setting_names, context_text=setting_context_text
+        )
         if setting_block:
             lines.append(setting_block)
             lines.append("")
+
+        # Overdue seeds are a global lifecycle signal, not an optional director
+        # hint.  Inject them whenever the chapter is being written so a seed
+        # cannot disappear merely because its outline row omitted an allocation.
+        overdue_contract_text = ""
+        try:
+            from backend.services.foreshadowing.blueprint import get_overdue_foreshadowing
+            overdue = get_overdue_foreshadowing(novel_id)
+        except Exception as overdue_exc:
+            raise RuntimeError(
+                f"Writer context cannot load foreshadowing debt for chapter {chapter_index}"
+            ) from overdue_exc
+        if overdue:
+            overdue_lines = ["### 🚨【全局伏筆逾期清單（本章必須處置或明確延後）】"]
+            for seed in overdue[:8]:
+                overdue_lines.append(
+                    f"- {seed.get('seed_id', 'seed')}：埋設第 {seed.get('plant_chapter', '?')} 章，"
+                    f"原定第 {seed.get('payoff_chapter', '?')} 章回收，狀態 OVERDUE。"
+                )
+            overdue_lines.append("不可靜默忽略逾期伏筆；若本章不能回收，必須在章綱契約中安排可追蹤的延後理由與新落點。")
+            overdue_contract_text = "\n".join(overdue_lines)
+            lines.extend(overdue_lines)
+            lines.append("")
+        lines.append(build_chapter_contract(
+            current_outline,
+            chapter_index,
+            setting_names=setting_names,
+            terms=[
+                {"term": t.get("term"), "definition": t.get("definition"), "notes": t.get("notes", "")}
+                for t in terms_list
+            ],
+            foreshadowing="\n".join(part for part in (clue_payoff_details, overdue_contract_text) if part),
+            conflict=current_outline.get("conflict_signature_hint") if isinstance(current_outline, dict) else "",
+        ))
+        lines.append("")
 
         # (C) 出場角色狀態與知情邊界
         lines.append("### 👥【出場角色即時狀態與語言傾向】")
@@ -751,6 +833,23 @@ class WriterContextBuilder:
         )
         lines.append("### 🔗【敘事連續性與時序記憶約束 (Graphiti Memory)】")
         lines.append(temporal_graph_context)
+        try:
+            from backend import persistence as _episode_db
+            episodes = [
+                item for item in (_episode_db.get_episodes(novel_id) or [])
+                if int(item.get("chapter_index") or 0) < int(chapter_index or 0)
+            ][-8:]
+            if episodes:
+                lines.append("### 🧭【Temporal Episodes 長程事件摘要】")
+                for episode in episodes:
+                    summary = str(episode.get("summary") or "").strip()
+                    if summary:
+                        lines.append(f"- 第 {episode.get('chapter_index')} 章：{summary[:240]}")
+                lines.append("（以上為已發生事件摘要；不得把後續章節事件提前寫入本章。）")
+        except Exception as episode_exc:
+            raise RuntimeError(
+                f"Writer context cannot load temporal episodes for chapter {chapter_index}"
+            ) from episode_exc
         if narrative_memory_context:
             if isinstance(narrative_memory_context, dict):
                 formatted_mem = self._format_narrative_continuity_context(narrative_memory_context, chapter_index)
@@ -787,7 +886,12 @@ class WriterContextBuilder:
                 json.dumps(current_outline, ensure_ascii=False) + " " + " ".join(active_char_names) + " " +
                 contract.get("scene_goal", "") + " " + (clue_payoff_details or "")
             )
-            broader_haystack = " ".join(((worldview_text or "")[:8000], narrative_memory_context or ""))
+            broader_haystack = " ".join((
+                (worldview_text or "")[:8000],
+                str(narrative_memory_context or ""),
+                str(surrounding_plot or ""),
+                json.dumps(terms_list, ensure_ascii=False),
+            ))
             directly_relevant = [t for t in terms if t.get("term") and t["term"] in chapter_haystack]
             # 先依術語字串分組再做去除重複，避免對整個累積術語庫進行 O(T²) 的 dict 等值掃描
             direct_by_term: Dict[str, List[Dict[str, Any]]] = {}

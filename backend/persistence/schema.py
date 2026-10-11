@@ -508,12 +508,31 @@ def db_init(
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_episodes_novel_ch ON temporal_episodes(novel_id, chapter_index)")
 
         cursor.execute("""
+        CREATE TABLE IF NOT EXISTS story_events (
+            id TEXT PRIMARY KEY,
+            novel_id TEXT NOT NULL,
+            chapter_index INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            character_name TEXT,
+            description TEXT,
+            payload_json TEXT,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_story_events_novel_ch ON story_events(novel_id, chapter_index, status)")
+
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS temporal_entities (
             id TEXT PRIMARY KEY,
             novel_id TEXT NOT NULL,
             name TEXT NOT NULL,
             entity_type TEXT NOT NULL,
             life_status TEXT,
+            life_status_source TEXT DEFAULT 'unknown',
+            life_status_chapter INTEGER,
             summary TEXT,
             attributes_json TEXT,
             created_chapter INTEGER DEFAULT 1,
@@ -525,6 +544,10 @@ def db_init(
             cols = [r[1] for r in cursor.execute("PRAGMA table_info(temporal_entities)").fetchall()]
             if "life_status" not in cols:
                 cursor.execute("ALTER TABLE temporal_entities ADD COLUMN life_status TEXT")
+            if "life_status_source" not in cols:
+                cursor.execute("ALTER TABLE temporal_entities ADD COLUMN life_status_source TEXT DEFAULT 'unknown'")
+            if "life_status_chapter" not in cols:
+                cursor.execute("ALTER TABLE temporal_entities ADD COLUMN life_status_chapter INTEGER")
         except Exception as e:
             print(f"[WARN] Failed to migrate temporal entity life_status: {e}")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entities_novel_name ON temporal_entities(novel_id, name)")
