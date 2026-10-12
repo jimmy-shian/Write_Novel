@@ -58,11 +58,11 @@ class ChapterHaltedException(Exception):
 
 
 RETRY_POLICY = {
-    "worldview": 3,
-    "characters": 3,
-    "foreshadowing": 3,
-    "volumes": 3,
-    "volume_skeleton": 3,
+    "worldview": 3 * RETRY_MULTIPLIER,
+    "characters": 3 * RETRY_MULTIPLIER,
+    "foreshadowing": 3 * RETRY_MULTIPLIER,
+    "volumes": 3 * RETRY_MULTIPLIER,
+    "volume_skeleton": 3 * RETRY_MULTIPLIER,
     "writer": 3 * RETRY_MULTIPLIER,
     "editor": 3 * RETRY_MULTIPLIER,
     "final_quality_gate": FINAL_QUALITY_GATE_RETRIES,
@@ -395,7 +395,7 @@ class AutonomousPipelineManager:
 
         # 階段型上限：未特別傳入特定 max_retries 時使用 RETRY_POLICY
         if max_retries == 20 or max_retries is None:
-            max_retries = RETRY_POLICY.get(stage, 3)
+            max_retries = RETRY_POLICY.get(stage, 3 * RETRY_MULTIPLIER)
 
         last_exc = None
         for attempt in range(1, max_retries + 1):
@@ -862,7 +862,11 @@ class AutonomousPipelineManager:
 
             # 08. 全書完備性終極門禁 (Story Completion Gate: 鎖定 STORY_CANON_LOCKED)
             if task.stop_requested: return
-            self._phase_story_completion_gate(task, novel_id)
+            if not self._phase_story_completion_gate(task, novel_id):
+                task.current_stage = "awaiting_retry"
+                task.status_message = "⏸️ StoryCompletionGate 未通過，已停止正文流程，等待修復後重試。"
+                task.log("⏸️ StoryCompletionGate 未通過，拒絕在未鎖定的破損 Master Graph 上繼續寫正文。", level="warn")
+                return
 
             # 5.5 角色一致性與名冊完整性防呆校驗 (防止正文角色性格盲猜或反派立場翻轉)
             self._phase_character_roster_guard(task, novel_id, vols)
@@ -889,8 +893,35 @@ class AutonomousPipelineManager:
                         editor_retry_only = True
                         task.log(f"第 {ch_idx} 章初稿仍在、但上次精修未完成，跳過 Writer、僅重試 Editor 及後續流程...")
                     else:
-                        task.log(f"第 {ch_idx} 章已存在完整內容，跳過並接續下一章。")
-                        continue
+                        # dirty 章（敘事診斷未通過 / 圖譜切片已清除）不可跳過，
+                        # 否則殘留 REVISE 會被當成完成、錯誤上下文繼續擴散。
+                        _row = written_rows.get(ch_idx) or {}
+                        try:
+                            _is_dirty = int(_row.get("is_dirty") or 0) == 1
+                        except Exception:
+                            _is_dirty = bool(_row.get("is_dirty"))
+                        _has_unresolved = False
+                        if not _is_dirty:
+                            try:
+                                _un = db.get_narrative_audits(
+                                    novel_id, chapter_index=ch_idx, unresolved_only=True, limit=20
+                                ) or []
+                                # 只有 action_required=1（REVISE/CRITICAL 級）才擋跳過；
+                                # WATCH 級（action_required=0）是觀察項，照 PASS 語義放行。
+                                _has_unresolved = any(
+                                    bool(_u.get("action_required"))
+                                    for _u in _un
+                                )
+                            except Exception:
+                                _has_unresolved = False
+                        if _is_dirty or _has_unresolved:
+                            task.log(
+                                f"第 {ch_idx} 章有殘留診斷未通過（dirty={int(_is_dirty)}, "
+                                f"unresolved={int(_has_unresolved)}），不跳過、重新進入修復流程..."
+                            )
+                        else:
+                            task.log(f"第 {ch_idx} 章已存在完整內容，跳過並接續下一章。")
+                            continue
 
                 vols, stopped_before_editor = self._write_single_chapter(
                     task, novel_id, vols, ch_idx, total_target, written_rows, editor_retry_only
@@ -1022,11 +1053,17 @@ class AutonomousPipelineManager:
             from backend.services.narrative import SettingRegistry
             SettingRegistry.sync_systems_from_worldview(novel_id)
             audit_a = run_setting_audit(novel_id, "worldview")
-            task.log(f"⚙️ [Setting Audit A] 世界觀設定與力量體系註冊完成 (審計結果: {audit_a.get('overall_decision')})")
+            _decision = audit_a.get("overall_decision", audit_a.get("passed"))
+            _score = audit_a.get("score")
+            _suffix = f" (分數: {_score})" if _score is not None else ""
+            task.log(f"⚙️ [Setting Audit A] 世界觀設定與力量體系註冊完成 (審計結果: {_decision}{_suffix})")
         except Exception as sa_exc:
             task.log(f"⚠️ Setting Audit A 執行異常 (非致命): {sa_exc}", level="warn")
 
         # 1.6 Master Graph 碰撞節點世界觀回填
+        if self._master_graph_is_canon_locked(novel_id):
+            task.log("🔒 Master Graph 已鎖定 STORY_CANON_LOCKED，跳過世界觀回填與二次驗證。")
+            return
         try:
             from backend.agents.story_architect.runner import backfill_worldview_to_master_graph
             wb = db.get_latest_worldbuilding(novel_id)
@@ -1082,6 +1119,9 @@ class AutonomousPipelineManager:
             task.log("各陣營角色設定已就緒，跳過生成。")
 
         # 2.5 Master Graph 去命運化角色槽位回填
+        if self._master_graph_is_canon_locked(novel_id):
+            task.log("🔒 Master Graph 已鎖定 STORY_CANON_LOCKED，跳過角色回填與二次驗證。")
+            return
         try:
             from backend.agents.character_designer.runner import backfill_characters_to_master_graph
             char_data = db.get_latest_characters(novel_id)
@@ -1135,6 +1175,9 @@ class AutonomousPipelineManager:
             task.log(f"全書關鍵轉折點已就緒（>= {MIN_KEY_TURNING_POINTS} 條），跳過生成。")
 
         # 3.5 實體與伏筆拓樸硬綁定 (Entity & Foreshadowing ID Binding)
+        if self._master_graph_is_canon_locked(novel_id):
+            task.log("🔒 Master Graph 已鎖定 STORY_CANON_LOCKED，跳過實體與伏筆回填、二次驗證。")
+            return
         try:
             from backend.generation.modules.entity_binder import bind_entities_and_foreshadowings
             bindings = bind_entities_and_foreshadowings(novel_id)
@@ -1332,7 +1375,18 @@ class AutonomousPipelineManager:
         async_backup(reason=f"Auto flow [{task.novel_title}]: all volume skeletons finished")
         return vols
 
-    def _phase_story_completion_gate(self, task: NovelPipelineTask, novel_id: str):
+    @staticmethod
+    def _master_graph_is_canon_locked(novel_id: str) -> bool:
+        """檢查 Master Graph 正典鎖，避免重跑時回填污染已確立的圖。"""
+        from backend.persistence import master_graph_repository
+
+        graph = master_graph_repository.load_master_graph(novel_id)
+        if not graph:
+            return False
+        status = getattr(graph, "planning_status", None)
+        return getattr(status, "value", status) == "STORY_CANON_LOCKED"
+
+    def _phase_story_completion_gate(self, task: NovelPipelineTask, novel_id: str) -> bool:
         """
         Stage 08: 全書完備性終極門禁 (Story Completion Gate).
         在正式動筆寫作 (Writer Stage 09) 前的全域終極驗收：
@@ -1353,7 +1407,11 @@ class AutonomousPipelineManager:
         graph = master_graph_repository.load_master_graph(novel_id)
         if not graph:
             task.log("⚠️ 尚無 Master Graph，略過 StoryCompletionGate", level="warn")
-            return
+            return False
+
+        if getattr(getattr(graph, "planning_status", None), "value", getattr(graph, "planning_status", None)) == "STORY_CANON_LOCKED":
+            task.log("🔒 Master Graph 已是 STORY_CANON_LOCKED，跳過 StoryCompletionGate 回填與二次驗證。")
+            return True
 
         gate_res = StoryCompletionGate.evaluate(graph, auto_lock=True, strict_twist=False)
         if not gate_res.passed:
@@ -1366,9 +1424,9 @@ class AutonomousPipelineManager:
                 defects=[{"defect": d} for d in gate_res.defects],
                 audit_report=gate_res.metrics,
             )
-            # 確保鎖定以便 Writer 施工
-            StoryCompletionGate._lock_story_canon(graph)
+            # Gate 失敗時不可降級或強制鎖定，避免 Writer 讀取破損正典。
             master_graph_repository.save_master_graph(novel_id, graph)
+            return False
         else:
             master_graph_repository.save_master_graph(novel_id, graph)
             task.log("🎉 Stage 08 全書完備性終極門禁通過！Master Graph 已正式鎖定為 STORY_CANON_LOCKED！")
@@ -1386,6 +1444,7 @@ class AutonomousPipelineManager:
             "graph_revision": graph.graph_revision,
             "status": "COMPLETED",
         })
+        return True
 
     def _phase_character_roster_guard(
         self,
@@ -1839,7 +1898,7 @@ class AutonomousPipelineManager:
                 instruction=writer_instruction,
                 user_prompt=f"撰寫第 {ch_idx} 章",
                 verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
-                max_retries=3,
+                max_retries=3 * RETRY_MULTIPLIER,
             )
             task.log(f"第 {ch_idx} 章初稿撰寫完成！")
 
@@ -1955,7 +2014,7 @@ class AutonomousPipelineManager:
                         instruction=fix_instruction,
                         user_prompt=f"修正時空漂移重寫第 {ch_idx} 章",
                         verify_fn=lambda c=ch_idx: _is_chapter_written(novel_id, c),
-                        max_retries=1,
+                        max_retries=1 * RETRY_MULTIPLIER,
                     )
                     # 重新獲取修復後的內容並再次快速校驗
                     ch_draft = db.get_chapter(novel_id, ch_idx)

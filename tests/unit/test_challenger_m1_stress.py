@@ -531,6 +531,19 @@ def test_autonomous_pipeline_halts_during_writer_chapter_loop(novel_factory):
     # Chapter 1 is already written
     db.save_chapter(novel_id, 1, "第 1 章正文，字數足夠達到五十個字以上。這是一段合格的完整正文小說情節。")
 
+    # 新語義（Stage08 門禁失敗即停）：補回填資料，使流程能通過門禁抵達 writer 斷點
+    wb_data = {
+        "theme": "都市傳奇",
+        "main_conflict": "新舊秩序碰撞",
+        "macro_outline": "草根主角在都市夾縫中崛起",
+        "worldview": "現代都市異能共存，檯面下各方勢力以規則博弈",
+        "foreshadowing_seeds": [{"clue_id": f"CLUE_{i:02d}"} for i in range(1, 10)],
+        "key_turning_points": [{"turn_id": f"TURN_{i:02d}"} for i in range(1, 10)],
+    }
+    db.save_worldbuilding(novel_id, json.dumps(wb_data, ensure_ascii=False))
+    chars = [{"name": f"角色{i}", "role": "主角" if i == 1 else "配角"} for i in range(1, 16)]
+    db.save_characters(novel_id, chars)
+
     chapters_attempted = []
 
     def fake_execute_stage(task, stage, **kwargs):
