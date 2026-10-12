@@ -104,8 +104,10 @@ def delete_novel(novel_id):
 
 
 def _clear_geometry_tables(cursor, novel_id):
-    """清除敘事幾何拓撲（樹狀結構/心智圖）的 6 張衍生表。"""
+    """清除敘事幾何拓撲（單一真相來源 MASTER_GRAPH_*；舊表殘留一併清除）。"""
     for table in (
+        "MASTER_GRAPH_NODES", "MASTER_GRAPH_EDGES",
+        "STORY_EVENT_ENTITIES", "NODE_CHAPTER_BEATS", "NODE_THREAD_MEMBERSHIPS",
         "geometry_nodes", "geometry_edges", "geometry_threads",
         "geometry_volumes", "geometry_arcs", "geometry_metadata",
         "narrative_planning_blueprints", "narrative_entity_bindings",
@@ -133,8 +135,11 @@ def reset_novel_content(novel_id, scopes=None):
       - worldbuilding: worldbuilding 表 + novels.worldview_patches + setting_systems + 伏筆藍圖
       - characters: characters 表
       - plot: volumes 表 + plot_chapters 表 + 幾何拓撲樹狀結構 + 伏筆藍圖 + 衝突簽名
-      - chapters: chapters 表 + 連動清除全書時序圖譜與自動術語（手動術語保留）
-        + 幾何拓撲 + 草稿修訂提案 + 章節記憶/段落摘要/導演審查 + 敘事引擎簽名/審計
+      - chapters: 僅正文及其衍生（chapters 表 + 全書時序圖譜與自動術語 + 長程衝突簽名/審查記錄
+        + 草稿提案/章節記憶/段落摘要/導演審查 + 設定用量歸零）。
+        架構層（volumes/plot_chapters 大綱、geometry_* 拓撲含 geometry_threads、
+        narrative_planning_blueprints/bindings、foreshadowing 藍圖）一律保留，
+        否則 Master Graph（舊節點邊）與重建的線程會新舊混血、Stage 08 必斷。
       - chat: chat_memory 表 + pipeline_locks 表
     回傳實際執行的 scopes 清單。
     """
@@ -206,15 +211,11 @@ def reset_novel_content(novel_id, scopes=None):
             cursor.execute("DELETE FROM narrative_audits WHERE novel_id = ?", (novel_id,))
         except sqlite3.OperationalError:
             pass
-        # 正文清空後，幾何節點的 chapter_start/end 全成孤兒，連動清除避免樹狀殘留；
-        # 同時清除 per-chapter 衍生：草稿提案、章節記憶、段落摘要、導演審查、伏筆藍圖。
-        _clear_geometry_tables(cursor, novel_id)
-        _clear_foreshadowing_blueprint(cursor, novel_id)
-        for table in ("narrative_planning_blueprints", "narrative_entity_bindings"):
-            try:
-                cursor.execute(f"DELETE FROM {table} WHERE novel_id = ?", (novel_id,))
-            except sqlite3.OperationalError:
-                pass
+        # 正文清空後，僅清除正文衍生：草稿提案、章節記憶、段落摘要、導演審查。
+        # 架構層（geometry_* 拓撲、planning blueprints/bindings、伏筆藍圖、大綱）一律保留：
+        # 它們由 volumes/plot_chapters 推導，與正文是否存在無關；清掉會造成
+        # Master Graph 舊節點邊 × 重建新線程的新舊混血（Stage 08 TopologyGate 必斷）。
+        # 架構要重來請用 scopes=["plot"]（連動清幾何與藍圖）或整本刪除。
         for table in (
             "draft_proposals", "chapter_memory", "arc_summaries", "director_reviews",
         ):

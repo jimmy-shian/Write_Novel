@@ -687,45 +687,8 @@ def db_init(
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_narrative_audits_novel ON narrative_audits(novel_id, chapter_index, severity)")
 
-        # 14. Geometry Graph
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS geometry_nodes (
-            node_id TEXT NOT NULL,
-            novel_id TEXT NOT NULL,
-            volume_index INTEGER,
-            arc_index INTEGER,
-            sequence_index INTEGER,
-            chapter_start INTEGER,
-            chapter_end INTEGER,
-            structural_role TEXT NOT NULL,
-            primary_thread TEXT,
-            importance REAL DEFAULT 0.5,
-            semantic_json TEXT,
-            metadata_json TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (novel_id, node_id),
-            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_nodes_novel ON geometry_nodes(novel_id, volume_index)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_nodes_chapter ON geometry_nodes(novel_id, chapter_start, chapter_end)")
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS geometry_edges (
-            edge_id TEXT NOT NULL,
-            novel_id TEXT NOT NULL,
-            source_node TEXT NOT NULL,
-            target_node TEXT NOT NULL,
-            edge_type TEXT NOT NULL,
-            distance INTEGER,
-            semantic_json TEXT,
-            metadata_json TEXT,
-            PRIMARY KEY (novel_id, edge_id),
-            FOREIGN KEY (novel_id) REFERENCES novels(id) ON DELETE CASCADE
-        )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_edges_novel ON geometry_edges(novel_id, source_node)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_geometry_edges_target ON geometry_edges(novel_id, target_node)")
+        # 14. Geometry Graph（單一真相來源：MASTER_GRAPH_*；舊 geometry_nodes /
+        # geometry_edges 已退役，此處不再建表；殘留表由晉升遷移清空後自動 DROP）
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS geometry_threads (

@@ -939,14 +939,30 @@ class AutonomousPipelineManager:
     def _phase_master_graph_topology(self, task: NovelPipelineTask, novel_id: str):
         """
         Stage 02: Pure Algorithmic Topology (純演算法敘事拓樸生成).
-        零 LLM 消耗，秒級生成 10+ 卷、24 線程 (6 主線 + 18 支線)、因果 DAG。
+        零 LLM 消耗，秒級生成固定骨架：10 卷×40 章、24 線程
+        (6 主線 + 18 支線 / 8 角色弧 / 6 關係弧 / 4 主題線)、因果 DAG，
+        節點規模約 500～1500。骨架是因，後續卷章大綱、轉折伏筆、
+        總監派發全部照著它填；參數寫死，不跟分卷表走。
         通過 TopologyGate 驗收並原子持久化至 MASTER_GRAPH_* 表。
         """
         from backend.persistence import master_graph_repository
-        if not master_graph_repository.has_master_graph(novel_id):
+        # 單一真相來源：只認 MASTER。殘缺 MASTER（有殘邊但無節點/無線程，
+        # 如曾被清空）在回填之前刪掉重建，否則後續門禁驗到混搭圖。
+        _master_graph = master_graph_repository.load_master_graph(novel_id) if master_graph_repository.has_master_graph(novel_id) else None
+        _master_usable = bool(
+            _master_graph is not None
+            and len(getattr(_master_graph, "nodes", {}) or {}) > 0
+            and len(getattr(_master_graph, "threads", {}) or {}) > 0
+        )
+        if not _master_usable:
+            if master_graph_repository.has_master_graph(novel_id):
+                try:
+                    master_graph_repository.delete_master_graph(novel_id)
+                except Exception as _del_exc:
+                    task.log(f"⚠️ 清理殘缺 Master Graph 失敗（繼續重建）: {_del_exc}", level="warn")
             task.current_stage = "topology"
             task.progress_percent = 5
-            task.status_message = "正在透過純演算法圖論生成 Master Graph 敘事拓樸 (10+卷, 24線程, 因果DAG)..."
+            task.status_message = "正在透過純演算法圖論生成 Master Graph 敘事拓樸 (10卷, 24線程, 因果DAG)..."
             task.log("開始生成全書 Master Graph 敘事拓樸 (純演算法無環圖)...")
             from backend.geometry.generator import GeometryGenerator
             from backend.geometry.models import GeometryParams
@@ -959,6 +975,9 @@ class AutonomousPipelineManager:
                 raise RuntimeError(f"TopologyGate 驗收未通過: {'; '.join(gate_res.defects)}")
 
             master_graph_repository.save_master_graph(novel_id, graph)
+            # 單一真相來源：MASTER_GRAPH_* 為準；舊 geometry_* 表僅為唯讀鏡像，
+            # 供語義填充/統計/藍圖等下游讀取，避免雙寫分叉。
+            db.save_geometry_graph(novel_id, graph)
             task.log(f"✅ Master Graph 敘事拓樸已確立（{len(graph.nodes)} 個節點、{len(graph.edges)} 條邊、{len(graph.threads)} 條線程），通過 TopologyGate！")
             db.save_chat_message(
                 novel_id,
@@ -974,7 +993,7 @@ class AutonomousPipelineManager:
                 "status": "COMPLETED",
             })
         else:
-            task.log("Master Graph 敘事拓樸已存在，跳過生成。")
+            task.log("Master Graph 敘事拓樸已存在且完好，跳過生成。")
 
     def _phase_worldview(self, task: NovelPipelineTask, novel_id: str, initial_prompt: str):
         """步驟 1/1.5：檢查並生成世界觀，同步設定體系並執行 Setting Audit A 審計。"""
@@ -1170,6 +1189,15 @@ class AutonomousPipelineManager:
         # 4.5 敘事幾何骨架 (Geometry-First):純程式碼零 LLM 消耗，
         # 在分卷確定後、細綱與正文之前先鋪設全書拓撲 (長距伏筆/多線合流/主題對比邊)，
         # 後續 volume_skeleton / writer 才能遵照拓撲架構生成。
+        # 單一真相來源：只認 Stage02 的 MASTER，此處永不新建分叉圖；
+        # 舊表若為空，僅由 MASTER 鏡像回填。殘缺重建統一在 Stage02 處理
+        # （必須在回填之前，否則會丟掉已回填的事件與線索）。
+        from backend.persistence import master_graph_repository as _mgr
+        if _mgr.has_master_graph(novel_id) and not _is_geometry_ready(novel_id):
+            _master_graph = _mgr.load_master_graph(novel_id)
+            if _master_graph is not None:
+                db.save_geometry_graph(novel_id, _master_graph)
+                task.log("由 MASTER 鏡像回填舊 geometry 表（未新建分叉圖）。")
         if not _is_geometry_ready(novel_id):
             task.current_stage = "geometry"
             task.progress_percent = 37
@@ -2763,8 +2791,9 @@ def _is_geometry_semantic_ready(novel_id: str, kind: str) -> bool:
             if int(stats.get("filled_threads") or 0) > 0 or int(stats.get("filled_volumes") or 0) > 0:
                 return True
         elif kind == "character":
-            if int(stats.get("filled_nodes") or 0) > 0:
-                return True
+            # 人物弧線就緒不認 filled_nodes：世界觀回填也會填節點語義，
+            # 會誤觸發跳過 Pass 3。精確判定統一走下方圖載入檢查。
+            pass
         elif kind == "cross":
             if int(stats.get("edge_count") or 0) == 0:
                 return True
@@ -2779,7 +2808,11 @@ def _is_geometry_semantic_ready(novel_id: str, kind: str) -> bool:
         if kind == "macro":
             return any(v.semantic for v in g.volumes.values())
         if kind == "character":
-            return any(t.semantic and "character_binding" in t.semantic for t in g.threads.values())
+            _SHIFT_MARKERS = ("internal_shift", "dramatic_choice", "focus_character")
+            return any(t.semantic and "character_binding" in t.semantic for t in g.threads.values()) or any(
+                isinstance(n.semantic, dict) and any(k in n.semantic for k in _SHIFT_MARKERS)
+                for n in g.nodes.values()
+            )
         return bool(g.edges) and any(e.semantic for e in g.edges)
     except Exception:
         return False

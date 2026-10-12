@@ -281,6 +281,22 @@ class MasterGraphRepository:
                     contract.graph_revision = target_revision
                     n.graph_revision = target_revision
 
+                    # 節點級語義/主線以契約為載體：記憶體上只改了 node.semantic
+                    # 或 node.primary_thread 時，反向同步進契約，否則存取遺失。
+                    _nsem = getattr(n, "semantic", None)
+                    if _nsem:
+                        try:
+                            _slot = getattr(contract, "worldview_slot", None)
+                            _merged = dict(_slot) if isinstance(_slot, dict) else {}
+                            if isinstance(_nsem, dict):
+                                _merged.update(_nsem)
+                            else:
+                                _merged["value"] = _nsem
+                            contract.worldview_slot = _merged
+                        except Exception:
+                            pass
+                    _nprimary = getattr(n, "primary_thread", "") or ""
+
                     nid = n.node_id
                     vol_idx = n.hierarchy.volume_index if n.hierarchy else 1
                     arc_idx = n.hierarchy.arc_index if n.hierarchy else 1
@@ -293,6 +309,8 @@ class MasterGraphRepository:
                     node_meta = dict(n.metadata or {})
                     if hasattr(n, "chapter_window") and n.chapter_window:
                         node_meta["_chapter_window"] = list(n.chapter_window)
+                    if _nprimary:
+                        node_meta["_primary_thread"] = _nprimary
                     meta_json = json.dumps(node_meta, ensure_ascii=False)
 
                     node_rows.append((
@@ -428,7 +446,11 @@ class MasterGraphRepository:
                     e_type = e.edge_type.value if hasattr(e.edge_type, "value") else str(e.edge_type)
                     is_causal_int = 1 if e.is_causal else 0
                     dist = float(e.distance or 1.0)
-                    meta_json = json.dumps(e.metadata, ensure_ascii=False)
+                    # 邊語義無專屬欄位，隨 metadata 攜帶（保留鍵），讀取時還原。
+                    _e_meta = dict(e.metadata or {})
+                    if e.semantic is not None:
+                        _e_meta["__edge_semantic__"] = e.semantic
+                    meta_json = json.dumps(_e_meta, ensure_ascii=False)
                     edge_rows.append((
                         e.edge_id, novel_id, e.source, e.target, e_type,
                         is_causal_int, dist, target_revision, meta_json
@@ -716,13 +738,30 @@ class MasterGraphRepository:
                 chapter_window = (start_ch, start_ch + ch_per_vol - 1)
 
             geo_node = contract.to_geometry_node(chapter_window=chapter_window, metadata=meta)
+            # 節點級主線是獨立欄位（契約 primary_thread 為歸屬首位），存取時還原。
+            _saved_primary = meta.get("_primary_thread") if isinstance(meta, dict) else None
+            if _saved_primary:
+                try:
+                    geo_node.primary_thread = _saved_primary
+                except Exception:
+                    pass
             graph.add_node(geo_node)
 
+        # 節點按舊語義重排（章節起點、節點號），使 get_chapter_nodes()[0] 等
+        # 順序敏感調用與舊存取一致。
+        try:
+            if isinstance(graph.nodes, dict):
+                graph.nodes = dict(sorted(
+                    graph.nodes.items(),
+                    key=lambda kv: ((kv[1].chapter_window[0] if getattr(kv[1], "chapter_window", None) else 1), kv[0]),
+                ))
+        except Exception:
+            pass
         graph.graph_revision = max_revision
 
         # 4. 載入 Edges
         edge_rows = cursor.execute(
-            "SELECT * FROM MASTER_GRAPH_EDGES WHERE novel_id = ?", (novel_id,)
+            "SELECT * FROM MASTER_GRAPH_EDGES WHERE novel_id = ? ORDER BY rowid", (novel_id,)
         ).fetchall()
         for er in edge_rows:
             d = dict(er)
@@ -732,12 +771,14 @@ class MasterGraphRepository:
                 e_type = EdgeType.CAUSES
 
             meta = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
+            _e_sem = meta.pop("__edge_semantic__", None) if isinstance(meta, dict) else None
             edge = GeometryEdge(
                 edge_id=d["edge_id"],
                 source=d["source_node"],
                 target=d["target_node"],
                 edge_type=e_type,
                 distance=int(d.get("weight") or 1),
+                semantic=_e_sem,
                 metadata=meta,
                 graph_revision=int(d.get("graph_revision") or 1),
             )
@@ -1135,6 +1176,7 @@ class MasterGraphRepository:
             query += " AND (source_node = ? OR target_node = ?)"
             params.extend([node_id, node_id])
 
+        query += " ORDER BY rowid"
         rows = cursor.execute(query, params).fetchall()
         edges = []
         for r in rows:
@@ -1198,7 +1240,7 @@ class MasterGraphRepository:
         return cnt > 0
 
     def delete_master_graph(self, novel_id: str) -> None:
-        """刪除指定小說的 Master Graph 全部關聯數據。"""
+        """刪除指定小說的 Master Graph 全部關聯數據（含共用容器表）。"""
         conn = self._get_conn()
         with conn:
             cursor = conn.cursor()
@@ -1209,6 +1251,11 @@ class MasterGraphRepository:
             cursor.execute("DELETE FROM NODE_THREAD_MEMBERSHIPS WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM pipeline_task_checkpoints WHERE novel_id = ?", (novel_id,))
             cursor.execute("DELETE FROM chapter_draft_audits WHERE novel_id = ?", (novel_id,))
+            for _shared in ("geometry_threads", "geometry_volumes", "geometry_arcs", "geometry_metadata"):
+                try:
+                    cursor.execute(f"DELETE FROM {_shared} WHERE novel_id = ?", (novel_id,))
+                except Exception:
+                    pass
 
 
 # =============================================================================

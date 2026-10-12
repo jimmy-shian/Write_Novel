@@ -244,12 +244,12 @@ def test_autonomous_pipeline_wiring_executes_semantic_stages(novel_factory):
         manager._run_autonomous_flow(task, initial_prompt="測試執行", max_chapters=5)
 
     stages_called = [s["stage"] for s in executed_stages]
-    # 幾何之後必須緊跟三個語義階段
-    assert "geometry" in stages_called
-    geom_idx = stages_called.index("geometry")
-    assert stages_called[geom_idx + 1] == "macro_semantic"
-    assert stages_called[geom_idx + 2] == "character_semantic"
-    assert stages_called[geom_idx + 3] == "cross_relation"
+    # 單一真相來源：拓樸由 Stage02 建立並鏡像，4.5 不再觸發 geometry 分叉重建；
+    # 三個語義階段仍依序執行。
+    assert "geometry" not in stages_called
+    macro_idx = stages_called.index("macro_semantic")
+    assert stages_called[macro_idx + 1] == "character_semantic"
+    assert stages_called[macro_idx + 2] == "cross_relation"
 
     # 進度百分比平滑提升
     macro_item = next(s for s in executed_stages if s["stage"] == "macro_semantic")

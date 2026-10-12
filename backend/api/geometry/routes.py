@@ -198,6 +198,9 @@ def generate_geometry_endpoint(
     generator = GeometryGenerator(params)
     graph = generator.generate()
     db.save_geometry_graph(novel_id, graph)
+    # 單一真相來源：手動重建亦同步覆寫 MASTER，避免新舊兩套圖分叉。
+    from backend.persistence import master_graph_repository
+    master_graph_repository.save_master_graph(novel_id, graph)
     invalidate_node_context_cache(novel_id)
     stats = db.get_geometry_stats(novel_id)
 

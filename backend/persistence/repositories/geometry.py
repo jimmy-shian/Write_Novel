@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-幾何圖譜 (Geometry Graph) 的持久層模組。
-提供對 geometry_nodes, geometry_edges, geometry_threads, geometry_volumes, geometry_arcs 以及 geometry_metadata 的完整 CRUD 與修復操作。
+幾何圖譜 (Geometry Graph) 的持久層模組（單一真相來源：MASTER_GRAPH_*）。
+本模組函式為相容層：節點/邊讀寫一律轉發 MASTER，舊 geometry_nodes /
+geometry_edges 僅在晉升遷移時讀取，遷完即刪。線程/卷/弧/元數據為共用表。
 """
 
 from __future__ import annotations
@@ -32,297 +33,93 @@ from backend.persistence.connection import get_db_connection
 
 def save_geometry_graph(novel_id: str, graph: Union[GeometryGraph, Dict[str, Any]]) -> None:
     """
-    將完整的 GeometryGraph 保存至資料庫。
-    每次保存皆原子性全量取代該小說先前的幾何圖數據。
+    將完整的 GeometryGraph 保存至資料庫（單一真相來源：MASTER_GRAPH_*）。
+    舊 geometry_nodes / geometry_edges 已退役；本函式僅為相容層，直接轉發。
+    每次保存皆原子性全量取代該小說先前的圖數據。
     """
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    _mgr.save_master_graph(novel_id, graph)
+    return
+
+
+def _legacy_tables_exist() -> bool:
+    """舊 geometry_nodes / geometry_edges 是否尚存（過渡期相容）。"""
+    try:
+        conn = get_db_connection()
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        return "geometry_nodes" in tables and "geometry_edges" in tables
+    except Exception:
+        return False
+
+
+def _delete_legacy_geometry_rows(novel_id: str) -> None:
+    """刪除該書舊表殘留行（晉升遷移後清理）。"""
+    if not _legacy_tables_exist():
+        return
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-
-        # 1. 清理該小說舊幾何數據
         cursor.execute("DELETE FROM geometry_nodes WHERE novel_id = ?", (novel_id,))
         cursor.execute("DELETE FROM geometry_edges WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_threads WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_volumes WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_arcs WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_metadata WHERE novel_id = ?", (novel_id,))
 
-        # 2. 保存 Params / Metadata
-        params_dict = {}
-        if hasattr(graph, "params") and graph.params is not None:
-            params_dict = asdict(graph.params)
-        elif isinstance(graph, dict) and "params" in graph:
-            params_dict = dict(graph["params"])
 
-        revision_val = 1
-        if hasattr(graph, "graph_revision"):
-            revision_val = getattr(graph, "graph_revision", 1)
-        elif isinstance(graph, dict) and "graph_revision" in graph:
-            revision_val = graph.get("graph_revision", 1)
-
-        params_dict["_graph_revision"] = int(revision_val)
-
-        cursor.execute(
-            "INSERT OR REPLACE INTO geometry_metadata (novel_id, params_json) VALUES (?, ?)",
-            (novel_id, json.dumps(params_dict, ensure_ascii=False)),
-        )
-
-        # 3. 保存 Nodes
-        nodes_iterable = []
-        if hasattr(graph, "nodes"):
-            nodes_iterable = list(graph.nodes.values()) if isinstance(graph.nodes, dict) else graph.nodes
-        elif isinstance(graph, dict) and "nodes" in graph:
-            n_val = graph["nodes"]
-            nodes_iterable = list(n_val.values()) if isinstance(n_val, dict) else n_val
-
-        nodes_data = []
-        for n in nodes_iterable:
-            if isinstance(n, GeometryNode):
-                # 確保契約與多線歸屬同步至 metadata_json
-                n.ensure_story_contract()
-                if "thread_memberships" not in n.metadata:
-                    n.metadata["thread_memberships"] = list(n.thread_memberships)
-                h = n.hierarchy
-                nodes_data.append((
-                    n.node_id,
-                    novel_id,
-                    h.volume_index if h else 1,
-                    h.arc_index if h else 1,
-                    h.sequence_index if h else 1,
-                    n.chapter_window[0] if n.chapter_window else 1,
-                    n.chapter_window[1] if n.chapter_window else 1,
-                    n.structural_role.value if hasattr(n.structural_role, "value") else str(n.structural_role),
-                    n.primary_thread,
-                    n.importance,
-                    json.dumps(n.semantic, ensure_ascii=False) if n.semantic is not None else None,
-                    json.dumps(n.metadata, ensure_ascii=False) if n.metadata else None,
-                ))
-            elif isinstance(n, dict):
-                h = n.get("hierarchy", {}) or {}
-                cw = n.get("chapter_window", (1, 1)) or (1, 1)
-                s_role = n.get("structural_role", "")
-                meta_copy = dict(n.get("metadata") or {})
-                if n.get("thread_memberships") and "thread_memberships" not in meta_copy:
-                    meta_copy["thread_memberships"] = list(n.get("thread_memberships"))
-                nodes_data.append((
-                    n.get("node_id"),
-                    novel_id,
-                    h.get("volume_index", n.get("volume_index", 1)),
-                    h.get("arc_index", n.get("arc_index", 1)),
-                    h.get("sequence_index", n.get("sequence_index", 1)),
-                    cw[0] if isinstance(cw, (list, tuple)) and len(cw) > 0 else n.get("chapter_start", 1),
-                    cw[1] if isinstance(cw, (list, tuple)) and len(cw) > 1 else n.get("chapter_end", 1),
-                    s_role.value if hasattr(s_role, "value") else str(s_role),
-                    n.get("primary_thread"),
-                    n.get("importance", 0.5),
-                    json.dumps(n.get("semantic"), ensure_ascii=False) if n.get("semantic") is not None else None,
-                    json.dumps(meta_copy, ensure_ascii=False) if meta_copy else None,
-                ))
-
-        if nodes_data:
-            cursor.executemany(
-                """
-                INSERT INTO geometry_nodes (
-                    node_id, novel_id, volume_index, arc_index, sequence_index,
-                    chapter_start, chapter_end, structural_role, primary_thread,
-                    importance, semantic_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                nodes_data,
-            )
-
-        # 4. 保存 Edges
-        edges_iterable = []
-        if hasattr(graph, "edges"):
-            edges_iterable = graph.edges
-        elif isinstance(graph, dict) and "edges" in graph:
-            edges_iterable = graph["edges"]
-
-        edges_data = []
-        for e in edges_iterable:
-            if isinstance(e, GeometryEdge):
-                e_type = e.edge_type.value if hasattr(e.edge_type, "value") else str(e.edge_type)
-                edges_data.append((
-                    e.edge_id,
-                    novel_id,
-                    e.source,
-                    e.target,
-                    e_type,
-                    e.distance,
-                    json.dumps(e.semantic, ensure_ascii=False) if e.semantic is not None else None,
-                    json.dumps(e.metadata, ensure_ascii=False) if e.metadata else None,
-                ))
-            elif isinstance(e, dict):
-                e_type = e.get("edge_type", "")
-                edges_data.append((
-                    e.get("edge_id"),
-                    novel_id,
-                    e.get("source") or e.get("source_node"),
-                    e.get("target") or e.get("target_node"),
-                    e_type.value if hasattr(e_type, "value") else str(e_type),
-                    e.get("distance", 0),
-                    json.dumps(e.get("semantic"), ensure_ascii=False) if e.get("semantic") is not None else None,
-                    json.dumps(e.get("metadata"), ensure_ascii=False) if e.get("metadata") else None,
-                ))
-
-        if edges_data:
-            cursor.executemany(
-                """
-                INSERT INTO geometry_edges (
-                    edge_id, novel_id, source_node, target_node, edge_type,
-                    distance, semantic_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                edges_data,
-            )
-
-        # 5. 保存 Threads
-        threads_iterable = []
-        if hasattr(graph, "threads"):
-            threads_iterable = list(graph.threads.values()) if isinstance(graph.threads, dict) else graph.threads
-        elif isinstance(graph, dict) and "threads" in graph:
-            t_val = graph["threads"]
-            threads_iterable = list(t_val.values()) if isinstance(t_val, dict) else t_val
-
-        threads_data = []
-        for t in threads_iterable:
-            if isinstance(t, GeometryThread):
-                t_type = t.thread_type.value if hasattr(t.thread_type, "value") else str(t.thread_type)
-                skeleton_repr = [r.value if hasattr(r, "value") else str(r) for r in t.structural_skeleton]
-                threads_data.append((
-                    t.thread_id,
-                    novel_id,
-                    t_type,
-                    json.dumps(t.node_sequence, ensure_ascii=False),
-                    json.dumps(skeleton_repr, ensure_ascii=False),
-                    json.dumps(t.semantic, ensure_ascii=False) if t.semantic is not None else None,
-                    json.dumps(t.metadata, ensure_ascii=False) if t.metadata else None,
-                ))
-            elif isinstance(t, dict):
-                t_type = t.get("thread_type", "")
-                threads_data.append((
-                    t.get("thread_id"),
-                    novel_id,
-                    t_type.value if hasattr(t_type, "value") else str(t_type),
-                    json.dumps(t.get("node_sequence", []), ensure_ascii=False),
-                    json.dumps(t.get("structural_skeleton", []), ensure_ascii=False),
-                    json.dumps(t.get("semantic"), ensure_ascii=False) if t.get("semantic") is not None else None,
-                    json.dumps(t.get("metadata"), ensure_ascii=False) if t.get("metadata") else None,
-                ))
-
-        if threads_data:
-            cursor.executemany(
-                """
-                INSERT INTO geometry_threads (
-                    thread_id, novel_id, thread_type, node_sequence_json,
-                    structural_skeleton_json, semantic_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                threads_data,
-            )
-
-        # 6. 保存 Volumes (Containers)
-        vols_iterable = []
-        if hasattr(graph, "volumes"):
-            vols_iterable = list(graph.volumes.values()) if isinstance(graph.volumes, dict) else graph.volumes
-        elif isinstance(graph, dict) and "volumes" in graph:
-            v_val = graph["volumes"]
-            vols_iterable = list(v_val.values()) if isinstance(v_val, dict) else v_val
-
-        vols_data = []
-        seen_vol_ids = set()
-        for v in vols_iterable:
-            if isinstance(v, VolumeContainer):
-                if not v.volume_id or v.volume_id in seen_vol_ids:
-                    continue
-                seen_vol_ids.add(v.volume_id)
-                vols_data.append((
-                    v.volume_id,
-                    novel_id,
-                    v.volume_index,
-                    v.chapter_range[0] if v.chapter_range else 1,
-                    v.chapter_range[1] if v.chapter_range else 1,
-                    json.dumps(v.arc_ids, ensure_ascii=False),
-                    json.dumps(v.semantic, ensure_ascii=False) if v.semantic is not None else None,
-                ))
-            elif isinstance(v, dict):
-                vol_id = v.get("volume_id")
-                if not vol_id or vol_id in seen_vol_ids:
-                    continue
-                seen_vol_ids.add(vol_id)
-                cr = v.get("chapter_range", (1, 1)) or (1, 1)
-                vols_data.append((
-                    vol_id,
-                    novel_id,
-                    v.get("volume_index", 1),
-                    cr[0] if isinstance(cr, (list, tuple)) and len(cr) > 0 else v.get("chapter_start", 1),
-                    cr[1] if isinstance(cr, (list, tuple)) and len(cr) > 1 else v.get("chapter_end", 1),
-                    json.dumps(v.get("arc_ids", []), ensure_ascii=False),
-                    json.dumps(v.get("semantic"), ensure_ascii=False) if v.get("semantic") is not None else None,
-                ))
-
-        if vols_data:
-            cursor.executemany(
-                """
-                INSERT INTO geometry_volumes (
-                    volume_id, novel_id, volume_index, chapter_start,
-                    chapter_end, arc_ids_json, semantic_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                vols_data,
-            )
-
-        # 7. 保存 Arcs (Containers)
-        arcs_iterable = []
-        if hasattr(graph, "arcs"):
-            arcs_iterable = list(graph.arcs.values()) if isinstance(graph.arcs, dict) else graph.arcs
-        elif isinstance(graph, dict) and "arcs" in graph:
-            a_val = graph["arcs"]
-            arcs_iterable = list(a_val.values()) if isinstance(a_val, dict) else a_val
-
-        arcs_data = []
-        for a in arcs_iterable:
-            if isinstance(a, ArcContainer):
-                arcs_data.append((
-                    a.arc_id,
-                    novel_id,
-                    a.volume_index,
-                    a.arc_index,
-                    a.chapter_range[0] if a.chapter_range else 1,
-                    a.chapter_range[1] if a.chapter_range else 1,
-                    json.dumps(a.thread_ids, ensure_ascii=False),
-                    json.dumps(a.semantic, ensure_ascii=False) if a.semantic is not None else None,
-                ))
-            elif isinstance(a, dict):
-                cr = a.get("chapter_range", (1, 1)) or (1, 1)
-                arcs_data.append((
-                    a.get("arc_id"),
-                    novel_id,
-                    a.get("volume_index", 1),
-                    a.get("arc_index", 1),
-                    cr[0] if isinstance(cr, (list, tuple)) and len(cr) > 0 else a.get("chapter_start", 1),
-                    cr[1] if isinstance(cr, (list, tuple)) and len(cr) > 1 else a.get("chapter_end", 1),
-                    json.dumps(a.get("thread_ids", []), ensure_ascii=False),
-                    json.dumps(a.get("semantic"), ensure_ascii=False) if a.get("semantic") is not None else None,
-                ))
-
-        if arcs_data:
-            cursor.executemany(
-                """
-                INSERT INTO geometry_arcs (
-                    arc_id, novel_id, volume_index, arc_index, chapter_start,
-                    chapter_end, thread_ids_json, semantic_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                arcs_data,
-            )
+def _drop_legacy_tables_if_empty() -> None:
+    """舊表皆空時物理刪除（單存儲收尾）；非空則保留待下次晉升，不丟資料。"""
+    if not _legacy_tables_exist():
+        return
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        n = cur.execute("SELECT COUNT(*) FROM geometry_nodes").fetchone()[0]
+        e = cur.execute("SELECT COUNT(*) FROM geometry_edges").fetchone()[0]
+        if n == 0 and e == 0:
+            with conn:
+                conn.execute("DROP TABLE IF EXISTS geometry_nodes")
+                conn.execute("DROP TABLE IF EXISTS geometry_edges")
+    except Exception as _exc:
+        print(f"[WARN] drop legacy geometry tables skipped: {_exc}")
 
 
 def load_geometry_graph(novel_id: str) -> Optional[GeometryGraph]:
     """
-    從資料庫讀取完整的 GeometryGraph 實例。
+    從資料庫讀取完整的 GeometryGraph 實例（單一真相來源：MASTER_GRAPH_*）。
+    舊表僅有資料而 MASTER 缺失時，晉升遷移至 MASTER 後回傳。
     若該小說尚無幾何圖數據，回傳 None。
     """
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    try:
+        if _mgr.has_master_graph(novel_id):
+            _g = _mgr.load_master_graph(novel_id)
+            if _g is not None and getattr(_g, "nodes", None):
+                return _g
+    except Exception:
+        pass
+    _legacy = _load_legacy_geometry_graph(novel_id)
+    if _legacy is not None and getattr(_legacy, "nodes", None):
+        try:
+            _mgr.save_master_graph(novel_id, _legacy)
+            _delete_legacy_geometry_rows(novel_id)
+            _drop_legacy_tables_if_empty()
+        except Exception as _exc:
+            print(f"[WARN] promote legacy geometry failed: {_exc}")
+        try:
+            _promoted = _mgr.load_master_graph(novel_id)
+            if _promoted is not None and getattr(_promoted, "nodes", None):
+                return _promoted
+        except Exception:
+            pass
+        return _legacy
+    return None
+
+
+def _load_legacy_geometry_graph(novel_id: str) -> Optional[GeometryGraph]:
+    """
+    讀取舊 geometry_* 表（退役中，僅供晉升遷移）。
+    若該小說尚無幾何圖數據，回傳 None。
+    """
+    if not _legacy_tables_exist():
+        return None
     if not has_geometry(novel_id):
         return None
 
@@ -478,44 +275,73 @@ def load_geometry_graph(novel_id: str) -> Optional[GeometryGraph]:
     return graph
 
 
+def _node_to_dict(novel_id: str, n) -> dict:
+    """GeometryNode 轉舊相容 dict（含新舊兩套鍵）。"""
+    h = getattr(n, "hierarchy", None)
+    cw = getattr(n, "chapter_window", None) or (1, 1)
+    s_role = getattr(n, "structural_role", "")
+    return {
+        "node_id": getattr(n, "node_id", ""),
+        "novel_id": novel_id,
+        "volume_index": h.volume_index if h else 1,
+        "arc_index": h.arc_index if h else 1,
+        "sequence_index": h.sequence_index if h else 1,
+        "chapter_start": cw[0],
+        "chapter_end": cw[1],
+        "chapter_window": [cw[0], cw[1]],
+        "structural_role": s_role.value if hasattr(s_role, "value") else str(s_role),
+        "primary_thread": getattr(n, "primary_thread", "") or "",
+        "importance": getattr(n, "importance", 0.5),
+        "semantic": getattr(n, "semantic", None),
+        "metadata": getattr(n, "metadata", None) or {},
+        "thread_memberships": list(getattr(n, "thread_memberships", None) or []),
+    }
+
+
+def _edge_to_dict(novel_id: str, e) -> dict:
+    """GeometryEdge 轉舊相容 dict（含新舊兩套鍵）。"""
+    e_type = getattr(e, "edge_type", "")
+    return {
+        "edge_id": getattr(e, "edge_id", ""),
+        "novel_id": novel_id,
+        "source_node": getattr(e, "source", ""),
+        "target_node": getattr(e, "target", ""),
+        "source": getattr(e, "source", ""),
+        "target": getattr(e, "target", ""),
+        "edge_type": e_type.value if hasattr(e_type, "value") else str(e_type),
+        "distance": getattr(e, "distance", 0) or 0,
+        "semantic": getattr(e, "semantic", None),
+        "metadata": getattr(e, "metadata", None) or {},
+    }
+
+
 def get_geometry_node(novel_id: str, node_id: str) -> Optional[dict]:
-    """獲取單個幾何節點資訊。"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    row = cursor.execute("SELECT * FROM geometry_nodes WHERE novel_id = ? AND node_id = ?", (novel_id, node_id)).fetchone()
-    if row:
-        d = dict(row)
-        d["semantic"] = json.loads(d["semantic_json"]) if d.get("semantic_json") else None
-        d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
-        return d
-    return None
+    """獲取單個幾何節點資訊（讀 MASTER）。"""
+    graph = load_geometry_graph(novel_id)
+    if not graph:
+        return None
+    node = graph.nodes.get(node_id) if isinstance(graph.nodes, dict) else None
+    if node is None:
+        return None
+    return _node_to_dict(novel_id, node)
 
 
 def get_geometry_edges_for_node(novel_id: str, node_id: str, direction: str = "both") -> List[dict]:
-    """獲取與節點相連的邊。direction 可為 'incoming', 'outgoing', 或 'both'。"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    query = "SELECT * FROM geometry_edges WHERE novel_id = ?"
-    params = [novel_id]
-
-    if direction == "outgoing":
-        query += " AND source_node = ?"
-        params.append(node_id)
-    elif direction == "incoming":
-        query += " AND target_node = ?"
-        params.append(node_id)
-    else:
-        query += " AND (source_node = ? OR target_node = ?)"
-        params.extend([node_id, node_id])
-
-    rows = cursor.execute(query, params).fetchall()
+    """獲取與節點相連的邊（讀 MASTER）。direction 可為 'incoming', 'outgoing', 或 'both'。"""
+    graph = load_geometry_graph(novel_id)
+    if not graph:
+        return []
     edges = []
-    for r in rows:
-        d = dict(r)
-        d["semantic"] = json.loads(d["semantic_json"]) if d.get("semantic_json") else None
-        d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
-        edges.append(d)
+    for e in graph.edges or []:
+        src = getattr(e, "source", "")
+        tgt = getattr(e, "target", "")
+        if direction == "outgoing" and src != node_id:
+            continue
+        if direction == "incoming" and tgt != node_id:
+            continue
+        if direction not in ("outgoing", "incoming") and src != node_id and tgt != node_id:
+            continue
+        edges.append(_edge_to_dict(novel_id, e))
     return edges
 
 
@@ -535,37 +361,44 @@ def get_geometry_thread(novel_id: str, thread_id: str) -> Optional[dict]:
 
 
 def get_geometry_nodes_in_range(novel_id: str, chapter_start: int, chapter_end: int) -> List[dict]:
-    """獲取章節區間有交集的所有節點。"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    query = """
-        SELECT * FROM geometry_nodes
-        WHERE novel_id = ?
-          AND chapter_start <= ?
-          AND chapter_end >= ?
-        ORDER BY chapter_start ASC, node_id ASC
-    """
-    rows = cursor.execute(query, (novel_id, chapter_end, chapter_start)).fetchall()
-
+    """獲取章節區間有交集的所有節點（讀 MASTER）。"""
+    graph = load_geometry_graph(novel_id)
+    if not graph:
+        return []
     nodes = []
-    for r in rows:
-        d = dict(r)
-        d["semantic"] = json.loads(d["semantic_json"]) if d.get("semantic_json") else None
-        d["metadata"] = json.loads(d["metadata_json"]) if d.get("metadata_json") else {}
-        nodes.append(d)
+    for n in (graph.nodes.values() if isinstance(graph.nodes, dict) else []):
+        cw = getattr(n, "chapter_window", None) or (1, 1)
+        if cw[0] <= chapter_end and cw[1] >= chapter_start:
+            nodes.append(_node_to_dict(novel_id, n))
+    nodes.sort(key=lambda d: (d["chapter_start"], d["node_id"]))
     return nodes
 
 
 def update_node_semantic(novel_id: str, node_id: str, semantic: dict) -> None:
-    """更新節點的語義內容。"""
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE geometry_nodes SET semantic_json = ? WHERE novel_id = ? AND node_id = ?",
-            (json.dumps(semantic, ensure_ascii=False), novel_id, node_id),
-        )
+    """更新節點的語義內容（寫 MASTER：併入契約 worldview_slot）。"""
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    graph = _mgr.load_master_graph(novel_id)
+    if not graph:
+        return
+    node = graph.nodes.get(node_id) if isinstance(graph.nodes, dict) else None
+    if node is None:
+        return
+    contract = node.ensure_story_contract() if hasattr(node, "ensure_story_contract") else None
+    if contract is not None:
+        slot = getattr(contract, "worldview_slot", None)
+        merged = dict(slot) if isinstance(slot, dict) else {}
+        if isinstance(semantic, dict):
+            merged.update(semantic)
+        else:
+            merged["value"] = semantic
+        contract.worldview_slot = merged
+    try:
+        node.semantic = dict(getattr(node, "semantic", None) or {})
+        if isinstance(semantic, dict):
+            node.semantic.update(semantic)
+    except Exception:
+        pass
+    _mgr.save_master_graph(novel_id, graph)
 
 
 def update_thread_semantic(novel_id: str, thread_id: str, semantic: dict) -> None:
@@ -580,14 +413,19 @@ def update_thread_semantic(novel_id: str, thread_id: str, semantic: dict) -> Non
 
 
 def update_edge_semantic(novel_id: str, edge_id: str, semantic: dict) -> None:
-    """更新邊的語義內容。"""
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE geometry_edges SET semantic_json = ? WHERE novel_id = ? AND edge_id = ?",
-            (json.dumps(semantic, ensure_ascii=False), novel_id, edge_id),
-        )
+    """更新邊的語義內容（寫 MASTER，語義隨 metadata 攜帶）。"""
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    graph = _mgr.load_master_graph(novel_id)
+    if not graph:
+        return
+    updated = False
+    for e in graph.edges or []:
+        if getattr(e, "edge_id", None) == edge_id:
+            e.semantic = semantic
+            updated = True
+            break
+    if updated:
+        _mgr.save_master_graph(novel_id, graph)
 
 
 def update_volume_semantic(novel_id: str, volume_id: str, semantic: dict) -> None:
@@ -613,37 +451,29 @@ def update_arc_semantic(novel_id: str, arc_id: str, semantic: dict) -> None:
 
 
 def get_geometry_stats(novel_id: str) -> dict:
-    """回傳幾何圖統計與語義填充進度。"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    node_count = cursor.execute("SELECT COUNT(*) FROM geometry_nodes WHERE novel_id = ?", (novel_id,)).fetchone()[0]
-    edge_count = cursor.execute("SELECT COUNT(*) FROM geometry_edges WHERE novel_id = ?", (novel_id,)).fetchone()[0]
-    thread_count = cursor.execute("SELECT COUNT(*) FROM geometry_threads WHERE novel_id = ?", (novel_id,)).fetchone()[0]
-
-    filled_nodes = cursor.execute(
-        "SELECT COUNT(*) FROM geometry_nodes WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
-        (novel_id,),
-    ).fetchone()[0]
-
-    filled_threads = cursor.execute(
-        "SELECT COUNT(*) FROM geometry_threads WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
-        (novel_id,),
-    ).fetchone()[0]
-
-    filled_edges = cursor.execute(
-        "SELECT COUNT(*) FROM geometry_edges WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
-        (novel_id,),
-    ).fetchone()[0]
-
-    filled_volumes = cursor.execute(
-        "SELECT COUNT(*) FROM geometry_volumes WHERE novel_id = ? AND semantic_json IS NOT NULL AND semantic_json != '{}' AND semantic_json != 'null'",
-        (novel_id,),
-    ).fetchone()[0]
-
+    """回傳幾何圖統計與語義填充進度（讀 MASTER）。"""
+    graph = load_geometry_graph(novel_id)
+    if not graph:
+        return {
+            "node_count": 0, "edge_count": 0, "thread_count": 0,
+            "filled_nodes": 0, "unfilled_nodes": 0,
+            "filled_threads": 0, "unfilled_threads": 0,
+            "filled_edges": 0, "filled_volumes": 0,
+            "filling_progress": 0.0,
+        }
+    nodes = list(graph.nodes.values()) if isinstance(graph.nodes, dict) else []
+    edges = list(graph.edges or [])
+    threads = list(graph.threads.values()) if isinstance(graph.threads, dict) else []
+    volumes = list(graph.volumes.values()) if isinstance(graph.volumes, dict) else []
+    filled_nodes = sum(1 for n in nodes if getattr(n, "semantic", None))
+    filled_threads = sum(1 for t in threads if getattr(t, "semantic", None))
+    filled_edges = sum(1 for e in edges if getattr(e, "semantic", None))
+    filled_volumes = sum(1 for v in volumes if getattr(v, "semantic", None))
+    node_count = len(nodes)
+    thread_count = len(threads)
     return {
         "node_count": node_count,
-        "edge_count": edge_count,
+        "edge_count": len(edges),
         "thread_count": thread_count,
         "filled_nodes": filled_nodes,
         "unfilled_nodes": node_count - filled_nodes,
@@ -656,24 +486,32 @@ def get_geometry_stats(novel_id: str) -> dict:
 
 
 def has_geometry(novel_id: str) -> bool:
-    """檢查指定小說是否存在幾何圖數據。"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    count = cursor.execute("SELECT COUNT(*) FROM geometry_nodes WHERE novel_id = ?", (novel_id,)).fetchone()[0]
-    return count > 0
+    """檢查指定小說是否存在幾何圖數據（MASTER 優先，舊表殘留亦算）。"""
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    try:
+        if _mgr.has_master_graph(novel_id):
+            return True
+    except Exception:
+        pass
+    if not _legacy_tables_exist():
+        return False
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        count = cursor.execute("SELECT COUNT(*) FROM geometry_nodes WHERE novel_id = ?", (novel_id,)).fetchone()[0]
+        return count > 0
+    except Exception:
+        return False
 
 
 def delete_geometry(novel_id: str) -> None:
-    """刪除指定小說的所有幾何圖數據。"""
-    conn = get_db_connection()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM geometry_nodes WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_edges WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_threads WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_volumes WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_arcs WHERE novel_id = ?", (novel_id,))
-        cursor.execute("DELETE FROM geometry_metadata WHERE novel_id = ?", (novel_id,))
+    """刪除指定小說的所有幾何圖數據（MASTER 與舊表殘留一併清除）。"""
+    from backend.persistence.repositories import master_graph_repository as _mgr
+    try:
+        _mgr.delete_master_graph(novel_id)
+    except Exception as _exc:
+        print(f"[WARN] delete master graph skipped: {_exc}")
+    _delete_legacy_geometry_rows(novel_id)
 
 
 def apply_repair(
@@ -684,11 +522,13 @@ def apply_repair(
 ) -> Any:
     """
     執行幾何結構修復操作 (SPLIT / EXPAND / INSERT / COMPRESS)。
-    1. 載入當前幾何圖
+    單一真相來源：只讀寫 MASTER_GRAPH_*，舊表不再寫入。
+    1. 載入當前 MASTER 圖（舊表殘留會先晉升遷移）
     2. 通過門禁條件檢驗並執行拓撲變更
-    3. 若修復成功，將重構後的圖譜覆寫回資料庫
+    3. 若修復成功，將重構後的圖譜覆寫回 MASTER
     """
     from backend.geometry.repair import GeometryRepairEngine
+    from backend.persistence.repositories import master_graph_repository as _mgr
 
     graph = load_geometry_graph(novel_id)
     if not graph:
@@ -704,6 +544,6 @@ def apply_repair(
     result = engine.execute_repair(proposal, condition, gatekeeper_context)
 
     if result.success:
-        save_geometry_graph(novel_id, graph)
+        _mgr.save_master_graph(novel_id, graph)
 
     return result
