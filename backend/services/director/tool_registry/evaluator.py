@@ -253,6 +253,22 @@ def _scene_setting_keywords(value: Any) -> set[str]:
             keywords.add(token)
     return keywords
 
+
+def _has_relaxed_location_core(expected: str, opening: str) -> bool:
+    """允許描述性地點省略前綴，但不放寬具名地標。"""
+    import re
+
+    expected = str(expected or "").strip().lower()
+    opening = str(opening or "").lower()
+    generic_prefixes = (
+        "地下", "地上", "室內", "室外", "樓上", "樓下", "內部", "外部",
+        "古老", "破舊", "廢棄", "臨時", "隱蔽", "秘密", "神秘",
+    )
+    if not any(expected.startswith(prefix) and len(expected) > len(prefix) for prefix in generic_prefixes):
+        return False
+    core = re.sub(r"^(?:地下|地上|室內|室外|樓上|樓下|內部|外部|古老|破舊|廢棄|臨時|隱蔽|秘密|神秘)+", "", expected)
+    return len(core) >= 2 and core in opening
+
 def _validate_writer_like(parsed: Any, output_content: str, stage_name: str) -> List[str]:
     issues: List[str] = []
     content, data = _content_from_writer_like_output(parsed, output_content)
@@ -362,9 +378,67 @@ def _validate_chapter_setting_and_continuity(
                 matched_strong = {kw for kw in strong_keywords if kw in first_500.lower()}
                 # 明確地點完全不符時才判定為 critical
                 if not matched_strong and not any(kw in first_paragraph.lower() for kw in strong_keywords):
-                    issues.append(
-                        f"【場景地點漂移】大綱指定場景核心地點/地標「{', '.join(list(strong_keywords)[:2])}」未在開篇呈現，疑似場景漂移"
-                    )
+                    # 描述性修飾詞可省略：例如大綱寫「地下密室」，正文寫「密室」時，
+                    # 地點核心仍一致。保留 warning 交給總監確認，避免把合理縮寫誤判成漂移。
+                    partial_location = {
+                        kw for kw in strong_keywords
+                        if _has_relaxed_location_core(kw, first_500)
+                    }
+                    if partial_location:
+                        issues.append(
+                            "【場景地點提醒】正文使用大綱地點的核心名稱但省略修飾詞："
+                            + ", ".join(sorted(partial_location)[:2])
+                            + "；請總監確認是否仍為同一地點，若不是則退回修正"
+                        )
+                    # 長錨點容錯：完整長地名（如「東煌魔導大學地下百年檔案室暨夜間圖書館」）
+                    # 自然寫作只會寫「地下檔案室 / 夜間圖書館」這類縮寫，逐字全串比對過嚴。
+                    # 僅對長錨點（>8 字）啟用：按 暨/與 拆子段，子段需同時命中
+                    # 「核心名詞（檔案室/圖書館）＋任一子段內 2 字修飾（地下/夜間/東煌…）」，
+                    # 短錨點（如北城檔案室）維持嚴格全串比對，南城檔案室仍判漂移。
+                    _core_hit = False
+                    for _kw in list(strong_keywords):
+                        if len(_kw) <= 8:
+                            continue
+                        _sub_parts = [s.strip() for s in re.split(r"暨|與|及|以及", _kw) if s.strip()]
+                        if not _sub_parts:
+                            _sub_parts = [_kw]
+                        for _sp in _sub_parts:
+                            _sp_low = _sp.lower()
+                            _core_nouns = re.findall(
+                                r"[\u3400-\u9fff]{1,4}(?:圖書館|檔案室|室|館|站|殿|閣|樓|院|宮|城|塔|府|局|學院|教室)",
+                                _sp,
+                            )
+                            # 短核心兜底：子段尾部 3 字（檔案室/圖書館）也列為候選，
+                            # 搭配子段內任一 2 字修飾（地下/夜間/東煌…）即算命中，
+                            # 避免「地下檔案室」因缺「百年」二字被誤判漂移。
+                            if len(_sp) >= 3:
+                                _core_nouns.append(_sp[-3:])
+                            _grams = {
+                                _sp_low[i:i + 2]
+                                for i in range(max(0, len(_sp_low) - 1))
+                            } | {
+                                _sp_low[i:i + 3]
+                                for i in range(max(0, len(_sp_low) - 2))
+                            }
+                            _trailing5 = _sp_low[-5:] if len(_sp_low) >= 5 else _sp_low
+                            _opening = first_500.lower() + "\n" + first_paragraph.lower()
+                            if _trailing5 and _trailing5 in _opening:
+                                _core_hit = True
+                                break
+                            for _c in _core_nouns:
+                                if len(_c) >= 3 and _c.lower() in _opening and any(
+                                    _g in _opening for _g in _grams if _g != _c.lower()
+                                ):
+                                    _core_hit = True
+                                    break
+                            if _core_hit:
+                                break
+                        if _core_hit:
+                            break
+                    if not _core_hit and not partial_location:
+                        issues.append(
+                            f"【場景地點漂移】大綱指定場景核心地點/地標「{', '.join(list(strong_keywords)[:2])}」未在開篇呈現，疑似場景漂移"
+                        )
             else:
                 # 主場景錨點已出現在開篇時，鄰接地點、目的地或附加氛圍不應造成退回。
                 matched_anchor = {kw for kw in keywords if kw in first_500.lower()}
@@ -373,7 +447,7 @@ def _validate_chapter_setting_and_continuity(
                     if isinstance(scene_setting, str):
                         scene_parts = [
                             part.strip()
-                            for part in re.split(r"[，,；;。]|以及|與|及|並且|通往|通向|連接到|連往", scene_setting)
+                            for part in re.split(r"[，,；;。]|以及|暨|與|及|並且|通往|通向|連接到|連往", scene_setting)
                             if part.strip()
                         ]
                     else:

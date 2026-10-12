@@ -82,7 +82,11 @@ def build_targeted_rewriter_messages(
                 p_idx = s.get("paragraph_index", 1)
                 sent = s.get("matched_sentence", "")
                 lbl = s.get("pattern_label", "")
-                lines.append(f"- [第 {p_idx} 段] 原文：『{sent}』(問題：{lbl}) -> 必須整句刪除重寫，嚴禁近義詞修飾！")
+                if str(lbl).startswith("術語錯誤："):
+                    action = "必須在正文中改成指定標準名稱，保留原句語意，不得使用錯誤近義詞"
+                else:
+                    action = "必須整句刪除重寫，嚴禁近義詞修飾"
+                lines.append(f"- [第 {p_idx} 段] 原文：『{sent}』(問題：{lbl}) -> {action}！")
             spans_text = "\n".join(lines)
         else:
             spans_text = "（無特定標記句，依修正指令進行局部修訂）"

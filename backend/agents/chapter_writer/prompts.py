@@ -18,6 +18,7 @@ from backend.prompts.prompt_main import (
     CHAPTER_WRITER_PROMPT,
 )
 from backend.services.context.writer_context_builder import build_writer_scene_context
+from backend.services.context.writer_writing_skill import format_writer_writing_skill_context
 
 
 def build_chapter_writer_messages(
@@ -39,13 +40,14 @@ def build_chapter_writer_messages(
 ) -> List[Dict[str, str]]:
     """正文作家寫作提示詞拼接（情境化解構版）"""
     system_prompt = CHAPTER_WRITER_PROMPT + "\n" + CONTEXT_REQUEST_RULE + "\n\n" + CHAPTER_WRITER_GUIDELINES
+    system_prompt += "\n\n" + format_writer_writing_skill_context()
     if fix_mode:
         system_prompt += "\n\n【修正輪特別禁令】：禁用句與套路動作零容忍，其優先級高於文學美感與銜接要求。被標記之套路動作與因果必須實質打破，出現禁用句即判失敗。"
     system_prompt += build_agent_context_contract(
         "Chapter Writer / 正文作家",
         "- 指定章節之場景契約（包含 POV 視角人物、戲劇目標與知情邊界）。\n- 結構化推進拍點 (Scene Beats)。\n- 本章出場角色的人格特質與當前狀態。\n- 前章銜接背景與本章任務。",
         "撰寫指定章節可供 Editor 擴寫的繁體中文劇情底稿，完整交代事件因果、角色行動與情緒轉折；描寫潤飾由 Editor 完成。",
-        "請直接輸出小說正文（可在正文開頭標註 [正文開始]），不需輸出額外的 JSON 或設定解說。"
+        "請直接輸出小說正文，不需輸出額外的 JSON、設定解說或任何格式標記。"
     )
 
     system_prompt += """

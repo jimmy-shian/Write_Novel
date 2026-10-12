@@ -1948,6 +1948,40 @@ class AutonomousPipelineManager:
                 ))
             ]
 
+            # 地點核心一致但省略描述性前綴時，交由總監判斷是否仍是同一地點。
+            # 總監判定退回才升級成 Writer hard issue，避免合理縮寫觸發無限重寫。
+            location_warnings = [
+                issue for issue in eval_issues
+                if issue.startswith("【場景地點提醒】")
+            ]
+            if location_warnings and not hard_writer_issues and not task.stop_requested:
+                try:
+                    location_decision = get_director_decision_sync(
+                        novel_id=novel_id,
+                        current_stage="writer",
+                        user_prompt=(
+                            f"審查第 {ch_idx} 章 Writer 初稿。Python 發現地點核心名稱相符，但正文省略了大綱的描述性前綴："
+                            + "；".join(location_warnings)
+                            + "。請確認正文地點是否仍是大綱指定地點；若不是，請以 AUTO_REGENERATE 或 REDIRECT 明確退回 Writer，並在 agent_prompt 指示修正；若是，請以 CONTINUE 放行。"
+                        ),
+                        chapter_index=ch_idx,
+                        volume_index=curr_vol_idx,
+                        extra_context="【場景地點提醒】\n- " + "\n- ".join(location_warnings),
+                    ) or {}
+                    decision_action = str(location_decision.get("action") or "").upper()
+                    rejected = decision_action in {"AUTO_REGENERATE", "REDIRECT", "REVISE", "REJECT", "HALT_CHAPTER"}
+                    if location_decision.get("passed") is False:
+                        rejected = True
+                    if rejected:
+                        hard_writer_issues.extend(
+                            f"【場景地點漂移】總監判定地點核心不一致：{warning}"
+                            for warning in location_warnings
+                        )
+                    else:
+                        task.log(f"✅ [總監地點確認] 第 {ch_idx} 章地點核心一致，接受正文縮寫。")
+                except Exception as location_exc:
+                    task.log(f"⚠️ 場景地點總監確認失敗，保留警告交由 Editor：{location_exc}", level="warn")
+
             if hard_writer_issues and not task.stop_requested:
                 task.log(f"🚨 [總監章節硬性攔截] 第 {ch_idx} 章需先修正：{'; '.join(hard_writer_issues)}。", level="warn")
                 director_prompt = ""
@@ -2527,7 +2561,10 @@ class AutonomousPipelineManager:
                     f"🛠️ 第 {ch_idx} 章診斷為 [{audit_res.get('overall_action')}]，"
                     "啟動閉環修正（修到總監/引擎評斷通過為止）..."
                 )
-                fix_res = _auto_fix_loop(novel_id, ch_idx, log_fn=task.log)
+                fix_res = _auto_fix_loop(
+                    novel_id, ch_idx, log_fn=task.log,
+                    llm_signature=(graph_res or {}).get("conflict_signature"),
+                )
                 reaudit = fix_res.get("final_reaudit") or {}
                 loop_status = fix_res.get("status")
                 if loop_status == "passed":

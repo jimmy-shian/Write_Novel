@@ -289,6 +289,21 @@ class ConflictLedger:
         power_used = _pick("power_used", "turning_tactic", "twist_mechanism")
         twist = _pick("twist_mechanism", "turning_tactic", "scene_turn")
         cost = _pick("cost", "cost_paid")
+        # 正文回填：大綱/LLM 未給 cost 時，從正文代價關鍵字回填，
+        # 避免審計只看 sig.cost 誤判零代價、閉環空轉到上限。
+        if not cost and prose:
+            _cost_markers = (
+                "反噬", "灼痛", "灼傷", "灼熱", "冷汗", "代價", "消耗",
+                "透支", "虛脫", "經脈受創", "氣血", "暴露", "警覺",
+                "鎖定", "偵測", "冷卻", "殘留", "撕裂", "鈍痛", "焦糊",
+            )
+            for _m in _cost_markers:
+                _pos = prose.find(_m)
+                if _pos >= 0:
+                    _snippet = prose[max(0, _pos - 30):_pos + 30].replace("\n", " ").strip()
+                    if _snippet:
+                        cost = _clip(_snippet)
+                    break
         emotional = _pick("emotional_effect", "emotional_tone")
         setting_used = _pick("setting_used")
         if not setting_used:

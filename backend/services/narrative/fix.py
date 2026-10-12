@@ -14,9 +14,11 @@ WATCH 為觀察級，僅靠下一章寫作上下文約束，不需動用 Editor�
 2. 單章輔助 API（narrative routes fix-chapter）：手動按鈕（單輪）。
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from backend import persistence as db
+from backend.common.config import RETRY_MULTIPLIER
 from backend.services.narrative.narrative_auditor import NarrativeAuditor
 
 # 審計判決視為「通過」的集合：PASS=健全、NO_ACTION_REQUIRED=安靜呼吸章、
@@ -25,7 +27,7 @@ PASS_ACTIONS = {"PASS", "NO_ACTION_REQUIRED", "WATCH"}
 
 # 「修到好」的安全上限：無人值守流水線不可無限迴圈燒 LLM 配額；
 # 達上限仍未通過時保留原稿與殘留診斷，交由看板處置與下一章約束。
-DEFAULT_MAX_FIX_ROUNDS = 5
+DEFAULT_MAX_FIX_ROUNDS = 5 * RETRY_MULTIPLIER
 
 DIMENSION_LABELS = {
     "voice_integrity": "語言/口癖/動作重複",
@@ -233,17 +235,49 @@ def fix_chapter_from_audits(
     audit_ids: Optional[List[str]] = None,
     reaudit_findings: Optional[List[Dict[str, Any]]] = None,
     round_idx: int = 1,
+    llm_signature: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """執行閉環修正（Writer 重構因果 -> Editor 定點手術/潤色 -> 衝突簽名更新 -> 總監評斷），
     回傳 status success / no_change，並附 reaudit。
 
     reaudit_findings：上一輪引擎重審的 findings（含建議），會一併納入給總監合成 user 指令。
     round_idx：當前修正輪次。round_idx >= 2 時跳過 Writer，僅由 Editor 精準定點手術。
+    llm_signature：保留管線呼叫相容性；post-fix reaudit 不再使用這份修正前簽名，
+        避免舊因果標籤污染新版正文的評斷。
     """
     from backend.agents.chapter_writer.runner import run_chapter_writer
     from backend.agents.editor.runner import run_editor_agent
     from backend.services.narrative.conflict_ledger import ConflictLedger
     from backend.services.narrative.narrative_auditor import extract_banned_hits
+
+    def _term_fix_spans(audit_targets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Turn term findings into explicit LLM editing anchors.
+
+        Term compliance remains an LLM responsibility.  These spans only make
+        the wrong/canonical pair visible to the targeted rewriter instead of
+        leaving it buried in the general director instruction.
+        """
+        spans: List[Dict[str, Any]] = []
+        patterns = (
+            re.compile(r"使用近義詞「([^」]+)」代替登錄術語「([^」]+)」"),
+            re.compile(r"專有名詞「([^」]+)」[^（]*（登錄術語為「([^」]+)」）"),
+        )
+        for audit in audit_targets:
+            if audit.get("dimension") != "terms_compliance":
+                continue
+            evidence = str(audit.get("evidence") or "")
+            for pattern in patterns:
+                match = pattern.search(evidence)
+                if not match:
+                    continue
+                wrong, canonical = match.groups()
+                spans.append({
+                    "paragraph_index": 1,
+                    "matched_sentence": wrong,
+                    "pattern_label": f"術語錯誤：必須改為標準名稱「{canonical}」",
+                })
+                break
+        return spans
 
     ch_row = db.get_latest_chapter(novel_id, chapter_index)
     if not ch_row or not (ch_row.get("content") or "").strip():
@@ -282,7 +316,7 @@ def fix_chapter_from_audits(
     # - 若涉及核心因果、能力代價或主線任務（P0 級問題）：由 Writer 重新推演因果與情節架構（打破 round_idx==1 的死鎖，只要因果未解就由 Writer 負責根本解決）。
     # - 純微觀語言、口癖、開篇切入或微調（P1/P2 級問題）：由 Editor 進行定點手術潤色，專注語法與調理，不碰因果。
     should_run_writer = has_causal
-    current_spans = banned_hits
+    current_spans = banned_hits + _term_fix_spans(targets)
 
     if should_run_writer:
         try:
@@ -301,8 +335,7 @@ def fix_chapter_from_audits(
             if w_row and (w_row.get("content") or "").strip():
                 w_content = w_row["content"]
                 w_hits = extract_banned_hits(w_content)
-                if w_hits:
-                    current_spans = w_hits
+                current_spans = w_hits + _term_fix_spans(targets)
         except TypeError:
             try:
                 writer_gen = run_chapter_writer(
@@ -365,7 +398,7 @@ def fix_chapter_from_audits(
             w_row = db.get_latest_chapter(novel_id, chapter_index)
             w_content = (w_row.get("content") or "") if w_row else ""
             if w_content.strip() and w_content.strip() != before_content.strip():
-                current_spans = extract_banned_hits(w_content)
+                current_spans = extract_banned_hits(w_content) + _term_fix_spans(targets)
                 editor_gen = run_editor_agent(
                     novel_id,
                     chapter_index,
@@ -404,11 +437,17 @@ def fix_chapter_from_audits(
                 outline = None
 
             # 步驟 4: 基於改寫後的新正文與大綱，重新提取本章衝突簽名並更新帳本！
+            # The Graphiti signature passed into this fix loop was extracted
+            # before Writer/Editor changed the chapter.  Reusing it here makes
+            # every post-fix reaudit compare the new prose with the old causal
+            # labels, so conflict_novelty can never observe a successful
+            # rewrite.  Post-fix validation must be derived from the new text.
             new_sig = ConflictLedger.extract_signature_from_chapter(
                 novel_id=novel_id,
                 chapter_index=chapter_index,
                 outline=outline,
                 prose_text=after_content,
+                llm_signature=None,
             )
             try:
                 ConflictLedger.record_signature(
@@ -454,10 +493,13 @@ def fix_chapter_until_pass(
     chapter_index: int,
     max_rounds: int = DEFAULT_MAX_FIX_ROUNDS,
     log_fn=None,
+    llm_signature: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     閉環「修到好」：反覆 Editor 重寫 → resolve → 引擎重審 → 總監硬性校驗，
     直到 Narrative Auditor 判決進入 PASS_ACTIONS 通過態，或觸發安全上限。
+
+    llm_signature：保留管線呼叫相容性；修正後重審會以新版正文重新提取簽名。
 
     回傳：
     {
@@ -514,6 +556,7 @@ def fix_chapter_until_pass(
         try:
             fix_res = fix_chapter_from_audits(
                 novel_id, chapter_index, reaudit_findings=prev_reaudit_findings, round_idx=rnd,
+                llm_signature=llm_signature,
             )
         except ValueError as ve:
             # 無正文或無未處置診斷：視為無事可修

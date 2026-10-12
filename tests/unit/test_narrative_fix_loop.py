@@ -390,7 +390,18 @@ def test_fix_loop_resolves_conflict_novelty(monkeypatch, _mock_director_llm):
     e_fake, e_state = _make_editor_mock([writer_prose])
     monkeypatch.setattr("backend.agents.editor.runner.run_editor_agent", e_fake)
 
-    res = fix_chapter_until_pass(novel_id, 2)
+    # The pipeline may pass the pre-fix Graphiti signature into the loop.
+    # Post-fix reaudit must ignore those stale causal labels and inspect the
+    # Writer/Editor output instead.
+    res = fix_chapter_until_pass(
+        novel_id,
+        2,
+        llm_signature={
+            "pressure_type": "衝突推進",
+            "protagonist_strategy": "play_dumb_or_weak",
+            "outcome": "public_shock",
+        },
+    )
 
     # 斷言：一輪即重構因果並通過
     assert res["status"] == "passed"
