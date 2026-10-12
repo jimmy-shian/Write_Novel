@@ -7,17 +7,10 @@ from contextlib import contextmanager
 from typing import Callable, Iterator, Optional, Dict, Any, List
 from dotenv import load_dotenv
 
-# 新增 opencc 套件，用於簡體轉繁體
-try:
-    from opencc import OpenCC
-    _s2t_converter = OpenCC('s2t')
-    # 進行安全自我檢測，防止 Windows 環境下 opencc 造成中文字串編碼損毀 (Mojibake)
-    if _s2t_converter.convert("測試") != "測試":
-        _s2t_converter = None
-
-except Exception:
-    # 若套件未安裝或載入失敗，fallback 為 identity function
-    _s2t_converter = None
+# 暫停 OpenCC：s2t 會把台灣術語中的「干」誤轉成「幹」，例如
+# 「微型干擾儀」→「微型幹擾儀」，造成術語庫與正文永遠無法一致。
+# 保留下方明確的兩個字形正規化，不再做整體簡繁轉換。
+_s2t_converter = None
 
 # OpenCC preserves both valid Traditional variants. Normalize the two forms
 # used by this project so search, term checks, and exported prose agree.

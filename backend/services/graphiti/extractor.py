@@ -263,16 +263,20 @@ class ChapterFactExtractor:
             setting_usage = []
 
         # 1. Upsert Entities
+        # NOTE: LLM 可能回傳 null（force_json 稀疏欄位），.get(x, "") 擋不住
+        # key 存在但值為 None 的情況，一律用 (v or "") 再 strip。
         entity_id_map = {}
         for ent in data.get("entities", []):
-            name = ent.get("name", "").strip()
-            etype = ent.get("entity_type", "character").strip()
+            if not isinstance(ent, dict):
+                continue
+            name = (ent.get("name") or "").strip()
+            etype = (ent.get("entity_type") or "character").strip()
             if name:
                 res = db.upsert_entity(
                     novel_id=novel_id,
                     name=name,
                     entity_type=etype,
-                    summary=ent.get("summary", ""),
+                    summary=(ent.get("summary") or ""),
                     attributes=ent.get("attributes"),
                     life_status=(ent.get("life_status") or "").strip().lower() or None,
                     chapter_index=chapter_index,
@@ -283,11 +287,13 @@ class ChapterFactExtractor:
         # 2. Add New Facts
         added_facts = []
         for fact in data.get("new_facts", []):
-            stmt = fact.get("fact_statement", "").strip()
+            if not isinstance(fact, dict):
+                continue
+            stmt = (fact.get("fact_statement") or "").strip()
             if not stmt:
                 continue
-            src_name = fact.get("source_name", "").strip()
-            tgt_name = fact.get("target_name", "").strip()
+            src_name = (fact.get("source_name") or "").strip()
+            tgt_name = (fact.get("target_name") or "").strip()
             src_id = entity_id_map.get(src_name)
             tgt_id = entity_id_map.get(tgt_name)
             

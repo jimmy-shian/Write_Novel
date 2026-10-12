@@ -167,7 +167,7 @@ def build_director_decision_messages(
         # 世界觀階段：只傳世界觀完整內容 + 評斷提示詞
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前世界觀的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前世界觀的創作品質，並決定下一步的最佳動作。
  
 【審查原則與柔軟語調指南】
 1. 當前階段是「current_stage = {current_stage}」（世界觀架構師）。
@@ -199,7 +199,7 @@ def build_director_decision_messages(
             character_extra_context += f"【目標角色內容】{character_review_target_content}\n"
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前角色設計的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前角色設計的創作品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（角色設計師）。
@@ -221,7 +221,7 @@ def build_director_decision_messages(
         # 卷階段：完整卷列表 + 世界觀的 macro_outline
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前篇卷規劃的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前篇卷規劃的創作品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（篇卷規劃師）。
@@ -242,7 +242,7 @@ def build_director_decision_messages(
         # 骨架階段：完整骨架 + 世界觀的 macro_outline + Python 分配表
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前卷骨架的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前卷骨架的創作品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（篇卷骨架規劃師）。
@@ -271,7 +271,7 @@ def build_director_decision_messages(
         # 寫作階段：該章的完整內容(正文+大綱+角色聖經+伏筆+後三章伏筆回收預告)
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前章節正文的創作品質，並決定下一步的最佳動作。
 
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（正文寫作作家）。
@@ -307,7 +307,7 @@ def build_director_decision_messages(
         # 編輯階段：該章的完整潤色內容
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前潤色後正文的質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前潤色後正文的品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（編輯姬）。
@@ -342,7 +342,7 @@ def build_director_decision_messages(
         # 伏筆審查階段
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前伏筆與轉折點的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前伏筆與轉折點的創作品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」（伏筆與轉折編織師）。
@@ -365,7 +365,7 @@ def build_director_decision_messages(
         # 默認通用格式
         system_prompt = f"""{director_contract}
 
-你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前階段的創作質量，並決定下一步的最佳動作。
+你是 AI 小說創作系統的最高決策創意總監。你的任務是評審當前階段的創作品質，並決定下一步的最佳動作。
  
 【審查原則】
 1. 當前階段是「current_stage = {current_stage}」。

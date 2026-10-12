@@ -30,7 +30,7 @@ class TemporalGraphService:
         
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
         dead_names = {
-            name.strip().lower()
+            (name or "").strip().lower()
             for name, state in status_by_name.items()
             if state.get("life_status") == "dead" and name
         }
@@ -43,8 +43,8 @@ class TemporalGraphService:
                 statement=fact["fact_statement"],
                 relation=fact.get("relation_type", "relates_to"),
                 valid_from=fact["valid_from_chapter"],
-                source_life_status="dead" if fact.get("source_name", "").strip().lower() in dead_names else None,
-                target_life_status="dead" if fact.get("target_name", "").strip().lower() in dead_names else None,
+                source_life_status="dead" if (fact.get("source_name") or "").strip().lower() in dead_names else None,
+                target_life_status="dead" if (fact.get("target_name") or "").strip().lower() in dead_names else None,
             )
         return G
 
@@ -58,7 +58,7 @@ class TemporalGraphService:
         facts = db.get_facts_at_chapter(novel_id, at_chapter)
         from backend.services.narrative.story_canon import get_life_status_at_chapter
         status_by_name = {
-            name.strip().lower(): state.get("life_status")
+            (name or "").strip().lower(): state.get("life_status")
             for name, state in get_life_status_at_chapter(novel_id, at_chapter).items()
             if name
         }
@@ -72,7 +72,7 @@ class TemporalGraphService:
                 for fact in facts
             ]
         
-        clean_names = {n.strip().lower() for n in entity_names if n and n.strip()}
+        clean_names = {(n or "").strip().lower() for n in entity_names if n and (n or "").strip()}
         if not clean_names:
             return facts
 

@@ -124,6 +124,18 @@ export const App: React.FC = () => {
     savePreferences({ editor_font_size: newSize });
   }, []);
 
+  // 全域 Ctrl+S / Cmd+S：焦點不在 textarea 時也要攔截，避免跳出瀏覽器另存網頁
+  useEffect(() => {
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveActiveChapter();
+      }
+    };
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => window.removeEventListener('keydown', onGlobalKeyDown);
+  }, [saveActiveChapter]);
+
   // Layout and view state
   const [activeView, setActiveView] = useState<ActiveView>(() => {
     const saved = localStorage.getItem('writenovel_last_view');
